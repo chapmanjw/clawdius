@@ -39,15 +39,16 @@ jobs:
           node script/clawdius/scan-forbidden.ts "$tmp/good.ts"
           rm -rf "$tmp"
           echo "scanner is falsifiable: flags planted Copilot string, passes a clean file"
-      - name: Forbidden-content scan over Clawdius-owned files
+      - name: Forbidden-content scan over Clawdius-owned + marked files
         shell: bash
         run: |
           set -e
-          files=$(git ls-files 'clawdius/**' 'script/clawdius/**' CHANGES_AGAINST_UPSTREAM.md MERGING.md 'README-CLAWDIUS*')
-          if [ -n "$files" ]; then
-            node script/clawdius/scan-forbidden.ts $files
-          fi
-          echo "forbidden-content scan clean over Clawdius-owned files"
+          owned=$(git ls-files 'clawdius/**' 'script/clawdius/**' 'extensions/clawdius-*/**' CHANGES_AGAINST_UPSTREAM.md MERGING.md BUILD.md 'README-CLAWDIUS*')
+          # In-place upstream edits carry CLAWDIUS-BEGIN markers; the scanner inspects only their marked
+          # regions. Keep this list in sync with the CHANGES_AGAINST_UPSTREAM.md ledger.
+          marked="build/hygiene.ts src/vs/workbench/services/themes/common/workbenchThemeService.ts src/vs/workbench/services/accounts/browser/defaultAccount.ts"
+          node script/clawdius/scan-forbidden.ts $owned $marked
+          echo "forbidden-content scan clean over Clawdius-owned + marked files"
       - name: Fork scaffolding intact
         shell: bash
         run: |

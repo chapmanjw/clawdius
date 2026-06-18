@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // Clawdius forbidden-content scan. Flags Copilot/GitHub-Copilot branding, known Microsoft
 // telemetry keys, and Amazon-internal terms (from an env-referenced wordlist that is never
-// committed) in CLAWDIUS-AUTHORED files only. The upstream VS Code tree legitimately contains
-// "copilot" until Phase 2 removes the chrome, so this scan deliberately skips upstream paths
-// and only inspects Clawdius-owned files plus files carrying a CLAWDIUS-BEGIN marker.
+// committed) in CLAWDIUS-AUTHORED content only. The upstream VS Code tree legitimately contains
+// "copilot" until Phase 2 removes the chrome, so this scan deliberately skips upstream paths.
+// It inspects Clawdius-owned files in full, and for upstream files carrying a CLAWDIUS-BEGIN
+// marker it inspects ONLY the marked Clawdius regions (so an in-place edit to a Copilot-laden
+// upstream file like defaultAccount.ts does not trip on the surrounding upstream code).
 //
 // Usage: node script/clawdius/scan-forbidden.ts [--largefiles] <files...>
 // Exit 1 on any finding.
@@ -13,10 +15,12 @@ const args = process.argv.slice(2)
 const largeFilesMode = args.includes('--largefiles')
 const files = args.filter((a) => !a.startsWith('--'))
 
-// Clawdius-owned path prefixes the content scan applies to.
+// Clawdius-owned path prefixes the content scan applies to (scanned in full).
 const OWNED = [/^clawdius\//, /^src\/vs\/workbench\/contrib\/clawdius\//, /^script\/clawdius\//,
-  /^test\/clawdius\//, /^CHANGES_AGAINST_UPSTREAM\.md$/, /^MERGING\.md$/, /^README-CLAWDIUS/]
-const MARKER = 'CLAWDIUS-BEGIN'
+  /^test\/clawdius\//, /^extensions\/clawdius-/, /^CHANGES_AGAINST_UPSTREAM\.md$/, /^MERGING\.md$/,
+  /^BUILD\.md$/, /^README-CLAWDIUS/]
+const MARKER_BEGIN = 'CLAWDIUS-BEGIN'
+const MARKER_END = 'CLAWDIUS-END'
 
 // The scanner's own source legitimately contains every forbidden pattern (the rule literals).
 // Never scan it, or the gate flags itself.
@@ -26,7 +30,7 @@ const SELF = /(^|\/)script\/clawdius\/scan-forbidden\.ts$/
 // stay subject to telemetry-key and Amazon-internal checks; only brand mentions are allowed. SELF
 // already excludes the scanner itself, so this is a by-name list, not a directory-wide exemption.
 const BRAND_EXEMPT = [/^clawdius\/SECURITY-SCANNING\.md$/, /^CHANGES_AGAINST_UPSTREAM\.md$/,
-  /^MERGING\.md$/, /^README-CLAWDIUS/, /(^|\/)script\/clawdius\/branding-guard\.ts$/]
+  /^MERGING\.md$/, /^BUILD\.md$/, /^README-CLAWDIUS/, /(^|\/)script\/clawdius\/branding-guard\.ts$/]
 const BRANDING_IDS = new Set(['copilot-brand', 'github-copilot-brand'])
 
 const FORBIDDEN = [
@@ -41,6 +45,19 @@ let internal: string[] = []
 const wlPath = process.env.CLAWDIUS_INTERNAL_WORDLIST
 if (wlPath && fs.existsSync(wlPath)) {
   internal = fs.readFileSync(wlPath, 'utf8').split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+}
+
+// Pull only the text inside CLAWDIUS-BEGIN..CLAWDIUS-END spans (inclusive). An unterminated span
+// runs to EOF (over-scan is safe). Used for marked in-place edits to upstream files.
+function markedRegions(text: string): string {
+  const out: string[] = []
+  let inRegion = false
+  for (const line of text.split(/\r?\n/)) {
+    if (line.includes(MARKER_BEGIN)) { inRegion = true; out.push(line); continue }
+    if (line.includes(MARKER_END)) { out.push(line); inRegion = false; continue }
+    if (inRegion) { out.push(line) }
+  }
+  return out.join('\n')
 }
 
 const LARGE_LIMIT = 5 * 1024 * 1024
@@ -62,15 +79,19 @@ for (const f of files) {
   const owned = OWNED.some((re) => re.test(nf))
   let text = ''
   try { text = fs.readFileSync(f, 'utf8') } catch { continue }
-  const scan = owned || text.includes(MARKER)
-  if (!scan) { continue }
-  const brandExempt = BRAND_EXEMPT.some((re) => re.test(nf))
+  const marked = !owned && text.includes(MARKER_BEGIN)
+  if (!owned && !marked) { continue }
+  // Owned files: scan the whole file. Marked upstream edits: scan only the Clawdius regions, and treat
+  // them as brand-exempt (the comments legitimately describe the Copilot they neutralize) while still
+  // checking telemetry keys + internal terms.
+  const scanText = owned ? text : markedRegions(text)
+  const brandExempt = marked || BRAND_EXEMPT.some((re) => re.test(nf))
   for (const rule of FORBIDDEN) {
     if (brandExempt && BRANDING_IDS.has(rule.id)) { continue }
-    if (rule.re.test(text)) { console.error(`[${rule.id}] forbidden content in ${f}`); findings++ }
+    if (rule.re.test(scanText)) { console.error(`[${rule.id}] forbidden content in ${f}`); findings++ }
   }
   for (const term of internal) {
-    if (term && text.toLowerCase().includes(term.toLowerCase())) {
+    if (term && scanText.toLowerCase().includes(term.toLowerCase())) {
       console.error(`[amazon-internal] term match in ${f}`); findings++
     }
   }

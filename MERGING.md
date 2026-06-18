@@ -35,7 +35,8 @@ git switch main && git merge --ff-only merge/upstream-<NEW>
 
 ## Known conflict hot spots
 `product.json`, every file in `CHANGES_AGAINST_UPSTREAM.md` (currently `README.md`, `.gitignore`),
-`package.json`, `package-lock.json`, `build/`, and the chat contrib if patched
+`package.json`, `package-lock.json`, `build/`, `.github/workflows/` (upstream CI removed; on merge,
+take ours and keep `clawdius-ci.yml`), and the chat contrib if patched
 (`src/vs/workbench/contrib/chat/**`).
 
 ## Post-merge verification checklist

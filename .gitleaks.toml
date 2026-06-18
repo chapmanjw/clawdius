@@ -1,0 +1,36 @@
+# Clawdius gitleaks config. Extends the default ruleset with John's environment-specific
+# secret shapes, plus allowlists tuned to avoid false positives in the upstream VS Code tree.
+title = "Clawdius secret scan"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic API key"
+regex = '''sk-ant-[a-zA-Z0-9_-]{20,}'''
+keywords = ["sk-ant-"]
+
+[[rules]]
+id = "aws-lwa-client-secret"
+description = "Amazon LWA client identifier or secret reference"
+regex = '''amzn1\.application-oa2-client\.[a-z0-9]{32,}'''
+keywords = ["amzn1.application-oa2-client"]
+
+[[rules]]
+id = "sp-api-refresh-token"
+description = "Amazon SP-API / LWA refresh token"
+regex = '''Atzr\|[A-Za-z0-9_-]{40,}'''
+keywords = ["Atzr|"]
+
+[allowlist]
+description = "Global allowlist: upstream test fixtures, mock creds, and lockfiles"
+paths = [
+  '''(.*/)?test/.*''',
+  '''(.*/)?fixtures?/.*''',
+  '''(.*/)?\.vscode-test.*''',
+  '''package-lock\.json''',
+  '''test/clawdius/mocks/.*''',
+]
+# Note: the upstream VS Code tree contains example tokens in tests. Tune this allowlist
+# against a clean baseline scan before activating gitleaks as a blocking pre-commit hook.

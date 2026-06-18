@@ -47,3 +47,12 @@ dist
 .github/prompts/*.local.prompt.md
 .agents/skills/.local/
 .github/skills/.local/
+
+# CLAWDIUS-BEGIN gitignore additions (local secrets/config; see clawdius/SECURITY-SCANNING.md)
+.env
+.env.*
+!.env.example
+.aws/
+.clawdius/
+clawdius.local.json
+# CLAWDIUS-END

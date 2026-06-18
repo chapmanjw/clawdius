@@ -44,11 +44,12 @@ jobs:
         run: |
           set -e
           owned=$(git ls-files 'clawdius/**' 'script/clawdius/**' 'extensions/clawdius-*/**' CHANGES_AGAINST_UPSTREAM.md MERGING.md BUILD.md 'README-CLAWDIUS*')
-          # Discover in-place upstream edits by their begin-marker (built at runtime so this workflow does
-          # not match itself); the scanner inspects only the marked regions of those files. Scoped to the
-          # trees where in-place edits live so the list cannot drift from the actual markers.
+          # Discover in-place upstream edits by their begin-marker across ALL tracked files (built at
+          # runtime so this workflow does not match itself). The scanner self-selects: it skips its own
+          # source, scans owned files in full, and inspects only the marked regions of everything else, so
+          # a marked edit anywhere is covered and the list cannot drift.
           begin="CLAWDIUS""-BEGIN"
-          marked=$(git grep -lI "$begin" -- src build .gitignore || true)
+          marked=$(git grep -lI "$begin" || true)
           node script/clawdius/scan-forbidden.ts $owned $marked
           echo "forbidden-content scan clean over Clawdius-owned + marked files"
       - name: Fork scaffolding intact

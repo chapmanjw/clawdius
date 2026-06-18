@@ -13,9 +13,11 @@ they do not conflict on upstream merges.
 ## Scoping against the upstream tree (important)
 The upstream VS Code tree legitimately contains "copilot" until Phase 2 removes the chrome, and its
 tests contain example tokens. So:
-- The forbidden-content scan inspects only Clawdius-authored paths (`clawdius/**`,
-  `src/vs/workbench/contrib/clawdius/**`, `script/clawdius/**`, the ledger) plus any file carrying a
-  `CLAWDIUS-BEGIN` marker. It does not flag the upstream tree.
+- The forbidden-content scan inspects Clawdius-authored paths in full (`clawdius/**`,
+  `extensions/clawdius-*/**`, `src/vs/workbench/contrib/clawdius/**`, `script/clawdius/**`, the ledger);
+  for an in-place upstream edit carrying a `CLAWDIUS-BEGIN` marker it inspects ONLY the marked regions
+  (brand mentions are allowed there since the comments describe the removal; telemetry keys and
+  Amazon-internal terms are still flagged). It does not flag the surrounding upstream tree.
 - gitleaks runs with an allowlist for test/fixture paths and lockfiles. Tune the allowlist against a
   clean baseline scan before activating gitleaks as a blocking pre-commit hook.
 

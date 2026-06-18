@@ -1170,6 +1170,16 @@ class DefaultAccountProviderContribution extends Disposable implements IWorkbenc
 		@IDefaultAccountService defaultAccountService: IDefaultAccountService,
 	) {
 		super();
+		// CLAWDIUS-BEGIN no default-account egress: do not register the GitHub/Copilot default-account
+		// provider when no entitlement endpoint is configured (Clawdius empties entitlementUrl). This
+		// halts ALL startup account egress at the source, including the enterprise branch that
+		// reconstructs api.{ghe-host}/copilot_internal/* from user settings (which the emptied product
+		// URLs would not catch), until the Clawdius auth model lands (M2).
+		const chatAgent = productService.defaultChatAgent;
+		if (!chatAgent || !chatAgent.entitlementUrl) {
+			return;
+		}
+		// CLAWDIUS-END
 		const defaultAccountProvider = this._register(instantiationService.createInstance(DefaultAccountProvider, toDefaultAccountConfig(productService.defaultChatAgent)));
 		defaultAccountService.setDefaultAccountProvider(defaultAccountProvider);
 	}

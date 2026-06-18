@@ -93,11 +93,11 @@
 		"documentationUrl": "https://clawdiuscode.io",
 		"termsStatementUrl": "https://clawdiuscode.io",
 		"privacyStatementUrl": "https://clawdiuscode.io",
-		"skusDocumentationUrl": "https://aka.ms/github-copilot-plans",
-		"publicCodeMatchesUrl": "https://aka.ms/github-copilot-match-public-code",
-		"managePlanUrl": "https://aka.ms/github-copilot-manage-plan",
-		"upgradePlanUrl": "https://aka.ms/github-copilot-upgrade-plan",
-		"signUpUrl": "https://aka.ms/github-sign-up",
+		"skusDocumentationUrl": "https://clawdiuscode.io",
+		"publicCodeMatchesUrl": "https://clawdiuscode.io",
+		"managePlanUrl": "https://clawdiuscode.io",
+		"upgradePlanUrl": "https://clawdiuscode.io",
+		"signUpUrl": "https://clawdiuscode.io",
 		"provider": {
 			"default": {
 				"id": "github",
@@ -132,8 +132,8 @@
 				"read:user"
 			]
 		],
-		"entitlementUrl": "https://api.github.com/copilot_internal/user",
-		"entitlementSignupLimitedUrl": "https://api.github.com/copilot_internal/subscribe_limited_user",
+		"entitlementUrl": "",
+		"entitlementSignupLimitedUrl": "",
 		"chatQuotaExceededContext": "github.copilot.chat.quotaExceeded",
 		"completionsQuotaExceededContext": "github.copilot.completions.quotaExceeded",
 		"walkthroughCommand": "github.copilot.open.walkthrough",
@@ -144,9 +144,9 @@
 		"completionsAdvancedSetting": "github.copilot.advanced",
 		"completionsEnablementSetting": "github.copilot.enable",
 		"nextEditSuggestionsSetting": "github.copilot.nextEditSuggestions.enabled",
-		"tokenEntitlementUrl": "https://api.github.com/copilot_internal/v2/token",
-		"mcpRegistryDataUrl": "https://api.github.com/copilot/mcp_registry",
-		"managedSettingsUrl": "https://api.github.com/copilot_internal/managed_settings"
+		"tokenEntitlementUrl": "",
+		"mcpRegistryDataUrl": "",
+		"managedSettingsUrl": ""
 	},
 	"trustedExtensionAuthAccess": {},
 	"onboardingKeymaps": [

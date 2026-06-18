@@ -13,14 +13,28 @@ Base: microsoft/vscode `1.125.0` (see `UPSTREAM_VERSION`).
 | `README.md` | Merge resolution at Phase 0 import: kept upstream README for the vanilla baseline. Clawdius rebrand lands in Phase 1. | n/a (merge resolution) | root docs |
 | `.gitignore` | Appended a marked Clawdius block (research workspace, provider secrets, local config). | `# CLAWDIUS-BEGIN gitignore additions` | root |
 | `.github/workflows/*` | Removed the 16 inherited microsoft/vscode CI workflows (they need Microsoft secrets, self-hosted runners, and the distro repo, and fail on any fork); replaced with `clawdius-ci.yml`. | n/a (upstream file removal) | CI |
-| `product.json` | M1 branding overlay: names, app/data/bundle ids, fresh win32 GUIDs, URLs to clawdiuscode.io and the repo, extensionsGallery to Open VSX, enableTelemetry false, voiceWsUrl dropped, defaultChatAgent repointed off GitHub.copilot, GitHub auth trust emptied. Data-only. | n/a (data overlay) | product config |
-| `src/vs/workbench/services/themes/common/workbenchThemeService.ts` | M1 Phase 4: default color theme constants set to Clawdius Dark/Light for first paint. | `// CLAWDIUS-BEGIN default theme` | theme service |
-| `build/hygiene.ts` | M1: inverted the upstream "product.json must not contain extensionsGallery" guard into "Open VSX only" so the baked-in Open VSX gallery passes hygiene while the Microsoft Marketplace stays blocked. | `// CLAWDIUS-BEGIN gallery policy` | build hygiene |
+| `product.json` | M1 branding + privacy overlay: names, app/data/bundle ids, fresh win32 GUIDs, URLs to the repo, extensionsGallery to Open VSX, enableTelemetry false, voiceWsUrl dropped, defaultChatAgent.extensionId off GitHub.copilot, GitHub auth trust emptied. M1 review fix: emptied the five defaultChatAgent Copilot **egress** URLs (entitlementUrl, tokenEntitlementUrl, mcpRegistryDataUrl, managedSettingsUrl, entitlementSignupLimitedUrl) that core `DefaultAccountProviderContribution` fetched at BlockStartup, and repointed the aka.ms/github-copilot plan/signup links to the brand domain. Data-only. | n/a (data overlay) | product config |
+| `src/vs/workbench/services/themes/common/workbenchThemeService.ts` | M1 Phase 4: default color theme constants set to Clawdius Dark/Light; and the pre-theme first-paint `COLOR_THEME_*_INITIAL_COLORS` accent hexes recolored from Microsoft blue (#0078D4/#005FB8) to the Clawdius orange family, so first paint is Clawdius not blue (neutrals + semantic add/delete/error colors untouched; chat-surface accents left for Phase 2). | `// CLAWDIUS-BEGIN default theme`, `// CLAWDIUS-BEGIN initial-colors accent recolor` | theme service |
+| `build/hygiene.ts` | M1: inverted the upstream "product.json must not contain extensionsGallery" guard into "Open VSX only" (exact `https://open-vsx.org/` host prefix across serviceUrl/itemUrl/resourceUrlTemplate) so the baked-in Open VSX gallery passes hygiene while the Microsoft Marketplace stays blocked. | `// CLAWDIUS-BEGIN gallery policy` | build hygiene |
 
 ## New files / directories (no conflict, not part of the diff surface)
 `UPSTREAM_VERSION`, `MERGING.md`, `CHANGES_AGAINST_UPSTREAM.md`, `BUILD.md`, `.gitleaks.toml`,
 `.pre-commit-config.yaml`, `script/clawdius/**`, `clawdius/**`, `.github/workflows/clawdius-ci.yml`,
 `extensions/clawdius-themes/**`.
+
+## Known privacy follow-ups (tracked, deferred by design — not yet addressed)
+Surfaced by the M1 review; recorded so the zero-egress claim stays honest about what is and is not done.
+- `product.json` `webviewContentExternalBaseUrlTemplate` still points at `*.vscode-cdn.net`. Verified this
+  is **not** a desktop egress vector: desktop webviews use the local `vscode-webview://{{uuid}}` scheme
+  (`environmentService.ts` electron-browser); `vscode-cdn.net` appears only in the web/server build CSP
+  (`webClientServer.ts`) and the remote-resource URI transform. Re-point to a Clawdius-controlled host
+  before shipping the web/REH build.
+- `product.json` `defaultChatAgent` still carries Copilot-specific command/output identifiers
+  (`chatExtensionOutputId`, `chatExtensionOutputExtensionStateCommand`, the `github.copilot.*` commands /
+  contexts / settings) and a GitHub auth provider block. These have no consumer until the Phase 2 Clawdius
+  chat extension ships; neutralize them with that extension (Phase 2 / M2 auth model).
+- `product.json` documentation/terms/privacy/plan/signup URLs are placeholders on `https://clawdiuscode.io`.
+  Confirm the domain is registered with landing content before public release.
 
 ## Discipline
 Every future in-place edit is wrapped in `// CLAWDIUS-BEGIN <reason>` / `// CLAWDIUS-END` (or the

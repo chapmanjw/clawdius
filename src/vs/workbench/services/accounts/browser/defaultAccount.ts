@@ -144,6 +144,16 @@ export class DefaultAccountService extends Disposable implements IDefaultAccount
 	) {
 		super();
 		this.defaultAccountConfig = toDefaultAccountConfig(productService.defaultChatAgent);
+		// CLAWDIUS-BEGIN no default-account: when no entitlement endpoint is configured, the provider
+		// contribution declines to register (see DefaultAccountProviderContribution below), so
+		// setDefaultAccountProvider() — the only caller of initBarrier.open() — never runs. Open the
+		// barrier here so getDefaultAccount()/refresh()/signIn()/signOut() resolve to "no account"
+		// instead of hanging forever. Barrier.open() is idempotent and the guard is mutually exclusive
+		// with provider registration, so there is no double-open.
+		if (!productService.defaultChatAgent?.entitlementUrl) {
+			this.initBarrier.open();
+		}
+		// CLAWDIUS-END
 	}
 
 	async getDefaultAccount(): Promise<IDefaultAccount | null> {

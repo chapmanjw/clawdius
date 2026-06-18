@@ -21,6 +21,12 @@ tests contain example tokens. So:
 - gitleaks runs with an allowlist for test/fixture paths and lockfiles. Tune the allowlist against a
   clean baseline scan before activating gitleaks as a blocking pre-commit hook.
 
+Known limitation: the brand-name exemption for a marked region is region-wide, not comment-only, so a
+marked region that shipped an actual user-visible Copilot string in code (not just an explanatory
+comment) would not be flagged. The scan's threat model is accidental *leftover* upstream brand, not
+self-inflicted brand inside a deliberate Clawdius edit; the Phase 6 guard against the BUILT product is
+the backstop for shipped strings.
+
 ## Where they run
 - Pre-commit (`.pre-commit-config.yaml`): activate per developer with `pre-commit install`. Not
   auto-enforced against the upstream import.

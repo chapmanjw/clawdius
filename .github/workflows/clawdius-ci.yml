@@ -1,0 +1,39 @@
+name: Clawdius CI
+
+# Clawdius runs its own CI. The inherited microsoft/vscode workflows were removed because they
+# depend on Microsoft secrets, self-hosted runners, and the distro repo and fail on any fork.
+# This minimal job validates the fork scaffolding and works on a private repo with no secrets.
+# Phase 6 expands it into the full matrix (build, branding guard against the built product,
+# network-egress guard, gitleaks).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  fork-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false # upstream LFS test caches 404 and are not needed; never smudge in CI
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Clawdius scan scripts parse
+        run: node --check script/clawdius/scan-forbidden.js
+      - name: Fork scaffolding intact
+        shell: bash
+        run: |
+          set -e
+          for f in UPSTREAM_VERSION MERGING.md CHANGES_AGAINST_UPSTREAM.md BUILD.md \
+                   .gitleaks.toml .pre-commit-config.yaml clawdius/SECURITY-SCANNING.md \
+                   script/clawdius/scan-forbidden.js script/clawdius/diff-stat; do
+            test -f "$f" || { echo "MISSING required fork file: $f"; exit 1; }
+          done
+          echo "Clawdius fork scaffolding intact; pinned upstream $(cat UPSTREAM_VERSION)"

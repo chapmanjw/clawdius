@@ -1,0 +1,21 @@
+# Clawdius pre-commit gates. NOT auto-activated against the upstream tree yet: the
+# forbidden-content scan is scoped to Clawdius-authored paths, and gitleaks needs its
+# allowlist tuned against a clean baseline before it gates the full repo. See
+# clawdius/SECURITY-SCANNING.md. Activate per developer with `pre-commit install`.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2 # pin exact tag at activation
+    hooks:
+      - id: gitleaks
+  - repo: local
+    hooks:
+      - id: clawdius-forbidden-content
+        name: clawdius forbidden-content scan (Clawdius-authored paths only)
+        entry: node script/clawdius/scan-forbidden.js
+        language: system
+        pass_filenames: true
+      - id: clawdius-large-file-guard
+        name: block large binaries (> 5 MB, allowlist branding/installers)
+        entry: node script/clawdius/scan-forbidden.js --largefiles
+        language: system
+        pass_filenames: true

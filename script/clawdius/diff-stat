@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Print the Clawdius fork surface against the pinned upstream tag, so bloat is visible.
+# Usage: script/clawdius/diff-stat
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+VER="$(cat "$ROOT/UPSTREAM_VERSION" | tr -d '[:space:]')"
+echo "Clawdius fork surface vs upstream $VER:"
+git -C "$ROOT" diff "$VER...HEAD" --stat

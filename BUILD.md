@@ -1,65 +1,69 @@
 # Building Clawdius
 
-Clawdius is a fork of microsoft/vscode and builds with the upstream toolchain. This file records the
-reproducible recipe and the environment quirks found while building the Phase 0 baseline on a current
-bleeding-edge Windows toolchain (Visual Studio 2026 + Node 24 + VS Code 1.125).
+Clawdius is a fork of microsoft/vscode and builds with the upstream toolchain. The supported baseline
+matches microsoft/vscode's own CI: the Visual Studio 2022 C++ Build Tools plus the pinned Node. On that
+baseline the build is a clean `npm ci` with no workarounds (verified from a wiped `node_modules`, the
+Copilot extension's `sqlite3` builds with its own node-gyp).
 
 Base: microsoft/vscode `1.125.0` (see `UPSTREAM_VERSION`).
 
-## Prerequisites (Windows x64)
+## Prerequisites (Windows x64, supported baseline)
 
-- Node.js `>= 24.15.0` on the same major as `.nvmrc` (24). The preinstall guard rejects older patches
-  (24.14.x fails). A portable Node works; it does not need to be the system Node.
-- Python 3.x on PATH (node-gyp needs it). 3.11 and 3.12 both worked.
-- Visual Studio 2022 or 2026 with the "Desktop development with C++" workload AND the
-  "MSVC C++ x64/x86 Spectre-mitigated libs (Latest)" individual component. VS Code builds its native
-  modules with Spectre mitigation on, so the Spectre libs are required (else MSB8040).
+- Node.js the version in `.nvmrc` (24.15.0), same major (24). Older patches fail the preinstall guard.
+- Python 3.x on PATH (node-gyp needs it).
+- Visual Studio 2022 C++ Build Tools (standalone, no IDE needed), with:
+  - the C++ build tools workload `Microsoft.VisualStudio.Workload.VCTools` (MSVC v143 + Windows 11 SDK
+    via `--includeRecommended`), and
+  - the MSVC x64/x86 Spectre-mitigated libs
+    `Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre`. Required because VS Code builds its
+    native modules with Spectre mitigation on (else MSB8040).
 
-## Environment quirks on VS 2026 (toolset v18)
+  Install:
+  ```
+  winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override "--passive --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --add Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre"
+  ```
 
-1. VS Code's `build/npm/preinstall.ts` only whitelists VS "2022" and "2019". On VS 2026 it throws
-   "Invalid C/C++ Compiler Toolchain". Work around it by pointing the override env var at the VS 2026
-   install: `set vs2022_install=C:\Program Files\Microsoft Visual Studio\18\Professional`.
-2. Build inside a VS x64 developer environment so `VCINSTALLDIR` and `cl.exe` are set:
-   `call "<VS>\VC\Auxiliary\Build\vcvarsall.bat" x64`.
-3. Root native modules build cleanly: the repo's node-gyp (12.2.0) auto-detects VS 2026 via vswhere.
-4. The bundled `copilot` extension pins a deprecated `sqlite3` whose bundled node-gyp (10.3.1) does not
-   recognize VS 2026 and fails. Build that one module with a modern node-gyp (>= 13). See the workaround
-   below. Phase 2 removes the Copilot extension, which eliminates this issue entirely.
+## Recipe (VS 2022 baseline)
 
-## Recipe
-
-```bat
-:: 1. VS x64 dev env + Node 24.15.0 on PATH + the VS-version override
-call "C:\Program Files\Microsoft Visual Studio\18\Professional\VC\Auxiliary\Build\vcvarsall.bat" x64
-set "PATH=<portable-node-24.15>;%PATH%"
-set "vs2022_install=C:\Program Files\Microsoft Visual Studio\18\Professional"
-
-:: 2. install deps + build root native modules + all extensions
-cd /d <repo>
-call npm install
-
-:: 3. Copilot sqlite3 workaround (deprecated dep, old node-gyp vs VS 2026); skip once Phase 2 removes copilot
-npm install -g node-gyp@latest
-cd /d <repo>\extensions\copilot
-call npm install --ignore-scripts
-cd node_modules\sqlite3
-node "<global-node-gyp-13>\bin\node-gyp.js" rebuild --runtime=electron --target=42.3.0 --dist-url=https://electronjs.org/headers --arch=x64
-
-:: 4. compile and launch
-cd /d <repo>
-call npm run compile
-call scripts\code.bat .
+One command (detects VS 2022 via vswhere, enters its dev env, installs, compiles):
+```
+powershell -ExecutionPolicy Bypass -File script\clawdius\build-win.ps1
 ```
 
-## Verification (Phase 0 done)
+Or by hand, from a VS 2022 x64 developer environment so `VCINSTALLDIR` and `cl.exe` are set:
+```bat
+call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x64
+cd /d <repo>
+npm ci             :: installs deps + builds all native modules (root + extensions, incl. copilot sqlite3)
+npm run compile    :: TypeScript -> out/
+scripts\code.bat . :: launch
+```
 
-A vanilla build launches as "Code - OSS" (branding lands in Phase 1). The Electron app starts as a normal
-multi-process tree (main, renderers, extension host, GPU, utilities) with no crash. `out/` is populated
-(~206 MB) and `.build/electron` is downloaded on first launch.
+No `vs2022_install` override and no node-gyp override are needed on the VS 2022 baseline.
+
+## VS 2026 compatibility lane (only if you build on VS 2026 / toolset v18)
+
+VS 2026 is newer than VS Code 1.125's blessed toolchain and needs three workarounds, which is why the
+VS 2022 baseline above is preferred:
+1. `set vs2022_install=<VS 2026 path>` because preinstall only whitelists "2022" and "2019".
+2. Run inside the VS 2026 x64 dev env (`vcvarsall.bat x64`) for `VCINSTALLDIR`.
+3. The Copilot `sqlite3` (deprecated, pins node-gyp 10.3.1 which cannot target VS 2026) must be built
+   manually with node-gyp >= 13: `npm install -g node-gyp@latest`; in `extensions\copilot` run
+   `npm install --ignore-scripts`; then in `node_modules\sqlite3` run
+   `node <node-gyp-13>\bin\node-gyp.js rebuild --runtime=electron --target=42.3.0 --dist-url=https://electronjs.org/headers --arch=x64`.
+   Phase 2 removes the Copilot extension, which moots this.
+
+## Verification (Phase 0)
+
+A vanilla build launches as "Code - OSS" (Clawdius branding lands in Phase 1), boots as a normal
+multi-process Electron app (main, renderers, extension host, GPU, utilities) with no crash, and shuts
+down cleanly. `out/` is ~206 MB; `.build/electron` downloads on first launch.
 
 ## Notes
 
-- The Copilot sqlite3 workaround is not committed into the repo; it is a build-time step that Phase 2's
-  Copilot removal makes obsolete. Keeping it out preserves the small-diff doctrine.
-- Cross-platform packaging (NSIS, dmg, deb, rpm), signing, and a CI build matrix are Phase 7.
+- Git LFS: an upstream test-cache object (`extensions/copilot/test/simulation/cache/base.sqlite`) 404s on
+  the LFS server. Use `GIT_LFS_SKIP_SMUDGE=1` for clone, checkout, and merge (CI uses
+  `actions/checkout` with `lfs: false`). The pointers are not needed to build.
+- Full incremental development uses the watch tasks, not `npm run compile`; see the inherited
+  `.claude/CLAUDE.md`. `npm run compile` is the correct one-shot full build used here.
+- Cross-platform packaging (NSIS, dmg, deb, rpm), signing, and the full CI matrix are Phase 6 / Phase 7.

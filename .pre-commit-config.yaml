@@ -11,11 +11,11 @@ repos:
     hooks:
       - id: clawdius-forbidden-content
         name: clawdius forbidden-content scan (Clawdius-authored paths only)
-        entry: node script/clawdius/scan-forbidden.js
+        entry: node script/clawdius/scan-forbidden.ts
         language: system
         pass_filenames: true
       - id: clawdius-large-file-guard
         name: block large binaries (> 5 MB, allowlist branding/installers)
-        entry: node script/clawdius/scan-forbidden.js --largefiles
+        entry: node script/clawdius/scan-forbidden.ts --largefiles
         language: system
         pass_filenames: true

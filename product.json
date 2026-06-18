@@ -1,38 +1,38 @@
 {
-	"nameShort": "Code - OSS",
-	"nameLong": "Code - OSS",
-	"applicationName": "code-oss",
-	"dataFolderName": ".vscode-oss",
-	"sharedDataFolderName": ".vscode-oss-shared",
-	"win32MutexName": "vscodeoss",
+	"nameShort": "Clawdius",
+	"nameLong": "Clawdius",
+	"applicationName": "clawdius",
+	"dataFolderName": ".clawdius",
+	"sharedDataFolderName": ".clawdius-shared",
+	"win32MutexName": "clawdius",
 	"licenseName": "MIT",
-	"licenseUrl": "https://github.com/microsoft/vscode/blob/main/LICENSE.txt",
-	"serverLicenseUrl": "https://github.com/microsoft/vscode/blob/main/LICENSE.txt",
+	"licenseUrl": "https://github.com/chapmanjw/clawdius/blob/main/LICENSE.txt",
+	"serverLicenseUrl": "https://github.com/chapmanjw/clawdius/blob/main/LICENSE.txt",
 	"serverGreeting": [],
 	"serverLicense": [],
 	"serverLicensePrompt": "",
-	"serverApplicationName": "code-server-oss",
-	"serverDataFolderName": ".vscode-server-oss",
-	"tunnelApplicationName": "code-tunnel-oss",
-	"win32DirName": "Microsoft Code OSS",
-	"win32NameVersion": "Microsoft Code OSS",
-	"win32RegValueName": "CodeOSS",
-	"win32x64AppId": "{{D77B7E06-80BA-4137-BCF4-654B95CCEBC5}",
-	"win32arm64AppId": "{{D1ACE434-89C5-48D1-88D3-E2991DF85475}",
-	"win32x64UserAppId": "{{CC6B787D-37A0-49E8-AE24-8559A032BE0C}",
-	"win32arm64UserAppId": "{{3AEBF0C8-F733-4AD4-BADE-FDB816D53D7B}",
-	"win32AppUserModelId": "Microsoft.CodeOSS",
-	"win32ShellNameShort": "C&ode - OSS",
-	"win32TunnelServiceMutex": "vscodeoss-tunnelservice",
-	"win32TunnelMutex": "vscodeoss-tunnel",
-	"darwinBundleIdentifier": "com.visualstudio.code.oss",
+	"serverApplicationName": "clawdius-server",
+	"serverDataFolderName": ".clawdius-server",
+	"tunnelApplicationName": "clawdius-tunnel",
+	"win32DirName": "Clawdius",
+	"win32NameVersion": "Clawdius",
+	"win32RegValueName": "Clawdius",
+	"win32x64AppId": "{{51233188-726A-4391-A8CA-FC7F371A3E8C}",
+	"win32arm64AppId": "{{FB25E1FA-E0E6-4361-A606-41ACB151F492}",
+	"win32x64UserAppId": "{{B660CF2A-C304-4B92-8A02-B2BB99FC8D69}",
+	"win32arm64UserAppId": "{{4866B374-7BC8-4671-8BE0-BB400FB212B7}",
+	"win32AppUserModelId": "chapmanjw.Clawdius",
+	"win32ShellNameShort": "Cl&awdius",
+	"win32TunnelServiceMutex": "clawdius-tunnelservice",
+	"win32TunnelMutex": "clawdius-tunnel",
+	"darwinBundleIdentifier": "io.clawdiuscode.clawdius",
 	"darwinProfileUUID": "47827DD9-4734-49A0-AF80-7E19B11495CC",
 	"darwinProfilePayloadUUID": "CF808BE7-53F3-46C6-A7E2-7EDB98A5E959",
-	"linuxIconName": "code-oss",
+	"linuxIconName": "clawdius",
 	"licenseFileName": "LICENSE.txt",
-	"reportIssueUrl": "https://github.com/microsoft/vscode/issues/new",
+	"reportIssueUrl": "https://github.com/chapmanjw/clawdius/issues/new",
 	"nodejsRepository": "https://nodejs.org",
-	"urlProtocol": "code-oss",
+	"urlProtocol": "clawdius",
 	"agentsTelemetryAppName": "agents",
 	"webviewContentExternalBaseUrlTemplate": "https://{{uuid}}.vscode-cdn.net/insider/ef65ac1ba57f57f2a3961bfe94aa20481caca4c6/out/vs/workbench/contrib/webview/browser/pre/",
 	"builtInExtensions": [
@@ -86,13 +86,13 @@
 		}
 	],
 	"defaultChatAgent": {
-		"extensionId": "GitHub.copilot",
-		"chatExtensionId": "GitHub.copilot-chat",
+		"extensionId": "chapmanjw.clawdius-chat",
+		"chatExtensionId": "chapmanjw.clawdius-chat",
 		"chatExtensionOutputId": "GitHub.copilot-chat.GitHub Copilot Chat.log",
 		"chatExtensionOutputExtensionStateCommand": "github.copilot.debug.extensionState",
-		"documentationUrl": "https://aka.ms/github-copilot-overview",
-		"termsStatementUrl": "https://aka.ms/github-copilot-terms-statement",
-		"privacyStatementUrl": "https://aka.ms/github-copilot-privacy-statement",
+		"documentationUrl": "https://clawdiuscode.io",
+		"termsStatementUrl": "https://clawdiuscode.io",
+		"privacyStatementUrl": "https://clawdiuscode.io",
 		"skusDocumentationUrl": "https://aka.ms/github-copilot-plans",
 		"publicCodeMatchesUrl": "https://aka.ms/github-copilot-match-public-code",
 		"managePlanUrl": "https://aka.ms/github-copilot-manage-plan",
@@ -116,7 +116,7 @@
 				"name": "Apple"
 			}
 		},
-		"providerExtensionId": "vscode.github-authentication",
+		"providerExtensionId": "",
 		"providerUriSetting": "github-enterprise.uri",
 		"providerScopes": [
 			[
@@ -148,14 +148,7 @@
 		"mcpRegistryDataUrl": "https://api.github.com/copilot/mcp_registry",
 		"managedSettingsUrl": "https://api.github.com/copilot_internal/managed_settings"
 	},
-	"trustedExtensionAuthAccess": {
-		"github": [
-			"GitHub.copilot-chat"
-		],
-		"github-enterprise": [
-			"GitHub.copilot-chat"
-		]
-	},
+	"trustedExtensionAuthAccess": {},
 	"onboardingKeymaps": [
 		{
 			"id": "vscode",
@@ -231,9 +224,12 @@
 			"type": "light"
 		}
 	],
-	"builtInExtensionsEnabledWithAutoUpdates": [
-		"GitHub.copilot-chat"
-	],
+	"builtInExtensionsEnabledWithAutoUpdates": [],
 	"sessionsWindowAllowedExtensions": [],
-	"voiceWsUrl": "wss://falcon-caas.mai.microsoft.com/voice-code/api/v1/realtime/voice"
+	"enableTelemetry": false,
+	"extensionsGallery": {
+		"serviceUrl": "https://open-vsx.org/vscode/gallery",
+		"itemUrl": "https://open-vsx.org/vscode/item",
+		"resourceUrlTemplate": "https://open-vsx.org/vscode/unpkg/{publisher}/{name}/{version}/{path}"
+	}
 }

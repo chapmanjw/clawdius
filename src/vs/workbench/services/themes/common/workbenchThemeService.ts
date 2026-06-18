@@ -39,8 +39,10 @@ export enum ThemeSettings {
 }
 
 export namespace ThemeSettingDefaults {
-	export const COLOR_THEME_DARK = 'Dark 2026';
-	export const COLOR_THEME_LIGHT = 'Light 2026';
+	// CLAWDIUS-BEGIN default theme (Phase 4): Clawdius Dark/Light are the out-of-box defaults
+	export const COLOR_THEME_DARK = 'Clawdius Dark';
+	export const COLOR_THEME_LIGHT = 'Clawdius Light';
+	// CLAWDIUS-END
 	export const COLOR_THEME_HC_DARK = 'Default High Contrast';
 	export const COLOR_THEME_HC_LIGHT = 'Default High Contrast Light';
 

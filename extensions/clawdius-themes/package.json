@@ -1,0 +1,39 @@
+{
+  "name": "clawdius-themes",
+  "displayName": "Clawdius Themes",
+  "description": "Clawdius Dark and Light color themes (the default Clawdius look).",
+  "categories": [
+    "Themes"
+  ],
+  "version": "1.0.0",
+  "publisher": "vscode",
+  "license": "MIT",
+  "engines": {
+    "vscode": "*"
+  },
+  "contributes": {
+    "themes": [
+      {
+        "id": "Clawdius Dark",
+        "label": "Clawdius Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/clawdius-dark.json"
+      },
+      {
+        "id": "Clawdius Light",
+        "label": "Clawdius Light",
+        "uiTheme": "vs",
+        "path": "./themes/clawdius-light.json"
+      }
+    ],
+    "configurationDefaults": {
+      "workbench.colorTheme": "Clawdius Dark",
+      "workbench.preferredDarkColorTheme": "Clawdius Dark",
+      "workbench.preferredLightColorTheme": "Clawdius Light"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chapmanjw/clawdius.git"
+  }
+}

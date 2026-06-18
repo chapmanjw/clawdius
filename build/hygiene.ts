@@ -89,10 +89,19 @@ export function hygiene(some: NodeJS.ReadWriteStream | string[] | undefined, run
 	const productJson = es.through(function (file: VinylFile) {
 		const product = JSON.parse(file.contents!.toString('utf8'));
 
-		if (product.extensionsGallery) {
-			console.error(`product.json: Contains 'extensionsGallery'`);
-			errorCount++;
+		// CLAWDIUS-BEGIN gallery policy: Clawdius bakes Open VSX into product.json by design (a
+		// self-contained product with no Microsoft Marketplace and no MS distro overlay). Invert the
+		// upstream "no gallery" guard into "Open VSX only": fail if a gallery is present that is not
+		// Open VSX, or points at the Microsoft Marketplace. branding-guard.ts verifies the positive case.
+		const gallery = product.extensionsGallery;
+		if (gallery) {
+			const url: string = gallery.serviceUrl || '';
+			if (/marketplace\.visualstudio\.com|vsassets\.io/i.test(url) || !/open-vsx\.org/i.test(url)) {
+				console.error(`product.json: extensionsGallery must be Open VSX (got '${url}')`);
+				errorCount++;
+			}
 		}
+		// CLAWDIUS-END
 
 		this.emit('data', file);
 	});

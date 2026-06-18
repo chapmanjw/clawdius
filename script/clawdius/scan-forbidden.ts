@@ -3,9 +3,9 @@
 // telemetry keys, and Amazon-internal terms (from an env-referenced wordlist that is never
 // committed) in CLAWDIUS-AUTHORED files only. The upstream VS Code tree legitimately contains
 // "copilot" until Phase 2 removes the chrome, so this scan deliberately skips upstream paths
-// and only inspects Clawdius-owned files plus files carrying a CLAUDIUS-BEGIN marker.
+// and only inspects Clawdius-owned files plus files carrying a CLAWDIUS-BEGIN marker.
 //
-// Usage: node script/clawdius/scan-forbidden.js [--largefiles] <files...>
+// Usage: node script/clawdius/scan-forbidden.ts [--largefiles] <files...>
 // Exit 1 on any finding.
 import fs from 'node:fs'
 
@@ -17,6 +17,16 @@ const files = args.filter((a) => !a.startsWith('--'))
 const OWNED = [/^clawdius\//, /^src\/vs\/workbench\/contrib\/clawdius\//, /^script\/clawdius\//,
   /^test\/clawdius\//, /^CHANGES_AGAINST_UPSTREAM\.md$/, /^MERGING\.md$/, /^README-CLAWDIUS/]
 const MARKER = 'CLAWDIUS-BEGIN'
+
+// The scanner's own source legitimately contains every forbidden pattern (the rule literals).
+// Never scan it, or the gate flags itself.
+const SELF = /(^|\/)script\/clawdius\/scan-forbidden\.ts$/
+// Files that must be able to NAME what Clawdius removes (Copilot / GitHub Copilot): the policy +
+// ledger docs, and the enforcement scripts under script/clawdius/ that check for the brand. They
+// stay subject to telemetry-key and Amazon-internal checks; only brand mentions are allowed.
+const BRAND_EXEMPT = [/^clawdius\/SECURITY-SCANNING\.md$/, /^CHANGES_AGAINST_UPSTREAM\.md$/,
+  /^MERGING\.md$/, /^README-CLAWDIUS/, /^script\/clawdius\//]
+const BRANDING_IDS = new Set(['copilot-brand', 'github-copilot-brand'])
 
 const FORBIDDEN = [
   { id: 'copilot-brand', re: /\bcopilot\b/i },
@@ -37,21 +47,25 @@ const LARGE_ALLOW = [/^clawdius\/branding\//, /\.(icns|ico)$/]
 
 let findings = 0
 for (const f of files) {
+  const nf = f.replace(/\\/g, '/')
   if (largeFilesMode) {
     try {
       const sz = fs.statSync(f).size
-      if (sz > LARGE_LIMIT && !LARGE_ALLOW.some((re) => re.test(f))) {
+      if (sz > LARGE_LIMIT && !LARGE_ALLOW.some((re) => re.test(nf))) {
         console.error(`[large-file] ${f} is ${(sz / 1048576).toFixed(1)} MB (> 5 MB)`) ; findings++
       }
     } catch {}
     continue
   }
-  const owned = OWNED.some((re) => re.test(f))
+  if (SELF.test(nf)) { continue }
+  const owned = OWNED.some((re) => re.test(nf))
   let text = ''
   try { text = fs.readFileSync(f, 'utf8') } catch { continue }
   const scan = owned || text.includes(MARKER)
-  if (!scan) continue
+  if (!scan) { continue }
+  const brandExempt = BRAND_EXEMPT.some((re) => re.test(nf))
   for (const rule of FORBIDDEN) {
+    if (brandExempt && BRANDING_IDS.has(rule.id)) { continue }
     if (rule.re.test(text)) { console.error(`[${rule.id}] forbidden content in ${f}`); findings++ }
   }
   for (const term of internal) {

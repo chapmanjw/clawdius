@@ -91,14 +91,24 @@ export function hygiene(some: NodeJS.ReadWriteStream | string[] | undefined, run
 
 		// CLAWDIUS-BEGIN gallery policy: Clawdius bakes Open VSX into product.json by design (a
 		// self-contained product with no Microsoft Marketplace and no MS distro overlay). Invert the
-		// upstream "no gallery" guard into "Open VSX only": fail if a gallery is present that is not
-		// Open VSX, or points at the Microsoft Marketplace. branding-guard.ts verifies the positive case.
+		// upstream "no gallery" guard into "Open VSX only": a gallery, if present, must point at Open VSX
+		// on every URL field. Checked by exact host prefix (a substring match would accept
+		// open-vsx.org.evil.com). branding-guard.ts verifies the positive case. Absent gallery passes
+		// (upstream OSS ships gallery-free).
 		const gallery = product.extensionsGallery;
 		if (gallery) {
-			const url: string = gallery.serviceUrl || '';
-			if (/marketplace\.visualstudio\.com|vsassets\.io/i.test(url) || !/open-vsx\.org/i.test(url)) {
-				console.error(`product.json: extensionsGallery must be Open VSX (got '${url}')`);
+			const openVsx = /^https:\/\/open-vsx\.org\//;
+			const serviceUrl: string = gallery.serviceUrl || '';
+			if (!openVsx.test(serviceUrl)) {
+				console.error(`product.json: extensionsGallery.serviceUrl must be Open VSX (https://open-vsx.org/), got '${serviceUrl}'`);
 				errorCount++;
+			}
+			for (const field of ['itemUrl', 'resourceUrlTemplate']) {
+				const u: string = gallery[field] || '';
+				if (u && !openVsx.test(u)) {
+					console.error(`product.json: extensionsGallery.${field} must be Open VSX, got '${u}'`);
+					errorCount++;
+				}
 			}
 		}
 		// CLAWDIUS-END

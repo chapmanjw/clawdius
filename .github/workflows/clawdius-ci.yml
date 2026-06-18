@@ -25,8 +25,29 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
-      - name: Clawdius scan scripts load (no-arg run exits clean)
-        run: node script/clawdius/scan-forbidden.ts
+      - name: Forbidden-content scanner is falsifiable (planted string must fail)
+        shell: bash
+        run: |
+          set -e
+          tmp=clawdius/__scan_selftest__
+          mkdir -p "$tmp"
+          printf 'const s = "GitHub Copilot";\n' > "$tmp/bad.ts"
+          if node script/clawdius/scan-forbidden.ts "$tmp/bad.ts"; then
+            echo "FAIL: scanner did not flag a planted Copilot string"; rm -rf "$tmp"; exit 1
+          fi
+          printf 'const s = "hello from clawd";\n' > "$tmp/good.ts"
+          node script/clawdius/scan-forbidden.ts "$tmp/good.ts"
+          rm -rf "$tmp"
+          echo "scanner is falsifiable: flags planted Copilot string, passes a clean file"
+      - name: Forbidden-content scan over Clawdius-owned files
+        shell: bash
+        run: |
+          set -e
+          files=$(git ls-files 'clawdius/**' 'script/clawdius/**' CHANGES_AGAINST_UPSTREAM.md MERGING.md 'README-CLAWDIUS*')
+          if [ -n "$files" ]; then
+            node script/clawdius/scan-forbidden.ts $files
+          fi
+          echo "forbidden-content scan clean over Clawdius-owned files"
       - name: Fork scaffolding intact
         shell: bash
         run: |

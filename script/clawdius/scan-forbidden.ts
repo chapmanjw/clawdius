@@ -22,10 +22,11 @@ const MARKER = 'CLAWDIUS-BEGIN'
 // Never scan it, or the gate flags itself.
 const SELF = /(^|\/)script\/clawdius\/scan-forbidden\.ts$/
 // Files that must be able to NAME what Clawdius removes (Copilot / GitHub Copilot): the policy +
-// ledger docs, and the enforcement scripts under script/clawdius/ that check for the brand. They
-// stay subject to telemetry-key and Amazon-internal checks; only brand mentions are allowed.
+// ledger docs, and branding-guard.ts (which asserts the brand is ABSENT, so it embeds the term). They
+// stay subject to telemetry-key and Amazon-internal checks; only brand mentions are allowed. SELF
+// already excludes the scanner itself, so this is a by-name list, not a directory-wide exemption.
 const BRAND_EXEMPT = [/^clawdius\/SECURITY-SCANNING\.md$/, /^CHANGES_AGAINST_UPSTREAM\.md$/,
-  /^MERGING\.md$/, /^README-CLAWDIUS/, /^script\/clawdius\//]
+  /^MERGING\.md$/, /^README-CLAWDIUS/, /(^|\/)script\/clawdius\/branding-guard\.ts$/]
 const BRANDING_IDS = new Set(['copilot-brand', 'github-copilot-brand'])
 
 const FORBIDDEN = [
@@ -36,7 +37,7 @@ const FORBIDDEN = [
 ]
 
 // Amazon-internal wordlist (path supplied via env, never committed).
-let internal = []
+let internal: string[] = []
 const wlPath = process.env.CLAWDIUS_INTERNAL_WORDLIST
 if (wlPath && fs.existsSync(wlPath)) {
   internal = fs.readFileSync(wlPath, 'utf8').split(/\r?\n/).map((s) => s.trim()).filter(Boolean)

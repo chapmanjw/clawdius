@@ -12,10 +12,15 @@ keeps that tractable.
 ## Current base
 `UPSTREAM_VERSION` = `1.125.0`. Pinned at Phase 0 as the newest stable tag (decision 5).
 
-## Shallow-fetch note (Phase 0)
-The Phase 0 import fetched the `1.125.0` tag at `--depth=1` to get a buildable baseline quickly.
-Before the FIRST real upstream merge, deepen history so merges have a common base:
-`git fetch --unshallow upstream` (or `git fetch upstream --deepen=<N>`), then fetch the new tag.
+## History and LFS notes (Phase 0)
+Phase 0 imported the `1.125.0` tag then ran `git fetch --unshallow upstream`, so the repo has full
+history (about 159k commits, `.git` ~1.3 GB) and is NOT shallow. Preflight any merge with
+`git rev-parse --is-shallow-repository` (must print `false`). Fetch release tags only, not all upstream
+branches.
+
+Git LFS: an upstream test-cache object (`extensions/copilot/test/simulation/cache/base.sqlite`) 404s on
+the LFS server, so set `GIT_LFS_SKIP_SMUDGE=1` for every clone, checkout, and merge (the LFS pointers stay
+as harmless text and are not needed to build). Track whether upstream fixes the object on the pinned tag.
 
 ## Taking a new release
 ```

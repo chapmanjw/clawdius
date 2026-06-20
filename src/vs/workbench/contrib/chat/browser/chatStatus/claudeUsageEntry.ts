@@ -95,12 +95,38 @@ function resetLabel(resets_at: string | null | undefined): string | undefined {
 	return localize('clawdius.usage.resetsDay', "Resets {0}, {1}", day, time);
 }
 
-/** Unicode block for a 0-100 value (8 levels), for the compact status-bar bars. */
-function block(util: number): string {
-	// The 8 block-height glyphs are the consecutive code points U+2581 (lower one-eighth block) .. U+2588
-	// (full block); pick one by the value. Built from char codes to avoid literal unicode in source.
-	const level = Math.min(7, Math.max(0, Math.floor((util / 100) * 8)));
-	return String.fromCharCode(0x2581 + level);
+/** The Claude mark: a small radial sunburst, referencing actual Claude capacity. */
+function appendClaudeMark(parent: HTMLElement, size: number): void {
+	const NS = 'http://www.w3.org/2000/svg';
+	const doc = parent.ownerDocument;
+	const svg = doc.createElementNS(NS, 'svg');
+	svg.setAttribute('viewBox', '0 0 24 24');
+	svg.setAttribute('width', String(size));
+	svg.setAttribute('height', String(size));
+	svg.classList.add('clawdius-claude-mark');
+	for (let i = 0; i < 12; i++) {
+		const ray = doc.createElementNS(NS, 'rect');
+		ray.setAttribute('x', '11');
+		ray.setAttribute('y', '1.5');
+		ray.setAttribute('width', '2');
+		ray.setAttribute('height', '7');
+		ray.setAttribute('rx', '1');
+		ray.setAttribute('transform', `rotate(${i * 30} 12 12)`);
+		svg.appendChild(ray);
+	}
+	parent.appendChild(svg);
+}
+
+/** A small capacity bar (track + fill) for the status-bar content element. */
+function appendCapacityPip(parent: HTMLElement, util: number): void {
+	const doc = parent.ownerDocument;
+	const track = doc.createElement('span');
+	track.className = 'clawdius-usage-pip';
+	const fill = doc.createElement('span');
+	fill.className = 'clawdius-usage-pip-fill';
+	fill.style.height = `${Math.max(10, Math.min(100, util))}%`;
+	track.appendChild(fill);
+	parent.appendChild(track);
 }
 
 export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchContribution {
@@ -181,26 +207,37 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 
 	private getProps(): IStatusbarEntry {
 		const windows = this.capacityWindows();
-		let text: string;
+		// Custom content: the Claude mark + one small capacity bar per Claude rate-limit window.
+		const content = mainWindow.document.createElement('div');
+		content.className = 'clawdius-usage-statusbar';
+		appendClaudeMark(content, 13);
 		if (windows.length > 0) {
-			// One mini bar per Claude rate-limit window (the "status bars").
-			text = `$(sparkle) ${windows.map(w => block(w.util)).join('')}`;
+			const pips = mainWindow.document.createElement('span');
+			pips.className = 'clawdius-usage-pips';
+			for (const w of windows) {
+				appendCapacityPip(pips, w.util);
+			}
+			content.appendChild(pips);
 		} else if (typeof this.stats?.totalMessages === 'number') {
-			text = `$(sparkle) ${compact(this.stats.totalMessages)}`;
-		} else {
-			text = '$(sparkle) Claude';
+			const label = mainWindow.document.createElement('span');
+			label.className = 'clawdius-usage-statusbar-label';
+			label.textContent = compact(this.stats.totalMessages);
+			content.appendChild(label);
 		}
 		return {
 			name: localize('clawdius.usage.name', "Claude Code Usage"),
-			text,
+			text: '',
 			ariaLabel: localize('clawdius.usage.aria', "Claude Code usage"),
+			content,
 			tooltip: { element: () => this.buildTooltip() },
 		};
 	}
 
 	private buildTooltip(): HTMLElement {
 		const root = h('.chat-status-bar-entry-tooltip.clawdius-usage-tooltip');
-		append(root, h('.clawdius-usage-header')).textContent = localize('clawdius.usage.brand', "Claude Code");
+		const header = append(root, h('.clawdius-usage-header'));
+		appendClaudeMark(header, 16);
+		append(header, h('span.clawdius-usage-header-text')).textContent = localize('clawdius.usage.brand', "Claude Code");
 
 		// --- Usage: capacity bars (Current session / week / per-model) ---
 		const windows = this.capacityWindows();

@@ -541,9 +541,61 @@
 }
 
 .clawdius-usage-header {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin-bottom: 12px;
+}
+
+.clawdius-usage-header-text {
 	font-weight: 600;
 	font-size: 13px;
-	margin-bottom: 12px;
+}
+
+.clawdius-usage-tooltip .clawdius-claude-mark rect {
+	fill: var(--vscode-charts-orange, #d97757);
+}
+
+/* Status-bar content: the Claude mark + one small capacity bar per rate-limit window. */
+.clawdius-usage-statusbar {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	height: 100%;
+}
+
+.clawdius-usage-statusbar .clawdius-claude-mark rect {
+	fill: var(--vscode-charts-orange, #d97757);
+}
+
+.clawdius-usage-pips {
+	display: flex;
+	align-items: flex-end;
+	gap: 2px;
+	height: 11px;
+}
+
+.clawdius-usage-pip {
+	position: relative;
+	display: inline-block;
+	width: 3px;
+	height: 100%;
+	border-radius: 1px;
+	background: var(--vscode-statusBarItem-hoverBackground, rgba(128, 128, 128, 0.35));
+	overflow: hidden;
+}
+
+.clawdius-usage-pip-fill {
+	position: absolute;
+	bottom: 0;
+	left: 0;
+	width: 100%;
+	border-radius: 1px;
+	background: var(--vscode-charts-orange, #d97757);
+}
+
+.clawdius-usage-statusbar-label {
+	font-variant-numeric: tabular-nums;
 }
 
 .clawdius-usage-section {

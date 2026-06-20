@@ -12,13 +12,43 @@ import * as fs from 'fs';
 
 const PARTICIPANT_ID = 'vscode.clawdius-chat.default';
 const MODEL_VENDOR = 'clawdius';
-const MODEL_ID = 'claude-code';
 
 // v1 is READ-ONLY/conversational. Under `claude -p` the CLI runs its OWN agent loop and can only use the
 // tools we pre-approve here; everything else auto-denies. Read tools let Claude answer about the workspace
-// without ever mutating it, running shell, or reaching the network. Agentic write mode + a permission
-// bridge to the chat confirmation UI is a follow-up.
+// without ever mutating it, running shell, or reaching the network. Agentic write mode (+ permission-mode
+// selection and a permission bridge to the chat confirmation UI) is a follow-up.
 const ALLOWED_TOOLS = ['Read', 'Grep', 'Glob'];
+
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+interface ClaudeModelDef {
+	readonly id: string; // the `claude --model` alias (always resolves to the latest of that family)
+	readonly name: string;
+	readonly detail: string;
+	readonly maxInputTokens: number;
+	readonly maxOutputTokens: number;
+	readonly isDefault?: boolean;
+}
+
+// The Claude models offered in the picker, keyed by their `claude --model` alias.
+const CLAUDE_MODELS: ReadonlyArray<ClaudeModelDef> = [
+	{ id: 'opus', name: 'Claude Opus', detail: 'Most capable - deepest reasoning', maxInputTokens: 200_000, maxOutputTokens: 64_000, isDefault: true },
+	{ id: 'sonnet', name: 'Claude Sonnet', detail: 'Balanced - fast and strong', maxInputTokens: 200_000, maxOutputTokens: 64_000 },
+	{ id: 'haiku', name: 'Claude Haiku', detail: 'Fastest - lightweight', maxInputTokens: 200_000, maxOutputTokens: 32_000 },
+];
+
+/** The user's preferred effort, read from ~/.claude/settings.json so Clawdius mirrors the CLI's own setting. */
+function defaultEffort(): string {
+	try {
+		const settings = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'settings.json'), 'utf8'));
+		if (typeof settings.effortLevel === 'string' && (EFFORT_LEVELS as ReadonlyArray<string>).includes(settings.effortLevel)) {
+			return settings.effortLevel;
+		}
+	} catch {
+		// no settings / unreadable - fall back
+	}
+	return 'high';
+}
 
 /**
  * Resolve the Claude Code CLI binary. The extension host PATH may not include the user's local bin, so
@@ -60,9 +90,22 @@ interface ClaudeRunResult {
  * Spawn the local Claude Code CLI with a single prompt and stream its assistant text. `claude -p` reads the
  * prompt from the arg and emits newline-delimited JSON; we forward every assistant text block to `onText`.
  */
-function runClaude(prompt: string, cwd: string, token: vscode.CancellationToken, onText: (text: string) => void): Promise<ClaudeRunResult> {
+interface ClaudeRunOptions {
+	readonly model?: string;  // `claude --model` alias
+	readonly effort?: string; // `claude --effort` level
+}
+
+function runClaude(prompt: string, cwd: string, token: vscode.CancellationToken, onText: (text: string) => void, opts: ClaudeRunOptions = {}): Promise<ClaudeRunResult> {
 	return new Promise<ClaudeRunResult>(resolve => {
-		const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--allowed-tools', ...ALLOWED_TOOLS];
+		// `--strict-mcp-config` with no `--mcp-config` skips the user's MCP servers, so a quick chat answer is
+		// not delayed by (or noised up with) MCP server startup. Agentic mode can opt back in later.
+		const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--strict-mcp-config', '--allowed-tools', ...ALLOWED_TOOLS];
+		if (opts.model) {
+			args.push('--model', opts.model);
+		}
+		if (opts.effort) {
+			args.push('--effort', opts.effort);
+		}
 
 		let child: ChildProcessWithoutNullStreams;
 		try {
@@ -178,24 +221,41 @@ function messagesToPrompt(messages: ReadonlyArray<vscode.LanguageModelChatReques
  */
 class ClaudeLanguageModelProvider implements vscode.LanguageModelChatProvider {
 	async provideLanguageModelChatInformation(_options: vscode.PrepareLanguageModelChatModelOptions, _token: vscode.CancellationToken): Promise<vscode.LanguageModelChatInformation[]> {
-		return [{
-			id: MODEL_ID,
-			name: 'Claude (Claude Code)',
+		// Per-model "effort" control (Claude Code's --effort), shown as a primary action in the model picker.
+		const configurationSchema = {
+			properties: {
+				effort: {
+					type: 'string',
+					enum: [...EFFORT_LEVELS],
+					enumItemLabels: ['Low', 'Medium', 'High', 'Extra High', 'Max'],
+					default: defaultEffort(),
+					description: 'Reasoning effort (Claude Code --effort).',
+					group: 'navigation',
+				},
+			},
+		};
+		return CLAUDE_MODELS.map(model => ({
+			id: model.id,
+			name: model.name,
+			detail: model.detail,
 			family: 'claude',
 			version: '1.0.0',
-			maxInputTokens: 200_000,
-			maxOutputTokens: 64_000,
+			maxInputTokens: model.maxInputTokens,
+			maxOutputTokens: model.maxOutputTokens,
 			// Claude runs its own agent loop in the CLI, so it does not expose VS Code-side tool calling yet.
 			capabilities: { toolCalling: false, imageInput: false },
-			isDefault: true,
+			isDefault: model.isDefault ?? false,
 			isUserSelectable: true,
-		}];
+			configurationSchema,
+		}));
 	}
 
-	async provideLanguageModelChatResponse(_model: vscode.LanguageModelChatInformation, messages: readonly vscode.LanguageModelChatRequestMessage[], _options: vscode.ProvideLanguageModelChatResponseOptions, progress: vscode.Progress<vscode.LanguageModelResponsePart2>, token: vscode.CancellationToken): Promise<void> {
+	async provideLanguageModelChatResponse(model: vscode.LanguageModelChatInformation, messages: readonly vscode.LanguageModelChatRequestMessage[], options: vscode.ProvideLanguageModelChatResponseOptions, progress: vscode.Progress<vscode.LanguageModelResponsePart2>, token: vscode.CancellationToken): Promise<void> {
 		const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
 		const prompt = messagesToPrompt(messages);
-		const result = await runClaude(prompt, cwd, token, text => progress.report(new vscode.LanguageModelTextPart(text)));
+		const configuredEffort = options.modelConfiguration?.effort;
+		const effort = typeof configuredEffort === 'string' ? configuredEffort : defaultEffort();
+		const result = await runClaude(prompt, cwd, token, text => progress.report(new vscode.LanguageModelTextPart(text)), { model: model.id, effort });
 		if (result.error && !result.answered) {
 			throw new Error(result.error);
 		}

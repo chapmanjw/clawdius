@@ -58,7 +58,9 @@ export class MobilePermissionPicker extends PermissionPicker {
 			{
 				id: ChatPermissionLevel.Default,
 				label: localize('permissions.default', "Default Approvals"),
-				description: localize('permissions.default.subtext', "Copilot uses your configured settings"),
+				// CLAWDIUS-BEGIN claude branding
+				description: localize('permissions.default.subtext', "Claude uses your configured settings"),
+				// CLAWDIUS-END
 				icon: Codicon.shield,
 				checked: this._currentLevel === ChatPermissionLevel.Default,
 			},

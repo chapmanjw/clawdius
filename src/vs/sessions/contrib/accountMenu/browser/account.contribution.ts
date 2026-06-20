@@ -301,7 +301,9 @@ class TitleBarAccountWidget extends BaseActionViewItem {
 
 	private getAvatarAltText(hasLoadedAvatar: boolean): string {
 		if (hasLoadedAvatar && this.accountProviderId === 'github' && this.accountName) {
-			return localize('accountAvatarAlt', "GitHub profile image for {0}", this.accountName);
+			// CLAWDIUS-BEGIN no github branding
+			return localize('accountAvatarAlt', "Profile image for {0}", this.accountName);
+			// CLAWDIUS-END
 		}
 
 		return localize('accountAvatarAltFallback', "Account profile image");

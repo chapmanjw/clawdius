@@ -31,7 +31,9 @@ export class OpenSessionEventsFileAction extends Action2 {
 	constructor() {
 		super({
 			id: OpenSessionEventsFileAction.ID,
-			title: localize2('openSessionEventsFile', "Open Copilot CLI State File"),
+			// CLAWDIUS-BEGIN no copilot branding
+			title: localize2('openSessionEventsFile', "Open Agent Session State File"),
+			// CLAWDIUS-END
 			f1: true,
 			category: Categories.Developer,
 			precondition: ContextKeyExpr.and(ChatContextKeys.enabled, IsAgentHostSession),

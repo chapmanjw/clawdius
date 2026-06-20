@@ -169,7 +169,9 @@ export class PermissionPicker extends Disposable {
 					checked: this._currentLevel === ChatPermissionLevel.Default,
 				},
 				label: localize('permissions.default', "Default Approvals"),
-				detail: localize('permissions.default.subtext', "Copilot uses your configured settings"),
+				// CLAWDIUS-BEGIN claude branding
+				detail: localize('permissions.default.subtext', "Claude uses your configured settings"),
+				// CLAWDIUS-END
 				disabled: false,
 			},
 			{

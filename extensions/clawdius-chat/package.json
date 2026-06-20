@@ -10,7 +10,8 @@
   },
   "enabledApiProposals": [
     "defaultChatParticipant",
-    "chatParticipantAdditions"
+    "chatParticipantAdditions",
+    "chatProvider"
   ],
   "main": "./out/extension",
   "activationEvents": [
@@ -21,6 +22,12 @@
     "watch": "gulp watch-extension:clawdius-chat"
   },
   "contributes": {
+    "languageModelChatProviders": [
+      {
+        "vendor": "clawdius",
+        "displayName": "Clawdius (Claude Code)"
+      }
+    ],
     "chatParticipants": [
       {
         "id": "vscode.clawdius-chat.default",

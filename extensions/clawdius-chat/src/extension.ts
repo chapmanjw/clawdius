@@ -11,11 +11,13 @@ import * as path from 'path';
 import * as fs from 'fs';
 
 const PARTICIPANT_ID = 'vscode.clawdius-chat.default';
+const MODEL_VENDOR = 'clawdius';
+const MODEL_ID = 'claude-code';
 
-// v1 is READ-ONLY/conversational. Under `claude -p` the CLI cannot raise interactive permission
-// prompts, so any tool that is not pre-approved is auto-denied. We hand Claude only read tools, so it
-// can answer about the workspace but can never mutate it, run shell, or reach the network. Agentic mode
-// with a permission bridge to the chat confirmation UI is a follow-up.
+// v1 is READ-ONLY/conversational. Under `claude -p` the CLI runs its OWN agent loop and can only use the
+// tools we pre-approve here; everything else auto-denies. Read tools let Claude answer about the workspace
+// without ever mutating it, running shell, or reaching the network. Agentic write mode + a permission
+// bridge to the chat confirmation UI is a follow-up.
 const ALLOWED_TOOLS = ['Read', 'Grep', 'Glob'];
 
 /**
@@ -40,52 +42,42 @@ function resolveClaudeBinary(): string {
 	return 'claude';
 }
 
-/** The session id of the most recent Clawdius response, recovered from chat history (survives reloads). */
-function lastSessionId(history: ReadonlyArray<vscode.ChatRequestTurn | vscode.ChatResponseTurn>): string | undefined {
-	for (let i = history.length - 1; i >= 0; i--) {
-		// A request turn has no `.result`; the optional chain reads `undefined` for those, so casting every
-		// turn to a response turn and guarding with `?.` discriminates without the banned `in` operator.
-		const sessionId = (history[i] as vscode.ChatResponseTurn).result?.metadata?.sessionId;
-		if (typeof sessionId === 'string' && sessionId.length > 0) {
-			return sessionId;
-		}
-	}
-	return undefined;
-}
-
 interface ClaudeStreamEvent {
 	readonly type?: string;
 	readonly subtype?: string;
 	readonly session_id?: string;
 	readonly is_error?: boolean;
+	readonly result?: string;
 	readonly message?: { readonly content?: ReadonlyArray<{ readonly type?: string; readonly text?: string }> };
 }
 
-export function activate(context: vscode.ExtensionContext): void {
-	const handler: vscode.ChatRequestHandler = async (request, chatContext, response, token): Promise<vscode.ChatResult> => {
-		const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
-		const resumeId = lastSessionId(chatContext.history);
+interface ClaudeRunResult {
+	readonly answered: boolean;
+	readonly error?: string;
+}
 
-		const args = ['-p', request.prompt, '--output-format', 'stream-json', '--verbose', '--allowed-tools', ...ALLOWED_TOOLS];
-		if (resumeId) {
-			args.push('--resume', resumeId);
-		}
+/**
+ * Spawn the local Claude Code CLI with a single prompt and stream its assistant text. `claude -p` reads the
+ * prompt from the arg and emits newline-delimited JSON; we forward every assistant text block to `onText`.
+ */
+function runClaude(prompt: string, cwd: string, token: vscode.CancellationToken, onText: (text: string) => void): Promise<ClaudeRunResult> {
+	return new Promise<ClaudeRunResult>(resolve => {
+		const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--allowed-tools', ...ALLOWED_TOOLS];
 
 		let child: ChildProcessWithoutNullStreams;
 		try {
 			child = spawn(resolveClaudeBinary(), args, { cwd, windowsHide: true });
 		} catch (err) {
-			response.markdown(vscode.l10n.t('Could not start the Claude Code CLI. Make sure `claude` is installed and on your PATH.'));
-			return { errorDetails: { message: err instanceof Error ? err.message : String(err) } };
+			resolve({ answered: false, error: err instanceof Error ? err.message : String(err) });
+			return;
 		}
 
 		const cancellation = token.onCancellationRequested(() => {
 			try { child.kill(); } catch { /* already gone */ }
 		});
 
-		let sessionId = resumeId;
-		let sawError = false;
 		let answered = false;
+		let sawError = false;
 		let spawnError: Error | undefined;
 		let stderr = '';
 
@@ -98,7 +90,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		const reader = createInterface({ input: child.stdout });
 		reader.on('line', line => {
 			if (token.isCancellationRequested) {
-				return; // stop streaming into a response the user already cancelled
+				return;
 			}
 			const trimmed = line.trim();
 			if (!trimmed) {
@@ -110,57 +102,156 @@ export function activate(context: vscode.ExtensionContext): void {
 			} catch {
 				return; // non-JSON noise; ignore
 			}
-			if (event.type === 'system' && event.subtype === 'init' && event.session_id) {
-				sessionId = event.session_id;
-			} else if (event.type === 'assistant' && event.message?.content) {
-				// Stream only assistant TEXT blocks. Tool-use blocks and the final `result` echo are skipped
-				// so the transcript is not duplicated.
+			if (event.type === 'assistant' && event.message?.content) {
+				// Stream only assistant TEXT blocks; tool-use blocks and the final `result` echo are skipped.
 				for (const part of event.message.content) {
 					if (part.type === 'text' && part.text) {
-						response.markdown(part.text);
+						onText(part.text);
 						answered = true;
 					}
 				}
-			} else if (event.type === 'result') {
-				if (event.session_id) {
-					sessionId = event.session_id;
-				}
-				if (event.is_error) {
-					sawError = true;
-				}
+			} else if (event.type === 'result' && event.is_error) {
+				sawError = true;
 			}
 		});
 
 		// Settle when BOTH the child exit (for the code) and the reader close (all NDJSON lines flushed) have
-		// happened, so the final assistant text and result session_id are never missed - but also settle
-		// immediately on a spawn 'error' (e.g. ENOENT), which does not reliably emit 'close' and would
-		// otherwise hang the turn forever.
+		// happened - but also settle immediately on a spawn 'error' (e.g. ENOENT), which does not reliably
+		// emit 'close' and would otherwise hang forever.
 		let exitCode = 0;
-		await new Promise<void>(resolve => {
-			let childClosed = false;
-			let readerClosed = false;
-			const settle = () => { if (childClosed && readerClosed) { resolve(); } };
-			child.on('close', code => { exitCode = code ?? 0; childClosed = true; settle(); });
-			reader.on('close', () => { readerClosed = true; settle(); });
-			child.on('error', () => { childClosed = true; readerClosed = true; resolve(); });
-		});
-		cancellation.dispose();
-
-		if (token.isCancellationRequested) {
-			return { metadata: { sessionId } };
-		}
-		if (spawnError) {
-			response.markdown(vscode.l10n.t('Could not start the Claude Code CLI. Make sure `claude` is installed and that you are signed in (run `claude` in a terminal).'));
-			return { errorDetails: { message: spawnError.message } };
-		}
-		if (sawError || exitCode !== 0 || !answered) {
-			if (!answered) {
-				response.markdown(vscode.l10n.t('Clawdius could not get a response from the Claude Code CLI. Check that you are signed in by running `claude` in a terminal.'));
+		let childClosed = false;
+		let readerClosed = false;
+		const settle = () => {
+			if (childClosed && readerClosed) {
+				cancellation.dispose();
+				if (spawnError) {
+					resolve({ answered, error: spawnError.message });
+				} else if (sawError || exitCode !== 0 || !answered) {
+					resolve({ answered, error: stderr.trim() || `Claude CLI exited with code ${exitCode}.` });
+				} else {
+					resolve({ answered, error: undefined });
+				}
 			}
-			return { errorDetails: { message: stderr.trim() || vscode.l10n.t('Claude CLI exited with code {0}.', exitCode) } };
-		}
+		};
+		child.on('close', code => { exitCode = code ?? 0; childClosed = true; settle(); });
+		reader.on('close', () => { readerClosed = true; settle(); });
+		child.on('error', () => { childClosed = true; readerClosed = true; settle(); });
+	});
+}
 
-		return { metadata: { sessionId } };
+/** Extract plain text from a heterogeneous content array (text parts expose a string `value`). */
+function partsToText(content: ReadonlyArray<unknown>): string {
+	let text = '';
+	for (const part of content) {
+		const value = (part as { value?: unknown })?.value;
+		if (typeof value === 'string') {
+			text += value;
+		} else if (typeof part === 'string') {
+			text += part;
+		}
+	}
+	return text;
+}
+
+/** Flatten a chat conversation into a single prompt for `claude -p` (it has no native multi-message input). */
+function messagesToPrompt(messages: ReadonlyArray<vscode.LanguageModelChatRequestMessage>): string {
+	const turns: string[] = [];
+	for (const message of messages) {
+		const text = partsToText(message.content as ReadonlyArray<unknown>).trim();
+		if (!text) {
+			continue;
+		}
+		const role = message.role === vscode.LanguageModelChatMessageRole.Assistant ? 'Assistant' : 'Human';
+		turns.push(`${role}: ${text}`);
+	}
+	if (turns.length <= 1) {
+		// Single user turn: hand Claude the raw prompt without role labels.
+		return partsToText((messages[messages.length - 1]?.content ?? []) as ReadonlyArray<unknown>).trim();
+	}
+	return turns.join('\n\n');
+}
+
+/**
+ * The Clawdius language model: Claude, served by the local Claude Code CLI. Registered through the standard
+ * `lm.registerLanguageModelChatProvider` extension point, so it appears in the model picker alongside any
+ * models other extensions contribute.
+ */
+class ClaudeLanguageModelProvider implements vscode.LanguageModelChatProvider {
+	async provideLanguageModelChatInformation(_options: vscode.PrepareLanguageModelChatModelOptions, _token: vscode.CancellationToken): Promise<vscode.LanguageModelChatInformation[]> {
+		return [{
+			id: MODEL_ID,
+			name: 'Claude (Claude Code)',
+			family: 'claude',
+			version: '1.0.0',
+			maxInputTokens: 200_000,
+			maxOutputTokens: 64_000,
+			// Claude runs its own agent loop in the CLI, so it does not expose VS Code-side tool calling yet.
+			capabilities: { toolCalling: false, imageInput: false },
+			isDefault: true,
+			isUserSelectable: true,
+		}];
+	}
+
+	async provideLanguageModelChatResponse(_model: vscode.LanguageModelChatInformation, messages: readonly vscode.LanguageModelChatRequestMessage[], _options: vscode.ProvideLanguageModelChatResponseOptions, progress: vscode.Progress<vscode.LanguageModelResponsePart2>, token: vscode.CancellationToken): Promise<void> {
+		const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
+		const prompt = messagesToPrompt(messages);
+		const result = await runClaude(prompt, cwd, token, text => progress.report(new vscode.LanguageModelTextPart(text)));
+		if (result.error && !result.answered) {
+			throw new Error(result.error);
+		}
+	}
+
+	async provideTokenCount(_model: vscode.LanguageModelChatInformation, text: string | vscode.LanguageModelChatRequestMessage, _token: vscode.CancellationToken): Promise<number> {
+		const str = typeof text === 'string' ? text : partsToText(text.content as ReadonlyArray<unknown>);
+		// Rough heuristic (~4 chars/token); the Claude tokenizer is not exposed to the CLI.
+		return Math.max(1, Math.ceil(str.length / 4));
+	}
+}
+
+/** Convert chat history + the current prompt into language-model messages. */
+function buildMessages(history: ReadonlyArray<vscode.ChatRequestTurn | vscode.ChatResponseTurn>, prompt: string): vscode.LanguageModelChatMessage[] {
+	const messages: vscode.LanguageModelChatMessage[] = [];
+	for (const turn of history) {
+		const requestPrompt = (turn as vscode.ChatRequestTurn).prompt;
+		if (typeof requestPrompt === 'string') {
+			messages.push(vscode.LanguageModelChatMessage.User(requestPrompt));
+			continue;
+		}
+		const response = (turn as vscode.ChatResponseTurn).response;
+		if (Array.isArray(response)) {
+			const text = partsToText(response.map(part => (part as { value?: unknown }).value));
+			if (text.trim()) {
+				messages.push(vscode.LanguageModelChatMessage.Assistant(text));
+			}
+		}
+	}
+	messages.push(vscode.LanguageModelChatMessage.User(prompt));
+	return messages;
+}
+
+export function activate(context: vscode.ExtensionContext): void {
+	// Register Claude as a language model (the model picker + any model-using flow can now select it).
+	context.subscriptions.push(vscode.lm.registerLanguageModelChatProvider(MODEL_VENDOR, new ClaudeLanguageModelProvider()));
+
+	// The default panel participant is model-agnostic: it relays whatever model the user picked (Claude by
+	// default, or any model another extension contributes) so the model picker is meaningful.
+	const handler: vscode.ChatRequestHandler = async (request, chatContext, response, token): Promise<vscode.ChatResult> => {
+		if (!request.model) {
+			response.markdown(vscode.l10n.t('No language model is available. Make sure the Claude Code CLI is installed and you are signed in (run `claude` in a terminal).'));
+			return { errorDetails: { message: 'No language model available.' } };
+		}
+		try {
+			const messages = buildMessages(chatContext.history, request.prompt);
+			const chatResponse = await request.model.sendRequest(messages, {}, token);
+			for await (const chunk of chatResponse.text) {
+				response.markdown(chunk);
+			}
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			response.markdown(vscode.l10n.t('Clawdius could not get a response from Claude: {0}', message));
+			return { errorDetails: { message } };
+		}
+		return {};
 	};
 
 	const participant = vscode.chat.createChatParticipant(PARTICIPANT_ID, handler);

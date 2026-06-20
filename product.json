@@ -101,7 +101,7 @@
 		"provider": {
 			"default": {
 				"id": "github",
-				"name": "GitHub"
+				"name": "Clawdius"
 			},
 			"enterprise": {
 				"id": "github-enterprise",

@@ -113,7 +113,12 @@ import { isAgentHostTarget } from '../agentSessions/agentSessions.js';
 
 const $ = dom.$;
 
-const COPILOT_USERNAME = 'GitHub Copilot';
+// CLAWDIUS-BEGIN brand username: MUST stay in lockstep with the default agent's display name, which is
+// `${product.defaultChatAgent.provider.default.name} Copilot` (chatSetupProviders.ts, marked "Do NOT
+// change"). If they differ, the redundant username + avatar stop being hidden in the chat transcript.
+// Provider name is "Clawdius" (product.json defaultChatAgent.provider.default.name), so this is "Clawdius Copilot".
+const COPILOT_USERNAME = 'Clawdius Copilot';
+// CLAWDIUS-END
 const WORKING_CAUGHT_UP_DEBOUNCE_MS = 750;
 
 export interface IChatListItemTemplate {

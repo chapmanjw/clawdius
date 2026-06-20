@@ -778,7 +778,9 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			isDefault: false,
 			isDynamic: true,
 			isCore: true,
-			metadata: { themeIcon: Codicon.copilot },
+			// CLAWDIUS-BEGIN claude themeicon on the native agent
+			metadata: { themeIcon: this._config.sessionType.endsWith('claude') ? Codicon.claude : Codicon.copilot },
+			// CLAWDIUS-END
 			slashCommands: [],
 			locations: [ChatAgentLocation.Chat],
 			modes: [ChatModeKind.Agent],
@@ -2590,7 +2592,9 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		return {
 			resource: forkedResource,
 			label: forkedLabel,
-			iconPath: Codicon.copilot,
+			// CLAWDIUS-BEGIN claude icon on forked native session
+			iconPath: this._config.sessionType.endsWith('claude') ? Codicon.claude : Codicon.copilot,
+			// CLAWDIUS-END
 			timing: { created: now, lastRequestStarted: now, lastRequestEnded: now },
 		};
 	}

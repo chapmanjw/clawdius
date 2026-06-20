@@ -61,7 +61,9 @@ export class NativeTitlebarPart extends TitlebarPart {
 		// matches the BrowserWindow's initial title.
 		// See: https://github.com/microsoft/vscode/issues/191288
 		const window = getWindow(this.element);
-		const agentsTitle = localize('agentsWindowTitle', "Agents");
+		// CLAWDIUS-BEGIN ultracode window name
+		const agentsTitle = localize('agentsWindowTitle', "Ultracode");
+		// CLAWDIUS-END
 		if (isMacintosh) {
 			const initialTitle = this.productService.nameLong;
 			if (!window.document.title || window.document.title === initialTitle) {

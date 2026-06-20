@@ -87,9 +87,9 @@ interface IClaudeModelSupports {
 // `claude --model` values the SDK resolves to the latest of each family. `provider` is omitted here and
 // stamped at publish so it matches ClaudeAgent.id. models[0] (Opus) is the de-facto picker default.
 const CLAWDIUS_STATIC_CLAUDE_MODELS: readonly Omit<IAgentModelInfo, 'provider'>[] = [
-	{ id: 'opus', name: 'Claude Opus', maxContextWindow: 200_000, supportsVision: true, configSchema: createClaudeThinkingLevelSchema(['low', 'medium', 'high', 'xhigh', 'max']) },
-	{ id: 'sonnet', name: 'Claude Sonnet', maxContextWindow: 200_000, supportsVision: true, configSchema: createClaudeThinkingLevelSchema(['low', 'medium', 'high', 'xhigh', 'max']) },
-	{ id: 'haiku', name: 'Claude Haiku', maxContextWindow: 200_000, supportsVision: true, configSchema: createClaudeThinkingLevelSchema(['low', 'medium', 'high']) },
+	{ id: 'opus', name: 'Claude Opus', maxContextWindow: 1_000_000, supportsVision: true, configSchema: createClaudeThinkingLevelSchema(['low', 'medium', 'high', 'xhigh', 'max']) },
+	{ id: 'sonnet', name: 'Claude Sonnet', maxContextWindow: 1_000_000, supportsVision: true, configSchema: createClaudeThinkingLevelSchema(['low', 'medium', 'high', 'xhigh', 'max']) },
+	{ id: 'haiku', name: 'Claude Haiku', maxContextWindow: 200_000, supportsVision: true, configSchema: createClaudeThinkingLevelSchema(['low', 'medium', 'high', 'xhigh', 'max']) },
 ];
 // CLAWDIUS-END
 

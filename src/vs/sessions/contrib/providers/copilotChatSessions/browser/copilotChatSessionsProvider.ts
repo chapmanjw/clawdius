@@ -1452,6 +1452,13 @@ export class CopilotChatSessionsProvider extends Disposable implements ISessions
 	 * the Agents window picker only surfaces the Agent Host Copilot CLI entry.
 	 */
 	private _isCopilotCliAvailable(): boolean {
+		// CLAWDIUS-BEGIN no copilot cli session type
+		// There is no extension-host GitHub Copilot CLI harness in Clawdius, so never offer the "Copilot CLI"
+		// new-session type (it was a phantom entry with the Copilot label + icon). Upstream is unchanged.
+		if (!product.defaultChatAgent?.entitlementUrl) {
+			return false;
+		}
+		// CLAWDIUS-END
 		return !this._hideExtensionHostCopilotCli;
 	}
 

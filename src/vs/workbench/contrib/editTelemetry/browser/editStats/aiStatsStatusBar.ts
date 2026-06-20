@@ -16,6 +16,7 @@ import { ICommandService } from '../../../../../platform/commands/common/command
 import { nativeHoverDelegate } from '../../../../../platform/hover/browser/hover.js';
 import { ITelemetryService } from '../../../../../platform/telemetry/common/telemetry.js';
 import { IStatusbarService, StatusbarAlignment } from '../../../../services/statusbar/browser/statusbar.js';
+import product from '../../../../../platform/product/common/product.js';
 import { AI_STATS_SETTING_ID } from '../settingIds.js';
 import type { AiStatsFeature } from './aiStatsFeature.js';
 import { ChartViewMode, createAiStatsChart, ISessionData } from './aiStatsChart.js';
@@ -31,6 +32,15 @@ export class AiStatsStatusBar extends Disposable {
 		@ITelemetryService private readonly _telemetryService: ITelemetryService,
 	) {
 		super();
+
+		// CLAWDIUS-BEGIN no vscode AI-stats entry
+		// In Clawdius (Copilot eliminated => no defaultChatAgent.entitlementUrl) the dedicated Claude Code
+		// usage entry (claudeUsageEntry.ts) owns this slot, so suppress VS Code's "AI Usage Statistics" /
+		// "Inline suggestions" status entry to avoid a duplicate.
+		if (!product.defaultChatAgent?.entitlementUrl) {
+			return;
+		}
+		// CLAWDIUS-END
 
 		this._register(autorun((reader) => {
 			const statusBarItem = this._createStatusBar().keepUpdated(reader.store);

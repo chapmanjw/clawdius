@@ -94,6 +94,15 @@ class SessionsSetUpWidget extends Disposable {
 	}
 
 	private _start(): void {
+		// CLAWDIUS-BEGIN no copilot setup/sign-in flow
+		// Copilot eliminated + empty entitlementUrl (Clawdius): there is no IDE account to sign into, so
+		// skip the GitHub/Copilot-branded sessions welcome + sign-in dialog entirely. Mirrors the choke
+		// point in accountTitleBarState.ts (computeState early-returns on empty entitlementUrl).
+		if (!this.productService.defaultChatAgent?.entitlementUrl) {
+			this.onCompleted();
+			return;
+		}
+		// CLAWDIUS-END
 		if (!this.productService.defaultChatAgent?.chatExtensionId) {
 			this.onCompleted();
 			return;

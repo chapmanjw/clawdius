@@ -1363,8 +1363,12 @@ class AgentSessionAdapter implements ICopilotChatSession {
 export class CopilotChatSessionsProvider extends Disposable implements ISessionsProvider {
 
 	readonly id = COPILOT_PROVIDER_ID;
-	readonly label = localize('copilotChatSessionsProvider', "Copilot Chat");
-	readonly icon = Codicon.copilot;
+	// CLAWDIUS-BEGIN claude branding (agents window session source)
+	// User-visible provider name + icon only. The id (COPILOT_PROVIDER_ID), the nls key, the class
+	// name, and every command id are left intact so the Claude/CLI wiring and tests still bind.
+	readonly label = localize('copilotChatSessionsProvider', "Claude Code");
+	readonly icon = Codicon.claude;
+	// CLAWDIUS-END
 	readonly order = 0;
 
 	get sessionTypes(): readonly ISessionType[] {

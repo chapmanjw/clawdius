@@ -415,9 +415,16 @@ export class ChatEntitlementService extends Disposable implements IChatEntitleme
 			return;
 		}
 
-		if (!productService.defaultChatAgent) {
-			return; // we need a default chat agent configured going forward from here
+		// CLAWDIUS-BEGIN no copilot setup chrome
+		// Copilot is eliminated and product.json leaves defaultChatAgent.entitlementUrl empty. Bailing here
+		// leaves this.context/this.requests undefined, which makes ChatSetupContribution short-circuit
+		// (chatSetupContributions.ts) so NONE of the sign-in / setup / growth chrome ever registers: the
+		// titlebar sign-in pill, the accounts-menu entry, the F1 setup commands, the upgrade/manage items,
+		// the growth nudge, the setup agents and the setup dialog.
+		if (!productService.defaultChatAgent || !productService.defaultChatAgent.entitlementUrl) {
+			return; // no default chat agent OR no entitlement (Clawdius) -> no setup/sign-in chrome
 		}
+		// CLAWDIUS-END
 
 		const context = this.context = new Lazy(() => this._register(instantiationService.createInstance(ChatEntitlementContext)));
 		this.requests = new Lazy(() => this._register(instantiationService.createInstance(ChatEntitlementRequests, context.value, {

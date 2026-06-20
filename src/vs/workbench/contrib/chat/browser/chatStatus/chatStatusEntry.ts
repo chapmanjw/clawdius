@@ -11,6 +11,7 @@ import { IStatusbarEntry, IStatusbarEntryAccessor, IStatusbarService, ShowToolti
 import { ChatEntitlement, ChatEntitlementContextKeys, ChatEntitlementService, IChatEntitlementService, isProUser } from '../../../../services/chat/common/chatEntitlementService.js';
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
+import { IProductService } from '../../../../../platform/product/common/productService.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
 import { getCodeEditor } from '../../../../../editor/browser/editorBrowser.js';
@@ -40,7 +41,7 @@ export class ChatStatusBarEntry extends Disposable implements IWorkbenchContribu
 	private readonly entryAnchor = h('span');
 	private readonly dashboardTooltip: IStatusbarEntry['tooltip'];
 
-	private runningSessionsCount: number;
+	private runningSessionsCount: number = 0; // CLAWDIUS: default-initialized (the entitlementUrl early-return can skip the constructor assignment)
 
 	constructor(
 		@IChatEntitlementService private readonly chatEntitlementService: ChatEntitlementService,
@@ -51,8 +52,17 @@ export class ChatStatusBarEntry extends Disposable implements IWorkbenchContribu
 		@IInlineCompletionsService private readonly completionsService: IInlineCompletionsService,
 		@IChatSessionsService private readonly chatSessionsService: IChatSessionsService,
 		@IContextKeyService private readonly contextKeyService: IContextKeyService,
+		@IProductService private readonly productService: IProductService,
 	) {
 		super();
+
+		// CLAWDIUS-BEGIN no copilot status entry
+		// Copilot eliminated + empty entitlementUrl (Clawdius): never register the status-bar chat entry. It
+		// would otherwise render a "Sign In" affordance whose CHAT_SETUP_ACTION_ID command no longer exists.
+		if (!this.productService.defaultChatAgent?.entitlementUrl) {
+			return;
+		}
+		// CLAWDIUS-END
 
 		this.runningSessionsCount = this.chatSessionsService.getInProgress().reduce((total, item) => total + item.count, 0);
 

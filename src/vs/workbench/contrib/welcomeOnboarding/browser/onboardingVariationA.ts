@@ -117,7 +117,11 @@ export class OnboardingVariationA extends Disposable implements IOnboardingServi
 	private _footerSignInBtn: HTMLButtonElement | undefined;
 
 	private currentStepIndex = 0;
-	private readonly steps = ONBOARDING_STEPS;
+	// CLAWDIUS-BEGIN no copilot sign-in onboarding
+	// Copilot eliminated + empty entitlementUrl (Clawdius): drop the Sign-In step entirely - there is no
+	// account to sign in to (the chat is powered by the local Claude Code CLI's own login).
+	private readonly steps = defaultChat.entitlementUrl ? ONBOARDING_STEPS : ONBOARDING_STEPS.filter(step => step !== OnboardingStepId.SignIn);
+	// CLAWDIUS-END
 	private readonly disposables = this._register(new DisposableStore());
 	private readonly stepDisposables = this._register(new DisposableStore());
 	private previouslyFocusedElement: HTMLElement | undefined;
@@ -444,7 +448,8 @@ export class OnboardingVariationA extends Disposable implements IOnboardingServi
 		if (this.footerLeft) {
 			if (this._isLastStep()) {
 				// Show sign-in nudge in footer
-				if (!this._footerSignInBtn && !this._userSignedIn) {
+				// CLAWDIUS: never show the "Sign in to use GitHub Copilot" nudge when there is no entitlement.
+				if (!this._footerSignInBtn && !this._userSignedIn && defaultChat.entitlementUrl) {
 					this._footerSignInBtn = append(this.footerLeft, $<HTMLButtonElement>('button.onboarding-a-signin-nudge-btn'));
 					this._footerSignInBtn.type = 'button';
 					this._footerSignInBtn.textContent = localize('onboarding.sessions.signInNudge', "Sign in to use GitHub Copilot");

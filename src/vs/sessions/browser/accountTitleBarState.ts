@@ -9,6 +9,7 @@ import { localize } from '../../nls.js';
 import { ChatEntitlement, IChatSentiment, IQuotaSnapshot } from '../../workbench/services/chat/common/chatEntitlementService.js';
 import { IDefaultAccountService } from '../../platform/defaultAccount/common/defaultAccount.js';
 import { IAuthenticationService } from '../../workbench/services/authentication/common/authentication.js';
+import product from '../../platform/product/common/product.js';
 
 export interface IResolvedAccountInfo {
 	readonly accountName: string;
@@ -137,6 +138,13 @@ function getCopilotPresentation(
 	sentiment: IChatSentiment,
 	quotas: { readonly chat?: IQuotaSnapshot; readonly completions?: IQuotaSnapshot }
 ): IAccountTitleBarState | undefined {
+	// CLAWDIUS-BEGIN no copilot signed-out chip
+	// Copilot eliminated + empty entitlementUrl (Clawdius): never render the sessions-window Copilot/Agents
+	// signed-out chip ("Agents Signed Out" / "Copilot Unavailable"). There is no account to sign in to.
+	if (!product.defaultChatAgent?.entitlementUrl) {
+		return undefined;
+	}
+	// CLAWDIUS-END
 	if (sentiment.hidden) {
 		return undefined;
 	}

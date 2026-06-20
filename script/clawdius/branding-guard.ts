@@ -95,7 +95,7 @@ for (const t of (p.onboardingThemes || []) as { themeId: string }[]) {
 // out to the local Claude Code CLI. A future upstream merge that re-introduces extensions/copilot trips this
 // gate (it would re-register six competing isDefault panel participants + nine sign-in welcome views).
 ok(!fs.existsSync('extensions/copilot'), 'extensions/copilot was re-introduced - Copilot must stay eliminated');
-ok(p.defaultChatAgent?.extensionId === 'chapmanjw.clawdius-chat', 'defaultChatAgent.extensionId is not the clawdius-chat backend');
+ok(p.defaultChatAgent?.extensionId === 'vscode.clawdius-chat', 'defaultChatAgent.extensionId is not the clawdius-chat backend');
 ok(fs.existsSync('extensions/clawdius-chat/package.json'), 'the clawdius-chat extension (Claude CLI chat backend) is missing');
 
 if (fail.length) {

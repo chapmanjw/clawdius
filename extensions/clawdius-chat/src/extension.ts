@@ -10,7 +10,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 
-const PARTICIPANT_ID = 'chapmanjw.clawdius-chat.default';
+const PARTICIPANT_ID = 'vscode.clawdius-chat.default';
 
 // v1 is READ-ONLY/conversational. Under `claude -p` the CLI cannot raise interactive permission
 // prompts, so any tool that is not pre-approved is auto-denied. We hand Claude only read tools, so it

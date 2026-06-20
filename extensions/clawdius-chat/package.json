@@ -2,11 +2,11 @@
   "name": "clawdius-chat",
   "publisher": "chapmanjw",
   "displayName": "Clawdius Chat",
-  "description": "The Clawdius default chat participant. Stub for Phase 2 — the Claude Code-backed model is wired in a later milestone.",
+  "description": "The Clawdius default chat participant, powered by the local Claude Code CLI.",
   "version": "1.0.0",
   "license": "MIT",
   "engines": {
-    "vscode": "^1.5.0"
+    "vscode": "^1.125.0"
   },
   "categories": [
     "AI",
@@ -36,7 +36,9 @@
           "panel"
         ],
         "modes": [
-          "ask"
+          "ask",
+          "edit",
+          "agent"
         ]
       }
     ]

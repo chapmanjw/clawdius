@@ -85,6 +85,12 @@
 			}
 		}
 	],
+	"extensionEnabledApiProposals": {
+		"chapmanjw.clawdius-chat": [
+			"defaultChatParticipant",
+			"chatParticipantAdditions"
+		]
+	},
 	"defaultChatAgent": {
 		"extensionId": "chapmanjw.clawdius-chat",
 		"chatExtensionId": "chapmanjw.clawdius-chat",

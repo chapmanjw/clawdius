@@ -1,0 +1,48 @@
+{
+  "name": "clawdius-chat",
+  "publisher": "chapmanjw",
+  "displayName": "Clawdius Chat",
+  "description": "The Clawdius default chat participant. Stub for Phase 2 — the Claude Code-backed model is wired in a later milestone.",
+  "version": "1.0.0",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.5.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "enabledApiProposals": [
+    "defaultChatParticipant",
+    "chatParticipantAdditions"
+  ],
+  "main": "./out/extension",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "scripts": {
+    "compile": "gulp compile-extension:clawdius-chat",
+    "watch": "gulp watch-extension:clawdius-chat"
+  },
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "chapmanjw.clawdius-chat.default",
+        "name": "clawdius",
+        "fullName": "Clawdius",
+        "description": "Build with Clawdius",
+        "isDefault": true,
+        "locations": [
+          "panel"
+        ],
+        "modes": [
+          "ask"
+        ]
+      }
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chapmanjw/clawdius.git"
+  }
+}

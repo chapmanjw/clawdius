@@ -51,6 +51,9 @@ function onExtensionCompilationEnd(): void {
 // 	ignore: ['**/out/**', '**/node_modules/**']
 // });
 const compilations = [
+	// CLAWDIUS-BEGIN clawdius-chat: compile the in-tree Clawdius default chat participant extension
+	'extensions/clawdius-chat/tsconfig.json',
+	// CLAWDIUS-END
 	'extensions/configuration-editing/tsconfig.json',
 	'extensions/css-language-features/client/tsconfig.json',
 	'extensions/css-language-features/server/tsconfig.json',

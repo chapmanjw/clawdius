@@ -22,6 +22,23 @@ Base: microsoft/vscode `1.125.0` (see `UPSTREAM_VERSION`).
 | `extensions/theme-defaults/package.json` | "Only Clawdius themes" (Phase 4 follow-up): removed the 10 upstream color themes (Dark/Light Modern, Dark/Light+, VS Dark/Light, Dark/Light 2026, Default High Contrast + Light) from `contributes.themes`; kept the `vs-minimal` icon theme. The inert `themes/*.json` files are left untouched (so they merge cleanly) but are no longer contributed. | n/a (JSON, no inline comments) | built-in themes |
 | `extensions/theme-{abyss,kimbie-dark,monokai,monokai-dimmed,quietlight,red,solarized-dark,solarized-light,tomorrow-night-blue}/**` | "Only Clawdius themes": deleted the 9 standalone upstream color-theme extensions wholesale (each contributed exactly one color theme and nothing else), so only the four Clawdius themes ship. `theme-seti` (default file icons) and `theme-defaults` (icon theme) are kept. `branding-guard.ts` scans every extension manifest and fails if any non-Clawdius color theme reappears (e.g. via an upstream merge). | n/a (upstream dir removal) | built-in themes |
 
+## Branding asset replacements (in-place upstream binary / SVG swaps)
+The VS Code logo/mark assets, replaced in place with the Clawdius mark (orange `#d97757` family,
+re-exported from `clawdius-private-docs/images/clawdius-logo.{svg,png}`). These are upstream files, so a
+merge that touches the same asset conflicts; re-export from the Clawdius master rather than hand-merge.
+- **OS app-icon family:** `resources/win32/code.ico` + `code_150x150.png` + `code_70x70.png`,
+  `resources/darwin/code.icns`, `resources/linux/code.png`, `resources/linux/rpm/code.xpm` (256px),
+  `resources/server/code-192.png`, `code-512.png`, `favicon.ico`. `linux/code` + `server/code-192/512`
+  share one 1024² master (byte-identical, retina-correct).
+- **Inno installer wizard art:** `resources/win32/inno-{big,small}-{100,125,150,175,200,225,250}.bmp`
+  (14 BMPs) — Clawdius logo centered on white at each placeholder's footprint size.
+- **In-product / chrome logos:** `src/vs/workbench/browser/media/code-icon.svg` (titlebar/banner/welcome),
+  `src/vs/sessions/browser/media/vscode-icon.svg` (Open-in-VS-Code), and `sessions-icon.svg`
+  (Open-in-Agents widget; blue gradient recolored to the orange family).
+- **Auth login chrome (interim, until Phase 2/3 removes the flow):**
+  `extensions/github-authentication/media/favicon.ico` + `code-icon.svg`,
+  `extensions/microsoft-authentication/media/favicon.ico`.
+
 ## New files / directories (no conflict, not part of the diff surface)
 `UPSTREAM_VERSION`, `MERGING.md`, `CHANGES_AGAINST_UPSTREAM.md`, `BUILD.md`, `.gitleaks.toml`,
 `.pre-commit-config.yaml`, `script/clawdius/**`, `clawdius/**`, `.github/workflows/clawdius-ci.yml`,

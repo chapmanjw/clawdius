@@ -39,12 +39,12 @@ export enum ThemeSettings {
 }
 
 export namespace ThemeSettingDefaults {
-	// CLAWDIUS-BEGIN default theme (Phase 4): Clawdius Dark/Light are the out-of-box defaults
+	// CLAWDIUS-BEGIN default theme (Phase 4): Clawdius Dark/Light/High-Contrast are the out-of-box defaults
 	export const COLOR_THEME_DARK = 'Clawdius Dark';
 	export const COLOR_THEME_LIGHT = 'Clawdius Light';
+	export const COLOR_THEME_HC_DARK = 'Clawdius High Contrast';
+	export const COLOR_THEME_HC_LIGHT = 'Clawdius High Contrast Light';
 	// CLAWDIUS-END
-	export const COLOR_THEME_HC_DARK = 'Default High Contrast';
-	export const COLOR_THEME_HC_LIGHT = 'Default High Contrast Light';
 
 	export const FILE_ICON_THEME = 'vs-seti';
 	export const PRODUCT_ICON_THEME = 'Default';

@@ -24,12 +24,26 @@
         "label": "Clawdius Light",
         "uiTheme": "vs",
         "path": "./themes/clawdius-light.json"
+      },
+      {
+        "id": "Clawdius High Contrast",
+        "label": "Clawdius High Contrast",
+        "uiTheme": "hc-black",
+        "path": "./themes/clawdius-hc-dark.json"
+      },
+      {
+        "id": "Clawdius High Contrast Light",
+        "label": "Clawdius High Contrast Light",
+        "uiTheme": "hc-light",
+        "path": "./themes/clawdius-hc-light.json"
       }
     ],
     "configurationDefaults": {
       "workbench.colorTheme": "Clawdius Dark",
       "workbench.preferredDarkColorTheme": "Clawdius Dark",
-      "workbench.preferredLightColorTheme": "Clawdius Light"
+      "workbench.preferredLightColorTheme": "Clawdius Light",
+      "workbench.preferredHighContrastColorTheme": "Clawdius High Contrast",
+      "workbench.preferredHighContrastLightColorTheme": "Clawdius High Contrast Light"
     }
   },
   "repository": {

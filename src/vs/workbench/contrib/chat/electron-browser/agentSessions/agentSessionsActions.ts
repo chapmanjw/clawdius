@@ -43,7 +43,9 @@ export class OpenWorkspaceInAgentsWindowAction extends Action2 {
 	constructor() {
 		super({
 			id: OPEN_WORKSPACE_IN_AGENTS_WINDOW_COMMAND_ID,
-			title: localize2('openWorkspaceInAgentsWindow', "Open in Agents"),
+			// CLAWDIUS-BEGIN ultracode window name
+			title: localize2('openWorkspaceInAgentsWindow', "Open in Ultracode"),
+			// CLAWDIUS-END
 			category: CHAT_CATEGORY,
 			precondition: OPEN_AGENTS_WINDOW_PRECONDITION,
 			f1: true,
@@ -88,7 +90,9 @@ export class OpenAgentsWindowAction extends Action2 {
 	constructor() {
 		super({
 			id: OPEN_AGENTS_WINDOW_COMMAND_ID,
-			title: localize2('openAgentsWindow', "Open Agents Window"),
+			// CLAWDIUS-BEGIN ultracode window name
+			title: localize2('openAgentsWindow', "Open Ultracode Window"),
+			// CLAWDIUS-END
 			category: CHAT_CATEGORY,
 			precondition: OPEN_AGENTS_WINDOW_PRECONDITION,
 			f1: true,
@@ -124,7 +128,9 @@ export class OpenChatSessionInAgentsWindowAction extends Action2 {
 	constructor() {
 		super({
 			id: OpenChatSessionInAgentsWindowAction.ID,
-			title: localize2('openSessionInAgentsWindow', "Open in Agents Window"),
+			// CLAWDIUS-BEGIN ultracode window name
+			title: localize2('openSessionInAgentsWindow', "Open in Ultracode Window"),
+			// CLAWDIUS-END
 			category: CHAT_CATEGORY,
 			precondition: OPEN_AGENTS_WINDOW_PRECONDITION,
 			f1: false,
@@ -197,7 +203,9 @@ class OpenWorkspaceInAgentsTitleBarWidget extends BaseActionViewItem {
 		container.setAttribute('role', 'button');
 
 		const label = this.action.label;
-		const hoverText = this.keybindingService.appendKeybinding(localize('openInAgentsHover', "Open in Agents Window"), OPEN_AGENTS_WINDOW_COMMAND_ID);
+		// CLAWDIUS-BEGIN ultracode window name
+		const hoverText = this.keybindingService.appendKeybinding(localize('openInAgentsHover', "Open in Ultracode Window"), OPEN_AGENTS_WINDOW_COMMAND_ID);
+		// CLAWDIUS-END
 		container.setAttribute('aria-label', hoverText);
 		this._register(this.hoverService.setupManagedHover(getDefaultHoverDelegate('element'), container, hoverText));
 

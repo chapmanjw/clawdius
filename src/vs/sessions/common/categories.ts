@@ -6,5 +6,7 @@
 import { localize2 } from '../../nls.js';
 
 export const SessionsCategories = Object.freeze({
-	Sessions: localize2('agents', "Agents"),
+	// CLAWDIUS-BEGIN ultracode window name (command-palette category)
+	Sessions: localize2('agents', "Ultracode"),
+	// CLAWDIUS-END
 });

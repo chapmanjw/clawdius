@@ -220,6 +220,14 @@ function messagesToPrompt(messages: ReadonlyArray<vscode.LanguageModelChatReques
  * models other extensions contribute.
  */
 class ClaudeLanguageModelProvider implements vscode.LanguageModelChatProvider {
+	// Fire once after registration so the core eagerly RESOLVES our models into the renderer cache. Without a
+	// change event, resolution is lazy (only on first request), so the panel model picker shows just the
+	// synthetic "Auto" entry until the user sends a message. One fire is enough - the model list is static.
+	private readonly _onDidChange = new vscode.EventEmitter<void>();
+	readonly onDidChangeLanguageModelChatInformation: vscode.Event<void> = this._onDidChange.event;
+	notifyModelsChanged(): void { this._onDidChange.fire(); }
+	dispose(): void { this._onDidChange.dispose(); }
+
 	async provideLanguageModelChatInformation(_options: vscode.PrepareLanguageModelChatModelOptions, _token: vscode.CancellationToken): Promise<vscode.LanguageModelChatInformation[]> {
 		// Per-model "effort" control (Claude Code's --effort), shown as a primary action in the model picker.
 		const configurationSchema = {
@@ -321,7 +329,12 @@ export function activate(context: vscode.ExtensionContext): void {
 	context.subscriptions.push(new vscode.Disposable(() => clearInterval(usageTimer)));
 
 	// Register Claude as a language model (the model picker + any model-using flow can now select it).
-	context.subscriptions.push(vscode.lm.registerLanguageModelChatProvider(MODEL_VENDOR, new ClaudeLanguageModelProvider()));
+	const claudeProvider = new ClaudeLanguageModelProvider();
+	context.subscriptions.push(claudeProvider);
+	context.subscriptions.push(vscode.lm.registerLanguageModelChatProvider(MODEL_VENDOR, claudeProvider));
+	// Fire the model-change event once so the core eagerly resolves our static models into the renderer
+	// cache; otherwise the panel model picker shows only the synthetic "Auto" entry until the first request.
+	queueMicrotask(() => claudeProvider.notifyModelsChanged());
 
 	// The default panel participant is model-agnostic: it relays whatever model the user picked (Claude by
 	// default, or any model another extension contributes) so the model picker is meaningful.

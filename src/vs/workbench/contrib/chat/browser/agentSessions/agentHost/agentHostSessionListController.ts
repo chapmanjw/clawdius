@@ -349,7 +349,10 @@ export class AgentHostSessionListController extends Disposable implements IChatS
 			resource: URI.from({ scheme: this._sessionType, path: `/${rawId}` }),
 			label: opts.title || `Session ${rawId.substring(0, 8)}`,
 			description,
-			iconPath: Codicon.copilot,
+			// CLAWDIUS-BEGIN claude icon on native session rows
+			// In Clawdius the only agent-host agent is Claude; render its rows with the Claude logo, not Copilot.
+			iconPath: this._sessionType.endsWith('claude') ? Codicon.claude : Codicon.copilot,
+			// CLAWDIUS-END
 			status: mapSessionStatus(opts.status),
 			archived: opts.status !== undefined && (opts.status & SessionStatus.IsArchived) === SessionStatus.IsArchived,
 			metadata: this._buildMetadata(opts.workingDirectory),

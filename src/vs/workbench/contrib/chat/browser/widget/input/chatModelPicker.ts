@@ -1244,7 +1244,14 @@ export class ModelPickerWidget extends Disposable {
 			: (name ?? localize('chat.modelPicker.auto', "Auto"));
 		// In PRU mode, append the config description (e.g. thinking effort) to the button label
 		const isUBB = !!this._entitlementService.quotas.usageBasedBilling;
-		const configDescription = !isUBB && this._selectedModel && !noModelsAvailable
+		// CLAWDIUS-BEGIN show effort/tokens pills in clawdius (PRU) mode
+		// Upstream only shows the clickable effort + context-size pills in usage-based-billing mode; in PRU it
+		// folds the value into the model label as a suffix. Clawdius (empty entitlementUrl) is always PRU, so
+		// surface the pills there too (the click handlers are wired unconditionally) - this is the visible
+		// "Ultracode effort" selector. Upstream PRU behavior is unchanged.
+		const showConfigPills = isUBB || !this._productService.defaultChatAgent?.entitlementUrl;
+		// CLAWDIUS-END
+		const configDescription = !showConfigPills && this._selectedModel && !noModelsAvailable
 			? getModelConfigurationDescription(this._selectedModel, this._modelConfiguration)
 			: undefined;
 		const fullLabel = configDescription
@@ -1260,7 +1267,7 @@ export class ModelPickerWidget extends Disposable {
 		// In PRU mode, configuration is accessed via per-model toolbar actions in the picker dropdown.
 
 		// --- Effort section (from configurationSchema group 'navigation') ---
-		const effortConfig = isUBB ? this._getConfigProperty('navigation') : undefined;
+		const effortConfig = showConfigPills ? this._getConfigProperty('navigation') : undefined;
 		if (effortConfig && this._effortButton) {
 			// Use the localized enumItemLabel from the schema, falling back to the raw value
 			const enumIndex = effortConfig.schema.enum?.indexOf(effortConfig.value) ?? -1;
@@ -1275,7 +1282,7 @@ export class ModelPickerWidget extends Disposable {
 		}
 
 		// --- Tokens section (from configurationSchema group 'tokens') ---
-		const tokensConfig = isUBB ? this._getConfigProperty('tokens') : undefined;
+		const tokensConfig = showConfigPills ? this._getConfigProperty('tokens') : undefined;
 		if (tokensConfig && this._tokensButton) {
 			const idx = tokensConfig.schema.enum?.indexOf(tokensConfig.value) ?? -1;
 			const tokensLabel = idx >= 0 && tokensConfig.schema.enumItemLabels?.[idx]

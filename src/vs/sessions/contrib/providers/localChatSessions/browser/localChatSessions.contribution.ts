@@ -5,6 +5,7 @@
 
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../../../workbench/common/contributions.js';
 import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
+import product from '../../../../../platform/product/common/product.js';
 import { Disposable, IDisposable } from '../../../../../base/common/lifecycle.js';
 import { LocalChatSessionsProvider, LOCAL_SESSION_ENABLED_SETTING } from './localChatSessionsProvider.js';
 import { ISessionsProvidersService } from '../../../../services/sessions/browser/sessionsProvidersService.js';
@@ -42,6 +43,17 @@ class LocalSessionsProviderContribution extends Disposable implements IWorkbench
 		@IConfigurationService configurationService: IConfigurationService,
 	) {
 		super();
+
+		// CLAWDIUS-BEGIN native-claude-only sessions (dedupe model picker)
+		// In Clawdius the Ultracode window is native-Claude-only. The Local (VS Code in-process) sessions
+		// provider's getModels returns every user-selectable model with NO targetChatSessionType, which
+		// surfaces the clawdius-chat extension vendor as a SECOND "Clawdius" model group alongside the native
+		// agent-host "Claude" group. Suppress the Local provider here so the agent-host Claude is the sole
+		// group. Upstream (non-empty entitlementUrl) keeps the Local sessions provider.
+		if (!product.defaultChatAgent?.entitlementUrl) {
+			return;
+		}
+		// CLAWDIUS-END
 
 		// Only register the provider when enabled. The setting is read once
 		// at startup; toggling it requires a window reload.

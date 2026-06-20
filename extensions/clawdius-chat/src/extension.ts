@@ -289,7 +289,37 @@ function buildMessages(history: ReadonlyArray<vscode.ChatRequestTurn | vscode.Ch
 	return messages;
 }
 
+/**
+ * Fetch the user's Claude rate-limit "capacity" (the /usage windows) and cache it to disk for the core
+ * status-bar usage entry. The renderer can't reach api.anthropic.com (CORS); the extension host (node) can.
+ * This is network egress to Claude's own API using the user's existing CLI OAuth token - the user asked for
+ * live capacity bars that reference real Claude capacity, so it is intended.
+ */
+async function fetchUsageCapacity(): Promise<void> {
+	try {
+		const claudeDir = path.join(os.homedir(), '.claude');
+		const token = JSON.parse(fs.readFileSync(path.join(claudeDir, '.credentials.json'), 'utf8'))?.claudeAiOauth?.accessToken;
+		if (!token) {
+			return;
+		}
+		const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
+			headers: { 'Authorization': `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20', 'Content-Type': 'application/json' },
+		});
+		if (!res.ok) {
+			return;
+		}
+		fs.writeFileSync(path.join(claudeDir, '.clawdius-usage-cache.json'), await res.text());
+	} catch {
+		// offline / expired token - leave any existing cache in place
+	}
+}
+
 export function activate(context: vscode.ExtensionContext): void {
+	// Keep the Claude capacity cache fresh for the status-bar usage entry (fetch now + on an interval).
+	fetchUsageCapacity();
+	const usageTimer = setInterval(fetchUsageCapacity, 60_000);
+	context.subscriptions.push(new vscode.Disposable(() => clearInterval(usageTimer)));
+
 	// Register Claude as a language model (the model picker + any model-using flow can now select it).
 	context.subscriptions.push(vscode.lm.registerLanguageModelChatProvider(MODEL_VENDOR, new ClaudeLanguageModelProvider()));
 

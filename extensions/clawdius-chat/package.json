@@ -1,17 +1,13 @@
 {
   "name": "clawdius-chat",
-  "publisher": "chapmanjw",
+  "publisher": "vscode",
   "displayName": "Clawdius Chat",
   "description": "The Clawdius default chat participant, powered by the local Claude Code CLI.",
   "version": "1.0.0",
   "license": "MIT",
   "engines": {
-    "vscode": "^1.125.0"
+    "vscode": "*"
   },
-  "categories": [
-    "AI",
-    "Chat"
-  ],
   "enabledApiProposals": [
     "defaultChatParticipant",
     "chatParticipantAdditions"
@@ -27,7 +23,7 @@
   "contributes": {
     "chatParticipants": [
       {
-        "id": "chapmanjw.clawdius-chat.default",
+        "id": "vscode.clawdius-chat.default",
         "name": "clawdius",
         "fullName": "Clawdius",
         "description": "Build with Clawdius",

@@ -1786,7 +1786,15 @@ configurationRegistry.registerConfiguration({
 		'chat.extensionUnification.enabled': {
 			type: 'boolean',
 			description: nls.localize('chat.extensionUnification.enabled', "Enables the unification of GitHub Copilot extensions. When enabled, all GitHub Copilot functionality is served from the GitHub Copilot Chat extension. When disabled, the GitHub Copilot and GitHub Copilot Chat extensions operate independently."),
-			default: true,
+			// CLAWDIUS-BEGIN no copilot unification
+			// Copilot is eliminated in Clawdius, so its completions+chat "unification" is irrelevant - and
+			// harmful: ExtensionEnablementService._isDisabledByUnification force-disables the extension whose
+			// id equals product.defaultChatAgent.extensionId (our built-in vscode.clawdius-chat, the Claude CLI
+			// backend), dropping it from the registry so it never activates. Default OFF so clawdius-chat is the
+			// live default chat extension. (configurationDefaults can't fix this - the enablement service reads
+			// this setting before product.json defaults are applied.)
+			default: false,
+			// CLAWDIUS-END
 			tags: ['experimental'],
 			experiment: {
 				mode: 'auto'

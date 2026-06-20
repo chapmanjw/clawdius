@@ -86,14 +86,14 @@
 		}
 	],
 	"extensionEnabledApiProposals": {
-		"chapmanjw.clawdius-chat": [
+		"vscode.clawdius-chat": [
 			"defaultChatParticipant",
 			"chatParticipantAdditions"
 		]
 	},
 	"defaultChatAgent": {
-		"extensionId": "chapmanjw.clawdius-chat",
-		"chatExtensionId": "chapmanjw.clawdius-chat",
+		"extensionId": "vscode.clawdius-chat",
+		"chatExtensionId": "vscode.clawdius-chat",
 		"chatExtensionOutputId": "GitHub.copilot-chat.GitHub Copilot Chat.log",
 		"chatExtensionOutputExtensionStateCommand": "github.copilot.debug.extensionState",
 		"documentationUrl": "https://clawdiuscode.io",

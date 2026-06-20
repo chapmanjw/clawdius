@@ -15,7 +15,11 @@ export const dirs = [
 	'build/vite',
 	'extensions',
 	'extensions/configuration-editing',
-	'extensions/copilot',
+	// CLAWDIUS-BEGIN no copilot built-in extension
+	// The 'extensions/copilot' built-in was removed in the de-Copilot work. It must also be dropped
+	// from this install list: postinstall.ts runs `npm install` in each dir with `cwd` set, and a
+	// non-existent cwd makes Node report `spawn /bin/sh ENOENT`, failing `npm ci` in CI on every push.
+	// CLAWDIUS-END
 	'extensions/css-language-features',
 	'extensions/css-language-features/server',
 	'extensions/debug-auto-launch',

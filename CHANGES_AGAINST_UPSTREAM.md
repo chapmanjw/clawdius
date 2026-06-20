@@ -21,6 +21,7 @@ Base: microsoft/vscode `1.125.0` (see `UPSTREAM_VERSION`).
 | `src/vs/workbench/contrib/welcomeGettingStarted/common/media/dark.png`, `light.png`, `dark-hc.png`, `light-hc.png` | Regenerated the four welcome-picker preview thumbnails (874×600) as recolored mockups built from each Clawdius theme's real editor/sidebar/token/accent colors (orange tab indicator + accent pill; the HC variants keep the white-on-black / black-on-white high-contrast frame and divider). Replaces the upstream Modern/HC preview art. | n/a (binary asset) | welcome / getting-started |
 | `extensions/theme-defaults/package.json` | "Only Clawdius themes" (Phase 4 follow-up): removed the 10 upstream color themes (Dark/Light Modern, Dark/Light+, VS Dark/Light, Dark/Light 2026, Default High Contrast + Light) from `contributes.themes`; kept the `vs-minimal` icon theme. The inert `themes/*.json` files are left untouched (so they merge cleanly) but are no longer contributed. | n/a (JSON, no inline comments) | built-in themes |
 | `extensions/theme-{abyss,kimbie-dark,monokai,monokai-dimmed,quietlight,red,solarized-dark,solarized-light,tomorrow-night-blue}/**` | "Only Clawdius themes": deleted the 9 standalone upstream color-theme extensions wholesale (each contributed exactly one color theme and nothing else), so only the four Clawdius themes ship. `theme-seti` (default file icons) and `theme-defaults` (icon theme) are kept. `branding-guard.ts` scans every extension manifest and fails if any non-Clawdius color theme reappears (e.g. via an upstream merge). | n/a (upstream dir removal) | built-in themes |
+| `build/gulpfile.extensions.ts` | Phase 2 (A): registered the new in-tree `extensions/clawdius-chat` extension in the hardcoded `compilations` list so its TypeScript compiles (the auto-glob is commented out upstream, so a new extension is not picked up automatically). | `// CLAWDIUS-BEGIN clawdius-chat` | build / extensions |
 
 ## Branding asset replacements (in-place upstream binary / SVG swaps)
 The VS Code logo/mark assets, replaced in place with the Clawdius mark (orange `#d97757` family,
@@ -42,7 +43,7 @@ merge that touches the same asset conflicts; re-export from the Clawdius master 
 ## New files / directories (no conflict, not part of the diff surface)
 `UPSTREAM_VERSION`, `MERGING.md`, `CHANGES_AGAINST_UPSTREAM.md`, `BUILD.md`, `.gitleaks.toml`,
 `.pre-commit-config.yaml`, `script/clawdius/**`, `clawdius/**`, `.github/workflows/clawdius-ci.yml`,
-`extensions/clawdius-themes/**`,
+`extensions/clawdius-themes/**`, `extensions/clawdius-chat/**` (Phase 2 default chat participant stub),
 `src/vs/workbench/services/accounts/test/browser/defaultAccount.test.ts` (Clawdius regression test).
 
 ## Known privacy follow-ups (tracked, deferred by design — not yet addressed)

@@ -16,6 +16,7 @@ import { URI } from '../../../../../base/common/uri.js';
 import { ICommandService } from '../../../../../platform/commands/common/commands.js';
 import { IDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
 import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
+import product from '../../../../../platform/product/common/product.js';
 import { IAgentSession } from '../../../../../workbench/contrib/chat/browser/agentSessions/agentSessionsModel.js';
 import { getRepositoryName } from '../../../../../workbench/contrib/chat/browser/agentSessions/agentSessionsViewer.js';
 import { IAgentSessionsService } from '../../../../../workbench/contrib/chat/browser/agentSessions/agentSessionsService.js';
@@ -1376,7 +1377,14 @@ export class CopilotChatSessionsProvider extends Disposable implements ISessions
 		if (this._isCopilotCliAvailable()) {
 			types.push(CopilotCLISessionType);
 		}
-		types.push(CopilotCloudSessionType);
+		// CLAWDIUS-BEGIN no copilot cloud session type
+		// The GitHub Copilot cloud coding agent has no account in Clawdius; omit it so the agent-host Claude
+		// agent is the sole/default new-session type (otherwise the composer can default to a dead Cloud type
+		// that shows "No models available"). Upstream keeps offering it.
+		if (product.defaultChatAgent?.entitlementUrl) {
+			types.push(CopilotCloudSessionType);
+		}
+		// CLAWDIUS-END
 		if (this._isClaudeAvailable()) {
 			types.push(ClaudeCodeSessionType);
 		}

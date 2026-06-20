@@ -64,3 +64,39 @@ jobs:
           echo "Clawdius fork scaffolding intact; pinned upstream $(cat UPSTREAM_VERSION)"
       - name: Branding guard (Clawdius branding, Open VSX, no telemetry, Clawdius theme)
         run: node script/clawdius/branding-guard.ts
+
+  # Runs the Clawdius regression unit test (the no-default-account egress guard) in the browser mocha
+  # harness. Targeted on purpose: --run loads only that one test file, not the full upstream suite (which
+  # needs the minified out-build and carries unrelated upstream tests). Kept as a separate job so the fast
+  # fork-hygiene checks are never gated on the heavy dev install. Phase 6 broadens this to the full matrix.
+  unit-test-browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false # upstream LFS test caches 404 and are not needed; never smudge in CI
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install native-module build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxkbfile-dev libkrb5-dev
+      - name: Install dependencies
+        run: npm ci
+      - name: Transpile sources to out/
+        run: node build/next/index.ts transpile
+      - name: Install Playwright Chromium (with system deps)
+        run: npx playwright install --with-deps chromium
+      - name: Clawdius defaultAccount regression test (browser unit harness)
+        # Silent-green guard. The harness catches a failed module import, logs "BAD <file>", registers
+        # zero tests, and still exits 0 — so a drifted --run path would pass the job without running the
+        # test. Assert the compiled file exists, fail on a "BAD" load error, and require >=1 passing test.
+        run: |
+          test_js="out/vs/workbench/services/accounts/test/browser/defaultAccount.test.js"
+          if [ ! -f "$test_js" ]; then echo "::error::compiled test missing ($test_js) — transpile path drift"; exit 1; fi
+          node test/unit/browser/index.js --run "$test_js" --browser chromium 2>&1 | tee harness.log
+          if grep -q "BAD " harness.log; then echo "::error::harness failed to load the test (silent-green guard tripped)"; exit 1; fi
+          if ! grep -qE "[1-9][0-9]* passing" harness.log; then echo "::error::no tests ran (expected >=1 passing)"; exit 1; fi
+          echo "regression test ran and passed"

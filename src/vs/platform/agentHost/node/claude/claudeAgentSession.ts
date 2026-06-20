@@ -48,7 +48,9 @@ export type { IRematerializer } from './claudeSdkPipeline.js';
  * agent's per-session lookup, and the resume-vs-fresh discriminator).
  */
 export interface IMaterializeContext {
-	readonly proxyHandle: IClaudeProxyHandle;
+	// CLAWDIUS-BEGIN native ~/.claude auth: optional - undefined in Clawdius mode (no CAPI proxy); buildOptions then omits the proxy env vars and the SDK uses ~/.claude OAuth
+	readonly proxyHandle: IClaudeProxyHandle | undefined;
+	// CLAWDIUS-END
 	readonly canUseTool: NonNullable<Options['canUseTool']>;
 	readonly isResume: boolean;
 	/**

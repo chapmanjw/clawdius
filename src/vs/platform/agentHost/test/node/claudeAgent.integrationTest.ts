@@ -43,6 +43,8 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/c
 import { ServiceCollection } from '../../../instantiation/common/serviceCollection.js';
 import { InstantiationService } from '../../../instantiation/common/instantiationService.js';
 import { ILogService, NullLogService } from '../../../log/common/log.js';
+import { IProductService } from '../../../product/common/productService.js';
+import { upcastDeepPartial } from '../../../../base/test/common/mock.js';
 import { type AgentSignal, GITHUB_COPILOT_PROTECTED_RESOURCE } from '../../common/agentService.js';
 import { ActionType } from '../../common/state/sessionActions.js';
 import { ResponsePartKind, ToolResultContentType, type ClientPluginCustomization } from '../../common/state/sessionState.js';
@@ -563,6 +565,17 @@ suite('ClaudeAgent integration (proxy-backed)', function () {
 
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
+	// CLAWDIUS-BEGIN copilot-path product service
+	// These tests exercise the upstream Copilot proxy path, which ClaudeAgent now gates on a non-empty
+	// entitlementUrl (the Clawdius native-~/.claude-auth branch only fires when it is empty). Provide a
+	// product service with one set so getProtectedResources()/_ensureAuthenticated keep the CAPI-proxy
+	// behavior these tests assert.
+	const productService = upcastDeepPartial<IProductService>({
+		_serviceBrand: undefined,
+		defaultChatAgent: { entitlementUrl: 'https://example.test/entitlement' },
+	});
+	// CLAWDIUS-END
+
 	test('agent → proxy → CAPI → SSE → agent: end-to-end pipeline with real proxy and stubbed CAPI', async () => {
 		// This is the Phase 6 §5.2 integration test: real ClaudeProxyService
 		// + real ClaudeAgent + stubbed ICopilotApiService + recording SDK
@@ -584,6 +597,7 @@ suite('ClaudeAgent integration (proxy-backed)', function () {
 
 		const services = new ServiceCollection(
 			[ILogService, logService],
+			[IProductService, productService],
 			[ICopilotApiService, capi],
 			[IClaudeProxyService, realProxy],
 			[ISessionDataService, createSessionDataService()],
@@ -713,6 +727,7 @@ suite('ClaudeAgent integration (proxy-backed)', function () {
 
 		const services = new ServiceCollection(
 			[ILogService, logService],
+			[IProductService, productService],
 			[ICopilotApiService, capi],
 			[IClaudeProxyService, realProxy],
 			[ISessionDataService, createSessionDataService()],
@@ -771,6 +786,7 @@ suite('ClaudeAgent integration (proxy-backed)', function () {
 
 		const services = new ServiceCollection(
 			[ILogService, logService],
+			[IProductService, productService],
 			[ICopilotApiService, capi],
 			[IClaudeProxyService, realProxy],
 			[ISessionDataService, createSessionDataService()],

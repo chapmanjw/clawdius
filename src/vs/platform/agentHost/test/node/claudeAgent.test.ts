@@ -122,6 +122,12 @@ class FakeCopilotApiService implements ICopilotApiService {
 const FakeProductService: IProductService = {
 	_serviceBrand: undefined,
 	version: '1.0.0-test',
+	// CLAWDIUS-BEGIN copilot-path product service
+	// Non-empty entitlementUrl keeps ClaudeAgent on the upstream Copilot/CAPI path the bulk of these tests
+	// assert (getProtectedResources -> GitHub resource, AHP_AUTH_REQUIRED, CAPI model refresh). The Clawdius
+	// native-~/.claude-auth branch only fires when entitlementUrl is empty.
+	defaultChatAgent: { entitlementUrl: 'https://example.test/entitlement' } as IProductService['defaultChatAgent'],
+	// CLAWDIUS-END
 } as IProductService;
 
 // FakeClaudeSubagentResolver removed in the Phase 12 refactor (the
@@ -623,7 +629,7 @@ class CapturingLogService extends NullLogService {
 
 function createTestContext(
 	disposables: Pick<DisposableStore, 'add'>,
-	overrides?: { logService?: ILogService; database?: TestSessionDatabase },
+	overrides?: { logService?: ILogService; database?: TestSessionDatabase; productService?: IProductService },
 ): ITestContext {
 	const proxy = new FakeClaudeProxyService();
 	const api = new FakeCopilotApiService();
@@ -647,7 +653,7 @@ function createTestContext(
 		[IAgentPluginManager, new FakeAgentPluginManager()],
 		[IAgentHostGitService, createNoopGitService()],
 		[IAgentConfigurationService, configService],
-		[IProductService, FakeProductService],
+		[IProductService, overrides?.productService ?? FakeProductService],
 	);
 	const instantiationService: IInstantiationService = disposables.add(new InstantiationService(services));
 	const agent = disposables.add(instantiationService.createInstance(ClaudeAgent));
@@ -5059,3 +5065,43 @@ suite('ClaudeAgent — Phase 11 customizations', () => {
 });
 
 // #endregion
+
+// CLAWDIUS-BEGIN clawdius native-mode coverage
+// In Clawdius (empty entitlementUrl) ClaudeAgent runs Copilot-free: it advertises no protected resource,
+// publishes a static Claude catalog at construction (no CAPI / no GitHub token), and runs sessions with no
+// auth gate - the SDK subprocess then authenticates via native ~/.claude OAuth (the env wiring is in
+// claudeSdkOptions.ts; the end-to-end auth is verified by a live session run).
+suite('ClaudeAgent - Clawdius native mode (no Copilot)', () => {
+	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
+
+	const ClawdiusProductService = {
+		_serviceBrand: undefined,
+		version: '1.0.0-test',
+		defaultChatAgent: { entitlementUrl: '' } as IProductService['defaultChatAgent'],
+	} as IProductService;
+
+	test('getProtectedResources is empty (advertises no GitHub/Copilot auth)', () => {
+		const { agent } = createTestContext(disposables, { productService: ClawdiusProductService });
+		assert.deepStrictEqual(agent.getProtectedResources(), []);
+	});
+
+	test('publishes the static Claude catalog at construction (opus default, then sonnet, haiku)', async () => {
+		const { agent } = createTestContext(disposables, { productService: ClawdiusProductService });
+		await tick();
+		assert.deepStrictEqual(
+			agent.models.get().map(m => ({ id: m.id, provider: m.provider })),
+			[
+				{ id: 'opus', provider: 'claude' },
+				{ id: 'sonnet', provider: 'claude' },
+				{ id: 'haiku', provider: 'claude' },
+			],
+		);
+	});
+
+	test('createSession runs without an auth gate (no AHP_AUTH_REQUIRED throw)', async () => {
+		const { agent } = createTestContext(disposables, { productService: ClawdiusProductService });
+		const result = await agent.createSession({ workingDirectory: URI.file('/workspace') });
+		assert.ok(result.session, 'session created with no authentication');
+	});
+});
+// CLAWDIUS-END

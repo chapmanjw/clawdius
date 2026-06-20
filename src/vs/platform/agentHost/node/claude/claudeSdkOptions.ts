@@ -77,15 +77,23 @@ export interface IBuildOptionsInput {
  */
 export async function buildOptions(
 	input: IBuildOptionsInput,
-	proxyHandle: IClaudeProxyHandle,
+	// CLAWDIUS-BEGIN native ~/.claude auth: handle is undefined in Clawdius mode (no CAPI proxy); the SDK subprocess then authenticates via ~/.claude OAuth like the claude CLI
+	proxyHandle: IClaudeProxyHandle | undefined,
+	// CLAWDIUS-END
 	logStderr: (data: string) => void,
 	logElicitation: (msg: string) => void,
 ): Promise<Options> {
-	const subprocessEnv = buildSubprocessEnv();
+	// CLAWDIUS-BEGIN native ~/.claude auth: only strip ANTHROPIC_API_KEY when proxying
+	const subprocessEnv = buildSubprocessEnv(proxyHandle !== undefined);
+	// CLAWDIUS-END
 	const resolvedRgDiskPath = await rgDiskPath();
 	const settingsEnv: Record<string, string> = {
-		ANTHROPIC_BASE_URL: proxyHandle.baseUrl,
-		ANTHROPIC_AUTH_TOKEN: `${proxyHandle.nonce}.${input.sessionId}`,
+		// CLAWDIUS-BEGIN native ~/.claude auth: only redirect to the local CAPI proxy when a handle exists
+		...(proxyHandle ? {
+			ANTHROPIC_BASE_URL: proxyHandle.baseUrl,
+			ANTHROPIC_AUTH_TOKEN: `${proxyHandle.nonce}.${input.sessionId}`,
+		} : {}),
+		// CLAWDIUS-END
 		CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
 		USE_BUILTIN_RIPGREP: '0',
 		PATH: `${dirname(resolvedRgDiskPath)}${delimiter}${process.env.PATH ?? ''}`,
@@ -163,11 +171,13 @@ export async function buildClientMcpServers(
  *
  * Exported for unit testing as a pure function over `process.env`.
  */
-export function buildSubprocessEnv(): Record<string, string | undefined> {
+export function buildSubprocessEnv(stripAnthropicApiKey: boolean = true): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {
 		ELECTRON_RUN_AS_NODE: '1',
 		NODE_OPTIONS: undefined,
-		ANTHROPIC_API_KEY: undefined,
+		// CLAWDIUS-BEGIN native ~/.claude auth: only strip the key when routing through the CAPI proxy; native OAuth mode keeps the inherited env intact
+		...(stripAnthropicApiKey ? { ANTHROPIC_API_KEY: undefined } : {}),
+		// CLAWDIUS-END
 	};
 	for (const key of Object.keys(process.env)) {
 		if (key === 'ELECTRON_RUN_AS_NODE') { continue; }

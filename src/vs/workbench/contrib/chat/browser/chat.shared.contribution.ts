@@ -713,14 +713,20 @@ configurationRegistry.registerConfiguration({
 		[ClaudePreferAgentHostAgentsSettingId]: {
 			type: 'boolean',
 			description: nls.localize('chat.agents.claude.preferAgentHost', "When enabled, Claude sessions opened from the Agents Window run inside the agent host process instead of the GitHub Copilot Chat extension. Only one Claude implementation surfaces per window."),
-			default: false,
+			// CLAWDIUS-BEGIN prefer agent-host claude
+			// Clawdius has no Copilot extension; the agent-host Claude is the only Claude, so default it on (it
+			// surfaces the AH provider and stands the EH provider down). Upstream keeps default: false.
+			default: !product.defaultChatAgent?.entitlementUrl,
+			// CLAWDIUS-END
 			tags: ['experimental'],
 			experiment: { mode: 'startup' },
 		},
 		[ClaudePreferAgentHostEditorSettingId]: {
 			type: 'boolean',
 			description: nls.localize('chat.editor.claude.preferAgentHost', "When enabled, Claude sessions opened from the regular workbench (sidebar chat) run inside the agent host process instead of the GitHub Copilot Chat extension. Only one Claude implementation surfaces per window."),
-			default: false,
+			// CLAWDIUS-BEGIN prefer agent-host claude
+			default: !product.defaultChatAgent?.entitlementUrl,
+			// CLAWDIUS-END
 			tags: ['experimental'],
 			experiment: { mode: 'startup' },
 		},

@@ -532,3 +532,76 @@
 	opacity: 0.6;
 	padding: 0 2px;
 }
+
+/* CLAWDIUS-BEGIN claude usage entry */
+.clawdius-usage-tooltip {
+	min-width: 300px;
+	max-width: 360px;
+}
+
+.clawdius-usage-tooltip .quota-title {
+	font-weight: 600;
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	margin-bottom: 10px;
+}
+
+.clawdius-usage-tooltip .quota-value-suffix {
+	font-weight: 400;
+	opacity: 0.8;
+	font-variant-numeric: tabular-nums;
+}
+
+.clawdius-usage-models {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin-bottom: 10px;
+}
+
+.clawdius-usage-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.clawdius-usage-row-label {
+	flex: 0 0 92px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	opacity: 0.9;
+}
+
+.clawdius-usage-row .quota-bar {
+	flex: 1 1 auto;
+	height: 6px;
+	border-radius: 3px;
+	background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.2));
+	overflow: hidden;
+}
+
+.clawdius-usage-row .quota-bit {
+	height: 100%;
+	border-radius: 3px;
+	background: var(--vscode-progressBar-background, #d97757);
+}
+
+.clawdius-usage-row-value {
+	flex: 0 0 auto;
+	font-variant-numeric: tabular-nums;
+	opacity: 0.8;
+	min-width: 46px;
+	text-align: right;
+}
+
+.clawdius-usage-footer {
+	margin-top: 4px;
+}
+
+.clawdius-usage-since {
+	opacity: 0.6;
+	margin-top: 2px;
+}
+/* CLAWDIUS-END */

@@ -42,7 +42,14 @@ import { ILanguageModelsProviderGroup, ILanguageModelsConfigurationService } fro
  * Vendor id used for the built-in GitHub Copilot language model provider. Treated as the default
  * vendor across the chat stack (see `ILanguageModelProviderDescriptor.isDefault`).
  */
-export const COPILOT_VENDOR_ID = 'copilot';
+// CLAWDIUS-BEGIN default vendor
+// This constant is the "privileged default language-model vendor" used across the chat stack (default-model
+// selection in extHostLanguageModels.getDefaultLanguageModel, the vendor descriptor's isDefault flag, BYOK
+// detection, model-picker display). Copilot is eliminated in Clawdius, so repurpose it to Clawdius's own
+// vendor - the built-in Claude provider registers vendor "clawdius" - so that Claude is the default model.
+// The name is kept to minimize the merge surface against upstream; only the value changes.
+export const COPILOT_VENDOR_ID = 'clawdius';
+// CLAWDIUS-END
 
 export const enum ChatMessageRole {
 	System,

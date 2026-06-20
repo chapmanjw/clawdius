@@ -88,7 +88,8 @@
 	"extensionEnabledApiProposals": {
 		"vscode.clawdius-chat": [
 			"defaultChatParticipant",
-			"chatParticipantAdditions"
+			"chatParticipantAdditions",
+			"chatProvider"
 		]
 	},
 	"defaultChatAgent": {

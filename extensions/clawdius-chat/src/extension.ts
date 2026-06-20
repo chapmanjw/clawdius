@@ -91,6 +91,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
 		child.on('error', err => { spawnError = err; });
 		child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+		// The prompt is passed via `-p`; close stdin so the CLI sees EOF and does not block waiting on input
+		// (an open stdin pipe makes `claude` hang and never exit, so the turn would spin forever).
+		child.stdin.end();
 
 		const reader = createInterface({ input: child.stdout });
 		reader.on('line', line => {
@@ -128,13 +131,19 @@ export function activate(context: vscode.ExtensionContext): void {
 			}
 		});
 
-		// Await BOTH the child exit (for the code) and the reader close (all NDJSON lines flushed), so the
-		// final assistant text and result session_id are never missed.
+		// Settle when BOTH the child exit (for the code) and the reader close (all NDJSON lines flushed) have
+		// happened, so the final assistant text and result session_id are never missed - but also settle
+		// immediately on a spawn 'error' (e.g. ENOENT), which does not reliably emit 'close' and would
+		// otherwise hang the turn forever.
 		let exitCode = 0;
-		await Promise.all([
-			new Promise<void>(resolve => child.on('close', code => { exitCode = code ?? 0; resolve(); })),
-			new Promise<void>(resolve => reader.on('close', () => resolve())),
-		]);
+		await new Promise<void>(resolve => {
+			let childClosed = false;
+			let readerClosed = false;
+			const settle = () => { if (childClosed && readerClosed) { resolve(); } };
+			child.on('close', code => { exitCode = code ?? 0; childClosed = true; settle(); });
+			reader.on('close', () => { readerClosed = true; settle(); });
+			child.on('error', () => { childClosed = true; readerClosed = true; resolve(); });
+		});
 		cancellation.dispose();
 
 		if (token.isCancellationRequested) {

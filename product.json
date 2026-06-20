@@ -188,40 +188,28 @@
 	],
 	"onboardingThemes": [
 		{
-			"id": "dark-2026",
-			"label": "Dark 2026",
-			"themeId": "Dark 2026",
+			"id": "clawdius-dark",
+			"label": "Clawdius Dark",
+			"themeId": "Clawdius Dark",
 			"type": "dark"
 		},
 		{
-			"id": "hc-dark",
-			"label": "Dark High Contrast",
-			"themeId": "Default High Contrast",
+			"id": "clawdius-light",
+			"label": "Clawdius Light",
+			"themeId": "Clawdius Light",
+			"type": "light"
+		},
+		{
+			"id": "clawdius-hc-dark",
+			"label": "Clawdius High Contrast",
+			"themeId": "Clawdius High Contrast",
 			"type": "hcDark"
 		},
 		{
-			"id": "solarized-dark",
-			"label": "Solarized Dark",
-			"themeId": "Solarized Dark",
-			"type": "dark"
-		},
-		{
-			"id": "light-2026",
-			"label": "Light 2026",
-			"themeId": "Light 2026",
-			"type": "light"
-		},
-		{
-			"id": "hc-light",
-			"label": "Light High Contrast",
-			"themeId": "Default High Contrast Light",
+			"id": "clawdius-hc-light",
+			"label": "Clawdius High Contrast Light",
+			"themeId": "Clawdius High Contrast Light",
 			"type": "hcLight"
-		},
-		{
-			"id": "solarized-light",
-			"label": "Solarized Light",
-			"themeId": "Solarized Light",
-			"type": "light"
 		}
 	],
 	"builtInExtensionsEnabledWithAutoUpdates": [],

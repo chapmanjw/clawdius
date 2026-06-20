@@ -81,6 +81,18 @@ interface IClaudeModelSupports {
 	readonly reasoning_effort?: readonly string[];
 }
 
+// CLAWDIUS-BEGIN static claude catalog
+// Published by _refreshModels when the Copilot entitlement is absent (Clawdius mode, empty entitlementUrl).
+// Ids are family aliases that parse via tryParseClaudeModelId (Pattern 6, bare name) and are valid
+// `claude --model` values the SDK resolves to the latest of each family. `provider` is omitted here and
+// stamped at publish so it matches ClaudeAgent.id. models[0] (Opus) is the de-facto picker default.
+const CLAWDIUS_STATIC_CLAUDE_MODELS: readonly Omit<IAgentModelInfo, 'provider'>[] = [
+	{ id: 'opus', name: 'Claude Opus', maxContextWindow: 200_000, supportsVision: true, configSchema: createClaudeThinkingLevelSchema(['low', 'medium', 'high', 'xhigh', 'max']) },
+	{ id: 'sonnet', name: 'Claude Sonnet', maxContextWindow: 200_000, supportsVision: true, configSchema: createClaudeThinkingLevelSchema(['low', 'medium', 'high', 'xhigh', 'max']) },
+	{ id: 'haiku', name: 'Claude Haiku', maxContextWindow: 200_000, supportsVision: true, configSchema: createClaudeThinkingLevelSchema(['low', 'medium', 'high']) },
+];
+// CLAWDIUS-END
+
 /**
  * Project a {@link CCAModel} into the agent host's
  * {@link IAgentModelInfo} surface. The returned `provider` is the
@@ -238,6 +250,13 @@ export class ClaudeAgent extends Disposable implements IAgent {
 	) {
 		super();
 		this._metadataStore = _instantiationService.createInstance(ClaudeSessionMetadataStore, this.id);
+		// CLAWDIUS-BEGIN static claude catalog
+		// In Clawdius mode authenticate() never runs (getProtectedResources is []), so publish the static
+		// model catalog at construction; otherwise the Agents-window model picker would be empty.
+		if (!this._productService.defaultChatAgent?.entitlementUrl) {
+			void this._refreshModels();
+		}
+		// CLAWDIUS-END
 	}
 
 	// #region Descriptor + auth
@@ -251,10 +270,24 @@ export class ClaudeAgent extends Disposable implements IAgent {
 	}
 
 	getProtectedResources(): ProtectedResourceMetadata[] {
+		// CLAWDIUS-BEGIN native ~/.claude auth
+		// No Copilot/GitHub account in Clawdius; the SDK subprocess authenticates via native ~/.claude OAuth,
+		// so advertise no protected resource (the host never prompts for or requires GitHub auth).
+		if (!this._productService.defaultChatAgent?.entitlementUrl) {
+			return [];
+		}
+		// CLAWDIUS-END
 		return [GITHUB_COPILOT_PROTECTED_RESOURCE];
 	}
 
-	private _ensureAuthenticated(): IClaudeProxyHandle {
+	private _ensureAuthenticated(): IClaudeProxyHandle | undefined {
+		// CLAWDIUS-BEGIN native ~/.claude auth
+		// Native mode has no proxy handle and needs none - the SDK subprocess authenticates via ~/.claude
+		// OAuth. Skip the auth gate so sessions run end-to-end with no Copilot token.
+		if (!this._productService.defaultChatAgent?.entitlementUrl) {
+			return undefined;
+		}
+		// CLAWDIUS-END
 		const handle = this._proxyHandle;
 		if (!handle) {
 			throw new ProtocolError(
@@ -298,6 +331,15 @@ export class ClaudeAgent extends Disposable implements IAgent {
 	}
 
 	private async _refreshModels(): Promise<void> {
+		// CLAWDIUS-BEGIN static claude catalog
+		// No CAPI /models and no GitHub token in Clawdius mode. Publish a static Claude catalog of family
+		// aliases; ids flow raw into Options.model (claudeSdkOptions.ts) and double as the `claude --model`
+		// arg. models[0] (Opus) is the de-facto picker default.
+		if (!this._productService.defaultChatAgent?.entitlementUrl) {
+			this._models.set(CLAWDIUS_STATIC_CLAUDE_MODELS.map(m => ({ ...m, provider: this.id })), undefined);
+			return;
+		}
+		// CLAWDIUS-END
 		const tokenAtStart = this._githubToken;
 		if (!tokenAtStart) {
 			this._models.set([], undefined);

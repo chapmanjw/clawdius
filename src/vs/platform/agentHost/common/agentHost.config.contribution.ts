@@ -32,7 +32,12 @@ configurationRegistry.registerConfiguration({
 		[AgentHostEnabledSettingId]: {
 			type: 'boolean',
 			description: nls.localize('chat.agentHost.enabled', "When enabled, some agents run in a separate agent host process."),
-			default: !isWeb && product.quality !== 'stable',
+			// CLAWDIUS-BEGIN agent host on for clawdius
+			// Clawdius (entitlementUrl empty) powers the Agents window via the agent-host Claude provider, so
+			// the host must spawn in dev AND built/stable. This key is read in the main process where product.json
+			// configurationDefaults are NOT applied, so the flip must live here.
+			default: !isWeb && (!product.defaultChatAgent?.entitlementUrl || product.quality !== 'stable'),
+			// CLAWDIUS-END
 			tags: ['experimental', 'advanced'],
 		},
 		'chat.agents.copilotCli.hideExtensionHost': {

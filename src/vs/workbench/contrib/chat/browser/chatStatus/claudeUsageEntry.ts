@@ -4,10 +4,18 @@
  *--------------------------------------------------------------------------------------------*/
 
 // CLAWDIUS-BEGIN claude usage entry
-// A bottom-right status-bar entry that visualizes the local Claude Code CLI's own usage stats
-// (~/.claude/stats-cache.json) - model token usage, cost, and session counts - in the CLI's visual language.
-// This replaces the Copilot quota entry (which is suppressed in Clawdius, see chatStatusEntry.ts) so the
-// status bar reflects the tool actually powering the chat. Clawdius is "an extension of Claude Code".
+// A bottom-right status-bar entry + hover popup that mirror the Claude Code CLI's own `/usage` view.
+// - The status bar shows the Claude rate-limit "capacity" windows as mini bars.
+// - The popup shows: the capacity bars (Current session / Current week / per-model), and a Stats section
+//   (contribution heatmap + favorite model / total tokens / sessions / streaks), in Claude Code's look.
+//
+// Two data sources, both the user's own:
+// - ~/.claude/stats-cache.json (written by the CLI): historical tokens, sessions, daily activity.
+// - GET https://api.anthropic.com/api/oauth/usage (the endpoint the CLI's /usage calls): live capacity %
+//   per rate-limit window. This is network EGRESS to Claude's own API using the user's existing CLI OAuth
+//   token (~/.claude/.credentials.json). It only runs for this Clawdius usage entry. The user asked for live
+//   capacity bars that reference real Claude capacity, so this egress is intended; if it ever needs to be
+//   opt-out, gate it behind a setting.
 
 import './media/chatStatus.css';
 import { Disposable, MutableDisposable } from '../../../../../base/common/lifecycle.js';
@@ -21,34 +29,78 @@ import { $ as h, append, disposableWindowInterval } from '../../../../../base/br
 import { mainWindow } from '../../../../../base/browser/window.js';
 import product from '../../../../../platform/product/common/product.js';
 
+// --- Live capacity (rate-limit windows) from /api/oauth/usage ---
+
+interface ICapacityWindow {
+	readonly utilization?: number; // 0-100
+	readonly resets_at?: string | null;
+}
+
+interface IClaudeCapacity {
+	readonly five_hour?: ICapacityWindow | null;
+	readonly seven_day?: ICapacityWindow | null;
+	readonly seven_day_opus?: ICapacityWindow | null;
+	readonly seven_day_sonnet?: ICapacityWindow | null;
+}
+
+// --- Historical stats from ~/.claude/stats-cache.json ---
+
 interface IClaudeModelStat {
 	readonly inputTokens?: number;
 	readonly outputTokens?: number;
-	readonly cacheReadInputTokens?: number;
-	readonly cacheCreationInputTokens?: number;
 	readonly costUSD?: number;
+}
+
+interface IClaudeDailyActivity {
+	readonly date?: string;
+	readonly messageCount?: number;
 }
 
 interface IClaudeStats {
 	readonly modelUsage?: { readonly [model: string]: IClaudeModelStat };
+	readonly dailyActivity?: ReadonlyArray<IClaudeDailyActivity>;
 	readonly totalSessions?: number;
 	readonly totalMessages?: number;
 	readonly firstSessionDate?: string;
 }
 
+// The clawdius-chat extension (node, no CORS) fetches /api/oauth/usage and writes this cache; the renderer
+// can't reach api.anthropic.com directly (CORS), so the status entry reads the cache the extension writes.
+const CAPACITY_CACHE_FILE = '.clawdius-usage-cache.json';
+const HEATMAP_WEEKS = 14;
+
 function compact(n: number): string {
 	if (n >= 1_000_000) { return `${(n / 1_000_000).toFixed(1)}M`; }
 	if (n >= 1_000) { return `${(n / 1_000).toFixed(1)}K`; }
-	return `${n}`;
+	return `${Math.round(n)}`;
 }
 
-/** Friendly model label from a raw model id, e.g. 'claude-opus-4-8' -> 'Opus 4-8'. */
+/** Friendly model label, e.g. 'claude-opus-4-8' -> 'Opus 4.8'. */
 function modelLabel(id: string): string {
-	const m = /^claude-(opus|sonnet|haiku)-(.+)$/.exec(id);
-	if (m) {
-		return `${m[1].charAt(0).toUpperCase()}${m[1].slice(1)} ${m[2]}`;
-	}
+	const m = /^claude-(opus|sonnet|haiku)-(\d+)-(\d+)/.exec(id);
+	if (m) { return `${m[1].charAt(0).toUpperCase()}${m[1].slice(1)} ${m[2]}.${m[3]}`; }
+	const m2 = /^claude-(opus|sonnet|haiku)-(.+)$/.exec(id);
+	if (m2) { return `${m2[1].charAt(0).toUpperCase()}${m2[1].slice(1)} ${m2[2]}`; }
 	return id;
+}
+
+function resetLabel(resets_at: string | null | undefined): string | undefined {
+	if (!resets_at) { return undefined; }
+	const d = new Date(resets_at);
+	if (isNaN(d.getTime())) { return undefined; }
+	const now = new Date();
+	const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+	if (d.toDateString() === now.toDateString()) { return localize('clawdius.usage.resetsToday', "Resets {0}", time); }
+	const day = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+	return localize('clawdius.usage.resetsDay', "Resets {0}, {1}", day, time);
+}
+
+/** Unicode block for a 0-100 value (8 levels), for the compact status-bar bars. */
+function block(util: number): string {
+	// The 8 block-height glyphs are the consecutive code points U+2581 (lower one-eighth block) .. U+2588
+	// (full block); pick one by the value. Built from char codes to avoid literal unicode in source.
+	const level = Math.min(7, Math.max(0, Math.floor((util / 100) * 8)));
+	return String.fromCharCode(0x2581 + level);
 }
 
 export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchContribution {
@@ -57,6 +109,7 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 
 	private readonly entry = this._register(new MutableDisposable<IStatusbarEntryAccessor>());
 	private stats: IClaudeStats | undefined;
+	private capacity: IClaudeCapacity | undefined;
 
 	constructor(
 		@IStatusbarService private readonly statusbarService: IStatusbarService,
@@ -72,20 +125,49 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 		}
 
 		this.refresh();
-		// Poll periodically - the CLI rewrites stats-cache.json as the user works; a slow poll is plenty.
-		this._register(disposableWindowInterval(mainWindow, () => this.refresh(), 30_000));
+		// Both data sources are local files (the extension does the actual API egress every ~60s), so polling
+		// them often is cheap and gives prompt pickup when the capacity cache is (re)written.
+		this._register(disposableWindowInterval(mainWindow, () => this.refresh(), 15_000));
 	}
 
 	private async refresh(): Promise<void> {
+		await Promise.all([this.refreshStats(), this.refreshCapacity()]);
+		this.update();
+	}
+
+	private async refreshStats(): Promise<void> {
 		try {
 			const home = await this.pathService.userHome();
-			const statsUri = URI.joinPath(home, '.claude', 'stats-cache.json');
-			const content = await this.fileService.readFile(statsUri);
+			const content = await this.fileService.readFile(URI.joinPath(home, '.claude', 'stats-cache.json'));
 			this.stats = JSON.parse(content.value.toString()) as IClaudeStats;
 		} catch {
-			this.stats = undefined; // file missing / unreadable - show the neutral entry
+			this.stats = undefined;
 		}
-		this.update();
+	}
+
+	private async refreshCapacity(): Promise<void> {
+		try {
+			const home = await this.pathService.userHome();
+			const content = await this.fileService.readFile(URI.joinPath(home, '.claude', CAPACITY_CACHE_FILE));
+			this.capacity = JSON.parse(content.value.toString()) as IClaudeCapacity;
+		} catch {
+			this.capacity = undefined; // cache not written yet / offline - stats-only
+		}
+	}
+
+	/** The capacity windows that apply (non-null), in Claude Code's order. */
+	private capacityWindows(): { label: string; util: number; resets?: string | null }[] {
+		const c = this.capacity;
+		if (!c) { return []; }
+		const out: { label: string; util: number; resets?: string | null }[] = [];
+		const add = (w: ICapacityWindow | null | undefined, label: string) => {
+			if (w && typeof w.utilization === 'number') { out.push({ label, util: w.utilization, resets: w.resets_at }); }
+		};
+		add(c.five_hour, localize('clawdius.usage.session', "Current session"));
+		add(c.seven_day, localize('clawdius.usage.week', "Current week (all models)"));
+		add(c.seven_day_opus, localize('clawdius.usage.weekOpus', "Current week (Opus)"));
+		add(c.seven_day_sonnet, localize('clawdius.usage.weekSonnet', "Current week (Sonnet)"));
+		return out;
 	}
 
 	private update(): void {
@@ -98,8 +180,16 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 	}
 
 	private getProps(): IStatusbarEntry {
-		const messages = this.stats?.totalMessages;
-		const text = typeof messages === 'number' ? `$(sparkle) ${compact(messages)}` : '$(sparkle) Claude';
+		const windows = this.capacityWindows();
+		let text: string;
+		if (windows.length > 0) {
+			// One mini bar per Claude rate-limit window (the "status bars").
+			text = `$(sparkle) ${windows.map(w => block(w.util)).join('')}`;
+		} else if (typeof this.stats?.totalMessages === 'number') {
+			text = `$(sparkle) ${compact(this.stats.totalMessages)}`;
+		} else {
+			text = '$(sparkle) Claude';
+		}
 		return {
 			name: localize('clawdius.usage.name', "Claude Code Usage"),
 			text,
@@ -110,51 +200,89 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 
 	private buildTooltip(): HTMLElement {
 		const root = h('.chat-status-bar-entry-tooltip.clawdius-usage-tooltip');
-		const stats = this.stats;
+		append(root, h('.clawdius-usage-header')).textContent = localize('clawdius.usage.brand', "Claude Code");
 
-		if (!stats) {
-			append(root, h('.quota-title')).textContent = localize('clawdius.usage.none', "Claude Code");
-			append(root, h('.quota-details')).textContent = localize('clawdius.usage.noData', "No usage data yet. Use Claude in a terminal or the chat to start tracking.");
-			return root;
-		}
-
-		// --- Header: total cost across all models ---
-		const models = Object.entries(stats.modelUsage ?? {})
-			.map(([id, s]) => ({ id, tokens: (s.inputTokens ?? 0) + (s.outputTokens ?? 0), cost: s.costUSD ?? 0 }))
-			.filter(m => m.tokens > 0)
-			.sort((a, b) => b.tokens - a.tokens);
-		const totalCost = models.reduce((sum, m) => sum + m.cost, 0);
-
-		const header = append(root, h('.quota-title'));
-		header.textContent = localize('clawdius.usage.title', "Claude Code");
-		const costEl = append(header, h('span.quota-value-suffix'));
-		costEl.textContent = `  $${totalCost.toFixed(2)}`;
-
-		// --- Model usage bars (top 5 by tokens) ---
-		const maxTokens = models[0]?.tokens || 1;
-		const list = append(root, h('.clawdius-usage-models'));
-		for (const m of models.slice(0, 5)) {
-			const row = append(list, h('.clawdius-usage-row'));
-			append(row, h('.clawdius-usage-row-label')).textContent = modelLabel(m.id);
-			const barTrack = append(row, h('.quota-bar'));
-			const barFill = append(barTrack, h('.quota-bit'));
-			barFill.style.width = `${Math.max(2, Math.round((m.tokens / maxTokens) * 100))}%`;
-			append(row, h('.clawdius-usage-row-value')).textContent = compact(m.tokens);
-		}
-
-		// --- Session stats ---
-		const footer = append(root, h('.clawdius-usage-footer.quota-details'));
-		const sessions = stats.totalSessions ?? 0;
-		const totalMessages = stats.totalMessages ?? 0;
-		footer.textContent = localize('clawdius.usage.sessions', "{0} sessions . {1} messages", compact(sessions), compact(totalMessages));
-		if (stats.firstSessionDate) {
-			const since = new Date(stats.firstSessionDate);
-			if (!isNaN(since.getTime())) {
-				append(root, h('.clawdius-usage-since.quota-reset')).textContent = localize('clawdius.usage.since', "Since {0}", since.toLocaleDateString());
+		// --- Usage: capacity bars (Current session / week / per-model) ---
+		const windows = this.capacityWindows();
+		if (windows.length > 0) {
+			const section = append(root, h('.clawdius-usage-section'));
+			append(section, h('.clawdius-usage-section-title')).textContent = localize('clawdius.usage.usageTitle', "Usage");
+			for (const w of windows) {
+				const block = append(section, h('.clawdius-usage-capacity'));
+				const head = append(block, h('.clawdius-usage-capacity-head'));
+				append(head, h('span.clawdius-usage-capacity-label')).textContent = w.label;
+				append(head, h('span.clawdius-usage-capacity-pct')).textContent = localize('clawdius.usage.pctUsed', "{0}% used", Math.round(w.util));
+				const track = append(block, h('.quota-bar'));
+				append(track, h('.quota-bit')).style.width = `${Math.max(1, Math.min(100, w.util))}%`;
+				const reset = resetLabel(w.resets);
+				if (reset) { append(block, h('.clawdius-usage-capacity-reset')).textContent = reset; }
 			}
 		}
 
+		// --- Stats: contribution heatmap + grid ---
+		const stats = this.stats;
+		if (stats) {
+			const section = append(root, h('.clawdius-usage-section'));
+			append(section, h('.clawdius-usage-section-title')).textContent = localize('clawdius.usage.statsTitle', "Stats");
+			this.buildHeatmap(section, stats.dailyActivity ?? []);
+
+			const models = Object.entries(stats.modelUsage ?? {})
+				.map(([id, s]) => ({ id, tokens: (s.inputTokens ?? 0) + (s.outputTokens ?? 0) }))
+				.filter(m => m.tokens > 0)
+				.sort((a, b) => b.tokens - a.tokens);
+			const totalTokens = models.reduce((sum, m) => sum + m.tokens, 0);
+
+			const grid = append(section, h('.clawdius-usage-grid'));
+			const cell = (label: string, value: string) => {
+				const c = append(grid, h('.clawdius-usage-cell'));
+				append(c, h('span.clawdius-usage-cell-label')).textContent = label;
+				append(c, h('span.clawdius-usage-cell-value')).textContent = value;
+			};
+			if (models[0]) { cell(localize('clawdius.usage.favorite', "Favorite model"), modelLabel(models[0].id)); }
+			cell(localize('clawdius.usage.totalTokens', "Total tokens"), compact(totalTokens));
+			cell(localize('clawdius.usage.sessionsLabel', "Sessions"), compact(stats.totalSessions ?? 0));
+			cell(localize('clawdius.usage.messagesLabel', "Messages"), compact(stats.totalMessages ?? 0));
+		}
+
+		if (windows.length === 0 && !stats) {
+			append(root, h('.clawdius-usage-empty')).textContent = localize('clawdius.usage.noData', "No Claude Code usage data yet.");
+		}
+
 		return root;
+	}
+
+	/** A compact GitHub-style contribution heatmap of the most recent weeks (7 rows x N columns). */
+	private buildHeatmap(parent: HTMLElement, activity: ReadonlyArray<IClaudeDailyActivity>): void {
+		const byDate = new Map<string, number>();
+		let max = 1;
+		for (const a of activity) {
+			if (a.date) {
+				const count = a.messageCount ?? 0;
+				byDate.set(a.date.slice(0, 10), count);
+				max = Math.max(max, count);
+			}
+		}
+		const grid = append(parent, h('.clawdius-usage-heatmap'));
+		const today = new Date();
+		// Walk back to the start of the grid (Sunday HEATMAP_WEEKS ago), then forward column by column.
+		const start = new Date(today);
+		start.setDate(start.getDate() - (HEATMAP_WEEKS * 7 - 1));
+		for (let col = 0; col < HEATMAP_WEEKS; col++) {
+			const week = append(grid, h('.clawdius-usage-heatmap-week'));
+			for (let row = 0; row < 7; row++) {
+				const day = new Date(start);
+				day.setDate(start.getDate() + col * 7 + row);
+				const cell = append(week, h('.clawdius-usage-heatmap-day'));
+				if (day > today) {
+					cell.style.visibility = 'hidden';
+					continue;
+				}
+				const key = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
+				const count = byDate.get(key) ?? 0;
+				const level = count === 0 ? 0 : Math.min(4, Math.ceil((count / max) * 4));
+				cell.classList.add(`level-${level}`);
+			}
+		}
 	}
 }
 // CLAWDIUS-END

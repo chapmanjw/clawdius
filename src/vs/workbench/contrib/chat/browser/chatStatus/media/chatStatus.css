@@ -536,72 +536,116 @@
 /* CLAWDIUS-BEGIN claude usage entry */
 .clawdius-usage-tooltip {
 	min-width: 300px;
-	max-width: 360px;
+	max-width: 340px;
+	padding: 4px 4px 2px;
 }
 
-.clawdius-usage-tooltip .quota-title {
+.clawdius-usage-header {
 	font-weight: 600;
+	font-size: 13px;
+	margin-bottom: 12px;
+}
+
+.clawdius-usage-section {
+	margin-bottom: 14px;
+}
+
+.clawdius-usage-section-title {
+	font-weight: 600;
+	opacity: 0.65;
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	margin-bottom: 8px;
+}
+
+.clawdius-usage-capacity {
+	margin-bottom: 10px;
+}
+
+.clawdius-usage-capacity-head {
 	display: flex;
 	justify-content: space-between;
 	align-items: baseline;
-	margin-bottom: 10px;
+	margin-bottom: 4px;
 }
 
-.clawdius-usage-tooltip .quota-value-suffix {
-	font-weight: 400;
-	opacity: 0.8;
-	font-variant-numeric: tabular-nums;
-}
-
-.clawdius-usage-models {
-	display: flex;
-	flex-direction: column;
-	gap: 6px;
-	margin-bottom: 10px;
-}
-
-.clawdius-usage-row {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-}
-
-.clawdius-usage-row-label {
-	flex: 0 0 92px;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
+.clawdius-usage-capacity-label {
 	opacity: 0.9;
 }
 
-.clawdius-usage-row .quota-bar {
-	flex: 1 1 auto;
-	height: 6px;
-	border-radius: 3px;
+.clawdius-usage-capacity-pct {
+	font-variant-numeric: tabular-nums;
+	opacity: 0.7;
+}
+
+.clawdius-usage-capacity .quota-bar {
+	height: 8px;
+	border-radius: 4px;
 	background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.2));
 	overflow: hidden;
 }
 
-.clawdius-usage-row .quota-bit {
+.clawdius-usage-capacity .quota-bit {
 	height: 100%;
-	border-radius: 3px;
+	border-radius: 4px;
 	background: var(--vscode-progressBar-background, #d97757);
 }
 
-.clawdius-usage-row-value {
-	flex: 0 0 auto;
+.clawdius-usage-capacity-reset {
+	opacity: 0.55;
+	font-size: 11px;
+	margin-top: 3px;
+}
+
+.clawdius-usage-heatmap {
+	display: flex;
+	gap: 2px;
+	margin-bottom: 12px;
+}
+
+.clawdius-usage-heatmap-week {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.clawdius-usage-heatmap-day {
+	width: 9px;
+	height: 9px;
+	border-radius: 2px;
+	background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+.clawdius-usage-heatmap-day.level-1 { background: rgba(217, 119, 87, 0.35); }
+.clawdius-usage-heatmap-day.level-2 { background: rgba(217, 119, 87, 0.6); }
+.clawdius-usage-heatmap-day.level-3 { background: rgba(217, 119, 87, 0.8); }
+.clawdius-usage-heatmap-day.level-4 { background: rgba(217, 119, 87, 1); }
+
+.clawdius-usage-grid {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 5px 16px;
+}
+
+.clawdius-usage-cell {
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	gap: 8px;
+}
+
+.clawdius-usage-cell-label {
+	opacity: 0.7;
+}
+
+.clawdius-usage-cell-value {
+	font-weight: 600;
+	color: var(--vscode-charts-orange, #d97757);
 	font-variant-numeric: tabular-nums;
-	opacity: 0.8;
-	min-width: 46px;
-	text-align: right;
 }
 
-.clawdius-usage-footer {
-	margin-top: 4px;
-}
-
-.clawdius-usage-since {
+.clawdius-usage-empty {
 	opacity: 0.6;
-	margin-top: 2px;
 }
 /* CLAWDIUS-END */

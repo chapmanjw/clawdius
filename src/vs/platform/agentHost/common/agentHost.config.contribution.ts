@@ -95,7 +95,7 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 			'clawdius.cli.wrapperPath': {
 				type: 'string',
 				default: '',
-				markdownDescription: nls.localize('clawdius.cli.wrapperPath', "Path to a native `claude` binary or wrapper script. Reserved: native-binary launch is not supported yet, so setting this currently falls back to the bundled engine."),
+				markdownDescription: nls.localize('clawdius.cli.wrapperPath', "Absolute path to an enterprise Claude **process wrapper** - a launcher script/executable that injects auth, proxy, Bedrock/Vertex, or policy around the real CLI (like the official extension's `claudeProcessWrapper`). When set, Clawdius launches the engine through this wrapper and never silently bypasses it."),
 				tags: ['clawdius'],
 			},
 			'clawdius.cli.providerPreset': {

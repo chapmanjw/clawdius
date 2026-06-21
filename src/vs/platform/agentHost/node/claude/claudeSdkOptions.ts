@@ -9,6 +9,7 @@ import { delimiter, dirname } from '../../../../base/common/path.js';
 import { URI } from '../../../../base/common/uri.js';
 import { rgDiskPath } from '../../../../base/node/ripgrep.js';
 import { IClawdiusCliResolution } from '../../../clawdius/common/clawdiusCliConfig.js';
+import { createClaudeProcessWrapperSpawn } from './clawdiusCliSpawn.js';
 import { ClaudePermissionMode } from '../../common/claudeSessionConfigKeys.js';
 import { resolveClaudeEffort } from '../../common/claudeModelConfig.js';
 import { PendingRequestRegistry } from '../../common/pendingRequestRegistry.js';
@@ -120,6 +121,9 @@ export async function buildOptions(
 		// reintroduce a scrubbed reserved key (NODE_OPTIONS / ELECTRON_* / VSCODE_* / proxy-mode
 		// ANTHROPIC_API_KEY) that would break the Electron-as-node Claude subprocess.
 		env: { ...input.cliResolution.extraEnv, ...subprocessEnv },
+		// Enterprise wrapper mode: route the engine launch through the user's wrapper (which injects
+		// auth / proxy / provider / policy). The SDK calls this instead of its default local spawn.
+		...(input.cliResolution.wrapperPath ? { spawnClaudeCodeProcess: createClaudeProcessWrapperSpawn(input.cliResolution.wrapperPath) } : {}),
 		// CLAWDIUS-END
 		abortController: input.abortController,
 		allowDangerouslySkipPermissions: true,

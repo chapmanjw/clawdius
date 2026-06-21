@@ -52,16 +52,40 @@ suite('Clawdius CLI resolution', () => {
 		assert.ok(r.unsupportedReason);
 	});
 
-	test('wrapperPath (native binary) -> not supported yet, bundled with an unsupportedReason', () => {
-		const r = resolve({ wrapperPath: 'C:/tools/claude.exe' }, { wrapperPathExists: true, nodeCliPathExists: false });
-		assert.strictEqual(r.mode, 'bundled');
-		assert.ok(r.unsupportedReason && /native binary|raw stream-json/i.test(r.unsupportedReason));
+	test('valid wrapperPath (absolute + exists) -> wrapper mode targeting bundled, no unsupportedReason', () => {
+		const r = resolve({ wrapperPath: 'C:/tools/claude-wrapper.cmd' }, { wrapperPathExists: true, nodeCliPathExists: false });
+		assert.strictEqual(r.mode, 'wrapper');
+		assert.strictEqual(r.wrapperPath, 'C:/tools/claude-wrapper.cmd');
+		assert.strictEqual(r.wrapperTarget, 'bundled');
+		assert.strictEqual(r.pathToClaudeCodeExecutable, undefined);
+		assert.strictEqual(r.unsupportedReason, undefined);
 	});
 
-	test('wrapperPath takes precedence over nodeCliPath (both flagged unsupported -> bundled)', () => {
-		const r = resolve({ wrapperPath: '/x/claude', nodeCliPath: '/y/cli.js' }, { wrapperPathExists: true, nodeCliPathExists: true });
+	test('wrapperPath + valid nodeCliPath -> wrapper mode targeting the user cli', () => {
+		const r = resolve({ wrapperPath: '/opt/ent/claude', nodeCliPath: '/opt/claude-code/cli.js' }, { wrapperPathExists: true, nodeCliPathExists: true });
+		assert.strictEqual(r.mode, 'wrapper');
+		assert.strictEqual(r.wrapperTarget, 'userCli');
+		assert.strictEqual(r.pathToClaudeCodeExecutable, '/opt/claude-code/cli.js');
+		assert.strictEqual(r.unsupportedReason, undefined);
+	});
+
+	test('invalid wrapperPath (missing) STILL resolves to wrapper mode (never silently bypassed)', () => {
+		const r = resolve({ wrapperPath: '/no/such/wrapper' }, { wrapperPathExists: false, nodeCliPathExists: false });
+		assert.strictEqual(r.mode, 'wrapper'); // NOT bundled - the enterprise policy layer is never skipped
+		assert.strictEqual(r.wrapperPath, '/no/such/wrapper');
+		assert.ok(r.unsupportedReason && /absolute path to an existing/i.test(r.unsupportedReason));
+	});
+
+	test('non-absolute wrapperPath STILL resolves to wrapper mode with a reason (no bypass)', () => {
+		const r = resolve({ wrapperPath: 'claude-wrapper' }, { wrapperPathExists: true, nodeCliPathExists: false });
+		assert.strictEqual(r.mode, 'wrapper');
+		assert.ok(r.unsupportedReason);
+	});
+
+	test('non-absolute nodeCliPath (bare command) -> bundled (SDK does not PATH-resolve)', () => {
+		const r = resolve({ nodeCliPath: 'cli.js' }, { wrapperPathExists: false, nodeCliPathExists: true });
 		assert.strictEqual(r.mode, 'bundled');
-		assert.ok(r.unsupportedReason && /wrapperPath/i.test(r.unsupportedReason));
+		assert.ok(r.unsupportedReason && /absolute/i.test(r.unsupportedReason));
 	});
 
 	test('bedrock preset sets CLAUDE_CODE_USE_BEDROCK (login prompt is not auto-disabled)', () => {

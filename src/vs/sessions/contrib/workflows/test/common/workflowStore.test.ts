@@ -17,7 +17,7 @@ import { TestInstantiationService } from '../../../../../platform/instantiation/
 import { ILogService, NullLogService } from '../../../../../platform/log/common/log.js';
 import { AgentSession, IAgentHostService, IAgentSessionMetadata } from '../../../../../platform/agentHost/common/agentService.js';
 import { ActionType } from '../../../../../platform/agentHost/common/state/protocol/common/actions.js';
-import { SessionState } from '../../../../../platform/agentHost/common/state/protocol/channels-session/state.js';
+import { MessageKind, PendingMessageKind, SessionState } from '../../../../../platform/agentHost/common/state/protocol/channels-session/state.js';
 import { IPathService } from '../../../../../workbench/services/path/common/pathService.js';
 import { encodeClaudeProjectDir, WorkflowStore } from '../../common/workflowStore.js';
 
@@ -31,10 +31,18 @@ suite('WorkflowStore', () => {
 	let agentHost: TestAgentHostService;
 
 	/** Minimal IAgentHostService stub: ownership (listSessions), live state (getSubscription), and dispatch. */
+	interface CapturedAction {
+		type: ActionType;
+		turnId?: string;
+		kind?: PendingMessageKind;
+		id?: string;
+		message?: { text: string; origin: { kind: MessageKind } };
+	}
+
 	class TestAgentHostService {
 		sessions: IAgentSessionMetadata[] = [];
 		sessionState: SessionState | undefined = undefined;
-		readonly dispatched: { channel: string; action: { type: ActionType; turnId?: string } }[] = [];
+		readonly dispatched: { channel: string; action: CapturedAction }[] = [];
 
 		async listSessions(): Promise<IAgentSessionMetadata[]> {
 			return this.sessions;
@@ -45,7 +53,7 @@ suite('WorkflowStore', () => {
 			return { object: sub, dispose: () => { } };
 		}
 
-		dispatch(channel: string, action: { type: ActionType; turnId?: string }): void {
+		dispatch(channel: string, action: CapturedAction): void {
 			this.dispatched.push({ channel, action });
 		}
 	}
@@ -166,6 +174,47 @@ suite('WorkflowStore', () => {
 		assert.strictEqual(channel, AgentSession.uri('claude', 'sess').toString());
 		assert.strictEqual(action.type, ActionType.SessionTurnCancelled);
 		assert.strictEqual(action.turnId, 'turn-7');
+	});
+
+	test('steering a window-driven workflow injects a Steering pending message', async () => {
+		await writeRunningJournal('proj', 'sess', 'wf_live', ['a1']);
+		agentHost.sessions = [sessionMeta('sess')];
+		agentHost.sessionState = { activeTurn: { id: 'turn-7' } } as unknown as SessionState;
+		const store = newStore();
+		await store.refresh();
+
+		assert.strictEqual(store.steerWorkflow(store.runs[0], '  also check error handling  '), true);
+		assert.strictEqual(agentHost.dispatched.length, 1);
+		const { channel, action } = agentHost.dispatched[0];
+		assert.strictEqual(channel, AgentSession.uri('claude', 'sess').toString());
+		assert.strictEqual(action.type, ActionType.SessionPendingMessageSet);
+		assert.strictEqual(action.kind, PendingMessageKind.Steering);
+		assert.strictEqual(action.message?.text, 'also check error handling', 'trimmed message text');
+		assert.strictEqual(action.message?.origin.kind, MessageKind.User);
+		assert.ok(action.id, 'carries a generated id');
+	});
+
+	test('steering is a no-op for external runs, idle sessions, and empty text', async () => {
+		await writeRunningJournal('proj', 'sess', 'wf_live', ['a1']);
+		const store = newStore();
+
+		// External (no matching session).
+		agentHost.sessions = [];
+		await store.refresh();
+		assert.strictEqual(store.steerWorkflow(store.runs[0], 'hi'), false, 'external run');
+
+		// Window-owned but no active turn.
+		agentHost.sessions = [sessionMeta('sess')];
+		agentHost.sessionState = { activeTurn: undefined } as unknown as SessionState;
+		await store.refresh();
+		assert.strictEqual(store.steerWorkflow(store.runs[0], 'hi'), false, 'no active turn');
+
+		// Window-driven but empty message.
+		agentHost.sessionState = { activeTurn: { id: 't1' } } as unknown as SessionState;
+		await store.refresh();
+		assert.strictEqual(store.steerWorkflow(store.runs[0], '   '), false, 'empty text');
+
+		assert.strictEqual(agentHost.dispatched.length, 0, 'never dispatched');
 	});
 
 	test('a run with both a summary and a journal dir is listed once (completed wins)', async () => {

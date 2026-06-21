@@ -18,8 +18,9 @@ import { IFileService } from '../../../../platform/files/common/files.js';
 import { IPathService } from '../../../../workbench/services/path/common/pathService.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { AgentSession, IAgentHostService, IAgentSessionMetadata } from '../../../../platform/agentHost/common/agentService.js';
+import { generateUuid } from '../../../../base/common/uuid.js';
 import { ActionType } from '../../../../platform/agentHost/common/state/protocol/common/actions.js';
-import { SessionState } from '../../../../platform/agentHost/common/state/protocol/channels-session/state.js';
+import { MessageKind, PendingMessageKind, SessionState } from '../../../../platform/agentHost/common/state/protocol/channels-session/state.js';
 import { StateComponents } from '../../../../platform/agentHost/common/state/sessionState.js';
 import { IAgentSubscription } from '../../../../platform/agentHost/common/state/agentSubscription.js';
 
@@ -189,6 +190,28 @@ export class WorkflowStore extends Disposable {
 			return false;
 		}
 		this._agentHost.dispatch(sessionUri.toString(), { type: ActionType.SessionTurnCancelled, turnId });
+		return true;
+	}
+
+	/**
+	 * Inject a steering message into a window-owned running workflow's active turn. The agent host queues it
+	 * with 'now' priority, interrupting and re-prompting the in-flight turn (the same mechanism as typing into
+	 * the chat input mid-turn). No-op (returns false) for external runs, when no turn is active, or for empty
+	 * text.
+	 */
+	steerWorkflow(run: IWorkflowRun, message: string): boolean {
+		const sessionUri = this._owned.get(run.sessionId);
+		const turnId = this._activeTurnId(run.sessionId);
+		const text = message.trim();
+		if (!sessionUri || !turnId || !text) {
+			return false;
+		}
+		this._agentHost.dispatch(sessionUri.toString(), {
+			type: ActionType.SessionPendingMessageSet,
+			kind: PendingMessageKind.Steering,
+			id: generateUuid(),
+			message: { text, origin: { kind: MessageKind.User } },
+		});
 		return true;
 	}
 

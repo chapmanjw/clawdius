@@ -75,3 +75,57 @@ configurationRegistry.registerConfiguration({
 		},
 	}
 });
+
+// CLAWDIUS-BEGIN clawdius cli engine settings
+// These drive IClawdiusCliConfigService in the agent-host process (which reads the user settings.json) to
+// pick which Claude Code engine to launch. Only meaningful in Clawdius mode (empty entitlementUrl), so the
+// schema/defaults are registered only there. Resolution is file-existence-only: no network, no process spawn.
+if (!product.defaultChatAgent?.entitlementUrl) {
+	configurationRegistry.registerConfiguration({
+		id: 'clawdiusCli',
+		title: nls.localize('clawdiusCliConfigurationTitle', "Clawdius CLI"),
+		type: 'object',
+		properties: {
+			'clawdius.cli.nodeCliPath': {
+				type: 'string',
+				default: '',
+				markdownDescription: nls.localize('clawdius.cli.nodeCliPath', "Absolute path to your installed Claude Code `cli.js` (a JavaScript entrypoint). When set and valid, Clawdius launches the Claude Code engine from your own install instead of the bundled one. Leave empty to use the bundled engine."),
+				tags: ['clawdius'],
+			},
+			'clawdius.cli.wrapperPath': {
+				type: 'string',
+				default: '',
+				markdownDescription: nls.localize('clawdius.cli.wrapperPath', "Path to a native `claude` binary or wrapper script. Reserved: native-binary launch is not supported yet, so setting this currently falls back to the bundled engine."),
+				tags: ['clawdius'],
+			},
+			'clawdius.cli.providerPreset': {
+				type: 'string',
+				enum: ['oauth', 'bedrock', 'vertex', 'foundry', 'custom'],
+				default: 'oauth',
+				enumDescriptions: [
+					nls.localize('clawdius.cli.providerPreset.oauth', "Native ~/.claude OAuth (the default; same as the claude CLI)."),
+					nls.localize('clawdius.cli.providerPreset.bedrock', "Amazon Bedrock (sets CLAUDE_CODE_USE_BEDROCK)."),
+					nls.localize('clawdius.cli.providerPreset.vertex', "Google Vertex AI (sets CLAUDE_CODE_USE_VERTEX)."),
+					nls.localize('clawdius.cli.providerPreset.foundry', "Azure AI Foundry (configure via Environment Variables)."),
+					nls.localize('clawdius.cli.providerPreset.custom', "A custom provider (configure via Environment Variables)."),
+				],
+				description: nls.localize('clawdius.cli.providerPreset.desc', "Which provider the Claude Code engine authenticates against."),
+				tags: ['clawdius'],
+			},
+			'clawdius.cli.environmentVariables': {
+				type: 'object',
+				additionalProperties: { type: 'string' },
+				default: {},
+				markdownDescription: nls.localize('clawdius.cli.environmentVariables', "Environment variables passed to the Claude Code subprocess (e.g. provider credentials / region). Keys that Clawdius manages for the subprocess (`NODE_OPTIONS`, `VSCODE_*`, `ELECTRON_*`) cannot be overridden."),
+				tags: ['clawdius'],
+			},
+			'clawdius.cli.disableLoginPrompt': {
+				type: 'boolean',
+				default: false,
+				description: nls.localize('clawdius.cli.disableLoginPrompt', "Suppress the interactive OAuth login prompt (for provider-backed or headless setups). Reserved: not yet enforced."),
+				tags: ['clawdius'],
+			},
+		},
+	});
+}
+// CLAWDIUS-END

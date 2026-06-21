@@ -13,15 +13,18 @@
 // - ~/.claude/stats-cache.json (written by the CLI): historical tokens, sessions, daily activity.
 // - GET https://api.anthropic.com/api/oauth/usage (the endpoint the CLI's /usage calls): live capacity %
 //   per rate-limit window. This is network EGRESS to Claude's own API using the user's existing CLI OAuth
-//   token (~/.claude/.credentials.json). It only runs for this Clawdius usage entry. The user asked for live
-//   capacity bars that reference real Claude capacity, so this egress is intended; if it ever needs to be
-//   opt-out, gate it behind a setting.
+//   token (~/.claude/.credentials.json). The renderer can't reach api.anthropic.com (CORS), so the
+//   clawdius-chat extension performs the fetch; this entry triggers it ON DEMAND - only when the user opens
+//   the usage tooltip - via the `clawdius.refreshUsageCapacity` command, never at startup or on a timer, to
+//   honor the zero-uninitiated-network-egress guarantee. The two LOCAL cache files below are polled cheaply
+//   (no network); the capacity bars populate the first time the user looks at them.
 
 import './media/chatStatus.css';
 import { Disposable, MutableDisposable } from '../../../../../base/common/lifecycle.js';
 import { localize } from '../../../../../nls.js';
 import { IWorkbenchContribution } from '../../../../common/contributions.js';
 import { IStatusbarEntry, IStatusbarEntryAccessor, IStatusbarService, StatusbarAlignment } from '../../../../services/statusbar/browser/statusbar.js';
+import { ICommandService } from '../../../../../platform/commands/common/commands.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { IPathService } from '../../../../services/path/common/pathService.js';
 import { URI } from '../../../../../base/common/uri.js';
@@ -136,11 +139,13 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 	private readonly entry = this._register(new MutableDisposable<IStatusbarEntryAccessor>());
 	private stats: IClaudeStats | undefined;
 	private capacity: IClaudeCapacity | undefined;
+	private _refreshingOnDemand = false;
 
 	constructor(
 		@IStatusbarService private readonly statusbarService: IStatusbarService,
 		@IFileService private readonly fileService: IFileService,
 		@IPathService private readonly pathService: IPathService,
+		@ICommandService private readonly commandService: ICommandService,
 	) {
 		super();
 
@@ -151,9 +156,31 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 		}
 
 		this.refresh();
-		// Both data sources are local files (the extension does the actual API egress every ~60s), so polling
-		// them often is cheap and gives prompt pickup when the capacity cache is (re)written.
+		// Both data sources are LOCAL files (no network): stats-cache.json and the on-demand capacity cache.
+		// Polling them every 15s is cheap and picks up the capacity cache promptly after an on-demand fetch
+		// writes it. No network egress happens here - the only egress is the on-demand fetch triggered from
+		// the usage tooltip (see refreshOnDemand).
 		this._register(disposableWindowInterval(mainWindow, () => this.refresh(), 15_000));
+	}
+
+	/**
+	 * Trigger the clawdius-chat extension's capacity fetch ON DEMAND (the user just opened the usage
+	 * tooltip), then re-read the cache it writes and re-render. This is the sole api.anthropic.com egress
+	 * for the usage entry and it is user-initiated; there is no startup fetch or background poll.
+	 */
+	private async refreshOnDemand(): Promise<void> {
+		if (this._refreshingOnDemand) {
+			return;
+		}
+		this._refreshingOnDemand = true;
+		try {
+			await this.commandService.executeCommand('clawdius.refreshUsageCapacity');
+			await this.refresh();
+		} catch {
+			// best-effort: offline / extension not yet active / expired token - keep showing any cached data
+		} finally {
+			this._refreshingOnDemand = false;
+		}
 	}
 
 	private async refresh(): Promise<void> {
@@ -229,7 +256,8 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 			text: '',
 			ariaLabel: localize('clawdius.usage.aria', "Claude Code usage"),
 			content,
-			tooltip: { element: () => this.buildTooltip() },
+			// Opening the tooltip is the user-initiated signal to refresh live capacity (on-demand egress).
+			tooltip: { element: () => { void this.refreshOnDemand(); return this.buildTooltip(); } },
 		};
 	}
 

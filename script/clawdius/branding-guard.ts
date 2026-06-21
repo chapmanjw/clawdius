@@ -47,6 +47,15 @@ for (const k of NO_EGRESS_KEYS) {
 }
 ok(!gal.controlUrl, 'product.json extensionsGallery.controlUrl is set (extension control/malicious-manifest egress)');
 
+// Zero-egress RUNTIME backstop (not just product keys): the clawdius-chat usage-capacity fetch to
+// api.anthropic.com must be ON DEMAND only - wired to the `clawdius.refreshUsageCapacity` command the usage
+// tooltip invokes - with NO startup call and NO background timer. (It previously fetched at activate() +
+// every 60s; see .research/egress-audit.md.) A regression to a timer or a bare activation call trips this.
+const chatExt = fs.readFileSync('extensions/clawdius-chat/src/extension.ts', 'utf8');
+ok(/registerCommand\('clawdius\.refreshUsageCapacity'/.test(chatExt), 'clawdius-chat: the on-demand usage-refresh command is missing');
+ok(!/setInterval\([^)]*fetchUsageCapacity/.test(chatExt), 'clawdius-chat: usage capacity is fetched on a background timer (uninitiated egress)');
+ok(!/^\s*fetchUsageCapacity\(\);\s*$/m.test(chatExt), 'clawdius-chat: fetchUsageCapacity() is called directly (likely at activation) - it must run on demand only');
+
 const themeSvc = fs.readFileSync('src/vs/workbench/services/themes/common/workbenchThemeService.ts', 'utf8');
 ok(/COLOR_THEME_DARK = 'Clawdius Dark'/.test(themeSvc), 'default dark theme is not Clawdius Dark');
 ok(/COLOR_THEME_LIGHT = 'Clawdius Light'/.test(themeSvc), 'default light theme is not Clawdius Light');

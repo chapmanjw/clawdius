@@ -10,6 +10,7 @@
 // The live running-workflow lane is sourced separately from the agent host's subagent session tree.
 
 import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
+import { RunOnceScheduler } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -72,6 +73,11 @@ export class WorkflowStore extends Disposable {
 	get runs(): readonly IWorkflowRun[] { return this._runs; }
 
 	private readonly _watchers = this._register(new DisposableStore());
+	private _watchedKeys = new Set<string>();
+	/** Monotonic guard so an older in-flight scan can't clobber a newer one. */
+	private _refreshGen = 0;
+	/** Debounce watcher-driven refreshes - a single run emits many file events. */
+	private readonly _scheduler = this._register(new RunOnceScheduler(() => { void this.refresh(); }, 400));
 
 	constructor(
 		@IFileService private readonly _fileService: IFileService,
@@ -81,17 +87,22 @@ export class WorkflowStore extends Disposable {
 		super();
 	}
 
-	/** Refresh the run list and (re)attach watchers. Safe to call repeatedly. */
+	/** Refresh the run list. Serialized via a generation guard; safe to call repeatedly. */
 	async refresh(): Promise<void> {
+		const gen = ++this._refreshGen;
 		const dirs = await this._workflowDirs();
+		this._syncWatchers(dirs);
 		const runs: IWorkflowRun[] = [];
 		for (const dir of dirs) {
 			runs.push(...await this._readRunsIn(dir));
 		}
+		// A newer refresh started while we were scanning: let it win, don't publish stale data.
+		if (gen !== this._refreshGen || this._store.isDisposed) {
+			return;
+		}
 		// Newest first.
 		runs.sort((a, b) => (b.startTime ?? 0) - (a.startTime ?? 0));
 		this._runs = runs;
-		await this._attachWatchers(dirs);
 		this._onDidChange.fire();
 	}
 
@@ -163,7 +174,9 @@ export class WorkflowStore extends Disposable {
 		let raw: unknown;
 		try {
 			const content = await this._fileService.readFile(resource);
-			raw = JSON.parse(content.value.toString());
+			let text = content.value.toString();
+			if (text.charCodeAt(0) === 0xFEFF) { text = text.slice(1); } // strip a UTF-8 BOM (JSON.parse rejects it)
+			raw = JSON.parse(text);
 		} catch (err) {
 			this._logService.trace('[WorkflowStore] skipping unreadable run', resource.toString(), err);
 			return undefined;
@@ -217,31 +230,27 @@ export class WorkflowStore extends Disposable {
 		};
 	}
 
-	private async _attachWatchers(dirs: readonly URI[]): Promise<void> {
+	/** (Re)attach watchers only when the watched dir set actually changes, and debounce the events. */
+	private _syncWatchers(dirs: readonly URI[]): void {
+		const wanted = new Set(dirs.map(d => d.toString()));
+		if (wanted.size === this._watchedKeys.size && [...wanted].every(k => this._watchedKeys.has(k))) {
+			return; // unchanged: keep existing watchers (avoids a teardown/rebuild window that drops events)
+		}
 		this._watchers.clear();
+		this._watchedKeys = wanted;
 		for (const dir of dirs) {
 			try {
 				const watcher = this._fileService.createWatcher(dir, { recursive: false, excludes: [] });
 				this._watchers.add(watcher);
-				this._watchers.add(watcher.onDidChange(() => this.refresh().catch(() => { /* best-effort */ })));
+				this._watchers.add(watcher.onDidChange(() => this._scheduler.schedule()));
 			} catch {
 				// best-effort; a missing dir is fine
 			}
 		}
 	}
 
-	private async _pathExists(resource: URI): Promise<boolean> {
-		try {
-			await this._fileService.resolve(resource);
-			return true;
-		} catch {
-			return false;
-		}
-	}
-
-	override dispose(): void {
-		this._watchers.clear();
-		super.dispose();
+	private _pathExists(resource: URI): Promise<boolean> {
+		return this._fileService.exists(resource);
 	}
 }
 

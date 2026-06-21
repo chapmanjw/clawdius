@@ -12,7 +12,7 @@
 import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
 import { RunOnceScheduler } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
-import { basename, joinPath } from '../../../../base/common/resources.js';
+import { basename, dirname, joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { IPathService } from '../../../../workbench/services/path/common/pathService.js';
@@ -33,6 +33,8 @@ export interface IWorkflowAgent {
 	readonly lastToolName: string | undefined;
 	readonly promptPreview: string | undefined;
 	readonly resultPreview: string | undefined;
+	/** The on-disk agent-<id>.jsonl transcript, for drill-in. Undefined when the agentId is unknown. */
+	readonly transcriptUri: URI | undefined;
 }
 
 /** A durable multi-agent workflow run (one `wf_*.json` file). */
@@ -243,13 +245,13 @@ export class WorkflowStore extends Disposable {
 			const agentId = m[1];
 			let meta: { agentType?: unknown; description?: unknown } = {};
 			try { meta = JSON.parse((await this._fileService.readFile(child.resource)).value.toString()); } catch { /* partial */ }
-			agents.push(runningAgent(agentId, str(meta.agentType), str(meta.description), started.has(agentId), done.has(agentId)));
+			agents.push(runningAgent(agentId, str(meta.agentType), str(meta.description), started.has(agentId), done.has(agentId), joinPath(runDir, `agent-${agentId}.jsonl`)));
 		}
 		// If metas are not written yet, fall back to the agentIds the journal mentions (started OR result -
 		// a result-only line must still surface its agent).
 		for (const id of new Set([...started, ...done])) {
 			if (!agents.some(a => a.agentId === id)) {
-				agents.push(runningAgent(id, undefined, undefined, started.has(id), done.has(id)));
+				agents.push(runningAgent(id, undefined, undefined, started.has(id), done.has(id), joinPath(runDir, `agent-${id}.jsonl`)));
 			}
 		}
 
@@ -313,6 +315,11 @@ export class WorkflowStore extends Disposable {
 			return undefined;
 		}
 		const r = raw as Record<string, unknown>;
+		// Transcripts for a completed run live beside the journal under
+		// <sessionDir>/subagents/workflows/<summary-stem>/agent-<id>.jsonl. The dir name matches the summary
+		// filename stem (not the internal runId field), so derive it from the resource path.
+		const sessionDir = dirname(dirname(resource));
+		const transcriptDir = joinPath(sessionDir, 'subagents', 'workflows', basename(resource).replace(/\.json$/, ''));
 		const progress = Array.isArray(r.workflowProgress) ? r.workflowProgress : [];
 		const agents: IWorkflowAgent[] = [];
 		for (const ev of progress) {
@@ -320,8 +327,9 @@ export class WorkflowStore extends Disposable {
 				continue;
 			}
 			const a = ev as Record<string, unknown>;
+			const agentId = str(a.agentId);
 			agents.push({
-				agentId: str(a.agentId) ?? '',
+				agentId: agentId ?? '',
 				label: str(a.label) ?? str(a.agentType) ?? 'agent',
 				agentType: str(a.agentType),
 				model: str(a.model),
@@ -333,6 +341,7 @@ export class WorkflowStore extends Disposable {
 				lastToolName: str(a.lastToolName),
 				promptPreview: str(a.promptPreview),
 				resultPreview: str(a.resultPreview),
+				transcriptUri: agentId ? joinPath(transcriptDir, `agent-${agentId}.jsonl`) : undefined,
 			});
 		}
 		const phases = (Array.isArray(r.phases) ? r.phases : [])
@@ -388,7 +397,7 @@ function sessionIdFromWorkflowDir(wfDir: URI): string {
 	return parts.length >= 2 ? parts[parts.length - 2] : '';
 }
 
-function runningAgent(agentId: string, agentType: string | undefined, description: string | undefined, started: boolean, done: boolean): IWorkflowAgent {
+function runningAgent(agentId: string, agentType: string | undefined, description: string | undefined, started: boolean, done: boolean, transcriptUri: URI): IWorkflowAgent {
 	return {
 		agentId,
 		label: description ?? agentType ?? 'agent',
@@ -402,6 +411,7 @@ function runningAgent(agentId: string, agentType: string | undefined, descriptio
 		lastToolName: undefined,
 		promptPreview: undefined,
 		resultPreview: undefined,
+		transcriptUri,
 	};
 }
 

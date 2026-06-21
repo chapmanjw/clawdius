@@ -32,10 +32,12 @@ import { IWorkspaceContextService } from '../../../../platform/workspace/common/
 import { IViewPaneOptions, ViewPane } from '../../../../workbench/browser/parts/views/viewPane.js';
 import { ViewPaneContainer } from '../../../../workbench/browser/parts/views/viewPaneContainer.js';
 import { IViewDescriptorService } from '../../../../workbench/common/views.js';
+import { IEditorService } from '../../../../workbench/services/editor/common/editorService.js';
 import { IExtensionService } from '../../../../workbench/services/extensions/common/extensions.js';
 import { IWorkbenchLayoutService } from '../../../../workbench/services/layout/browser/layoutService.js';
 import { IWorkflowAgent, IWorkflowRun, WorkflowStore } from '../common/workflowStore.js';
 import { WORKFLOWS_VIEW_CONTAINER_ID } from '../common/workflows.js';
+import { transcriptDocUri } from './workflowTranscript.js';
 
 const $ = dom.$;
 
@@ -160,6 +162,7 @@ export class WorkflowsViewPane extends ViewPane {
 		@IThemeService themeService: IThemeService,
 		@IHoverService hoverService: IHoverService,
 		@ILogService private readonly _logService: ILogService,
+		@IEditorService private readonly _editorService: IEditorService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 		this._workflowStore = this._register(this.instantiationService.createInstance(WorkflowStore));
@@ -183,8 +186,25 @@ export class WorkflowsViewPane extends ViewPane {
 			}
 		)) as WorkbenchObjectTree<WorkflowNode, void>;
 
+		this._register(this._tree.onDidOpen(e => {
+			if (e.element?.kind === 'agent') {
+				this._openTranscript(e.element.agent);
+			}
+		}));
+
 		this._register(this._workflowStore.onDidChange(() => this._refreshTree()));
 		this._workflowStore.refresh().catch(err => this._logService.warn('[Ultracode] workflow refresh failed', err));
+	}
+
+	/** Drill into a sub-agent: open its transcript as a read-only, Markdown-rendered document. */
+	private _openTranscript(agent: IWorkflowAgent): void {
+		if (!agent.transcriptUri) {
+			return;
+		}
+		const shortId = agent.agentId ? agent.agentId.slice(0, 6) : '';
+		const label = shortId ? `${agent.label} (${shortId})` : agent.label;
+		this._editorService.openEditor({ resource: transcriptDocUri(agent.transcriptUri, label), options: { pinned: false } })
+			.catch(err => this._logService.warn('[Ultracode] open transcript failed', err));
 	}
 
 	private _refreshTree(): void {

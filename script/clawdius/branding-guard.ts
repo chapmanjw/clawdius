@@ -98,6 +98,43 @@ ok(!fs.existsSync('extensions/copilot'), 'extensions/copilot was re-introduced -
 ok(p.defaultChatAgent?.extensionId === 'vscode.clawdius-chat', 'defaultChatAgent.extensionId is not the clawdius-chat backend');
 ok(fs.existsSync('extensions/clawdius-chat/package.json'), 'the clawdius-chat extension (Claude CLI chat backend) is missing');
 
+// Phase 6 brand backstop: the user-visible Copilot/GitHub strings + logo icons rebranded by the brand
+// sweeps must STAY rebranded, so an upstream merge can't silently re-introduce them in shipped UI. Each
+// site asserts the Claude/neutral wording is PRESENT and the exact old brand string/icon is ABSENT. The
+// `absent` patterns target the rebranded VALUE precisely (not the localize key or internal id), so the
+// deliberately-left gated strings (e.g. chat.sessionSync) and Copilot-suffixed command ids don't trip it.
+const brandSites: { file: string; present: RegExp; absent: RegExp; what: string }[] = [
+	{ file: 'src/vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent.ts',
+		present: /"Use AI features with Claude"/, absent: /Use AI features with Copilot for free/, what: 'welcome walkthrough title' },
+	{ file: 'src/vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent.ts',
+		present: /\[Claude\]\(\{0\}\)/, absent: /\[Copilot\]\(\{0\}\)/, what: 'welcome walkthrough description link' },
+	{ file: 'src/vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent.ts',
+		present: /altText: 'Claude multi file edits'/, absent: /altText: 'VS Code Copilot multi file edits'/, what: 'welcome walkthrough media alt text' },
+	{ file: 'src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts',
+		present: /provided by Claude, including chat/, absent: /provided by GitHub Copilot/, what: 'chat.disableAIFeatures description' },
+	{ file: 'src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts',
+		present: /Sandbox mode for the agent SDK/, absent: /Sandbox mode for the Copilot SDK/, what: 'chat.agentHost.sdkSandbox description' },
+	{ file: 'src/vs/workbench/contrib/chat/browser/actions/chatActions.ts',
+		present: /"Show Extensions using Claude"/, absent: /"Show Extensions using Copilot"/, what: 'Show Extensions command title' },
+	{ file: 'src/vs/workbench/contrib/chat/browser/actions/openCopilotCliStateFileAction.ts',
+		// Match the localize() VALUE, not the JSDoc comment that still names the upstream helper.
+		present: /localize2\('openSessionEventsFile', "Open Agent Session State File"\)/, absent: /localize2\('openSessionEventsFile', "Open Copilot CLI State File"\)/, what: 'open-session-state command title' },
+	{ file: 'src/vs/workbench/contrib/chat/browser/actions/openCopilotCliStateFileAction.ts',
+		present: /"No agent session is active\."/, absent: /"No Copilot CLI session is active\."/, what: 'open-session-state no-session toast' },
+	{ file: 'src/vs/workbench/contrib/chat/browser/widget/input/permissionPickerActionItem.ts',
+		present: /"Claude uses your configured settings"/, absent: /"Copilot uses your configured settings"/, what: 'approvals picker subtext' },
+	{ file: 'src/vs/workbench/contrib/chat/common/languageModelStats.ts',
+		present: /localize\('Language Models', "Claude"\)/, absent: /localize\('Language Models', "Copilot"\)/, what: 'extension Features-tab label' },
+	{ file: 'src/vs/workbench/contrib/chat/browser/actions/createPluginAction.ts',
+		present: /localize\('agents', "Agents"\), Codicon\.claude/, absent: /localize\('agents', "Agents"\), Codicon\.copilot/, what: 'create-plugin Agents group icon' },
+];
+for (const s of brandSites) {
+	let src = '';
+	try { src = fs.readFileSync(s.file, 'utf8'); } catch { ok(false, `brand-guard: cannot read ${s.file}`); continue; }
+	ok(s.present.test(src), `brand regressed (${s.what}): expected Claude/neutral wording missing in ${s.file}`);
+	ok(!s.absent.test(src), `brand regressed (${s.what}): the old Copilot string/icon re-appeared in ${s.file}`);
+}
+
 if (fail.length) {
 	console.error('BRANDING GUARD FAILED:');
 	for (const m of fail) { console.error('  - ' + m); }

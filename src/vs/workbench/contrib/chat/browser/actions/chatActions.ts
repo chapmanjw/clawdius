@@ -1160,7 +1160,9 @@ export function registerChatActions() {
 		constructor() {
 			super({
 				id: 'workbench.action.chat.showExtensionsUsingCopilot',
-				title: localize2('showCopilotUsageExtensions', "Show Extensions using Copilot"),
+				// CLAWDIUS-BEGIN claude branding
+				title: localize2('showCopilotUsageExtensions', "Show Extensions using Claude"),
+				// CLAWDIUS-END
 				f1: true,
 				category: EXTENSIONS_CATEGORY,
 				precondition: ChatContextKeys.enabled

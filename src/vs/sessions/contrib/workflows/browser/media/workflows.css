@@ -1,0 +1,39 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/* CLAWDIUS-BEGIN ultracode workflows view */
+.ultracode-workflows-view {
+	height: 100%;
+}
+
+.ultracode-workflow-row {
+	display: flex;
+	align-items: center;
+	height: 22px;
+	overflow: hidden;
+}
+
+.ultracode-workflow-icon {
+	flex-shrink: 0;
+	margin-right: 6px;
+}
+
+.ultracode-workflow-label {
+	flex-shrink: 0;
+	max-width: 60%;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.ultracode-workflow-detail {
+	margin-left: 8px;
+	opacity: 0.7;
+	font-size: 0.9em;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+/* CLAWDIUS-END */

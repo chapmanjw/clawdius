@@ -27,6 +27,7 @@ import { IKeybindingService } from '../../../../platform/keybinding/common/keybi
 import { WorkbenchObjectTree } from '../../../../platform/list/browser/listService.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
+import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
 import { IStorageService } from '../../../../platform/storage/common/storage.js';
 import { ITelemetryService } from '../../../../platform/telemetry/common/telemetry.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
@@ -193,6 +194,7 @@ export class WorkflowsViewPane extends ViewPane {
 		@ILogService private readonly _logService: ILogService,
 		@IEditorService private readonly _editorService: IEditorService,
 		@IContextMenuService private readonly _ctxMenuService: IContextMenuService,
+		@IQuickInputService private readonly _quickInputService: IQuickInputService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 		this._workflowStore = this._register(this.instantiationService.createInstance(WorkflowStore));
@@ -250,7 +252,26 @@ export class WorkflowsViewPane extends ViewPane {
 				}
 			},
 		};
-		this._ctxMenuService.showContextMenu({ getAnchor: () => anchor, getActions: () => [cancel] });
+		const steer: IAction = {
+			id: 'ultracode.workflows.steer',
+			label: localize('ultracode.workflows.steerAction', "Steer Workflow…"),
+			tooltip: '',
+			class: undefined,
+			enabled: true,
+			run: () => this._steerWorkflow(run),
+		};
+		this._ctxMenuService.showContextMenu({ getAnchor: () => anchor, getActions: () => [steer, cancel] });
+	}
+
+	/** Prompt for a message and inject it into a window-owned running workflow's active turn. */
+	private async _steerWorkflow(run: IWorkflowRun): Promise<void> {
+		const message = await this._quickInputService.input({
+			prompt: localize('ultracode.workflows.steerPrompt', "Message to steer '{0}' mid-run", run.workflowName),
+			placeHolder: localize('ultracode.workflows.steerPlaceholder', "e.g. also check the error-handling paths"),
+		});
+		if (message && message.trim() && !this._workflowStore.steerWorkflow(run, message)) {
+			this._logService.info('[Ultracode] workflow steer had no active turn to inject into', run.runId);
+		}
 	}
 
 	/** Drill into a sub-agent: open its transcript as a read-only, Markdown-rendered document. */

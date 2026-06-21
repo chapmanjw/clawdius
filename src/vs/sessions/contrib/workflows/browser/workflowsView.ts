@@ -10,6 +10,8 @@
 
 import './media/workflows.css';
 import * as dom from '../../../../base/browser/dom.js';
+import { IMouseEvent } from '../../../../base/browser/mouseEvent.js';
+import { IAction } from '../../../../base/common/actions.js';
 import { IListVirtualDelegate } from '../../../../base/browser/ui/list/list.js';
 import { ITreeNode, ITreeRenderer } from '../../../../base/browser/ui/tree/tree.js';
 import { IListAccessibilityProvider } from '../../../../base/browser/ui/list/listWidget.js';
@@ -65,6 +67,7 @@ interface IRowTemplate {
 	readonly icon: HTMLElement;
 	readonly label: HTMLElement;
 	readonly detail: HTMLElement;
+	readonly badge: HTMLElement;
 }
 
 abstract class AbstractRowRenderer implements ITreeRenderer<WorkflowNode, void, IRowTemplate> {
@@ -75,11 +78,17 @@ abstract class AbstractRowRenderer implements ITreeRenderer<WorkflowNode, void, 
 		const icon = dom.append(row, $('span.ultracode-workflow-icon'));
 		const label = dom.append(row, $('span.ultracode-workflow-label'));
 		const detail = dom.append(row, $('span.ultracode-workflow-detail'));
-		return { icon, label, detail };
+		const badge = dom.append(row, $('span.ultracode-workflow-badge'));
+		return { icon, label, detail, badge };
 	}
 
 	protected setIcon(template: IRowTemplate, icon: ThemeIcon): void {
 		template.icon.className = 'ultracode-workflow-icon ' + ThemeIcon.asClassName(icon);
+	}
+
+	protected clearBadge(template: IRowTemplate): void {
+		template.badge.textContent = '';
+		template.badge.className = 'ultracode-workflow-badge';
 	}
 
 	abstract renderElement(node: ITreeNode<WorkflowNode, void>, index: number, template: IRowTemplate): void;
@@ -88,12 +97,17 @@ abstract class AbstractRowRenderer implements ITreeRenderer<WorkflowNode, void, 
 		template.icon.remove();
 		template.label.remove();
 		template.detail.remove();
+		template.badge.remove();
 	}
 }
 
 class RunRowRenderer extends AbstractRowRenderer {
 	static readonly TEMPLATE_ID = 'run';
 	readonly templateId = RunRowRenderer.TEMPLATE_ID;
+
+	constructor(private readonly _store: WorkflowStore) {
+		super();
+	}
 
 	override renderElement(node: ITreeNode<WorkflowNode, void>, _index: number, template: IRowTemplate): void {
 		if (node.element.kind !== 'run') {
@@ -107,6 +121,20 @@ class RunRowRenderer extends AbstractRowRenderer {
 		if (run.totalTokens !== undefined) { bits.push(`${formatCount(run.totalTokens)} tok`); }
 		if (run.defaultModel) { bits.push(run.defaultModel); }
 		template.detail.textContent = bits.join(' · ');
+
+		// Ownership badge (running runs only): only a workflow this window actively drives can be cancelled;
+		// any other running workflow is a separate process (e.g. the terminal CLI) and is view-only.
+		this.clearBadge(template);
+		const control = this._store.controlFor(run);
+		if (control?.controllable) {
+			template.badge.textContent = localize('ultracode.workflows.cancellable', "in window");
+			template.badge.classList.add('cancellable');
+			template.badge.title = localize('ultracode.workflows.cancellableTip', "Spawned from this window — right-click to cancel.");
+		} else if (control) {
+			template.badge.textContent = localize('ultracode.workflows.external', "external");
+			template.badge.classList.add('external');
+			template.badge.title = localize('ultracode.workflows.externalTip', "Run by a separate Claude Code process — view only.");
+		}
 	}
 }
 
@@ -126,6 +154,7 @@ class AgentRowRenderer extends AbstractRowRenderer {
 		if (agent.tokens !== undefined) { bits.push(`${formatCount(agent.tokens)} tok`); }
 		if (agent.toolCalls !== undefined) { bits.push(`${agent.toolCalls} tools`); }
 		template.detail.textContent = bits.join(' · ');
+		this.clearBadge(template);
 	}
 }
 
@@ -163,6 +192,7 @@ export class WorkflowsViewPane extends ViewPane {
 		@IHoverService hoverService: IHoverService,
 		@ILogService private readonly _logService: ILogService,
 		@IEditorService private readonly _editorService: IEditorService,
+		@IContextMenuService private readonly _ctxMenuService: IContextMenuService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 		this._workflowStore = this._register(this.instantiationService.createInstance(WorkflowStore));
@@ -177,7 +207,7 @@ export class WorkflowsViewPane extends ViewPane {
 			'UltracodeWorkflows',
 			container,
 			new WorkflowsDelegate(),
-			[new RunRowRenderer(), new AgentRowRenderer()],
+			[new RunRowRenderer(this._workflowStore), new AgentRowRenderer()],
 			{
 				horizontalScrolling: false,
 				accessibilityProvider: new WorkflowsAccessibilityProvider(),
@@ -192,8 +222,35 @@ export class WorkflowsViewPane extends ViewPane {
 			}
 		}));
 
+		this._register(this._tree.onContextMenu(e => this._onContextMenu(e.element, e.anchor)));
+
 		this._register(this._workflowStore.onDidChange(() => this._refreshTree()));
 		this._workflowStore.refresh().catch(err => this._logService.warn('[Ultracode] workflow refresh failed', err));
+	}
+
+	/** Offer "Cancel Workflow" for a running run this window's agent host owns. */
+	private _onContextMenu(element: WorkflowNode | null | undefined, anchor: HTMLElement | IMouseEvent): void {
+		if (element?.kind !== 'run') {
+			return;
+		}
+		const run = element.run;
+		const control = this._workflowStore.controlFor(run);
+		if (!control?.controllable) {
+			return;
+		}
+		const cancel: IAction = {
+			id: 'ultracode.workflows.cancel',
+			label: localize('ultracode.workflows.cancelAction', "Cancel Workflow"),
+			tooltip: '',
+			class: undefined,
+			enabled: true,
+			run: () => {
+				if (!this._workflowStore.cancelWorkflow(run)) {
+					this._logService.info('[Ultracode] workflow cancel had no active turn to stop', run.runId);
+				}
+			},
+		};
+		this._ctxMenuService.showContextMenu({ getAnchor: () => anchor, getActions: () => [cancel] });
 	}
 
 	/** Drill into a sub-agent: open its transcript as a read-only, Markdown-rendered document. */

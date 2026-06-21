@@ -9,7 +9,7 @@
 // run per file. This is the data source for the Ultracode window's "Workflows" board (the past-runs lane).
 // The live running-workflow lane is sourced separately from the agent host's subagent session tree.
 
-import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
+import { Disposable, DisposableStore, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { RunOnceScheduler } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { basename, dirname, joinPath } from '../../../../base/common/resources.js';
@@ -17,6 +17,11 @@ import { URI } from '../../../../base/common/uri.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { IPathService } from '../../../../workbench/services/path/common/pathService.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
+import { AgentSession, IAgentHostService, IAgentSessionMetadata } from '../../../../platform/agentHost/common/agentService.js';
+import { ActionType } from '../../../../platform/agentHost/common/state/protocol/common/actions.js';
+import { SessionState } from '../../../../platform/agentHost/common/state/protocol/channels-session/state.js';
+import { StateComponents } from '../../../../platform/agentHost/common/state/sessionState.js';
+import { IAgentSubscription } from '../../../../platform/agentHost/common/state/agentSubscription.js';
 
 /** A single agent within a workflow run (one `workflow_agent` progress event). */
 export interface IWorkflowAgent {
@@ -58,6 +63,20 @@ export interface IWorkflowRun {
 }
 
 /**
+ * Control state for a *running* workflow. `controllable` is true only when this window's own agent host is
+ * actively driving the turn that runs the workflow (the window holds the SDK child's stdin and the session
+ * state shows an active turn) - then `cancelWorkflow` can abort it. A running workflow that is NOT
+ * controllable is a separate process (e.g. the terminal CLI) and is view-only. Note: matching the on-disk
+ * sessionId against the agent host's *persisted* session list is too loose (the CLI persists into the same
+ * ~/.claude project), so an actively-driven turn - not list membership - is the authoritative signal.
+ */
+export interface IWorkflowControl {
+	readonly controllable: boolean;
+	/** The backend session URI to dispatch control actions to (controllable runs only). */
+	readonly sessionUri?: URI;
+}
+
+/**
  * Encode an absolute filesystem path the way the Claude Code CLI names its per-project transcript dirs
  * under ~/.claude/projects: path separators and the drive colon become '-'. Verified against the on-disk
  * layout (e.g. C:\Users\chapm\Projects\Clawdius\clawdius -> C--Users-chapm-Projects-Clawdius-clawdius).
@@ -84,13 +103,26 @@ export class WorkflowStore extends Disposable {
 	private readonly _scheduler = this._register(new RunOnceScheduler(() => { void this.refresh(); }, 400));
 	/** While any workflow is running (no completion summary yet), poll so journal progress shows live. */
 	private readonly _livePoll = this._register(new RunOnceScheduler(() => { void this.refresh(); }, 2500));
+	/** Debounce the noisy session-state stream (activeTurn updates every token) into board re-renders. */
+	private readonly _controlNotify = this._register(new RunOnceScheduler(() => this._onDidChange.fire(), 600));
+
+	/** sessionId -> backend session URI for running workflows THIS window's agent host owns. */
+	private _owned = new Map<string, URI>();
+	/** Held session-state subscriptions (keyed by sessionId) that keep `activeTurn` warm for cancel. */
+	private readonly _subs = new Map<string, { readonly sub: IAgentSubscription<SessionState>; readonly dispose: () => void }>();
 
 	constructor(
 		@IFileService private readonly _fileService: IFileService,
 		@IPathService private readonly _pathService: IPathService,
 		@ILogService private readonly _logService: ILogService,
+		@IAgentHostService private readonly _agentHost: IAgentHostService,
 	) {
 		super();
+		this._register(toDisposable(() => {
+			for (const id of [...this._subs.keys()]) {
+				this._releaseSub(id);
+			}
+		}));
 	}
 
 	/** Refresh the run list. Serialized via a generation guard; safe to call repeatedly. */
@@ -117,12 +149,113 @@ export class WorkflowStore extends Disposable {
 		// pruned); dedupe on runId so it isn't double-listed.
 		const completedIds = new Set(completed.map(r => r.runId));
 		const runningDeduped = running.filter(r => !completedIds.has(r.runId));
+		// Determine which running runs this window's agent host owns (so the board can offer controls for
+		// those and mark the rest external). Round-trips to the agent host; guarded by the generation check.
+		await this._syncOwnership(runningDeduped, gen);
+		if (gen !== this._refreshGen || this._store.isDisposed) {
+			this._armLivePoll(false);
+			return;
+		}
 		completed.sort((a, b) => (b.startTime ?? 0) - (a.startTime ?? 0));
 		runningDeduped.sort((a, b) => b.runId.localeCompare(a.runId));
 		// Running workflows first so in-progress work is always visible at the top.
 		this._runs = [...runningDeduped, ...completed];
 		this._onDidChange.fire();
 		this._armLivePoll(runningDeduped.length > 0);
+	}
+
+	/**
+	 * Control information for a run, or `undefined` for non-running runs. `owner: 'window'` runs were spawned
+	 * by this window's agent host and can be cancelled while a turn is active; `owner: 'external'` runs are a
+	 * separate (e.g. CLI) process and are view-only.
+	 */
+	controlFor(run: IWorkflowRun): IWorkflowControl | undefined {
+		if (run.status !== 'running') {
+			return undefined;
+		}
+		const sessionUri = this._owned.get(run.sessionId);
+		const controllable = sessionUri !== undefined && this._activeTurnId(run.sessionId) !== undefined;
+		return { controllable, sessionUri };
+	}
+
+	/**
+	 * Cancel a window-owned running workflow by aborting the turn that is executing it (and its sub-agents).
+	 * No-op (returns false) for external runs or when no turn is currently active.
+	 */
+	cancelWorkflow(run: IWorkflowRun): boolean {
+		const sessionUri = this._owned.get(run.sessionId);
+		const turnId = this._activeTurnId(run.sessionId);
+		if (!sessionUri || !turnId) {
+			return false;
+		}
+		this._agentHost.dispatch(sessionUri.toString(), { type: ActionType.SessionTurnCancelled, turnId });
+		return true;
+	}
+
+	/** Reconcile the window-owned set + held session-state subscriptions against the current running runs. */
+	private async _syncOwnership(running: readonly IWorkflowRun[], gen: number): Promise<void> {
+		const owned = new Map<string, URI>();
+		if (running.length > 0) {
+			let metas: IAgentSessionMetadata[];
+			try {
+				metas = await this._agentHost.listSessions();
+			} catch {
+				metas = [];
+			}
+			if (gen !== this._refreshGen || this._store.isDisposed) {
+				return;
+			}
+			const byId = new Map<string, URI>();
+			for (const meta of metas) {
+				try {
+					byId.set(AgentSession.id(meta.session), meta.session);
+				} catch {
+					// not an agent-session URI; skip
+				}
+			}
+			for (const run of running) {
+				const uri = byId.get(run.sessionId);
+				if (uri) {
+					owned.set(run.sessionId, uri);
+				}
+			}
+		}
+		// Acquire subscriptions for newly-owned sessions; release ones no longer running/owned.
+		for (const [id, uri] of owned) {
+			if (!this._subs.has(id)) {
+				this._acquireSub(id, uri);
+			}
+		}
+		for (const id of [...this._subs.keys()]) {
+			if (!owned.has(id)) {
+				this._releaseSub(id);
+			}
+		}
+		this._owned = owned;
+	}
+
+	private _acquireSub(sessionId: string, sessionUri: URI): void {
+		try {
+			const ref = this._agentHost.getSubscription(StateComponents.Session, sessionUri, 'UltracodeWorkflows');
+			const listener: IDisposable = ref.object.onDidChange(() => this._controlNotify.schedule());
+			this._subs.set(sessionId, { sub: ref.object, dispose: () => { listener.dispose(); ref.dispose(); } });
+		} catch {
+			// best-effort; a session that can't be subscribed simply won't be controllable
+		}
+	}
+
+	private _releaseSub(sessionId: string): void {
+		const entry = this._subs.get(sessionId);
+		if (entry) {
+			this._subs.delete(sessionId);
+			entry.dispose();
+		}
+	}
+
+	/** The id of the session's currently-active turn, read live from the held subscription (warm). */
+	private _activeTurnId(sessionId: string): string | undefined {
+		const value = this._subs.get(sessionId)?.sub.value;
+		return value && !(value instanceof Error) ? value.activeTurn?.id : undefined;
 	}
 
 	/**

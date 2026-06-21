@@ -11,6 +11,7 @@ import Severity from '../../../../base/common/severity.js';
 import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { localize, localize2 } from '../../../../nls.js';
 import { Action2, MenuRegistry, registerAction2, IMenuService } from '../../../../platform/actions/common/actions.js';
+import product from '../../../../platform/product/common/product.js';
 import { ContextKeyExpr, IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { IDefaultAccountService } from '../../../../platform/defaultAccount/common/defaultAccount.js';
 import { IInstantiationService, ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
@@ -202,6 +203,14 @@ class TitleBarAccountWidget extends BaseActionViewItem {
 		super.render(container);
 
 		this.container = container;
+		// CLAWDIUS-BEGIN no account/sign-in button
+		// Clawdius has no IDE account to sign into (auth is native ~/.claude OAuth), so hide the title-bar
+		// account / "Sign in to your account" button entirely.
+		if (!product.defaultChatAgent?.entitlementUrl) {
+			container.style.display = 'none';
+			return;
+		}
+		// CLAWDIUS-END
 		container.classList.add('sessions-account-titlebar-widget');
 		container.setAttribute('role', 'button');
 		container.tabIndex = 0;

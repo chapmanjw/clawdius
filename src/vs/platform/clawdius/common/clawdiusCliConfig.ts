@@ -67,6 +67,10 @@ export interface IClawdiusCliResolution {
 	/** Environment overlay for the Claude subprocess (provider-preset env + user `environmentVariables`). */
 	readonly extraEnv: Readonly<Record<string, string | undefined>>;
 	readonly providerPreset: ClawdiusCliProviderPreset;
+	/**
+	 * Resolved from `clawdius.cli.disableLoginPrompt`. Carried as metadata for a later phase that wires
+	 * login-prompt suppression; NOT yet enforced by `buildOptions`. Defaults to `false`.
+	 */
 	readonly disableLoginPrompt: boolean;
 	/**
 	 * Set when the user requested a mode that is not yet supported (a native-binary `wrapperPath`, or a
@@ -102,7 +106,10 @@ function providerPresetEnv(preset: ClawdiusCliProviderPreset): Record<string, st
  */
 export function projectCliResolution(settings: IClawdiusCliSettings, existence: IClawdiusCliPathExistence): IClawdiusCliResolution {
 	const providerPreset: ClawdiusCliProviderPreset = settings.providerPreset ?? 'oauth';
-	const disableLoginPrompt = settings.disableLoginPrompt ?? providerPreset !== 'oauth';
+	// Honest pass-through metadata: mirrors the explicit setting (default false). Not yet enforced; a later
+	// phase wires actual login-prompt suppression. (Do not auto-disable per preset - that implies behavior
+	// this phase does not deliver.)
+	const disableLoginPrompt = settings.disableLoginPrompt ?? false;
 	const extraEnv: Record<string, string | undefined> = {
 		...providerPresetEnv(providerPreset),
 		...(settings.environmentVariables ?? {}),
@@ -114,7 +121,7 @@ export function projectCliResolution(settings: IClawdiusCliSettings, existence: 
 		return {
 			...base,
 			mode: 'bundled',
-			unsupportedReason: `clawdius.cli.wrapperPath ('${wrapperPath}') names a native binary, which the bundled SDK engine cannot launch yet; using the bundled engine. Native-binary support is a planned raw stream-json adapter.`,
+			unsupportedReason: `clawdius.cli.wrapperPath ('${wrapperPath}') selects a native-binary / wrapper-script engine, which is not supported yet (a planned raw stream-json adapter); using the bundled engine.`,
 		};
 	}
 

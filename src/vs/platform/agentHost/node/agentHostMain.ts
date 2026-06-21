@@ -24,6 +24,10 @@ import { CopilotAgent } from './copilot/copilotAgent.js';
 import { CopilotApiService, ICopilotApiService } from './shared/copilotApiService.js';
 import { ClaudeAgent } from './claude/claudeAgent.js';
 import { ClaudeAgentSdkService, ClaudeSdkPackage, IClaudeAgentSdkService } from './claude/claudeAgentSdkService.js';
+// CLAWDIUS-BEGIN cli backend resolution
+import { IClawdiusCliConfigService } from '../../clawdius/common/clawdiusCliConfig.js';
+import { ClawdiusCliConfigService } from '../../clawdius/node/clawdiusCliConfigService.js';
+// CLAWDIUS-END
 import { ClaudeProxyService, IClaudeProxyService } from './claude/claudeProxyService.js';
 import { CodexAgent, CodexSdkPackage } from './codex/codexAgent.js';
 import { CodexProxyService, ICodexProxyService } from './codex/codexProxyService.js';
@@ -143,6 +147,9 @@ async function startAgentHost(): Promise<void> {
 		// downloads. Must run before any downstream service that injects them.
 		await registerAgentHostNetworkServices(diServices, fileService, environmentService, logService, disposables);
 		instantiationService = new InstantiationService(diServices);
+		// CLAWDIUS-BEGIN cli backend resolution: resolve the Claude Code engine (bundled vs user cli.js) from clawdius.cli.* settings
+		diServices.set(IClawdiusCliConfigService, instantiationService.createInstance(ClawdiusCliConfigService));
+		// CLAWDIUS-END
 		const fileMonitorService = disposables.add(instantiationService.createInstance(AgentHostFileMonitorService));
 		diServices.set(IAgentHostFileMonitorService, fileMonitorService);
 		diServices.set(IWindowsMxcTerminalSandboxRuntime, instantiationService.createInstance(WindowsMxcTerminalSandboxRuntime));

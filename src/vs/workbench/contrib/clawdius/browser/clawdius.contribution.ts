@@ -39,8 +39,10 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 		containerIcon: clawdiusViewIcon,
 		name: localize2('clawdius.workflows', "Workflows"),
 		ctorDescriptor: new SyncDescriptor(ClawdiusWorkflowsViewPane),
-		canToggleVisibility: true,
-		canMoveView: true,
+		// The only view in the owned Clawdius container: keep it pinned (not hideable / movable) so a user
+		// cannot leave the activity-bar container empty. Revisit once the container has multiple views.
+		canToggleVisibility: false,
+		canMoveView: false,
 		order: 1,
 	};
 

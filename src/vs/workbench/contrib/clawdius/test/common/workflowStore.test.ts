@@ -137,5 +137,21 @@ suite('Clawdius WorkflowStore (read-only)', () => {
 		await changed;
 		assert.strictEqual(store.runs.length, 1);
 	});
+
+	test('strips a UTF-8 BOM from a completed run summary', async () => {
+		await write('.claude/projects/proj/sess/workflows/wf_bom.json', String.fromCharCode(0xFEFF) + JSON.stringify({ runId: 'wf_bom', workflowName: 'BOM', status: 'completed' }));
+		const store = newStore();
+		await store.refresh();
+		assert.deepStrictEqual(store.runs.map(r => r.runId), ['wf_bom']);
+	});
+
+	test('a result-only journal line still surfaces its agent (as done)', async () => {
+		await write('.claude/projects/proj/sess/subagents/workflows/wf_res/journal.jsonl', JSON.stringify({ type: 'result', agentId: 'r1' }));
+		const store = newStore();
+		await store.refresh();
+		assert.strictEqual(store.runs.length, 1);
+		const agent = store.runs[0].agents.find(a => a.agentId === 'r1');
+		assert.strictEqual(agent?.state, 'done');
+	});
 });
 // CLAWDIUS-END

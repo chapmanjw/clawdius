@@ -314,7 +314,9 @@ export const platformSessionSchema = createSchema({
 			localize('agentHost.sessionConfig.autoApprove.autopilot', "Autopilot (Preview)"),
 		],
 		enumDescriptions: [
-			localize('agentHost.sessionConfig.autoApprove.defaultDescription', "Copilot uses your configured settings"),
+			// CLAWDIUS-BEGIN claude branding
+			localize('agentHost.sessionConfig.autoApprove.defaultDescription', "Claude uses your configured settings"),
+			// CLAWDIUS-END
 			localize('agentHost.sessionConfig.autoApprove.bypassDescription', "All tool calls are auto-approved"),
 			localize('agentHost.sessionConfig.autoApprove.autopilotDescription', "Autonomously iterates from start to finish"),
 		],

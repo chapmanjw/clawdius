@@ -46,9 +46,11 @@ export class LanguageModelStatsService extends Disposable implements ILanguageMo
 export const CopilotUsageExtensionFeatureId = 'copilot';
 Registry.as<IExtensionFeaturesRegistry>(Extensions.ExtensionFeaturesRegistry).registerExtensionFeature({
 	id: CopilotUsageExtensionFeatureId,
-	label: localize('Language Models', "Copilot"),
+	// CLAWDIUS-BEGIN claude branding
+	label: localize('Language Models', "Claude"),
 	description: localize('languageModels', "Language models usage statistics of this extension."),
-	icon: Codicon.copilot,
+	icon: Codicon.claude,
+	// CLAWDIUS-END
 	access: {
 		canToggle: false
 	},

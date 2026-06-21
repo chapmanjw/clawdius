@@ -88,14 +88,17 @@ merge that touches the same asset conflicts; re-export from the Clawdius master 
 `src/vs/workbench/services/accounts/test/browser/defaultAccount.test.ts` (Clawdius regression test),
 `src/vs/workbench/contrib/chat/browser/chatStatus/claudeUsageEntry.ts` (the Claude Code usage status-bar entry; new file in an upstream dir, registered from `chat.shared.contribution.ts`).
 
-## Intentional egress (not "uninitiated")
+## On-demand egress (user-initiated, never at startup/idle)
 - The Claude Code usage pane shows live rate-limit "capacity" bars. The clawdius-chat extension (node, no
-  CORS - the renderer can't reach the API) fetches `GET https://api.anthropic.com/api/oauth/usage` every
-  ~60s using the user's existing CLI OAuth token (`~/.claude/.credentials.json`) and caches it to
-  `~/.claude/.clawdius-usage-cache.json`; the core status entry reads that cache. This is egress to Claude's
-  OWN API for the user's OWN usage, and only because the user asked for live capacity bars - it is intended,
-  not the "uninitiated egress" the zero-egress guarantee is about. If it should be opt-out, gate the fetch
-  behind a setting.
+  CORS - the renderer can't reach the API) fetches `GET https://api.anthropic.com/api/oauth/usage` using the
+  user's existing CLI OAuth token (`~/.claude/.credentials.json`) and caches it to
+  `~/.claude/.clawdius-usage-cache.json`; the core status entry reads that cache. This fetch runs **on demand
+  only** - the status entry executes the `clawdius.refreshUsageCapacity` command when the user opens the
+  usage tooltip (`claudeUsageEntry.ts` `refreshOnDemand`); there is **no startup fetch and no 60s background
+  poll** (removed), so a Clawdius install makes zero uninitiated network egress per the guarantee. The bars
+  populate the first time the user looks at them; the status entry's 15s poll is LOCAL-file reads only.
+  (Was an `activate()` fetch + 60s `setInterval`; changed to on-demand after the egress audit -
+  `.research/egress-audit.md`.)
 
 ## Known privacy follow-ups (tracked, deferred by design — not yet addressed)
 Surfaced by the M1 review; recorded so the zero-egress claim stays honest about what is and is not done.

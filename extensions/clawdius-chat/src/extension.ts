@@ -300,8 +300,10 @@ function buildMessages(history: ReadonlyArray<vscode.ChatRequestTurn | vscode.Ch
 /**
  * Fetch the user's Claude rate-limit "capacity" (the /usage windows) and cache it to disk for the core
  * status-bar usage entry. The renderer can't reach api.anthropic.com (CORS); the extension host (node) can.
- * This is network egress to Claude's own API using the user's existing CLI OAuth token - the user asked for
- * live capacity bars that reference real Claude capacity, so it is intended.
+ * This is network egress to Claude's own API using the user's existing CLI OAuth token. It runs ON DEMAND
+ * ONLY - the core usage status entry invokes the `clawdius.refreshUsageCapacity` command when the user opens
+ * the usage UI. There is deliberately no startup fetch and no background timer, so a Clawdius install makes
+ * zero uninitiated network egress (the zero-egress guarantee); the bars populate when the user looks at them.
  */
 async function fetchUsageCapacity(): Promise<void> {
 	try {
@@ -323,10 +325,10 @@ async function fetchUsageCapacity(): Promise<void> {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
-	// Keep the Claude capacity cache fresh for the status-bar usage entry (fetch now + on an interval).
-	fetchUsageCapacity();
-	const usageTimer = setInterval(fetchUsageCapacity, 60_000);
-	context.subscriptions.push(new vscode.Disposable(() => clearInterval(usageTimer)));
+	// Refresh the Claude capacity cache ON DEMAND only: the core usage status entry executes this command
+	// when the user opens/hovers the usage UI. No startup fetch, no background poll - the zero-uninitiated-
+	// network-egress guarantee (the fetch is api.anthropic.com egress with the user's CLI OAuth token).
+	context.subscriptions.push(vscode.commands.registerCommand('clawdius.refreshUsageCapacity', () => fetchUsageCapacity()));
 
 	// Register Claude as a language model (the model picker + any model-using flow can now select it).
 	const claudeProvider = new ClaudeLanguageModelProvider();

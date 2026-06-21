@@ -1158,7 +1158,9 @@ configurationRegistry.registerConfiguration({
 		},
 		[AgentHostCustomTerminalToolEnabledSettingId]: {
 			type: 'boolean',
-			description: nls.localize('chat.agentHost.customTerminalTool.enabled', "When enabled, Copilot SDK sessions use the Agent Host terminal tool override instead of the SDK's default terminal behavior."),
+			// CLAWDIUS-BEGIN no copilot branding
+			description: nls.localize('chat.agentHost.customTerminalTool.enabled', "When enabled, agent SDK sessions use the Agent Host terminal tool override instead of the SDK's default terminal behavior."),
+			// CLAWDIUS-END
 			default: false,
 			tags: ['experimental', 'advanced'],
 		},
@@ -1170,7 +1172,9 @@ configurationRegistry.registerConfiguration({
 				nls.localize('chat.agentHost.sdkSandbox.enabled.on', "The SDK's built-in shell tool runs inside a sandbox using the configured filesystem policy and host-list-restricted network."),
 				nls.localize('chat.agentHost.sdkSandbox.enabled.allowNetwork', "The SDK's built-in shell tool runs inside a sandbox with unrestricted outbound network access."),
 			],
-			markdownDescription: nls.localize('chat.agentHost.sdkSandbox.enabled', "Sandbox mode for the Copilot SDK's built-in shell tool. Only takes effect when `#chat.agentHost.customTerminalTool.enabled#` is `false`; when the Agent Host's own terminal tool is enabled, the engine sandbox is controlled by `#chat.agent.sandbox.enabled#`."),
+			// CLAWDIUS-BEGIN no copilot branding
+			markdownDescription: nls.localize('chat.agentHost.sdkSandbox.enabled', "Sandbox mode for the agent SDK's built-in shell tool. Only takes effect when `#chat.agentHost.customTerminalTool.enabled#` is `false`; when the Agent Host's own terminal tool is enabled, the engine sandbox is controlled by `#chat.agent.sandbox.enabled#`."),
+			// CLAWDIUS-END
 			default: AgentSandboxEnabledValue.Off,
 			tags: ['experimental', 'advanced'],
 			experiment: {
@@ -1560,7 +1564,9 @@ configurationRegistry.registerConfiguration({
 			title: nls.localize('chat.hookFilesLocations.title', "Hook File Locations",),
 			markdownDescription: nls.localize(
 				'chat.hookFilesLocations.description',
-				"Specify paths to hook configuration files that define custom shell commands to execute at strategic points in an agent's workflow. [Learn More]({0}).\n\nRelative paths are resolved from the root folder(s) of your workspace. Supports Copilot hooks (`*.json`) and Claude Code hooks (`settings.json`, `settings.local.json`).",
+				// CLAWDIUS-BEGIN no copilot branding
+				"Specify paths to hook configuration files that define custom shell commands to execute at strategic points in an agent's workflow. [Learn More]({0}).\n\nRelative paths are resolved from the root folder(s) of your workspace. Supports the built-in hook format (`*.json`) and Claude Code hooks (`settings.json`, `settings.local.json`).",
+				// CLAWDIUS-END
 				HOOK_DOCUMENTATION_URL,
 			),
 			default: {
@@ -1608,7 +1614,9 @@ configurationRegistry.registerConfiguration({
 		[PromptsConfig.USE_CLAUDE_HOOKS]: {
 			type: 'boolean',
 			title: nls.localize('chat.useClaudeHooks.title', "Use Claude Hooks",),
-			markdownDescription: nls.localize('chat.useClaudeHooks.description', "Controls whether hooks from Claude configuration files can execute. When disabled, only Copilot-format hooks are used. Hooks are loaded from the files configured in `#chat.hookFilesLocations#`.",),
+			// CLAWDIUS-BEGIN no copilot branding
+			markdownDescription: nls.localize('chat.useClaudeHooks.description', "Controls whether hooks from Claude configuration files can execute. When disabled, only the built-in chat hook format is used. Hooks are loaded from the files configured in `#chat.hookFilesLocations#`.",),
+			// CLAWDIUS-END
 			default: false,
 			restricted: true,
 			disallowConfigurationDefault: true,
@@ -1728,13 +1736,17 @@ configurationRegistry.registerConfiguration({
 		},
 		[ChatConfiguration.AIDisabled]: {
 			type: 'boolean',
-			description: nls.localize('chat.disableAIFeatures', "Disable and hide built-in AI features provided by GitHub Copilot, including chat and inline suggestions."),
+			// CLAWDIUS-BEGIN claude branding
+			description: nls.localize('chat.disableAIFeatures', "Disable and hide built-in AI features provided by Claude, including chat and inline suggestions."),
+			// CLAWDIUS-END
 			default: false,
 			scope: ConfigurationScope.WINDOW,
 		},
 		[ChatConfiguration.TitleBarSignInEnabled]: {
 			type: 'boolean',
-			description: nls.localize('chat.titleBar.signIn.enabled', "Controls whether the Copilot Sign In button is shown in the title bar when signed out. When disabled, the Sign In affordance falls back to the status bar."),
+			// CLAWDIUS-BEGIN no copilot branding
+			description: nls.localize('chat.titleBar.signIn.enabled', "Controls whether the Sign In button is shown in the title bar when signed out. When disabled, the Sign In affordance falls back to the status bar."),
+			// CLAWDIUS-END
 			default: true,
 		},
 		[ChatConfiguration.TitleBarOpenInAgentsWindowEnabled]: {
@@ -1772,7 +1784,9 @@ configurationRegistry.registerConfiguration({
 		},
 		[ChatConfiguration.GrowthNotificationEnabled]: {
 			type: 'boolean',
-			description: nls.localize('chat.growthNotification', "Controls whether to show a growth notification in the agent sessions view to encourage new users to try Copilot."),
+			// CLAWDIUS-BEGIN claude branding
+			description: nls.localize('chat.growthNotification', "Controls whether to show a growth notification in the agent sessions view to encourage new users to try Claude."),
+			// CLAWDIUS-END
 			default: false,
 			tags: ['experimental'],
 			experiment: {

@@ -109,7 +109,9 @@ export class PermissionPickerActionItem extends ChatInputPickerActionViewItem {
 						...action,
 						id: 'chat.permissions.default',
 						label: localize('permissions.default', "Default Approvals"),
-						detail: localize('permissions.default.subtext', "Copilot uses your configured settings"),
+						// CLAWDIUS-BEGIN claude branding
+						detail: localize('permissions.default.subtext', "Claude uses your configured settings"),
+						// CLAWDIUS-END
 						icon: ThemeIcon.fromId(Codicon.shield.id),
 						checked: currentLevel === ChatPermissionLevel.Default,
 						tooltip: '',

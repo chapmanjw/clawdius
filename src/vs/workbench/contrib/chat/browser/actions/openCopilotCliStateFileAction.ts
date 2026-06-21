@@ -51,10 +51,14 @@ export async function openCopilotCliStateFile(
 			await editorService.openEditor({ resource: result.resource });
 			return;
 		case 'no-session':
-			notificationService.info(localize('openSessionEventsFile.noSession', "No Copilot CLI session is active."));
+			// CLAWDIUS-BEGIN no copilot branding
+			notificationService.info(localize('openSessionEventsFile.noSession', "No agent session is active."));
+			// CLAWDIUS-END
 			return;
 		case 'unsupported-scheme':
-			notificationService.info(localize('openSessionEventsFile.unsupported', "The active chat session is not a Copilot CLI session."));
+			// CLAWDIUS-BEGIN no copilot branding
+			notificationService.info(localize('openSessionEventsFile.unsupported', "The active chat session is not an agent session."));
+			// CLAWDIUS-END
 			return;
 		case 'remote-not-connected':
 			notificationService.warn(localize('openSessionEventsFile.notConnected', "No active connection found for remote agent host '{0}'.", result.authority));
@@ -77,7 +81,9 @@ export class OpenCopilotCliStateFileAction extends Action2 {
 	constructor() {
 		super({
 			id: OpenCopilotCliStateFileAction.ID,
-			title: localize2('openSessionEventsFile', "Open Copilot CLI State File"),
+			// CLAWDIUS-BEGIN no copilot branding
+			title: localize2('openSessionEventsFile', "Open Agent Session State File"),
+			// CLAWDIUS-END
 			f1: true,
 			category: Categories.Developer,
 			precondition: ContextKeyExpr.and(

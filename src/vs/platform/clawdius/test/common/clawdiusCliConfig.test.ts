@@ -64,11 +64,11 @@ suite('Clawdius CLI resolution', () => {
 		assert.ok(r.unsupportedReason && /wrapperPath/i.test(r.unsupportedReason));
 	});
 
-	test('bedrock preset sets CLAUDE_CODE_USE_BEDROCK and disables the login prompt by default', () => {
+	test('bedrock preset sets CLAUDE_CODE_USE_BEDROCK (login prompt is not auto-disabled)', () => {
 		const r = resolve({ providerPreset: 'bedrock' });
 		assert.strictEqual(r.providerPreset, 'bedrock');
 		assert.strictEqual(r.extraEnv.CLAUDE_CODE_USE_BEDROCK, '1');
-		assert.strictEqual(r.disableLoginPrompt, true);
+		assert.strictEqual(r.disableLoginPrompt, false);
 	});
 
 	test('vertex preset sets CLAUDE_CODE_USE_VERTEX', () => {
@@ -83,9 +83,9 @@ suite('Clawdius CLI resolution', () => {
 		assert.strictEqual(r.extraEnv.CLAUDE_CODE_USE_BEDROCK, '0');
 	});
 
-	test('explicit disableLoginPrompt=false is honored even for a non-oauth preset', () => {
-		const r = resolve({ providerPreset: 'bedrock', disableLoginPrompt: false });
-		assert.strictEqual(r.disableLoginPrompt, false);
+	test('explicit disableLoginPrompt is honored (resolved metadata for a later phase)', () => {
+		assert.strictEqual(resolve({ disableLoginPrompt: true }).disableLoginPrompt, true);
+		assert.strictEqual(resolve({ providerPreset: 'bedrock', disableLoginPrompt: false }).disableLoginPrompt, false);
 	});
 
 	test('oauth preset (default) keeps the login prompt and adds no provider env', () => {

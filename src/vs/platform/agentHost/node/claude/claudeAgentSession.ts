@@ -11,6 +11,7 @@ import { Disposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IInstantiationService } from '../../../instantiation/common/instantiation.js';
 import { ILogService } from '../../../log/common/log.js';
+import { IClawdiusCliConfigService } from '../../../clawdius/common/clawdiusCliConfig.js';
 import { IAgentConfigurationService } from '../agentConfigurationService.js';
 import { ISyncedCustomization } from '../../common/agentPluginManager.js';
 import { ClaudePermissionMode } from '../../common/claudeSessionConfigKeys.js';
@@ -210,6 +211,9 @@ export class ClaudeAgentSession extends Disposable {
 		@IClaudeAgentSdkService private readonly _sdkService: IClaudeAgentSdkService,
 		@ISessionDataService private readonly _sessionDataService: ISessionDataService,
 		@ILogService private readonly _logService: ILogService,
+		// CLAWDIUS-BEGIN cli backend resolution
+		@IClawdiusCliConfigService private readonly _cliConfigService: IClawdiusCliConfigService,
+		// CLAWDIUS-END
 	) {
 		super();
 		this.project = project;
@@ -258,6 +262,7 @@ export class ClaudeAgentSession extends Disposable {
 				allowedTools,
 				plugins: this.clientCustomizationsDiff.consume(),
 				agent: this._resolveAgentName(this._provisionalAgent),
+				cliResolution: await this._cliConfigService.resolveCliBackend(), // CLAWDIUS cli backend resolution
 			},
 			ctx.proxyHandle,
 			data => this._logService.error(`[Claude SDK stderr] ${data}`),
@@ -356,6 +361,7 @@ export class ClaudeAgentSession extends Disposable {
 						allowedTools: rebuildAllowedTools,
 						plugins: this.clientCustomizationsDiff.consume(),
 						agent: this._resolveAgentName(this._provisionalAgent),
+						cliResolution: await this._cliConfigService.resolveCliBackend(), // CLAWDIUS cli backend resolution
 					},
 					ctx.proxyHandle,
 					data => this._logService.error(`[Claude SDK stderr] ${data}`),

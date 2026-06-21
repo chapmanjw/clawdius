@@ -8,6 +8,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { delimiter, dirname } from '../../../../base/common/path.js';
 import { URI } from '../../../../base/common/uri.js';
 import { rgDiskPath } from '../../../../base/node/ripgrep.js';
+import { IClawdiusCliResolution } from '../../../clawdius/common/clawdiusCliConfig.js';
 import { ClaudePermissionMode } from '../../common/claudeSessionConfigKeys.js';
 import { resolveClaudeEffort } from '../../common/claudeModelConfig.js';
 import { PendingRequestRegistry } from '../../common/pendingRequestRegistry.js';
@@ -57,6 +58,14 @@ export interface IBuildOptionsInput {
 	 * Omit when no custom agent is selected (SDK default behavior).
 	 */
 	readonly agent?: string;
+	// CLAWDIUS-BEGIN cli backend resolution
+	/**
+	 * The resolved Claude Code engine to launch (the bundled SDK cli.js vs the user's installed cli.js) plus
+	 * its environment overlay, from {@link IClawdiusCliConfigService}. Projected onto `executable` /
+	 * `pathToClaudeCodeExecutable` / `env`. Resolved fresh by the caller at each materialize / rematerialize.
+	 */
+	readonly cliResolution: IClawdiusCliResolution;
+	// CLAWDIUS-END
 }
 
 /**
@@ -101,8 +110,17 @@ export async function buildOptions(
 
 	return {
 		cwd: input.workingDirectory.fsPath,
-		executable: process.execPath as 'node',
-		env: subprocessEnv,
+		// CLAWDIUS-BEGIN cli backend resolution
+		// Map the resolved runtime: 'node' -> the current binary (Electron-as-node via ELECTRON_RUN_AS_NODE,
+		// which preserves the bundled vendored-cli.js behavior); bun/deno pass through. In userCli mode point
+		// the SDK at the user's installed cli.js. The env overlay carries provider-preset + user env vars.
+		executable: input.cliResolution.executable === 'node' ? (process.execPath as 'node') : input.cliResolution.executable,
+		...(input.cliResolution.pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable: input.cliResolution.pathToClaudeCodeExecutable } : {}),
+		// subprocessEnv MUST win over the user overlay so a clawdius.cli.environmentVariables entry can never
+		// reintroduce a scrubbed reserved key (NODE_OPTIONS / ELECTRON_* / VSCODE_* / proxy-mode
+		// ANTHROPIC_API_KEY) that would break the Electron-as-node Claude subprocess.
+		env: { ...input.cliResolution.extraEnv, ...subprocessEnv },
+		// CLAWDIUS-END
 		abortController: input.abortController,
 		allowDangerouslySkipPermissions: true,
 		canUseTool: input.canUseTool,

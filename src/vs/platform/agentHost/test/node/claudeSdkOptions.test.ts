@@ -155,4 +155,14 @@ suite('claudeSdkOptions / buildOptions plugins projection', () => {
 		assert.strictEqual(env.NODE_OPTIONS, undefined); // the deliberate scrub wins over the user overlay
 		assert.strictEqual(env.SAFE_VAR, 'ok'); // a non-reserved user var still passes through
 	});
+
+	test('wrapper resolution projects spawnClaudeCodeProcess (enterprise wrapper launch)', async () => {
+		const opts = await buildOptions(input(undefined, { mode: 'wrapper', executable: 'node', wrapperPath: '/opt/ent/claude', wrapperTarget: 'bundled', extraEnv: {}, providerPreset: 'oauth', disableLoginPrompt: false }), proxyHandle, () => { }, () => { });
+		assert.strictEqual(typeof opts.spawnClaudeCodeProcess, 'function');
+	});
+
+	test('non-wrapper resolution omits spawnClaudeCodeProcess', async () => {
+		const opts = await buildOptions(input(undefined, { mode: 'bundled', executable: 'node', extraEnv: {}, providerPreset: 'oauth', disableLoginPrompt: false }), proxyHandle, () => { }, () => { });
+		assert.strictEqual(opts.spawnClaudeCodeProcess, undefined);
+	});
 });

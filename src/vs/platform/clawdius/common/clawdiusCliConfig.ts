@@ -17,24 +17,31 @@ export type ClawdiusCliProviderPreset = 'oauth' | 'bedrock' | 'vertex' | 'foundr
 
 /**
  * Which Claude Code engine the agent-host SDK should launch.
- *  - `bundled`      : the Agent SDK's own vendored `cli.js`, run via Electron-as-node. The default and the
- *                     current behavior (`executable:'node'`, no `pathToClaudeCodeExecutable`).
- *  - `userCli`      : the user's installed `@anthropic-ai/claude-code` `cli.js`, passed as
- *                     `pathToClaudeCodeExecutable` (true one-shared-config).
- *  - `nativeBinary` : a compiled `claude` binary (claude.exe / musl) the SDK cannot launch as a JS
- *                     entrypoint. NOT yet supported — requires a raw stream-json adapter (later phase);
- *                     a request for it resolves to `bundled` with an `unsupportedReason`.
+ *  - `bundled` : the Agent SDK's own vendored `cli.js`, run via Electron-as-node. The default
+ *                (`executable:'node'`, no `pathToClaudeCodeExecutable`).
+ *  - `userCli` : the user's installed Claude Code `cli.js` (an ABSOLUTE JS path), passed as
+ *                `pathToClaudeCodeExecutable` (true one-shared-config).
+ *  - `wrapper` : an ENTERPRISE wrapper — a process launcher (`clawdius.cli.wrapperPath`) that injects
+ *                auth / proxy / Bedrock / Vertex / policy around the real CLI, like the official extension's
+ *                `claudeProcessWrapper`. Launched via the SDK's `spawnClaudeCodeProcess` (the wrapper receives
+ *                the SDK's intended launch command as argv[0]). A wrapper is NEVER silently bypassed: if its
+ *                path is invalid the resolution STILL uses wrapper mode and surfaces the problem, so an
+ *                enterprise policy layer can't be skipped by misconfiguration.
  */
-export type ClawdiusCliMode = 'bundled' | 'userCli' | 'nativeBinary';
+export type ClawdiusCliMode = 'bundled' | 'userCli' | 'wrapper';
 
 /**
  * The raw `clawdius.cli.*` settings, as read from the user `settings.json`. Every field is optional; an
  * absent field means "use the default" (which resolves to the bundled engine + native OAuth).
  */
 export interface IClawdiusCliSettings {
-	/** Path to a wrapper script / native `claude` binary. Reserved: native-binary launch is not yet supported. */
+	/**
+	 * Absolute path to an enterprise Claude process wrapper (a launcher script/executable that injects
+	 * auth/proxy/provider/policy around the real CLI), like the official extension's `claudeProcessWrapper`.
+	 * When set, selects `wrapper` mode and is never silently bypassed.
+	 */
 	readonly wrapperPath?: string;
-	/** Path to the user's installed Claude Code `cli.js` (a JS entrypoint). Selects `userCli` mode. */
+	/** ABSOLUTE path to the user's installed Claude Code `cli.js` (a JS entrypoint). Selects `userCli` mode. */
 	readonly nodeCliPath?: string;
 	/** Extra environment variables overlaid onto the Claude subprocess env. */
 	readonly environmentVariables?: Readonly<Record<string, string>>;
@@ -62,8 +69,16 @@ export interface IClawdiusCliResolution {
 	readonly mode: ClawdiusCliMode;
 	/** The SDK `executable` runtime enum. Always `node` today (the SDK runs cli.js under a JS runtime). */
 	readonly executable: 'node' | 'bun' | 'deno';
-	/** When set, the SDK launches this `cli.js` instead of its vendored one (`userCli` mode). */
+	/** When set, the SDK launches this `cli.js` instead of its vendored one (`userCli`, or a `wrapper` targeting the user cli). */
 	readonly pathToClaudeCodeExecutable?: string;
+	/**
+	 * The enterprise wrapper path (`wrapper` mode). Projected onto the SDK's `spawnClaudeCodeProcess` so the
+	 * wrapper launches the engine. Present whenever the user configured a wrapper, even if the path is invalid
+	 * (see `unsupportedReason`) — the wrapper is never silently bypassed.
+	 */
+	readonly wrapperPath?: string;
+	/** In `wrapper` mode, what the wrapper launches: the bundled cli.js, or the user's cli.js. */
+	readonly wrapperTarget?: 'bundled' | 'userCli';
 	/** Environment overlay for the Claude subprocess (provider-preset env + user `environmentVariables`). */
 	readonly extraEnv: Readonly<Record<string, string | undefined>>;
 	readonly providerPreset: ClawdiusCliProviderPreset;
@@ -73,9 +88,10 @@ export interface IClawdiusCliResolution {
 	 */
 	readonly disableLoginPrompt: boolean;
 	/**
-	 * Set when the user requested a mode that is not yet supported (a native-binary `wrapperPath`, or a
-	 * `nodeCliPath` that is missing / not a JS entrypoint) and the resolver fell back to `bundled`. Carries
-	 * a human-readable reason so the fallback is visible/loggable and is never silent.
+	 * Set when a configured path is invalid: a `wrapperPath` that is not an absolute existing executable
+	 * (STILL used in `wrapper` mode — launch fails visibly rather than bypassing the policy layer), or a
+	 * `nodeCliPath` that is not an absolute existing JS entrypoint (falls back to `bundled`). A human-readable
+	 * reason for logging; never a silent condition.
 	 */
 	readonly unsupportedReason?: string;
 }
@@ -95,13 +111,22 @@ function providerPresetEnv(preset: ClawdiusCliProviderPreset): Record<string, st
 	}
 }
 
+/** Absolute path across platforms: Windows drive (C:\ or C:/), Windows UNC (\\ or //), or POSIX root (/). */
+function isAbsolutePath(p: string): boolean {
+	return /^(?:[a-zA-Z]:[\\/]|[\\/])/.test(p);
+}
+
 /**
  * Pure projection from the user's `clawdius.cli.*` settings (+ on-disk existence of the paths they name)
- * onto a {@link IClawdiusCliResolution}. Deterministic, synchronous, network-free, spawn-free — the
- * resolver service does the async existence checks and hands the booleans in. Resolution rules:
- *  1. `wrapperPath` set -> native-binary requested -> NOT supported yet -> `bundled` + `unsupportedReason`.
- *  2. `nodeCliPath` set, exists, and is a JS entrypoint -> `userCli` (path wiring only; no probe/spawn).
- *  3. `nodeCliPath` set but missing / not a JS entrypoint -> `bundled` + `unsupportedReason`.
+ * onto a {@link IClawdiusCliResolution}. Deterministic, synchronous, network-free, spawn-free — the resolver
+ * service does the async existence checks and hands the booleans in. Resolution rules (precedence):
+ *  1. `wrapperPath` set -> `wrapper` mode (enterprise wrapper, launched via `spawnClaudeCodeProcess`). If a
+ *     valid absolute `nodeCliPath` is also set the wrapper targets the user cli (`pathToClaudeCodeExecutable`
+ *     + `wrapperTarget:'userCli'`); else it targets the bundled cli. An INVALID `wrapperPath` (not an
+ *     absolute existing executable) STILL resolves to `wrapper` mode with an `unsupportedReason` — a wrapper
+ *     is never silently bypassed (that would skip the enterprise policy layer); launch fails visibly instead.
+ *  2. no wrapper, `nodeCliPath` absolute + JS entrypoint + exists -> `userCli`.
+ *  3. no wrapper, `nodeCliPath` set but not an absolute existing JS entrypoint -> `bundled` + reason.
  *  4. otherwise -> `bundled` (the default; SDK runs its vendored cli.js via Electron-as-node).
  */
 export function projectCliResolution(settings: IClawdiusCliSettings, existence: IClawdiusCliPathExistence): IClawdiusCliResolution {
@@ -117,23 +142,35 @@ export function projectCliResolution(settings: IClawdiusCliSettings, existence: 
 	const base = { executable: 'node' as const, extraEnv, providerPreset, disableLoginPrompt };
 
 	const wrapperPath = settings.wrapperPath?.trim();
+	const nodeCliPath = settings.nodeCliPath?.trim();
+
+	// A user cli.js is valid only as an ABSOLUTE path to an existing JS entrypoint — the SDK does not
+	// PATH-resolve `pathToClaudeCodeExecutable`, so a bare `claude` must never resolve to a real engine.
+	const userCliValid = !!nodeCliPath && isAbsolutePath(nodeCliPath) && JS_ENTRYPOINT.test(nodeCliPath) && existence.nodeCliPathExists;
+
 	if (wrapperPath) {
+		const wrapperValid = isAbsolutePath(wrapperPath) && existence.wrapperPathExists;
 		return {
 			...base,
-			mode: 'bundled',
-			unsupportedReason: `clawdius.cli.wrapperPath ('${wrapperPath}') selects a native-binary / wrapper-script engine, which is not supported yet (a planned raw stream-json adapter); using the bundled engine.`,
+			mode: 'wrapper',
+			wrapperPath,
+			...(userCliValid && nodeCliPath
+				? { pathToClaudeCodeExecutable: nodeCliPath, wrapperTarget: 'userCli' as const }
+				: { wrapperTarget: 'bundled' as const }),
+			...(wrapperValid
+				? {}
+				: { unsupportedReason: `clawdius.cli.wrapperPath ('${wrapperPath}') must be an absolute path to an existing executable/script. The wrapper is still applied (the enterprise policy layer is never silently bypassed) — fix the path or launch will fail.` }),
 		};
 	}
 
-	const nodeCliPath = settings.nodeCliPath?.trim();
 	if (nodeCliPath) {
-		if (existence.nodeCliPathExists && JS_ENTRYPOINT.test(nodeCliPath)) {
+		if (userCliValid) {
 			return { ...base, mode: 'userCli', pathToClaudeCodeExecutable: nodeCliPath };
 		}
 		return {
 			...base,
 			mode: 'bundled',
-			unsupportedReason: `clawdius.cli.nodeCliPath ('${nodeCliPath}') was not found or is not a JS entrypoint (.js/.mjs/.cjs); using the bundled engine.`,
+			unsupportedReason: `clawdius.cli.nodeCliPath ('${nodeCliPath}') must be an absolute path to an existing JS entrypoint (.js/.mjs/.cjs); using the bundled engine.`,
 		};
 	}
 

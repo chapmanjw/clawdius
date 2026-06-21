@@ -36,4 +36,25 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
+
+.ultracode-workflow-badge {
+	flex-shrink: 0;
+	margin-left: 8px;
+	padding: 0 6px;
+	border-radius: 8px;
+	font-size: 0.82em;
+	line-height: 16px;
+	white-space: nowrap;
+}
+
+.ultracode-workflow-badge.external {
+	color: var(--vscode-badge-foreground);
+	background: var(--vscode-badge-background);
+	opacity: 0.7;
+}
+
+.ultracode-workflow-badge.cancellable {
+	color: var(--vscode-statusBarItem-prominentForeground, var(--vscode-badge-foreground));
+	background: var(--vscode-statusBarItem-remoteBackground, var(--vscode-badge-background));
+}
 /* CLAWDIUS-END */

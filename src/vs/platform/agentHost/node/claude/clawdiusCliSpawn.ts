@@ -39,6 +39,11 @@ const defaultSpawnFn: SpawnFn = (command, args, options) =>
  * Build the SDK `spawnClaudeCodeProcess` callback that launches the engine through the enterprise wrapper.
  * The wrapper is spawned with the SDK's intended launch command as argv[0]:
  *   `spawn(wrapperPath, [options.command, ...options.args], ...)`.
+ *
+ * `wrapperPath` must be a DIRECTLY-spawnable executable. We deliberately use `shell:false` (never `shell:true`
+ * — that is a shell-injection surface), so on Windows a `.cmd`/`.bat` BATCH wrapper does not launch directly
+ * (a dedicated Windows command-runner is a planned follow-up). Use an `.exe`, or a shebang script on
+ * POSIX/WSL. Failure here is fail-closed (the launch errors visibly); it never falls back to an unwrapped engine.
  */
 export function createClaudeProcessWrapperSpawn(wrapperPath: string, spawnFn: SpawnFn = defaultSpawnFn): NonNullable<Options['spawnClaudeCodeProcess']> {
 	return (options: SpawnOptions) => spawnFn(wrapperPath, [options.command, ...options.args], {

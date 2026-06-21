@@ -111,9 +111,13 @@ function providerPresetEnv(preset: ClawdiusCliProviderPreset): Record<string, st
 	}
 }
 
-/** Absolute path across platforms: Windows drive (C:\ or C:/), Windows UNC (\\ or //), or POSIX root (/). */
+/**
+ * A FULLY-QUALIFIED absolute path: a Windows drive (`C:\` / `C:/`), a UNC root (`\\server` / `//server`), or
+ * a POSIX root (`/`). Deliberately REJECTS a single leading backslash (`\foo`): on POSIX that is not a root
+ * at all, and on Windows it is only drive-relative (ambiguous) — neither is safe to launch as an engine.
+ */
 function isAbsolutePath(p: string): boolean {
-	return /^(?:[a-zA-Z]:[\\/]|[\\/])/.test(p);
+	return /^(?:[a-zA-Z]:[\\/]|\/|\\\\)/.test(p);
 }
 
 /**
@@ -150,16 +154,24 @@ export function projectCliResolution(settings: IClawdiusCliSettings, existence: 
 
 	if (wrapperPath) {
 		const wrapperValid = isAbsolutePath(wrapperPath) && existence.wrapperPathExists;
+		const targetUserCli = userCliValid && !!nodeCliPath;
+		// Accumulate every config problem so a typo is never silent: an invalid wrapper (still applied), and a
+		// set-but-invalid nodeCliPath that quietly downgraded the wrapper target from the user cli to bundled.
+		const reasons: string[] = [];
+		if (!wrapperValid) {
+			reasons.push(`clawdius.cli.wrapperPath ('${wrapperPath}') must be an absolute path to an existing executable. The wrapper is still applied (the enterprise policy layer is never silently bypassed) — fix the path or launch will fail.`);
+		}
+		if (nodeCliPath && !userCliValid) {
+			reasons.push(`clawdius.cli.nodeCliPath ('${nodeCliPath}') is not an absolute existing JS entrypoint, so the wrapper targets the bundled cli instead of your install.`);
+		}
 		return {
 			...base,
 			mode: 'wrapper',
 			wrapperPath,
-			...(userCliValid && nodeCliPath
+			...(targetUserCli
 				? { pathToClaudeCodeExecutable: nodeCliPath, wrapperTarget: 'userCli' as const }
 				: { wrapperTarget: 'bundled' as const }),
-			...(wrapperValid
-				? {}
-				: { unsupportedReason: `clawdius.cli.wrapperPath ('${wrapperPath}') must be an absolute path to an existing executable/script. The wrapper is still applied (the enterprise policy layer is never silently bypassed) — fix the path or launch will fail.` }),
+			...(reasons.length > 0 ? { unsupportedReason: reasons.join(' ') } : {}),
 		};
 	}
 

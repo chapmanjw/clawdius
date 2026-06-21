@@ -49,12 +49,18 @@ configurationRegistry.registerConfiguration({
 		},
 		'chat.editor.defaultProvider': {
 			type: 'string',
-			enum: ['local', 'copilotEh', 'copilotAh'],
-			enumDescriptions: [
+			// CLAWDIUS-BEGIN no copilot cli provider options in the settings picker
+			// The GitHub Copilot CLI providers (copilotEh/copilotAh) are suppressed in Clawdius, so don't
+			// offer them as choices in the Settings editor - only the built-in local harness applies.
+			enum: product.defaultChatAgent?.entitlementUrl ? ['local', 'copilotEh', 'copilotAh'] : ['local'],
+			enumDescriptions: product.defaultChatAgent?.entitlementUrl ? [
 				nls.localize('chat.editor.defaultProvider.local', "Use the built-in VS Code local chat harness"),
 				nls.localize('chat.editor.defaultProvider.copilotEh', "Use the Extension Host Copilot CLI"),
 				nls.localize('chat.editor.defaultProvider.copilotAh', "Use the Agent Host Copilot CLI"),
+			] : [
+				nls.localize('chat.editor.defaultProvider.local', "Use the built-in VS Code local chat harness"),
 			],
+			// CLAWDIUS-END
 			description: nls.localize('chat.editor.defaultProvider', "Controls which provider is used as the default for new editor chat sessions."),
 			default: 'local',
 			tags: ['experimental'],

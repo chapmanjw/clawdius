@@ -278,9 +278,16 @@ async function main(): Promise<void> {
 		diServices.set(ICodexProxyService, codexProxyService);
 		const agentHostOTelService = disposables.add(instantiationService.createInstance(AgentHostOTelService));
 		diServices.set(IAgentHostOTelService, agentHostOTelService);
-		const copilotAgent = disposables.add(instantiationService.createInstance(CopilotAgent));
-		agentService.registerProvider(copilotAgent);
-		log('CopilotAgent registered');
+		// CLAWDIUS-BEGIN no copilot agent in clawdius
+		// Mirror agentHostMain.ts: only register the GitHub Copilot agent when there is an entitlement
+		// (upstream). In Clawdius (empty entitlementUrl) the Claude agent is the sole agent-host backend,
+		// so the remote/server agent host must not register CopilotAgent either.
+		if (productService.defaultChatAgent?.entitlementUrl) {
+			const copilotAgent = disposables.add(instantiationService.createInstance(CopilotAgent));
+			agentService.registerProvider(copilotAgent);
+			log('CopilotAgent registered');
+		}
+		// CLAWDIUS-END
 		// Claude and Codex providers are gated on two things:
 		//  1. The user-facing enable toggle (`chat.agentHost.<x>Agent.enabled`,
 		//     forwarded as an env var by the renderer-side starters; the remote

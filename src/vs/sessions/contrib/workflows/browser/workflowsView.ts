@@ -128,13 +128,13 @@ class RunRowRenderer extends AbstractRowRenderer {
 		this.clearBadge(template);
 		const control = this._store.controlFor(run);
 		if (control?.controllable) {
-			template.badge.textContent = localize('ultracode.workflows.cancellable', "in window");
+			template.badge.textContent = localize('ultracode.workflows.managed', "Managed");
 			template.badge.classList.add('cancellable');
-			template.badge.title = localize('ultracode.workflows.cancellableTip', "Spawned from this window — right-click to cancel.");
+			template.badge.title = localize('ultracode.workflows.managedTip', "Managed by this window — right-click to steer or cancel this workflow.");
 		} else if (control) {
-			template.badge.textContent = localize('ultracode.workflows.external', "external");
+			template.badge.textContent = localize('ultracode.workflows.viewOnly', "View only");
 			template.badge.classList.add('external');
-			template.badge.title = localize('ultracode.workflows.externalTip', "Run by a separate Claude Code process — view only.");
+			template.badge.title = localize('ultracode.workflows.viewOnlyTip', "Run by a separate Claude Code process (e.g. the terminal CLI) — observed only, no controls from this window.");
 		}
 	}
 }

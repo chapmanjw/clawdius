@@ -12,7 +12,7 @@
 import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
 import { RunOnceScheduler } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
-import { joinPath } from '../../../../base/common/resources.js';
+import { basename, joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { IPathService } from '../../../../workbench/services/path/common/pathService.js';
@@ -76,8 +76,12 @@ export class WorkflowStore extends Disposable {
 	private _watchedKeys = new Set<string>();
 	/** Monotonic guard so an older in-flight scan can't clobber a newer one. */
 	private _refreshGen = 0;
+	/** Consecutive clean scans that saw no running work; used for the live-poll grace period. */
+	private _idleScans = 0;
 	/** Debounce watcher-driven refreshes - a single run emits many file events. */
 	private readonly _scheduler = this._register(new RunOnceScheduler(() => { void this.refresh(); }, 400));
+	/** While any workflow is running (no completion summary yet), poll so journal progress shows live. */
+	private readonly _livePoll = this._register(new RunOnceScheduler(() => { void this.refresh(); }, 2500));
 
 	constructor(
 		@IFileService private readonly _fileService: IFileService,
@@ -90,31 +94,62 @@ export class WorkflowStore extends Disposable {
 	/** Refresh the run list. Serialized via a generation guard; safe to call repeatedly. */
 	async refresh(): Promise<void> {
 		const gen = ++this._refreshGen;
-		const dirs = await this._workflowDirs();
-		this._syncWatchers(dirs);
-		const runs: IWorkflowRun[] = [];
-		for (const dir of dirs) {
-			runs.push(...await this._readRunsIn(dir));
+		const sessionDirs = await this._sessionDirs();
+		// Watch both the completed-run summaries and the live subagent journal dirs.
+		this._syncWatchers(sessionDirs.flatMap(s => [joinPath(s, 'workflows'), joinPath(s, 'subagents', 'workflows')]));
+
+		const completed: IWorkflowRun[] = [];
+		const running: IWorkflowRun[] = [];
+		for (const sessionDir of sessionDirs) {
+			completed.push(...await this._readRunsIn(joinPath(sessionDir, 'workflows')));
+			running.push(...await this._readRunningRunsIn(sessionDir));
 		}
 		// A newer refresh started while we were scanning: let it win, don't publish stale data.
 		if (gen !== this._refreshGen || this._store.isDisposed) {
+			// Superseded by a newer scan. Keep the live poll alive if the published state still has running
+			// work, so a refresh race can't silently kill liveness.
+			this._armLivePoll(false);
 			return;
 		}
-		// Newest first.
-		runs.sort((a, b) => (b.startTime ?? 0) - (a.startTime ?? 0));
-		this._runs = runs;
+		// A just-completed run can momentarily appear in both lanes (summary written, journal dir not yet
+		// pruned); dedupe on runId so it isn't double-listed.
+		const completedIds = new Set(completed.map(r => r.runId));
+		const runningDeduped = running.filter(r => !completedIds.has(r.runId));
+		completed.sort((a, b) => (b.startTime ?? 0) - (a.startTime ?? 0));
+		runningDeduped.sort((a, b) => b.runId.localeCompare(a.runId));
+		// Running workflows first so in-progress work is always visible at the top.
+		this._runs = [...runningDeduped, ...completed];
 		this._onDidChange.fire();
+		this._armLivePoll(runningDeduped.length > 0);
 	}
 
 	/**
-	 * The ~/.claude/projects/<encoded-cwd>/<sessionId>/workflows dirs to read. v1 scans ALL projects
-	 * (global) rather than only the current workspace folder, because a workflow run is stored under the
-	 * Claude Code CLI session's cwd - which is often an ancestor of (or different from) the window's
-	 * workspace folder - so workspace-only scoping would leave the board mysteriously empty. The encoded
-	 * dir for the current workspace is surfaced first so its runs sort to the top when timestamps tie.
+	 * Keep the live poll armed while work is in flight, with a short grace period so it survives the
+	 * completion handoff and refresh races (the recursive:false dir watchers don't reliably deliver the
+	 * journal's appends, so the 2.5s poll is the real liveness mechanism).
+	 */
+	private _armLivePoll(scanHadRunning: boolean): void {
+		if (this._store.isDisposed) {
+			return;
+		}
+		const hasRunning = scanHadRunning || this._runs.some(r => r.status === 'running');
+		if (hasRunning) {
+			this._idleScans = 0;
+			this._livePoll.schedule();
+		} else if (this._idleScans++ < 2) {
+			this._livePoll.schedule();
+		}
+	}
+
+	/**
+	 * The ~/.claude/projects/<encoded-cwd>/<sessionId> session dirs to read. v1 scans ALL projects (global)
+	 * rather than only the current workspace folder, because a workflow run is stored under the Claude Code
+	 * CLI session's cwd - which is often an ancestor of (or different from) the window's workspace folder -
+	 * so workspace-only scoping would leave the board mysteriously empty. Each session dir holds both the
+	 * completed-run summaries (workflows/wf_*.json) and the live subagent journals (subagents/workflows/<runId>).
 	 * (Project grouping / scoping is a planned refinement.)
 	 */
-	private async _workflowDirs(): Promise<URI[]> {
+	private async _sessionDirs(): Promise<URI[]> {
 		const userHome = await this._pathService.userHome();
 		const projectsRoot = joinPath(userHome, '.claude', 'projects');
 
@@ -137,16 +172,109 @@ export class WorkflowStore extends Disposable {
 				continue;
 			}
 			for (const sessionDir of projectStat.children ?? []) {
-				if (!sessionDir.isDirectory) {
-					continue;
-				}
-				const wfDir = joinPath(sessionDir.resource, 'workflows');
-				if (await this._pathExists(wfDir)) {
-					out.push(wfDir);
+				if (sessionDir.isDirectory) {
+					out.push(sessionDir.resource);
 				}
 			}
 		}
 		return out;
+	}
+
+	/**
+	 * Read the LIVE (in-progress) workflow runs for a session: a subagents/workflows/<runId> dir whose
+	 * completion summary (workflows/<runId>.json) does not exist yet. The per-agent state comes from the
+	 * incrementally-written journal.jsonl (started/result events) + each agent's meta.json (agentType /
+	 * description). Running workflows carry less detail than completed ones (no tokens/duration/name until
+	 * the summary lands), but they make in-progress work - including subagents spawned from a window chat
+	 * session - visible the moment they start.
+	 */
+	private async _readRunningRunsIn(sessionDir: URI): Promise<IWorkflowRun[]> {
+		const subWfDir = joinPath(sessionDir, 'subagents', 'workflows');
+		const completedDir = joinPath(sessionDir, 'workflows');
+		let stat;
+		try {
+			stat = await this._fileService.resolve(subWfDir);
+		} catch {
+			return [];
+		}
+		const sessionId = basename(sessionDir);
+		const runs: IWorkflowRun[] = [];
+		for (const runDir of stat.children ?? []) {
+			if (!runDir.isDirectory || !/^wf_/.test(runDir.name)) {
+				continue;
+			}
+			// Completed runs are already surfaced from the wf_*.json summary; skip those.
+			if (await this._pathExists(joinPath(completedDir, runDir.name + '.json'))) {
+				continue;
+			}
+			const run = await this._readRunningRun(runDir.resource, runDir.name, sessionId);
+			if (run) {
+				runs.push(run);
+			}
+		}
+		return runs;
+	}
+
+	private async _readRunningRun(runDir: URI, runId: string, sessionId: string): Promise<IWorkflowRun | undefined> {
+		// journal.jsonl: one {type:'started'|'result', agentId} per line, appended live.
+		const started = new Set<string>();
+		const done = new Set<string>();
+		try {
+			const journal = (await this._fileService.readFile(joinPath(runDir, 'journal.jsonl'))).value.toString();
+			for (const line of journal.split(/\r?\n/)) {
+				if (!line.trim()) { continue; }
+				let ev: { type?: unknown; agentId?: unknown };
+				try { ev = JSON.parse(line); } catch { continue; }
+				const id = str(ev.agentId);
+				if (!id) { continue; }
+				if (ev.type === 'started') { started.add(id); }
+				else if (ev.type === 'result') { done.add(id); }
+			}
+		} catch {
+			// No journal yet - the run just started; fall through with whatever metas exist.
+		}
+
+		const agents: IWorkflowAgent[] = [];
+		let dirStat;
+		try { dirStat = await this._fileService.resolve(runDir); } catch { dirStat = undefined; }
+		for (const child of dirStat?.children ?? []) {
+			const m = /^agent-(.+)\.meta\.json$/.exec(child.name);
+			if (!m) { continue; }
+			const agentId = m[1];
+			let meta: { agentType?: unknown; description?: unknown } = {};
+			try { meta = JSON.parse((await this._fileService.readFile(child.resource)).value.toString()); } catch { /* partial */ }
+			agents.push(runningAgent(agentId, str(meta.agentType), str(meta.description), started.has(agentId), done.has(agentId)));
+		}
+		// If metas are not written yet, fall back to the agentIds the journal mentions (started OR result -
+		// a result-only line must still surface its agent).
+		for (const id of new Set([...started, ...done])) {
+			if (!agents.some(a => a.agentId === id)) {
+				agents.push(runningAgent(id, undefined, undefined, started.has(id), done.has(id)));
+			}
+		}
+
+		// An empty/leftover subagent dir (no journal, no metas) is not a real running workflow: don't
+		// surface a phantom run, and don't keep the live poll alive for it.
+		if (agents.length === 0) {
+			return undefined;
+		}
+
+		return {
+			runId,
+			sessionId,
+			workflowName: runId, // the human name lives in the summary, written only at completion
+			status: 'running',
+			startTime: undefined,
+			durationMs: undefined,
+			agentCount: agents.length,
+			totalTokens: undefined,
+			totalToolCalls: undefined,
+			defaultModel: undefined,
+			summary: undefined,
+			phases: [],
+			agents,
+			resource: runDir,
+		};
 	}
 
 	private async _readRunsIn(wfDir: URI): Promise<IWorkflowRun[]> {
@@ -258,6 +386,23 @@ function sessionIdFromWorkflowDir(wfDir: URI): string {
 	// .../projects/<encoded-cwd>/<sessionId>/workflows
 	const parts = wfDir.path.split('/').filter(Boolean);
 	return parts.length >= 2 ? parts[parts.length - 2] : '';
+}
+
+function runningAgent(agentId: string, agentType: string | undefined, description: string | undefined, started: boolean, done: boolean): IWorkflowAgent {
+	return {
+		agentId,
+		label: description ?? agentType ?? 'agent',
+		agentType,
+		model: undefined,
+		state: done ? 'done' : (started ? 'running' : 'queued'),
+		phaseTitle: undefined,
+		tokens: undefined,
+		toolCalls: undefined,
+		durationMs: undefined,
+		lastToolName: undefined,
+		promptPreview: undefined,
+		resultPreview: undefined,
+	};
 }
 
 function str(v: unknown): string | undefined {

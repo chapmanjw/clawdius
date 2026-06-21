@@ -465,6 +465,9 @@ import './services/sessions/browser/sessionsListModelService.js';
 import './services/agentHostFilter/browser/agentHostFilterService.js';
 import './contrib/sessions/browser/customizationsToolbar.contribution.js';
 import './contrib/changes/browser/changes.contribution.js';
+// CLAWDIUS-BEGIN ultracode workflows view
+import './contrib/workflows/browser/workflows.contribution.js';
+// CLAWDIUS-END
 import './contrib/layout/browser/sessionLayout.contribution.js';
 import './contrib/codeReview/browser/codeReview.contributions.js';
 import './contrib/files/browser/files.contribution.js';

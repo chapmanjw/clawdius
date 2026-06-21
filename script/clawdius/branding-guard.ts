@@ -56,6 +56,12 @@ ok(/registerCommand\('clawdius\.refreshUsageCapacity'/.test(chatExt), 'clawdius-
 ok(!/setInterval\([^)]*fetchUsageCapacity/.test(chatExt), 'clawdius-chat: usage capacity is fetched on a background timer (uninitiated egress)');
 ok(!/^\s*fetchUsageCapacity\(\);\s*$/m.test(chatExt), 'clawdius-chat: fetchUsageCapacity() is called directly (likely at activation) - it must run on demand only');
 
+// CLAWDIUS-BEGIN cli backend resolution must stay file-existence-only (zero process spawn, zero network)
+const cliSvc = fs.readFileSync('src/vs/platform/clawdius/node/clawdiusCliConfigService.ts', 'utf8');
+ok(!/child_process/.test(cliSvc), 'clawdiusCliConfigService: must not import child_process - CLI resolution spawns no process');
+ok(!/\bfetch\s*\(|['"]node:https?['"]|['"]https?:\/\//.test(cliSvc), 'clawdiusCliConfigService: must not perform network I/O during CLI resolution');
+// CLAWDIUS-END
+
 const themeSvc = fs.readFileSync('src/vs/workbench/services/themes/common/workbenchThemeService.ts', 'utf8');
 ok(/COLOR_THEME_DARK = 'Clawdius Dark'/.test(themeSvc), 'default dark theme is not Clawdius Dark');
 ok(/COLOR_THEME_LIGHT = 'Clawdius Light'/.test(themeSvc), 'default light theme is not Clawdius Light');

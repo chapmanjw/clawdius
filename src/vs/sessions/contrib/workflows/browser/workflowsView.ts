@@ -39,7 +39,7 @@ import { WORKFLOWS_VIEW_CONTAINER_ID } from '../common/workflows.js';
 
 const $ = dom.$;
 
-type WorkflowNode = { readonly kind: 'run'; readonly run: IWorkflowRun } | { readonly kind: 'agent'; readonly agent: IWorkflowAgent };
+type WorkflowNode = { readonly kind: 'run'; readonly run: IWorkflowRun } | { readonly kind: 'agent'; readonly agent: IWorkflowAgent; readonly id: string };
 
 export class WorkflowsViewPaneContainer extends ViewPaneContainer {
 	constructor(
@@ -178,7 +178,7 @@ export class WorkflowsViewPane extends ViewPane {
 			{
 				horizontalScrolling: false,
 				accessibilityProvider: new WorkflowsAccessibilityProvider(),
-				identityProvider: { getId: (e: WorkflowNode) => e.kind === 'run' ? `run:${e.run.runId}` : `agent:${e.agent.agentId}` },
+				identityProvider: { getId: (e: WorkflowNode) => e.kind === 'run' ? `run:${e.run.runId}` : `agent:${e.id}` },
 				collapseByDefault: true,
 			}
 		)) as WorkbenchObjectTree<WorkflowNode, void>;
@@ -191,7 +191,7 @@ export class WorkflowsViewPane extends ViewPane {
 		this._tree?.setChildren(null, this._workflowStore.runs.map(run => ({
 			element: { kind: 'run', run } as const,
 			collapsed: true,
-			children: run.agents.map(agent => ({ element: { kind: 'agent', agent } as const })),
+			children: run.agents.map((agent, i) => ({ element: { kind: 'agent', agent, id: `${run.runId}:${i}:${agent.agentId}` } as const })),
 		})));
 	}
 
@@ -206,7 +206,7 @@ function statusIcon(status: string): ThemeIcon {
 	switch (status) {
 		case 'completed': return Codicon.pass;
 		case 'failed': case 'error': return Codicon.error;
-		case 'running': return Codicon.loading;
+		case 'running': return ThemeIcon.modify(Codicon.loading, 'spin');
 		default: return Codicon.circleOutline;
 	}
 }
@@ -215,7 +215,7 @@ function agentStateIcon(state: string | undefined): ThemeIcon {
 	switch (state) {
 		case 'done': case 'completed': return Codicon.pass;
 		case 'error': case 'failed': return Codicon.error;
-		case 'running': return Codicon.loading;
+		case 'running': return ThemeIcon.modify(Codicon.loading, 'spin');
 		case 'queued': return Codicon.circleOutline;
 		default: return Codicon.circleSmall;
 	}

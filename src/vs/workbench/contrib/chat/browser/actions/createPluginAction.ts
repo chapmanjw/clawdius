@@ -183,7 +183,9 @@ class CreatePluginAction extends Action2 {
 
 			addGroup(instructions, 'instruction', localize('instructions', "Instructions"), Codicon.book);
 			addGroup(prompts, 'prompt', localize('prompts', "Prompts"), Codicon.comment);
-			addGroup(agents, 'agent', localize('agents', "Agents"), Codicon.copilot);
+			// CLAWDIUS-BEGIN claude branding
+			addGroup(agents, 'agent', localize('agents', "Agents"), Codicon.claude);
+			// CLAWDIUS-END
 			addGroup(skills, 'skill', localize('skills', "Skills"), Codicon.lightbulb);
 			addGroup(hooks, 'hook', localize('hooks', "Hooks"), Codicon.zap);
 

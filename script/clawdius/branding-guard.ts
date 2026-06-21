@@ -33,6 +33,20 @@ ok(!/:\/\/api\.github\.com/i.test(productText), 'product.json has an api.github.
 ok(!/:\/\/aka\.ms/i.test(productText), 'product.json has an aka.ms (Microsoft) URL');
 ok(!/marketplace\.visualstudio\.com|vsassets\.io/i.test(productText), 'product.json references the Microsoft Marketplace');
 
+// Phase 6 zero-egress guarantee (audit: .research/egress-audit.md). Each of these product.json keys is the
+// SOLE source of an uninitiated outbound request (startup/idle/background poll); when the key is absent the
+// call site short-circuits and no request is built. Asserting them absent locks in the "robustly dead"
+// Microsoft telemetry/experiment/update/crash/survey surface so an upstream merge cannot silently
+// reintroduce a phone-home endpoint. (`commit`/`quality` are legitimate build fields and are NOT asserted;
+// the update gate already relies on `updateUrl` absence.)
+const NO_EGRESS_KEYS = ['aiConfig', 'ariaKey', 'tasConfig', 'updateUrl', 'appCenter', 'npsSurveyUrl',
+	'cesSurveyUrl', 'surveys', 'releaseNotesUrl', 'settingsSearchUrl', 'tipsAndTricksUrl',
+	'introductoryVideosUrl', 'newsletterSignupUrl', 'keybindingsReferenceUrl', 'requestFeatureUrl'];
+for (const k of NO_EGRESS_KEYS) {
+	ok(p[k] === undefined, `product.json carries an uninitiated-egress endpoint key "${k}" (zero-egress guarantee)`);
+}
+ok(!gal.controlUrl, 'product.json extensionsGallery.controlUrl is set (extension control/malicious-manifest egress)');
+
 const themeSvc = fs.readFileSync('src/vs/workbench/services/themes/common/workbenchThemeService.ts', 'utf8');
 ok(/COLOR_THEME_DARK = 'Clawdius Dark'/.test(themeSvc), 'default dark theme is not Clawdius Dark');
 ok(/COLOR_THEME_LIGHT = 'Clawdius Light'/.test(themeSvc), 'default light theme is not Clawdius Light');

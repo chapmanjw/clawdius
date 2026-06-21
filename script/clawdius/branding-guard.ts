@@ -60,6 +60,9 @@ ok(!/^\s*fetchUsageCapacity\(\);\s*$/m.test(chatExt), 'clawdius-chat: fetchUsage
 const cliSvc = fs.readFileSync('src/vs/platform/clawdius/node/clawdiusCliConfigService.ts', 'utf8');
 ok(!/child_process/.test(cliSvc), 'clawdiusCliConfigService: must not import child_process - CLI resolution spawns no process');
 ok(!/\bfetch\s*\(|['"]node:https?['"]|['"]https?:\/\//.test(cliSvc), 'clawdiusCliConfigService: must not perform network I/O during CLI resolution');
+// The main-IDE workflow store is observe-only: it must never reach the agent host (no control plane).
+const wfStore = fs.readFileSync('src/vs/workbench/contrib/clawdius/common/workflowStore.ts', 'utf8');
+ok(!/platform\/agentHost|IAgentHostService/.test(wfStore), 'clawdius workflowStore (main IDE): must stay observe-only - no agent-host import');
 // CLAWDIUS-END
 
 const themeSvc = fs.readFileSync('src/vs/workbench/services/themes/common/workbenchThemeService.ts', 'utf8');

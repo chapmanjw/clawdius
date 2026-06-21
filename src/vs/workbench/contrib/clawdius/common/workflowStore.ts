@@ -99,6 +99,12 @@ export class WorkflowStore extends Disposable {
 	async refresh(): Promise<void> {
 		const gen = ++this._refreshGen;
 		const sessionDirs = await this._sessionDirs();
+		// A newer refresh started while we were enumerating session dirs: bail BEFORE touching the watcher
+		// set, so a slow scan can't install stale watchers over a newer scan's correct ones.
+		if (gen !== this._refreshGen || this._store.isDisposed) {
+			this._armLivePoll(false);
+			return;
+		}
 		// Watch both the completed-run summaries and the live subagent journal dirs.
 		this._syncWatchers(sessionDirs.flatMap(s => [joinPath(s, 'workflows'), joinPath(s, 'subagents', 'workflows')]));
 

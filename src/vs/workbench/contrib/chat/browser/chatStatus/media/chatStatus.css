@@ -565,7 +565,8 @@
 }
 
 .clawdius-usage-statusbar .clawdius-claude-mark rect {
-	fill: var(--vscode-charts-orange, #d97757);
+	/* On the Clawdius orange status bar the mark uses the bar foreground (white) for contrast; the tooltip mark stays accent-orange on its neutral widget background. */
+	fill: var(--vscode-statusBar-foreground, #ffffff);
 }
 
 .clawdius-usage-pips {
@@ -581,7 +582,8 @@
 	width: 3px;
 	height: 100%;
 	border-radius: 1px;
-	background: var(--vscode-statusBarItem-hoverBackground, rgba(128, 128, 128, 0.35));
+	/* Translucent bar-foreground groove: visible on the orange bar and unaffected by the item hover background painted behind it. */
+	background: rgba(255, 255, 255, 0.3);
 	overflow: hidden;
 }
 
@@ -591,7 +593,8 @@
 	left: 0;
 	width: 100%;
 	border-radius: 1px;
-	background: var(--vscode-charts-orange, #d97757);
+	/* The filled portion uses the bar foreground (white) to read on the orange status bar. */
+	background: var(--vscode-statusBar-foreground, #ffffff);
 }
 
 .clawdius-usage-statusbar-label {

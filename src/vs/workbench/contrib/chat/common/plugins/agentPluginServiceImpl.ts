@@ -1089,6 +1089,17 @@ export class ClaudeCliAgentPluginDiscovery extends AbstractAgentPluginDiscovery 
 	private static readonly SETTINGS_FILE = '.claude/settings.json';
 	private static readonly PLUGINS_DIR = '.claude/plugins';
 
+	// Re-declare the decorated constructor so the DI metadata attaches to this subclass (otherwise the
+	// instantiation service injects nothing and the service fields are undefined).
+	constructor(
+		@IFileService fileService: IFileService,
+		@IPathService pathService: IPathService,
+		@ILogService logService: ILogService,
+		@IWorkspaceContextService workspaceContextService: IWorkspaceContextService,
+	) {
+		super(fileService, pathService, logService, workspaceContextService);
+	}
+
 	public override start(enablementModel: IEnablementModel): void {
 		this._enablementModel = enablementModel;
 		const scheduler = this._register(new RunOnceScheduler(() => this._refreshPlugins(), 0));

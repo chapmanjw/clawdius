@@ -140,7 +140,9 @@ export function registerNewChatActions() {
 	);
 
 	const iconVariants = [
-		{ idSuffix: '.copilotIcon', iconValue: 'copilot', icon: Codicon.copilot },
+		// CLAWDIUS-BEGIN claude branding (icon only; idSuffix/iconValue are experiment keys, leave as-is)
+		{ idSuffix: '.copilotIcon', iconValue: 'copilot', icon: Codicon.claude },
+		// CLAWDIUS-END
 		{ idSuffix: '.newSessionIcon', iconValue: 'new-session', icon: Codicon.newSession },
 		{ idSuffix: '.commentIcon', iconValue: 'comment', icon: Codicon.comment },
 	] as const;

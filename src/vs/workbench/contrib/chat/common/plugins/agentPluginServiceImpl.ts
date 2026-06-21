@@ -1067,6 +1067,117 @@ export class CopilotCliAgentPluginDiscovery extends AbstractAgentPluginDiscovery
 	}
 }
 
+// CLAWDIUS-BEGIN claude cli plugin discovery
+/**
+ * Discovers plugins installed by the local Claude Code CLI under
+ * `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`, so a user's
+ * CLI-installed plugins (e.g. Rutherford) surface in the Ultracode window
+ * Customizations panels - along with their bundled skills/agents/commands/hooks
+ * and `.mcp.json` MCP servers, which the base class + `PluginMcpDiscovery` wire
+ * up automatically once the plugin dir is discovered.
+ *
+ * Two layout differences from the Copilot CLI discovery: the active version dir
+ * is recorded as `installPath` in `~/.claude/plugins/installed_plugins.json`
+ * (multiple versions can coexist on disk, so we MUST NOT glob), and enabled /
+ * disabled state lives in `~/.claude/settings.json` (`enabledPlugins`). This is
+ * a READ-ONLY mirror of the CLI: it never writes back to disk (no `remove`), so
+ * the window can never delete a user's CLI plugin.
+ */
+export class ClaudeCliAgentPluginDiscovery extends AbstractAgentPluginDiscovery {
+
+	private static readonly INSTALLED_PLUGINS_FILE = '.claude/plugins/installed_plugins.json';
+	private static readonly SETTINGS_FILE = '.claude/settings.json';
+	private static readonly PLUGINS_DIR = '.claude/plugins';
+
+	public override start(enablementModel: IEnablementModel): void {
+		this._enablementModel = enablementModel;
+		const scheduler = this._register(new RunOnceScheduler(() => this._refreshPlugins(), 0));
+		const watcherStore = this._register(new DisposableStore());
+		const setupWatchers = async () => {
+			watcherStore.clear();
+			if (this._store.isDisposed) {
+				return;
+			}
+			const userHome = await this._pathService.userHome();
+			// Watch ~/.claude (settings.json) and ~/.claude/plugins (installed_plugins.json)
+			// non-recursively so enable/disable + install/uninstall reflect live.
+			for (const rel of ['.claude', ClaudeCliAgentPluginDiscovery.PLUGINS_DIR]) {
+				const dir = joinPath(userHome, rel);
+				if (!(await this._pathExists(dir))) {
+					continue;
+				}
+				const watcher = this._fileService.createWatcher(dir, { recursive: false, excludes: [] });
+				watcherStore.add(watcher);
+				watcherStore.add(watcher.onDidChange(() => {
+					scheduler.schedule();
+					setupWatchers().catch(() => { /* watchers are best-effort */ });
+				}));
+			}
+		};
+		setupWatchers().catch(() => { /* watchers are best-effort */ });
+		scheduler.schedule();
+	}
+
+	protected override async _discoverPluginSources(): Promise<readonly IPluginSource[]> {
+		const userHome = await this._pathService.userHome();
+
+		const enabledPlugins = await this._readEnabledPlugins(joinPath(userHome, ClaudeCliAgentPluginDiscovery.SETTINGS_FILE));
+
+		const installed = await this._readJson(joinPath(userHome, ClaudeCliAgentPluginDiscovery.INSTALLED_PLUGINS_FILE));
+		const plugins = installed && typeof installed === 'object' ? (installed as { plugins?: unknown }).plugins : undefined;
+		if (!plugins || typeof plugins !== 'object') {
+			return [];
+		}
+
+		const sources: IPluginSource[] = [];
+		for (const [key, records] of Object.entries(plugins as Record<string, unknown>)) {
+			// Skip plugins the CLI has explicitly disabled so their MCP servers don't auto-register.
+			if (enabledPlugins[key] === false) {
+				continue;
+			}
+			const installPath = this._resolveInstallPath(records);
+			if (!installPath) {
+				continue;
+			}
+			// installPath is the absolute local path of the active version dir.
+			const uri = URI.file(installPath);
+			if (!(await this._pathExists(uri))) {
+				continue;
+			}
+			sources.push({ uri, fromMarketplace: undefined });
+		}
+
+		return sources;
+	}
+
+	private _resolveInstallPath(records: unknown): string | undefined {
+		if (!Array.isArray(records) || records.length === 0) {
+			return undefined;
+		}
+		// Use installPath (the active version dir) rather than globbing, since multiple versions can
+		// coexist on disk. Prefer the user-scope record; fall back to the first.
+		const record = records.find(r => r && typeof r === 'object' && (r as { scope?: string }).scope === 'user') ?? records[0];
+		const installPath = record && typeof record === 'object' ? (record as { installPath?: unknown }).installPath : undefined;
+		return typeof installPath === 'string' && installPath.length > 0 ? installPath : undefined;
+	}
+
+	private async _readEnabledPlugins(settingsUri: URI): Promise<Record<string, boolean>> {
+		const settings = await this._readJson(settingsUri);
+		const enabled = settings && typeof settings === 'object' ? (settings as { enabledPlugins?: unknown }).enabledPlugins : undefined;
+		return enabled && typeof enabled === 'object' ? enabled as Record<string, boolean> : {};
+	}
+
+	private async _readJson(uri: URI): Promise<unknown> {
+		try {
+			const content = await this._fileService.readFile(uri);
+			return JSON.parse(content.value.toString());
+		} catch {
+			return undefined;
+		}
+	}
+}
+// CLAWDIUS-END
+
 // ---------------------------------------------------------------------------
 // Extension-contributed plugin discovery
 // ---------------------------------------------------------------------------

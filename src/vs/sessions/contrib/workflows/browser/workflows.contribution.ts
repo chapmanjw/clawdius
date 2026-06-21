@@ -9,9 +9,11 @@ import { localize2 } from '../../../../nls.js';
 import { SyncDescriptor } from '../../../../platform/instantiation/common/descriptors.js';
 import { Registry } from '../../../../platform/registry/common/platform.js';
 import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js';
+import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../../workbench/common/contributions.js';
 import { Extensions as ViewContainerExtensions, IViewContainersRegistry, IViewsRegistry, ViewContainerLocation, WindowEnablement } from '../../../../workbench/common/views.js';
 import { IsPhoneLayoutContext } from '../../../common/contextkeys.js';
 import { WORKFLOWS_VIEW_CONTAINER_ID, WORKFLOWS_VIEW_ID } from '../common/workflows.js';
+import { WorkflowTranscriptContribution } from './workflowTranscript.js';
 import { WorkflowsViewPane, WorkflowsViewPaneContainer } from './workflowsView.js';
 
 const workflowsViewIcon = registerIcon('workflows-view-icon', Codicon.listTree, localize2('workflowsViewIcon', 'View icon for the Ultracode Workflows view.').value);
@@ -43,4 +45,7 @@ viewsRegistry.registerViews([{
 	when: IsPhoneLayoutContext.negate(),
 	windowEnablement: WindowEnablement.Sessions,
 }], workflowsViewContainer);
+
+// Read-only Markdown renderer for sub-agent transcripts (drill-in from a workflow row).
+registerWorkbenchContribution2(WorkflowTranscriptContribution.ID, WorkflowTranscriptContribution, WorkbenchPhase.BlockRestore);
 // CLAWDIUS-END

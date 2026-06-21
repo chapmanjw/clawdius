@@ -53,9 +53,9 @@ suite('Clawdius CLI resolution', () => {
 	});
 
 	test('valid wrapperPath (absolute + exists) -> wrapper mode targeting bundled, no unsupportedReason', () => {
-		const r = resolve({ wrapperPath: 'C:/tools/claude-wrapper.cmd' }, { wrapperPathExists: true, nodeCliPathExists: false });
+		const r = resolve({ wrapperPath: 'C:/tools/claude-wrapper.exe' }, { wrapperPathExists: true, nodeCliPathExists: false });
 		assert.strictEqual(r.mode, 'wrapper');
-		assert.strictEqual(r.wrapperPath, 'C:/tools/claude-wrapper.cmd');
+		assert.strictEqual(r.wrapperPath, 'C:/tools/claude-wrapper.exe');
 		assert.strictEqual(r.wrapperTarget, 'bundled');
 		assert.strictEqual(r.pathToClaudeCodeExecutable, undefined);
 		assert.strictEqual(r.unsupportedReason, undefined);
@@ -86,6 +86,25 @@ suite('Clawdius CLI resolution', () => {
 		const r = resolve({ nodeCliPath: 'cli.js' }, { wrapperPathExists: false, nodeCliPathExists: true });
 		assert.strictEqual(r.mode, 'bundled');
 		assert.ok(r.unsupportedReason && /absolute/i.test(r.unsupportedReason));
+	});
+
+	test('wrapper valid but nodeCliPath invalid -> wrapper targets bundled WITH a reason (no silent downgrade)', () => {
+		const r = resolve({ wrapperPath: '/opt/ent/claude', nodeCliPath: '/opt/missing/cli.js' }, { wrapperPathExists: true, nodeCliPathExists: false });
+		assert.strictEqual(r.mode, 'wrapper');
+		assert.strictEqual(r.wrapperTarget, 'bundled');
+		assert.ok(r.unsupportedReason && /nodeCliPath/.test(r.unsupportedReason));
+	});
+
+	test('a single leading backslash is NOT treated as absolute', () => {
+		const r = resolve({ nodeCliPath: '\\cli.js' }, { wrapperPathExists: false, nodeCliPathExists: true });
+		assert.strictEqual(r.mode, 'bundled'); // drive-relative / ambiguous, not a launch-safe root
+		assert.ok(r.unsupportedReason);
+	});
+
+	test('a UNC path is treated as absolute', () => {
+		const r = resolve({ nodeCliPath: '\\\\server\\share\\cli.js' }, { wrapperPathExists: false, nodeCliPathExists: true });
+		assert.strictEqual(r.mode, 'userCli');
+		assert.strictEqual(r.pathToClaudeCodeExecutable, '\\\\server\\share\\cli.js');
 	});
 
 	test('bedrock preset sets CLAUDE_CODE_USE_BEDROCK (login prompt is not auto-disabled)', () => {

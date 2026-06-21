@@ -95,7 +95,7 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 			'clawdius.cli.wrapperPath': {
 				type: 'string',
 				default: '',
-				markdownDescription: nls.localize('clawdius.cli.wrapperPath', "Absolute path to an enterprise Claude **process wrapper** - a launcher script/executable that injects auth, proxy, Bedrock/Vertex, or policy around the real CLI (like the official extension's `claudeProcessWrapper`). When set, Clawdius launches the engine through this wrapper and never silently bypasses it."),
+				markdownDescription: nls.localize('clawdius.cli.wrapperPath', "Absolute path to an enterprise Claude **process wrapper** - a directly-spawnable launcher executable that injects auth, proxy, Bedrock/Vertex, or policy around the real CLI (like the official extension's `claudeProcessWrapper`). When set, Clawdius launches the engine through this wrapper and never silently bypasses it. (On Windows a `.cmd`/`.bat` batch wrapper is not supported yet - use an `.exe`.)"),
 				tags: ['clawdius'],
 			},
 			'clawdius.cli.providerPreset': {

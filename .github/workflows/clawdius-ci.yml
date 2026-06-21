@@ -65,10 +65,11 @@ jobs:
       - name: Branding guard (Clawdius branding, Open VSX, no telemetry, Clawdius theme)
         run: node script/clawdius/branding-guard.ts
 
-  # Runs the Clawdius regression unit test (the no-default-account egress guard) in the browser mocha
-  # harness. Targeted on purpose: --run loads only that one test file, not the full upstream suite (which
-  # needs the minified out-build and carries unrelated upstream tests). Kept as a separate job so the fast
-  # fork-hygiene checks are never gated on the heavy dev install. Phase 6 broadens this to the full matrix.
+  # Type-checks the sources and runs the Clawdius unit tests in the browser mocha harness: the
+  # no-default-account egress regression plus the workflow-store/transcript and Claude-CLI-plugin-discovery
+  # suites. Targeted on purpose: --run loads only the named test files, not the full upstream suite (which
+  # carries unrelated upstream tests). Kept as a separate job so the fast fork-hygiene checks are never
+  # gated on the heavy dev install. Phase 6 broadens this to the full matrix.
   unit-test-browser:
     runs-on: ubuntu-latest
     steps:
@@ -85,6 +86,8 @@ jobs:
           sudo apt-get install -y pkg-config libxkbfile-dev libkrb5-dev
       - name: Install dependencies
         run: npm ci
+      - name: Type-check sources (catches type regressions across the fork)
+        run: npm run compile-check-ts-native
       - name: Transpile sources to out/
         run: node build/next/index.ts transpile
       - name: Install Playwright Chromium (with system deps)
@@ -100,3 +103,20 @@ jobs:
           if grep -q "BAD " harness.log; then echo "::error::harness failed to load the test (silent-green guard tripped)"; exit 1; fi
           if ! grep -qE "[1-9][0-9]* passing" harness.log; then echo "::error::no tests ran (expected >=1 passing)"; exit 1; fi
           echo "regression test ran and passed"
+      - name: Clawdius feature unit tests (workflow store/transcript, Claude CLI plugin discovery)
+        # Same silent-green guards, per suite: assert the compiled file exists, fail on a "BAD" load error,
+        # require >=1 passing and zero failing in each. Run separately so a load failure in one is attributed.
+        run: |
+          for t in \
+            "out/vs/sessions/contrib/workflows/test/common/workflowStore.test.js" \
+            "out/vs/sessions/contrib/workflows/test/browser/workflowTranscript.test.js" \
+            "out/vs/workbench/contrib/chat/test/common/claudeCliAgentPluginDiscovery.test.js"; do
+            if [ ! -f "$t" ]; then echo "::error::compiled test missing ($t) — transpile path drift"; exit 1; fi
+            log="$(basename "$t").log"
+            node test/unit/browser/index.js --run "$t" --browser chromium 2>&1 | tee "$log"
+            if grep -q "BAD " "$log"; then echo "::error::harness failed to load $t (silent-green guard tripped)"; exit 1; fi
+            if ! grep -qE "[1-9][0-9]* passing" "$log"; then echo "::error::no tests ran in $t"; exit 1; fi
+            if grep -qE "[1-9][0-9]* failing" "$log"; then echo "::error::a Clawdius feature test failed in $t"; exit 1; fi
+            echo "ok: $t"
+          done
+          echo "Clawdius feature unit tests passed"

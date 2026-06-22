@@ -40,7 +40,16 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 		containerIcon: clawdiusChatIcon,
 		name: localize2('clawdius.chat.view', "Claude"),
 		ctorDescriptor: new SyncDescriptor(ClawdiusChatViewPane),
-		canToggleVisibility: false,
+		// The container uses doNotRegisterOpenCommand, so provide an explicit open command (like the workbench
+		// chat does) - otherwise, since this is a NON-default aux-bar container, there is no command to reopen
+		// it once hidden. No keybinding yet (would collide with the still-default workbench chat); INC-1 takes
+		// over the chat keybinding when this becomes the default and the workbench chat is suppressed.
+		openCommandActionDescriptor: {
+			id: CLAWDIUS_CHAT_VIEW_CONTAINER_ID,
+			title: localize2('clawdius.chat.open', "Open Claude Code Chat"),
+			order: 1,
+		},
+		canToggleVisibility: true,
 		canMoveView: true,
 		order: 1,
 	};

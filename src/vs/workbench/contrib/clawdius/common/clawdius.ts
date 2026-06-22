@@ -21,9 +21,11 @@ export const CLAWDIUS_WORKFLOWS_VIEW_ID = 'workbench.view.clawdius.workflows';
 // Claude Code plugin's webview chat, driven by the agent-host Claude session. New ids, distinct from the
 // workbench chat panel ('workbench.panel.chat') so the two never collide while the redesign is mid-flight.
 
+// `clawdiusChat` (one token), NOT `clawdius.chat`, so the right-hand chat container id does not read like
+// a child VIEW of the left `workbench.view.clawdius` container (whose views are `workbench.view.clawdius.*`).
 /** The right-hand (auxiliary-bar) Clawdius chat view container in the main workbench. */
-export const CLAWDIUS_CHAT_VIEW_CONTAINER_ID = 'workbench.view.clawdius.chat';
+export const CLAWDIUS_CHAT_VIEW_CONTAINER_ID = 'workbench.view.clawdiusChat';
 
 /** The native Claude chat view (webview SPA) inside the right-hand Clawdius chat container. */
-export const CLAWDIUS_CHAT_VIEW_ID = 'workbench.view.clawdius.chat.main';
+export const CLAWDIUS_CHAT_VIEW_ID = 'workbench.view.clawdiusChat.main';
 // CLAWDIUS-END

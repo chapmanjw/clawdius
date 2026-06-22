@@ -58,8 +58,20 @@ export class ClawdiusChatViewPane extends ViewPane {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 	}
 
+	// This pane never shows the base view-welcome UI; its body is entirely the webview. Returning false keeps
+	// the ViewWelcomeController (created by super.renderBody) inert so it cannot overlay or steal focus.
+	override shouldShowWelcome(): boolean {
+		return false;
+	}
+
 	protected override renderBody(container: HTMLElement): void {
 		super.renderBody(container);
+
+		// renderBody is called once per pane lifetime, but guard against re-entry so a second call can never
+		// orphan a mounted webview (its DOM is destroyed if the parent hierarchy changes).
+		if (this._webview) {
+			return;
+		}
 
 		this._webviewContainer = dom.append(container, dom.$('.clawdius-chat-webview'));
 		this._webviewContainer.style.width = '100%';
@@ -98,7 +110,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 	}
 
 	private _onDidReceiveMessage(message: unknown): void {
-		if (!message || typeof message !== 'object') {
+		if (!this._webview || !message || typeof message !== 'object') {
 			return;
 		}
 		const msg = message as { type?: string; text?: string };
@@ -132,19 +144,26 @@ export class ClawdiusChatViewPane extends ViewPane {
 		const sendLabel = localize('clawdius.chat.send', "Send");
 
 		// Localized strings used by the client script are passed as a JSON-encoded constant so translations
-		// are escaped correctly and never break out of the <script> element.
-		const strings = JSON.stringify({ claude: claudeLabel });
+		// are escaped correctly and never break out of the <script> element. JSON.stringify escapes quotes and
+		// </script>, but not the U+2028 / U+2029 separators, which are valid JSON yet break a JS expression -
+		// so escape those too.
+		const strings = JSON.stringify({ claude: claudeLabel })
+			.replace(new RegExp(String.fromCharCode(0x2028), 'g'), '\\u2028')
+			.replace(new RegExp(String.fromCharCode(0x2029), 'g'), '\\u2029');
 
 		return `<!DOCTYPE html>
 <html lang="en">
 <head>
 	<meta charset="utf-8">
-	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}';">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}';">
 	<style nonce="${nonce}">
 		:root {
 			--clawdius-orange: #d97757;
 			--clawdius-clay: #c6613f;
 			--clawdius-ivory: #faf9f5;
+			/* Send button uses a deeper orange so ivory text clears WCAG AA (4.5:1); brand --clawdius-orange */
+			/* (#d97757) is reserved for non-text accents (focus ring, status dot, welcome mark). */
+			--clawdius-button-bg: #b85c40;
 		}
 		* { box-sizing: border-box; }
 		html, body {
@@ -257,7 +276,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 			padding: 0 14px;
 			border: none;
 			border-radius: 8px;
-			background: var(--clawdius-orange);
+			background: var(--clawdius-button-bg);
 			color: var(--clawdius-ivory);
 			font-family: inherit;
 			font-size: inherit;
@@ -265,7 +284,12 @@ export class ClawdiusChatViewPane extends ViewPane {
 			cursor: pointer;
 		}
 		.composer .send:hover { background: var(--clawdius-clay); }
-		.composer .send:disabled { opacity: 0.5; cursor: default; }
+		.composer .send:focus-visible { outline: 2px solid var(--clawdius-orange); outline-offset: 2px; }
+		.composer .send:disabled {
+			cursor: default;
+			background: var(--vscode-button-secondaryBackground, var(--vscode-input-background));
+			color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground));
+		}
 	</style>
 </head>
 <body>
@@ -279,7 +303,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 	</div>
 	<div class="composer">
 		<textarea id="input" rows="1" placeholder="${escapeHtml(placeholder)}" aria-label="${escapeHtml(placeholder)}"></textarea>
-		<button class="send" id="send" type="button">${escapeHtml(sendLabel)}</button>
+		<button class="send" id="send" type="button" disabled aria-label="${escapeHtml(sendLabel)}">${escapeHtml(sendLabel)}</button>
 	</div>
 	<script nonce="${nonce}">
 		(function () {
@@ -308,12 +332,17 @@ export class ClawdiusChatViewPane extends ViewPane {
 				messages.scrollTop = messages.scrollHeight;
 			}
 
+			function updateSendState() {
+				send.disabled = input.value.trim().length === 0;
+			}
+
 			function submit() {
 				const text = input.value.trim();
 				if (!text) { return; }
 				vscode.postMessage({ type: 'submit', text: text });
 				input.value = '';
 				input.style.height = 'auto';
+				updateSendState();
 			}
 
 			input.addEventListener('keydown', function (e) {
@@ -325,12 +354,13 @@ export class ClawdiusChatViewPane extends ViewPane {
 			input.addEventListener('input', function () {
 				input.style.height = 'auto';
 				input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+				updateSendState();
 			});
 			send.addEventListener('click', submit);
 
 			window.addEventListener('message', function (event) {
 				const m = event.data;
-				if (!m || typeof m.type !== 'string') { return; }
+				if (!m || typeof m.type !== 'string' || typeof m.text !== 'string') { return; }
 				if (m.type === 'appendUser') { addMessage('user', m.text); }
 				else if (m.type === 'appendAssistant') { addMessage('assistant', m.text); }
 			});

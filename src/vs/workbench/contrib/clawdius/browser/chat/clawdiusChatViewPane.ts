@@ -447,6 +447,9 @@ export class ClawdiusChatViewPane extends ViewPane {
 			const input = document.getElementById('input');
 			const send = document.getElementById('send');
 			const assistantBubbles = Object.create(null);
+			// While a turn is streaming we are 'busy': the composer is disabled so INC-1 serializes turns
+			// (one in flight at a time) rather than orphaning the active turn with a concurrent dispatch.
+			let busy = false;
 
 			function clearWelcome() {
 				if (welcome && welcome.parentNode) { welcome.remove(); }
@@ -512,10 +515,11 @@ export class ClawdiusChatViewPane extends ViewPane {
 			}
 
 			function updateSendState() {
-				send.disabled = input.value.trim().length === 0;
+				send.disabled = busy || input.value.trim().length === 0;
 			}
 
 			function submit() {
+				if (busy) { return; }
 				const text = input.value.trim();
 				if (!text) { return; }
 				vscode.postMessage({ type: 'submit', text: text });
@@ -545,16 +549,16 @@ export class ClawdiusChatViewPane extends ViewPane {
 						if (typeof m.text === 'string') { addUser(m.text); }
 						break;
 					case 'assistantPending':
-						if (typeof m.id === 'string') { ensureAssistant(m.id); }
+						if (typeof m.id === 'string') { ensureAssistant(m.id); busy = true; updateSendState(); }
 						break;
 					case 'setAssistant':
 						if (typeof m.id === 'string' && typeof m.text === 'string') { setAssistant(m.id, m.text); }
 						break;
 					case 'assistantDone':
-						if (typeof m.id === 'string') { doneAssistant(m.id); }
+						if (typeof m.id === 'string') { doneAssistant(m.id); busy = false; updateSendState(); }
 						break;
 					case 'chatError':
-						if (typeof m.text === 'string') { showError(m.text); }
+						if (typeof m.text === 'string') { showError(m.text); busy = false; updateSendState(); }
 						break;
 				}
 			});

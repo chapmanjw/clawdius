@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Codicon } from '../../../../base/common/codicons.js';
+import product from '../../../../platform/product/common/product.js';
 import { localize, localize2 } from '../../../../nls.js';
 import { Action2, MenuId, MenuRegistry, registerAction2 } from '../../../../platform/actions/common/actions.js';
 import { ContextKeyExpr } from '../../../../platform/contextkey/common/contextkey.js';
@@ -22,10 +23,16 @@ import { SwitchCompositeViewAction } from '../compositeBarActions.js';
 const maximizeIcon = registerIcon('auxiliarybar-maximize', Codicon.screenFull, localize('maximizeIcon', 'Icon to maximize the secondary side bar.'));
 const closeIcon = registerIcon('auxiliarybar-close', Codicon.close, localize('closeIcon', 'Icon to close the secondary side bar.'));
 
-const auxiliaryBarRightIcon = registerIcon('auxiliarybar-right-layout-icon', Codicon.layoutSidebarRight, localize('toggleAuxiliaryIconRight', 'Icon to toggle the secondary side bar off in its right position.'));
-const auxiliaryBarRightOffIcon = registerIcon('auxiliarybar-right-off-layout-icon', Codicon.layoutSidebarRightOff, localize('toggleAuxiliaryIconRightOn', 'Icon to toggle the secondary side bar on in its right position.'));
-const auxiliaryBarLeftIcon = registerIcon('auxiliarybar-left-layout-icon', Codicon.layoutSidebarLeft, localize('toggleAuxiliaryIconLeft', 'Icon to toggle the secondary side bar in its left position.'));
-const auxiliaryBarLeftOffIcon = registerIcon('auxiliarybar-left-off-layout-icon', Codicon.layoutSidebarLeftOff, localize('toggleAuxiliaryIconLeftOn', 'Icon to toggle the secondary side bar on in its left position.'));
+// CLAWDIUS-BEGIN Claude chat-bubble toggle icon
+// In Clawdius the secondary side bar IS the native Claude chat, so its show/hide toggle reads as the Claude
+// mark (a chat affordance, Kiro-style) rather than a generic right-pane layout glyph. Upstream (entitlementUrl
+// present) keeps the layout icons unchanged.
+const clawdiusChatToggle = !product.defaultChatAgent?.entitlementUrl;
+const auxiliaryBarRightIcon = registerIcon('auxiliarybar-right-layout-icon', clawdiusChatToggle ? Codicon.claude : Codicon.layoutSidebarRight, localize('toggleAuxiliaryIconRight', 'Icon to toggle the secondary side bar off in its right position.'));
+const auxiliaryBarRightOffIcon = registerIcon('auxiliarybar-right-off-layout-icon', clawdiusChatToggle ? Codicon.claude : Codicon.layoutSidebarRightOff, localize('toggleAuxiliaryIconRightOn', 'Icon to toggle the secondary side bar on in its right position.'));
+const auxiliaryBarLeftIcon = registerIcon('auxiliarybar-left-layout-icon', clawdiusChatToggle ? Codicon.claude : Codicon.layoutSidebarLeft, localize('toggleAuxiliaryIconLeft', 'Icon to toggle the secondary side bar in its left position.'));
+const auxiliaryBarLeftOffIcon = registerIcon('auxiliarybar-left-off-layout-icon', clawdiusChatToggle ? Codicon.claude : Codicon.layoutSidebarLeftOff, localize('toggleAuxiliaryIconLeftOn', 'Icon to toggle the secondary side bar on in its left position.'));
+// CLAWDIUS-END
 
 export class ToggleAuxiliaryBarAction extends Action2 {
 

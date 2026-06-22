@@ -296,6 +296,11 @@ export namespace SessionType {
 	export const Codex = 'openai-codex';
 	export const Growth = 'copilot-growth';
 	export const AgentHostCopilot = 'agent-host-copilotcli';
+	// CLAWDIUS-BEGIN native agent-host Claude session type
+	// The agent-host Claude session (session type `agent-host-${provider}`, provider `claude`), served by
+	// AgentHostSessionHandler. This is the native backend the Clawdius chat panel defaults to.
+	export const AgentHostClaude = 'agent-host-claude';
+	// CLAWDIUS-END
 }
 
 /**

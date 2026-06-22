@@ -250,6 +250,14 @@ export function getDefaultNewChatSessionType(
 		chatSessionsService.getChatSessionContribution(SessionType.CopilotCLI)) {
 		return SessionType.CopilotCLI;
 	}
+	// CLAWDIUS-BEGIN native agent-host Claude as the default chat backend
+	// Return the agent-host Claude session type WITHOUT a synchronous getChatSessionContribution() gate: the
+	// provider activates asynchronously (acquireOrLoadSession waits for registration), and a sync check would
+	// race agent-host startup. The caller (acquireDefaultNewSession) falls back to local if activation fails.
+	if (defaultProvider === 'claudeAh') {
+		return SessionType.AgentHostClaude;
+	}
+	// CLAWDIUS-END
 	return localChatSessionType;
 }
 

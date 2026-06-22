@@ -21,8 +21,8 @@ import { generateUuid } from '../../../../../base/common/uuid.js';
 import { localize } from '../../../../../nls.js';
 import { IAgentHostService } from '../../../../../platform/agentHost/common/agentService.js';
 import { IAgentSubscription } from '../../../../../platform/agentHost/common/state/agentSubscription.js';
-import { ActionType, SessionTurnCancelledAction, SessionTurnStartedAction } from '../../../../../platform/agentHost/common/state/sessionActions.js';
-import { MessageKind, ResponsePartKind, StateComponents, TurnState, type MarkdownResponsePart, type SessionState } from '../../../../../platform/agentHost/common/state/sessionState.js';
+import { ActionType, SessionToolCallApprovedAction, SessionToolCallDeniedAction, SessionTurnCancelledAction, SessionTurnStartedAction } from '../../../../../platform/agentHost/common/state/sessionActions.js';
+import { MessageKind, ResponsePartKind, StateComponents, ToolCallCancellationReason, ToolCallConfirmationReason, ToolCallStatus, TurnState, type SessionState, type ToolCallState } from '../../../../../platform/agentHost/common/state/sessionState.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from '../../../../../platform/contextview/browser/contextView.js';
@@ -36,6 +36,36 @@ import { IWorkspaceContextService } from '../../../../../platform/workspace/comm
 import { IViewPaneOptions, ViewPane } from '../../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../../common/views.js';
 import { IOverlayWebview, IWebviewService, WebviewContentPurpose } from '../../../webview/browser/webview.js';
+
+/** A StringOrMarkdown (string | { markdown }) flattened to plain text for the SPA. */
+function flattenStringOrMarkdown(value: string | { markdown: string } | undefined): string {
+	if (typeof value === 'string') {
+		return value;
+	}
+	if (value && typeof value.markdown === 'string') {
+		return value.markdown;
+	}
+	return '';
+}
+
+/** A renderable block in an assistant turn, serialized to the SPA over postMessage. */
+type AssistantBlock =
+	| { kind: 'markdown'; text: string }
+	| { kind: 'reasoning'; text: string }
+	| {
+		kind: 'tool';
+		id: string;
+		name: string;
+		status: string;
+		invocation: string;
+		pending?: boolean;
+		confirmationTitle?: string;
+		options?: { id: string; label: string; kind: string }[];
+		success?: boolean;
+		result?: string;
+		errorText?: string;
+		cancelled?: boolean;
+	};
 
 /** Escape text that is interpolated into the webview HTML so a stray character cannot break markup. */
 function escapeHtml(value: string): string {
@@ -163,7 +193,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 		if (this._disposed || !message || typeof message !== 'object') {
 			return;
 		}
-		const msg = message as { type?: string; text?: string; href?: string };
+		const msg = message as { type?: string; text?: string; href?: string; toolCallId?: string; approved?: boolean; optionId?: string };
 		switch (msg.type) {
 			case 'submit': {
 				const text = typeof msg.text === 'string' ? msg.text.trim() : '';
@@ -183,6 +213,26 @@ export class ClawdiusChatViewPane extends ViewPane {
 				}
 				break;
 			}
+			case 'toolConfirm': {
+				this._respondToToolPermission(msg.toolCallId, msg.approved === true, typeof msg.optionId === 'string' ? msg.optionId : undefined);
+				break;
+			}
+		}
+	}
+
+	/** Approve or deny a tool call that is awaiting permission, by dispatching the confirm action. */
+	private _respondToToolPermission(toolCallId: string | undefined, approved: boolean, optionId: string | undefined): void {
+		const turnId = this._activeTurnId;
+		if (!turnId || !this._sessionUri || typeof toolCallId !== 'string') {
+			return;
+		}
+		const action: SessionToolCallApprovedAction | SessionToolCallDeniedAction = approved
+			? { type: ActionType.SessionToolCallConfirmed, turnId, toolCallId, approved: true, confirmed: ToolCallConfirmationReason.UserAction, selectedOptionId: optionId }
+			: { type: ActionType.SessionToolCallConfirmed, turnId, toolCallId, approved: false, reason: ToolCallCancellationReason.Denied, selectedOptionId: optionId };
+		try {
+			this._agentHostService.dispatch(this._sessionUri.toString(), action);
+		} catch (err) {
+			this._logService.error('[clawdius-chat] failed to dispatch tool confirmation', err);
 		}
 	}
 
@@ -290,15 +340,25 @@ export class ClawdiusChatViewPane extends ViewPane {
 			return;
 		}
 
-		// INC-1: text only. Concatenate markdown response parts in stream order. Tool calls, reasoning,
-		// content refs and system notifications are deferred to INC-2; a turn that produces only those leaves
-		// no markdown, handled by the completion fallback below.
-		const text = turn.responseParts
-			.filter((part): part is MarkdownResponsePart => part.kind === ResponsePartKind.Markdown)
-			.map(part => part.content)
-			.join('');
-		if (text) {
-			this._post({ type: 'setAssistant', id: turnId, text });
+		// INC-2: render the full response stream in order - markdown, reasoning (thinking), and tool calls
+		// (with inline permission cards). Re-derived from the authoritative state on each change so the parts
+		// always hold the full state-so-far. Content refs and system notifications are deferred to a later step.
+		const blocks: AssistantBlock[] = [];
+		for (const part of turn.responseParts) {
+			if (part.kind === ResponsePartKind.Markdown) {
+				if (part.content) {
+					blocks.push({ kind: 'markdown', text: part.content });
+				}
+			} else if (part.kind === ResponsePartKind.Reasoning) {
+				if (part.content) {
+					blocks.push({ kind: 'reasoning', text: part.content });
+				}
+			} else if (part.kind === ResponsePartKind.ToolCall) {
+				blocks.push(this._toolBlock(part.toolCall));
+			}
+		}
+		if (blocks.length > 0) {
+			this._post({ type: 'setAssistantParts', id: turnId, blocks });
 		}
 
 		if (completed) {
@@ -310,12 +370,43 @@ export class ClawdiusChatViewPane extends ViewPane {
 				const errorText = completed.error?.message || localize('clawdius.chat.turnError', "Claude could not complete the response.");
 				this._post({ type: 'chatError', text: errorText, id: turnId });
 			} else {
-				if (!text) {
-					this._post({ type: 'setAssistant', id: turnId, text: localize('clawdius.chat.noText', "Claude finished this turn without text output.") });
+				if (blocks.length === 0) {
+					this._post({ type: 'setAssistantParts', id: turnId, blocks: [{ kind: 'markdown', text: localize('clawdius.chat.noText', "Claude finished this turn without text output.") }] });
 				}
 				this._post({ type: 'assistantDone', id: turnId });
 			}
 		}
+	}
+
+	/** Project a ToolCallState into a serializable tool block for the SPA (status drives which fields exist). */
+	private _toolBlock(tc: ToolCallState): AssistantBlock {
+		const block: AssistantBlock = {
+			kind: 'tool',
+			id: tc.toolCallId,
+			name: tc.displayName || tc.toolName,
+			status: tc.status,
+			invocation: flattenStringOrMarkdown(tc.invocationMessage),
+		};
+		switch (tc.status) {
+			case ToolCallStatus.PendingConfirmation:
+				block.pending = true;
+				block.confirmationTitle = flattenStringOrMarkdown(tc.confirmationTitle);
+				block.options = (tc.options ?? []).map(option => ({ id: option.id, label: option.label, kind: option.kind }));
+				break;
+			case ToolCallStatus.Completed:
+				block.success = tc.success;
+				block.result = flattenStringOrMarkdown(tc.pastTenseMessage);
+				if (tc.error) {
+					block.errorText = tc.error.message;
+				}
+				break;
+			case ToolCallStatus.Cancelled:
+				block.cancelled = true;
+				break;
+			default:
+				break;
+		}
+		return block;
 	}
 
 	/** Post to the webview, guarded against a disposed pane / torn-down webview. */
@@ -367,7 +458,20 @@ export class ClawdiusChatViewPane extends ViewPane {
 		// are escaped correctly and never break out of the <script> element. JSON.stringify escapes quotes and
 		// </script>, but not the U+2028 / U+2029 separators, which are valid JSON yet break a JS expression -
 		// so escape those too.
-		const strings = JSON.stringify({ claude: claudeLabel, working: workingLabel })
+		const strings = JSON.stringify({
+			claude: claudeLabel,
+			working: workingLabel,
+			thinking: localize('clawdius.chat.thinking', "Thinking"),
+			allow: localize('clawdius.chat.allow', "Allow"),
+			deny: localize('clawdius.chat.deny', "Deny"),
+			permissionTitle: localize('clawdius.chat.permissionTitle', "Permission required"),
+			cancelled: localize('clawdius.chat.cancelled', "Cancelled"),
+			statusStreaming: localize('clawdius.chat.statusStreaming', "Preparing..."),
+			statusPending: localize('clawdius.chat.statusPending', "Awaiting approval"),
+			statusRunning: localize('clawdius.chat.statusRunning', "Running..."),
+			statusDone: localize('clawdius.chat.statusDone', "Done"),
+			statusFailed: localize('clawdius.chat.statusFailed', "Failed"),
+		})
 			.replace(new RegExp(String.fromCharCode(0x2028), 'g'), '\\u2028')
 			.replace(new RegExp(String.fromCharCode(0x2029), 'g'), '\\u2029');
 
@@ -484,6 +588,28 @@ export class ClawdiusChatViewPane extends ViewPane {
 		.msg .bubble.markdown pre.code-block code { font-family: var(--vscode-editor-font-family, monospace); font-size: 0.9em; white-space: pre; }
 		.msg .bubble.markdown a.md-link { color: var(--vscode-textLink-foreground); cursor: pointer; text-decoration: none; }
 		.msg .bubble.markdown a.md-link:hover { text-decoration: underline; }
+		/* Tool cards, thinking blocks, permission cards (INC-2). */
+		.tool-card { margin: 6px 0; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 6px; background: var(--vscode-textCodeBlock-background, rgba(127,127,127,0.06)); overflow: hidden; }
+		.tool-header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; }
+		.tool-name { font-weight: 600; font-size: 0.92em; }
+		.tool-badge { margin-left: auto; font-size: 0.78em; padding: 1px 7px; border-radius: 10px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); white-space: nowrap; }
+		.tool-card.status-completed .tool-badge { background: var(--clawdius-button-bg); color: var(--clawdius-ivory); }
+		.tool-card.status-cancelled .tool-badge { background: var(--vscode-errorForeground); color: var(--clawdius-ivory); }
+		.tool-invocation { padding: 0 10px 8px; font-size: 0.88em; color: var(--vscode-descriptionForeground); white-space: pre-wrap; word-break: break-word; }
+		.tool-result { padding: 0 10px 8px; font-size: 0.88em; white-space: pre-wrap; word-break: break-word; }
+		.tool-error { padding: 0 10px 8px; font-size: 0.88em; color: var(--vscode-errorForeground); white-space: pre-wrap; word-break: break-word; }
+		.tool-cancelled { padding: 0 10px 8px; font-size: 0.85em; color: var(--vscode-descriptionForeground); font-style: italic; }
+		.tool-perm { padding: 6px 10px 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+		.perm-title { flex-basis: 100%; font-size: 0.85em; color: var(--vscode-descriptionForeground); }
+		.perm-btn { height: 28px; padding: 0 12px; border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 6px; font-family: inherit; font-size: 0.86em; cursor: pointer; background: var(--vscode-input-background); color: var(--vscode-foreground); }
+		.perm-btn:disabled { opacity: 0.5; cursor: default; }
+		.perm-allow { background: var(--clawdius-button-bg); color: var(--clawdius-ivory); border-color: transparent; }
+		.perm-allow:hover { background: var(--clawdius-clay); }
+		.perm-deny:hover { border-color: var(--vscode-errorForeground); }
+		details.thinking { margin: 4px 0; border-left: 2px solid var(--vscode-widget-border, rgba(127,127,127,0.3)); padding-left: 8px; }
+		details.thinking > summary { cursor: pointer; font-size: 0.85em; color: var(--vscode-descriptionForeground); font-style: italic; list-style: none; user-select: none; }
+		details.thinking > summary::-webkit-details-marker { display: none; }
+		.thinking-body { margin-top: 4px; font-size: 0.92em; color: var(--vscode-descriptionForeground); }
 		.msg.error .bubble {
 			color: var(--vscode-inputValidation-errorForeground, var(--vscode-errorForeground));
 			background: var(--vscode-inputValidation-errorBackground, transparent);
@@ -765,13 +891,113 @@ export class ClawdiusChatViewPane extends ViewPane {
 				return frag;
 			}
 
-			function setAssistant(id, text) {
+			function toolStatusLabel(status, block) {
+				if (status === 'streaming') { return STRINGS.statusStreaming; }
+				if (status === 'pending-confirmation') { return STRINGS.statusPending; }
+				if (status === 'running' || status === 'pending-result-confirmation') { return STRINGS.statusRunning; }
+				if (status === 'completed') { return block && block.success === false ? STRINGS.statusFailed : STRINGS.statusDone; }
+				if (status === 'cancelled') { return STRINGS.cancelled; }
+				return status;
+			}
+
+			function renderReasoning(text) {
+				const d = document.createElement('details');
+				d.className = 'thinking';
+				const s = document.createElement('summary');
+				s.textContent = STRINGS.thinking;
+				d.appendChild(s);
+				const body = document.createElement('div');
+				body.className = 'thinking-body markdown';
+				body.appendChild(renderMarkdown(text));
+				d.appendChild(body);
+				return d;
+			}
+
+			function renderPermission(block) {
+				const wrap = document.createElement('div');
+				wrap.className = 'tool-perm';
+				const title = document.createElement('div');
+				title.className = 'perm-title';
+				title.textContent = block.confirmationTitle || STRINGS.permissionTitle;
+				wrap.appendChild(title);
+				let opts = block.options && block.options.length ? block.options : null;
+				if (!opts) {
+					opts = [{ id: '', label: STRINGS.allow, kind: 'approve' }, { id: '', label: STRINGS.deny, kind: 'deny' }];
+				}
+				for (let k = 0; k < opts.length; k++) {
+					const o = opts[k];
+					const btn = document.createElement('button');
+					btn.type = 'button';
+					btn.className = 'perm-btn ' + (o.kind === 'deny' ? 'perm-deny' : 'perm-allow');
+					btn.textContent = o.label;
+					btn.addEventListener('click', function () {
+						vscode.postMessage({ type: 'toolConfirm', toolCallId: block.id, approved: o.kind === 'approve', optionId: o.id || undefined });
+						const all = wrap.querySelectorAll('button');
+						for (let j = 0; j < all.length; j++) { all[j].disabled = true; }
+					});
+					wrap.appendChild(btn);
+				}
+				return wrap;
+			}
+
+			function renderTool(block) {
+				const card = document.createElement('div');
+				card.className = 'tool-card status-' + block.status;
+				const header = document.createElement('div');
+				header.className = 'tool-header';
+				const name = document.createElement('span');
+				name.className = 'tool-name';
+				name.textContent = block.name;
+				header.appendChild(name);
+				const badge = document.createElement('span');
+				badge.className = 'tool-badge';
+				badge.textContent = toolStatusLabel(block.status, block);
+				header.appendChild(badge);
+				card.appendChild(header);
+				if (block.invocation) {
+					const inv = document.createElement('div');
+					inv.className = 'tool-invocation';
+					inv.textContent = block.invocation;
+					card.appendChild(inv);
+				}
+				if (block.pending) {
+					card.appendChild(renderPermission(block));
+				}
+				if (block.status === 'completed') {
+					if (block.result) {
+						const r = document.createElement('div');
+						r.className = 'tool-result';
+						r.textContent = block.result;
+						card.appendChild(r);
+					}
+					if (block.errorText) {
+						const e = document.createElement('div');
+						e.className = 'tool-error';
+						e.textContent = block.errorText;
+						card.appendChild(e);
+					}
+				}
+				if (block.cancelled) {
+					const c = document.createElement('div');
+					c.className = 'tool-cancelled';
+					c.textContent = STRINGS.cancelled;
+					card.appendChild(c);
+				}
+				return card;
+			}
+
+			function setAssistantParts(id, blocks) {
 				const bubble = ensureAssistant(id);
 				const stick = isNearBottom();
 				bubble.classList.remove('pending');
 				bubble.classList.add('markdown');
 				bubble.textContent = '';
-				bubble.appendChild(renderMarkdown(text));
+				for (let k = 0; k < blocks.length; k++) {
+					const b = blocks[k];
+					if (b.kind === 'markdown') { bubble.appendChild(renderMarkdown(b.text)); }
+					else if (b.kind === 'reasoning') { bubble.appendChild(renderReasoning(b.text)); }
+					else if (b.kind === 'tool') { bubble.appendChild(renderTool(b)); }
+				}
 				if (stick) { toBottom(); }
 			}
 
@@ -849,8 +1075,8 @@ export class ClawdiusChatViewPane extends ViewPane {
 					case 'assistantPending':
 						if (typeof m.id === 'string') { ensureAssistant(m.id); busy = true; updateSendState(); }
 						break;
-					case 'setAssistant':
-						if (typeof m.id === 'string' && typeof m.text === 'string') { setAssistant(m.id, m.text); }
+					case 'setAssistantParts':
+						if (typeof m.id === 'string' && Array.isArray(m.blocks)) { setAssistantParts(m.id, m.blocks); }
 						break;
 					case 'assistantDone':
 						if (typeof m.id === 'string') { doneAssistant(m.id); }

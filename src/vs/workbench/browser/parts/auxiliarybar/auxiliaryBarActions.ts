@@ -32,12 +32,19 @@ const auxiliaryBarRightIcon = registerIcon('auxiliarybar-right-layout-icon', cla
 const auxiliaryBarRightOffIcon = registerIcon('auxiliarybar-right-off-layout-icon', clawdiusChatToggle ? Codicon.claude : Codicon.layoutSidebarRightOff, localize('toggleAuxiliaryIconRightOn', 'Icon to toggle the secondary side bar on in its right position.'));
 const auxiliaryBarLeftIcon = registerIcon('auxiliarybar-left-layout-icon', clawdiusChatToggle ? Codicon.claude : Codicon.layoutSidebarLeft, localize('toggleAuxiliaryIconLeft', 'Icon to toggle the secondary side bar in its left position.'));
 const auxiliaryBarLeftOffIcon = registerIcon('auxiliarybar-left-off-layout-icon', clawdiusChatToggle ? Codicon.claude : Codicon.layoutSidebarLeftOff, localize('toggleAuxiliaryIconLeftOn', 'Icon to toggle the secondary side bar on in its left position.'));
+// In Clawdius the secondary side bar IS the native Claude chat, so its show/hide toggle reads "Claude Code
+// Chat" everywhere it surfaces (top-bar tooltip, Customize Layout, command palette, pane title) rather than
+// the generic "Secondary Side Bar". Both localize keys are static; only one is selected at runtime.
+const auxBarToggleTitle = clawdiusChatToggle ? localize('toggleClaudeCodeChat', "Toggle Claude Code Chat") : localize('toggleSecondarySideBar', "Toggle Secondary Side Bar");
+const auxBarHide = clawdiusChatToggle ? localize('hideClaudeCodeChat', "Hide Claude Code Chat") : localize('hideSecondarySideBar', "Hide Secondary Side Bar");
 // CLAWDIUS-END
 
 export class ToggleAuxiliaryBarAction extends Action2 {
 
 	static readonly ID = 'workbench.action.toggleAuxiliaryBar';
-	static readonly LABEL = localize2('toggleAuxiliaryBar', "Toggle Secondary Side Bar Visibility");
+	// CLAWDIUS-BEGIN Claude chat-bubble toggle label
+	static readonly LABEL = clawdiusChatToggle ? localize2('toggleClaudeCodeChatCmd', "Toggle Claude Code Chat") : localize2('toggleAuxiliaryBar', "Toggle Secondary Side Bar Visibility");
+	// CLAWDIUS-END
 
 	constructor() {
 		super({
@@ -45,9 +52,11 @@ export class ToggleAuxiliaryBarAction extends Action2 {
 			title: ToggleAuxiliaryBarAction.LABEL,
 			toggled: {
 				condition: AuxiliaryBarVisibleContext,
-				title: localize('closeSecondarySideBar', 'Hide Secondary Side Bar'),
+				// CLAWDIUS-BEGIN Claude chat-bubble toggle label
+				title: auxBarHide,
 				icon: closeIcon,
-				mnemonicTitle: localize({ key: 'miCloseSecondarySideBar', comment: ['&& denotes a mnemonic'] }, "&&Secondary Side Bar"),
+				mnemonicTitle: clawdiusChatToggle ? localize({ key: 'miClaudeCodeChat', comment: ['&& denotes a mnemonic'] }, "Claude Code &&Chat") : localize({ key: 'miCloseSecondarySideBar', comment: ['&& denotes a mnemonic'] }, "&&Secondary Side Bar"),
+				// CLAWDIUS-END
 			},
 			icon: closeIcon,
 			category: Categories.View,
@@ -81,9 +90,11 @@ export class ToggleAuxiliaryBarAction extends Action2 {
 		layoutService.setPartHidden(isCurrentlyVisible, Parts.AUXILIARYBAR_PART);
 
 		// Announce visibility change to screen readers
+		// CLAWDIUS-BEGIN Claude chat-bubble toggle label
 		const alertMessage = isCurrentlyVisible
-			? localize('auxiliaryBarHidden', "Secondary Side Bar hidden")
-			: localize('auxiliaryBarVisible', "Secondary Side Bar shown");
+			? (clawdiusChatToggle ? localize('claudeChatHidden', "Claude Code Chat hidden") : localize('auxiliaryBarHidden', "Secondary Side Bar hidden"))
+			: (clawdiusChatToggle ? localize('claudeChatShown', "Claude Code Chat shown") : localize('auxiliaryBarVisible', "Secondary Side Bar shown"));
+		// CLAWDIUS-END
 		alert(alertMessage);
 	}
 }
@@ -93,7 +104,9 @@ registerAction2(ToggleAuxiliaryBarAction);
 MenuRegistry.appendMenuItem(MenuId.AuxiliaryBarTitle, {
 	command: {
 		id: ToggleAuxiliaryBarAction.ID,
-		title: localize('closeSecondarySideBar', 'Hide Secondary Side Bar'),
+		// CLAWDIUS-BEGIN Claude chat-bubble toggle label
+		title: auxBarHide,
+		// CLAWDIUS-END
 		icon: closeIcon
 	},
 	group: 'navigation',
@@ -152,7 +165,7 @@ MenuRegistry.appendMenuItems([
 			group: 'navigation',
 			command: {
 				id: ToggleAuxiliaryBarAction.ID,
-				title: localize('toggleSecondarySideBar', "Toggle Secondary Side Bar"),
+				title: auxBarToggleTitle,
 				toggled: { condition: AuxiliaryBarVisibleContext, icon: auxiliaryBarLeftIcon },
 				icon: auxiliaryBarLeftOffIcon,
 			},
@@ -171,7 +184,7 @@ MenuRegistry.appendMenuItems([
 			group: 'navigation',
 			command: {
 				id: ToggleAuxiliaryBarAction.ID,
-				title: localize('toggleSecondarySideBar', "Toggle Secondary Side Bar"),
+				title: auxBarToggleTitle,
 				toggled: { condition: AuxiliaryBarVisibleContext, icon: auxiliaryBarRightIcon },
 				icon: auxiliaryBarRightOffIcon,
 			},

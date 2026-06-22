@@ -15,7 +15,7 @@
 // only local assets with zero network egress (CSP default-src 'none').
 
 import * as dom from '../../../../../base/browser/dom.js';
-import { DisposableStore } from '../../../../../base/common/lifecycle.js';
+import { DisposableStore, MutableDisposable } from '../../../../../base/common/lifecycle.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { generateUuid } from '../../../../../base/common/uuid.js';
 import { localize } from '../../../../../nls.js';
@@ -35,7 +35,7 @@ import { IThemeService } from '../../../../../platform/theme/common/themeService
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { IViewPaneOptions, ViewPane } from '../../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../../common/views.js';
-import { IWebviewElement, IWebviewService, WebviewContentPurpose } from '../../../webview/browser/webview.js';
+import { IOverlayWebview, IWebviewService, WebviewContentPurpose } from '../../../webview/browser/webview.js';
 
 /** Escape text that is interpolated into the webview HTML so a stray character cannot break markup. */
 function escapeHtml(value: string): string {
@@ -49,8 +49,12 @@ function escapeHtml(value: string): string {
 
 export class ClawdiusChatViewPane extends ViewPane {
 
-	private _webview: IWebviewElement | undefined;
-	private _webviewContainer: HTMLElement | undefined;
+	// An OVERLAY webview (not a plain element): it is anchored over the pane body rather than parented into
+	// it, so switching auxiliary-bar containers (which tears the ViewPane out of the DOM) cannot destroy its
+	// content. It is claimed when the body is visible and released when hidden; its SPA state survives.
+	private readonly _webview = this._register(new MutableDisposable<IOverlayWebview>());
+	private _container: HTMLElement | undefined;
+	private _rootContainer: HTMLElement | undefined;
 
 	// Agent-host session state (created lazily on the first user turn).
 	private readonly _sessionDisposables = this._register(new DisposableStore());
@@ -78,6 +82,9 @@ export class ClawdiusChatViewPane extends ViewPane {
 		@ILogService private readonly _logService: ILogService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
+		// Claim the overlay when the body becomes visible, release it when hidden (e.g. another auxiliary-bar
+		// container is selected). This is what lets the chat survive container switches without going blank.
+		this._register(this.onDidChangeBodyVisibility(() => this._updateVisibility()));
 	}
 
 	// This pane never shows the base view-welcome UI; its body is entirely the webview. Returning false keeps
@@ -89,50 +96,71 @@ export class ClawdiusChatViewPane extends ViewPane {
 	protected override renderBody(container: HTMLElement): void {
 		super.renderBody(container);
 
-		// renderBody is called once per pane lifetime, but guard against re-entry so a second call can never
-		// orphan a mounted webview (its DOM is destroyed if the parent hierarchy changes).
-		if (this._webview) {
-			return;
+		// renderBody may run again after a container switch with a fresh container; create the overlay once,
+		// then just re-anchor the existing one (its content - the live conversation - is preserved).
+		this._container = container;
+		this._rootContainer = undefined;
+
+		if (!this._webview.value) {
+			const webview = this._webviewService.createWebviewOverlay({
+				providedViewType: this.id,
+				title: localize('clawdius.chat.title', "Claude Code Chat"),
+				options: {
+					purpose: WebviewContentPurpose.WebviewView,
+					disableServiceWorker: true,
+				},
+				contentOptions: {
+					allowScripts: true,
+				},
+				extension: undefined,
+			});
+			this._webview.value = webview;
+			this._register(webview.onMessage(e => this._onDidReceiveMessage(e.message)));
+			webview.setHtml(this._renderHtml());
 		}
 
-		this._webviewContainer = dom.append(container, dom.$('.clawdius-chat-webview'));
-		this._webviewContainer.style.width = '100%';
-		this._webviewContainer.style.height = '100%';
-
-		const webview = this._register(this._webviewService.createWebviewElement({
-			title: localize('clawdius.chat.title', "Claude Code Chat"),
-			options: {
-				purpose: WebviewContentPurpose.WebviewView,
-				disableServiceWorker: true,
-				retainContextWhenHidden: true,
-			},
-			contentOptions: {
-				allowScripts: true,
-			},
-			extension: undefined,
-		}));
-		this._webview = webview;
-
-		webview.mountTo(this._webviewContainer, dom.getWindow(container));
-		this._register(webview.onMessage(e => this._onDidReceiveMessage(e.message)));
-		webview.setHtml(this._renderHtml());
+		this._layoutWebview();
+		this._updateVisibility();
 	}
 
 	protected override layoutBody(height: number, width: number): void {
 		super.layoutBody(height, width);
-		if (this._webviewContainer) {
-			this._webviewContainer.style.width = `${width}px`;
-			this._webviewContainer.style.height = `${height}px`;
-		}
+		this._layoutWebview();
 	}
 
 	override focus(): void {
 		super.focus();
-		this._webview?.focus();
+		this._webview.value?.focus();
+	}
+
+	/** Claim the overlay while the body is visible, release it when hidden, so it survives container switches. */
+	private _updateVisibility(): void {
+		const webview = this._webview.value;
+		if (!webview) {
+			return;
+		}
+		if (this.isBodyVisible()) {
+			webview.claim(this, dom.getWindow(this.element), undefined);
+			this._layoutWebview();
+		} else {
+			webview.release(this);
+		}
+	}
+
+	/** Position the overlay over the pane body, clipped to the scrollable root (mirrors WebviewViewPane). */
+	private _layoutWebview(): void {
+		const webview = this._webview.value;
+		if (!this._container || !webview) {
+			return;
+		}
+		if (!this._rootContainer || !this._rootContainer.isConnected) {
+			this._rootContainer = dom.findParentWithClass(this._container, 'monaco-scrollable-element') ?? undefined;
+		}
+		webview.setAnchorElement(this._container, this._rootContainer);
 	}
 
 	private _onDidReceiveMessage(message: unknown): void {
-		if (!this._webview || !message || typeof message !== 'object') {
+		if (this._disposed || !message || typeof message !== 'object') {
 			return;
 		}
 		const msg = message as { type?: string; text?: string };
@@ -283,11 +311,12 @@ export class ClawdiusChatViewPane extends ViewPane {
 
 	/** Post to the webview, guarded against a disposed pane / torn-down webview. */
 	private _post(message: unknown): void {
-		if (this._disposed || !this._webview) {
+		const webview = this._webview.value;
+		if (this._disposed || !webview) {
 			return;
 		}
 		try {
-			void this._webview.postMessage(message);
+			void webview.postMessage(message);
 		} catch (err) {
 			this._logService.debug('[clawdius-chat] postMessage failed (webview likely disposed)', err);
 		}

@@ -13,4 +13,7 @@ export const CLAWDIUS_VIEW_CONTAINER_ID = 'workbench.view.clawdius';
 
 /** The native Workflows view (Ultracode multi-agent runs) inside the Clawdius container. */
 export const CLAWDIUS_WORKFLOWS_VIEW_ID = 'workbench.view.clawdius.workflows';
+
+/** The native Claude Code chat view inside the Clawdius container (Phase 3). */
+export const CLAWDIUS_CHAT_VIEW_ID = 'workbench.view.clawdius.chat';
 // CLAWDIUS-END

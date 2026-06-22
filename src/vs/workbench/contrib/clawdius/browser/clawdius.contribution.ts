@@ -19,7 +19,8 @@ import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js'
 import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContainer.js';
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainerLocation } from '../../../common/views.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
-import { CLAWDIUS_VIEW_CONTAINER_ID, CLAWDIUS_WORKFLOWS_VIEW_ID } from '../common/clawdius.js';
+import { CLAWDIUS_CHAT_VIEW_ID, CLAWDIUS_VIEW_CONTAINER_ID, CLAWDIUS_WORKFLOWS_VIEW_ID } from '../common/clawdius.js';
+import { ClawdiusChatViewPane } from './clawdiusChatViewPane.js';
 import { ClawdiusWorkflowsViewPane } from './workflowsViewPane.js';
 import { WorkflowTranscriptContribution } from './workflowTranscript.js';
 
@@ -36,19 +37,30 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 		order: 6,
 	}, ViewContainerLocation.Sidebar);
 
+	// Chat is the container's primary view: pinned (a user can't hide the main surface). The Phase 3a
+	// placeholder body is harmless until Phase 3b embeds the interactive ChatWidget.
+	const chatView: IViewDescriptor = {
+		id: CLAWDIUS_CHAT_VIEW_ID,
+		containerIcon: clawdiusViewIcon,
+		name: localize2('clawdius.chat', "Chat"),
+		ctorDescriptor: new SyncDescriptor(ClawdiusChatViewPane),
+		canToggleVisibility: false,
+		canMoveView: false,
+		order: 0,
+	};
+
+	// Now that the container has a second view, Workflows is a normal toggleable view (kept in-container).
 	const workflowsView: IViewDescriptor = {
 		id: CLAWDIUS_WORKFLOWS_VIEW_ID,
 		containerIcon: clawdiusViewIcon,
 		name: localize2('clawdius.workflows', "Workflows"),
 		ctorDescriptor: new SyncDescriptor(ClawdiusWorkflowsViewPane),
-		// The only view in the owned Clawdius container: keep it pinned (not hideable / movable) so a user
-		// cannot leave the activity-bar container empty. Revisit once the container has multiple views.
-		canToggleVisibility: false,
+		canToggleVisibility: true,
 		canMoveView: false,
 		order: 1,
 	};
 
-	Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([workflowsView], viewContainer);
+	Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([chatView, workflowsView], viewContainer);
 
 	// The read-only Markdown transcript drill-in for a workflow sub-agent (clawdius-workflow-transcript: scheme).
 	registerWorkbenchContribution2(WorkflowTranscriptContribution.ID, WorkflowTranscriptContribution, WorkbenchPhase.BlockRestore);

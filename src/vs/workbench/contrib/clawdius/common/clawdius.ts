@@ -14,3 +14,16 @@ export const CLAWDIUS_VIEW_CONTAINER_ID = 'workbench.view.clawdius';
 /** The native Workflows view (Ultracode multi-agent runs) inside the Clawdius container. */
 export const CLAWDIUS_WORKFLOWS_VIEW_ID = 'workbench.view.clawdius.workflows';
 // CLAWDIUS-END
+
+// CLAWDIUS-BEGIN native webview Claude chat (Phase 3)
+// The native Claude chat lives in the RIGHT (auxiliary-bar) sidebar - its own container, NOT the left
+// Clawdius container (which holds workflows/agents/config). It is a faithful native replica of the official
+// Claude Code plugin's webview chat, driven by the agent-host Claude session. New ids, distinct from the
+// workbench chat panel ('workbench.panel.chat') so the two never collide while the redesign is mid-flight.
+
+/** The right-hand (auxiliary-bar) Clawdius chat view container in the main workbench. */
+export const CLAWDIUS_CHAT_VIEW_CONTAINER_ID = 'workbench.view.clawdius.chat';
+
+/** The native Claude chat view (webview SPA) inside the right-hand Clawdius chat container. */
+export const CLAWDIUS_CHAT_VIEW_ID = 'workbench.view.clawdius.chat.main';
+// CLAWDIUS-END

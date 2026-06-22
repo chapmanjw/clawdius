@@ -18,8 +18,10 @@ import { Registry } from '../../../../platform/registry/common/platform.js';
 import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js';
 import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContainer.js';
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainerLocation } from '../../../common/views.js';
+import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { CLAWDIUS_VIEW_CONTAINER_ID, CLAWDIUS_WORKFLOWS_VIEW_ID } from '../common/clawdius.js';
 import { ClawdiusWorkflowsViewPane } from './workflowsViewPane.js';
+import { WorkflowTranscriptContribution } from './workflowTranscript.js';
 
 if (!product.defaultChatAgent?.entitlementUrl) {
 
@@ -47,5 +49,8 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	};
 
 	Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([workflowsView], viewContainer);
+
+	// The read-only Markdown transcript drill-in for a workflow sub-agent (clawdius-workflow-transcript: scheme).
+	registerWorkbenchContribution2(WorkflowTranscriptContribution.ID, WorkflowTranscriptContribution, WorkbenchPhase.BlockRestore);
 }
 // CLAWDIUS-END

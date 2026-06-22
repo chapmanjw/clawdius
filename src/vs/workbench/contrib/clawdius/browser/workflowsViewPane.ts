@@ -29,7 +29,9 @@ import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../common/views.js';
+import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IWorkflowAgent, IWorkflowRun, WorkflowStore } from '../common/workflowStore.js';
+import { transcriptDocUri } from './workflowTranscript.js';
 
 const $ = dom.$;
 
@@ -155,6 +157,7 @@ export class ClawdiusWorkflowsViewPane extends ViewPane {
 		@IThemeService themeService: IThemeService,
 		@IHoverService hoverService: IHoverService,
 		@ILogService private readonly _logService: ILogService,
+		@IEditorService private readonly _editorService: IEditorService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 		this._workflowStore = this._register(this.instantiationService.createInstance(WorkflowStore));
@@ -178,8 +181,25 @@ export class ClawdiusWorkflowsViewPane extends ViewPane {
 			}
 		)) as WorkbenchObjectTree<WorkflowNode, void>;
 
+		this._register(this._tree.onDidOpen(e => {
+			if (e.element?.kind === 'agent') {
+				this._openTranscript(e.element.agent);
+			}
+		}));
+
 		this._register(this._workflowStore.onDidChange(() => this._refreshTree()));
 		this._workflowStore.refresh().catch(err => this._logService.warn('[Clawdius] workflow refresh failed', err));
+	}
+
+	/** Drill into a sub-agent: open its on-disk transcript as a read-only, Markdown-rendered document. */
+	private _openTranscript(agent: IWorkflowAgent): void {
+		if (!agent.transcriptUri) {
+			return;
+		}
+		const shortId = agent.agentId ? agent.agentId.slice(0, 6) : '';
+		const label = shortId ? `${agent.label} (${shortId})` : agent.label;
+		this._editorService.openEditor({ resource: transcriptDocUri(agent.transcriptUri, label), options: { pinned: false } })
+			.catch(err => this._logService.warn('[Clawdius] open transcript failed', err));
 	}
 
 	private _refreshTree(): void {

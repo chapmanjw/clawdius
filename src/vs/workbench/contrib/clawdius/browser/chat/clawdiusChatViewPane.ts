@@ -3,26 +3,36 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN native webview Claude chat (Phase 3 INC-0: shell)
+// CLAWDIUS-BEGIN native webview Claude chat (Phase 3 INC-1: agent-host text round-trip)
 // The native Claude chat ViewPane. It hosts a first-party webview (NOT the extension-backed
 // WebviewViewPane) whose SPA is a faithful, from-scratch replica of the official Claude Code plugin chat -
 // warm palette, message list, composer. The ViewPane is the BRIDGE: the webview iframe cannot import
-// workbench services, so this pane owns the agent-host session and relays to/from the SPA over postMessage
-// (INC-1 wires IAgentHostService here). INC-0 ships the shell only: the composer round-trips a message
-// through the bridge and the pane echoes a placeholder turn, proving the native webview path end-to-end
-// with zero network egress (CSP default-src 'none').
+// workbench services, so this pane owns the agent-host Claude session and relays to/from the SPA over
+// postMessage. INC-1 drives a real turn: on submit it lazily creates a `claude` session via
+// IAgentHostService, dispatches a SessionTurnStarted action, subscribes to the session state, and streams
+// the assistant's markdown text into the SPA (reading the authoritative SessionState on each change rather
+// than hand-accumulating deltas). Tool cards / thinking / diffs / permissions are INC-2+. The SPA loads
+// only local assets with zero network egress (CSP default-src 'none').
 
 import * as dom from '../../../../../base/browser/dom.js';
+import { IReference } from '../../../../../base/common/lifecycle.js';
+import { URI } from '../../../../../base/common/uri.js';
 import { generateUuid } from '../../../../../base/common/uuid.js';
 import { localize } from '../../../../../nls.js';
+import { IAgentHostService } from '../../../../../platform/agentHost/common/agentService.js';
+import { IAgentSubscription } from '../../../../../platform/agentHost/common/state/agentSubscription.js';
+import { ActionType, SessionTurnCancelledAction, SessionTurnStartedAction } from '../../../../../platform/agentHost/common/state/sessionActions.js';
+import { MessageKind, ResponsePartKind, StateComponents, TurnState, type MarkdownResponsePart, type SessionState } from '../../../../../platform/agentHost/common/state/sessionState.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from '../../../../../platform/contextview/browser/contextView.js';
 import { IHoverService } from '../../../../../platform/hover/browser/hover.js';
 import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
 import { IKeybindingService } from '../../../../../platform/keybinding/common/keybinding.js';
+import { ILogService } from '../../../../../platform/log/common/log.js';
 import { IOpenerService } from '../../../../../platform/opener/common/opener.js';
 import { IThemeService } from '../../../../../platform/theme/common/themeService.js';
+import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { IViewPaneOptions, ViewPane } from '../../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../../common/views.js';
 import { IWebviewElement, IWebviewService, WebviewContentPurpose } from '../../../webview/browser/webview.js';
@@ -42,6 +52,12 @@ export class ClawdiusChatViewPane extends ViewPane {
 	private _webview: IWebviewElement | undefined;
 	private _webviewContainer: HTMLElement | undefined;
 
+	// Agent-host session state (created lazily on the first user turn).
+	private _sessionUri: URI | undefined;
+	private _subscriptionRef: IReference<IAgentSubscription<SessionState>> | undefined;
+	private _activeTurnId: string | undefined;
+	private _sessionInit: Promise<URI> | undefined;
+
 	constructor(
 		options: IViewPaneOptions,
 		@IKeybindingService keybindingService: IKeybindingService,
@@ -54,6 +70,9 @@ export class ClawdiusChatViewPane extends ViewPane {
 		@IThemeService themeService: IThemeService,
 		@IHoverService hoverService: IHoverService,
 		@IWebviewService private readonly _webviewService: IWebviewService,
+		@IAgentHostService private readonly _agentHostService: IAgentHostService,
+		@IWorkspaceContextService private readonly _workspaceContextService: IWorkspaceContextService,
+		@ILogService private readonly _logService: ILogService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 	}
@@ -116,21 +135,126 @@ export class ClawdiusChatViewPane extends ViewPane {
 		const msg = message as { type?: string; text?: string };
 		switch (msg.type) {
 			case 'submit': {
-				// INC-0: no backend wired yet. Echo the user turn plus a placeholder assistant turn so the
-				// native webview bridge is verifiable end-to-end. INC-1 replaces this branch with a real
-				// IAgentHostService Claude session (create -> subscribe -> dispatch -> stream).
 				const text = typeof msg.text === 'string' ? msg.text.trim() : '';
 				if (!text) {
 					return;
 				}
-				this._webview?.postMessage({ type: 'appendUser', text });
-				this._webview?.postMessage({
-					type: 'appendAssistant',
-					text: localize('clawdius.chat.inc0Placeholder', "The native chat shell is live - your message round-tripped through the webview bridge. Claude's engine connects in the next build step."),
-				});
+				this._webview.postMessage({ type: 'appendUser', text });
+				void this._startTurn(text);
 				break;
 			}
 		}
+	}
+
+	/**
+	 * Lazily create the Claude agent-host session + state subscription. Created on the first user turn so
+	 * opening the pane never spawns a Claude session until the user actually chats. Concurrent callers share
+	 * the in-flight promise; a failed init is cleared so a later turn can retry.
+	 */
+	private _ensureSession(): Promise<URI> {
+		if (!this._sessionInit) {
+			this._sessionInit = (async () => {
+				const workingDirectory = this._workspaceContextService.getWorkspace().folders[0]?.uri;
+				const uri = await this._agentHostService.createSession({ provider: 'claude', workingDirectory });
+				this._sessionUri = uri;
+				const ref = this._agentHostService.getSubscription(StateComponents.Session, uri, 'ClawdiusChatViewPane');
+				this._subscriptionRef = ref;
+				this._register(ref.object.onDidChange(() => this._onSessionStateChange()));
+				return uri;
+			})();
+			this._sessionInit.catch(() => { this._sessionInit = undefined; });
+		}
+		return this._sessionInit;
+	}
+
+	/** Send the user's prompt as a new turn and stream the assistant response back to the SPA. */
+	private async _startTurn(text: string): Promise<void> {
+		let uri: URI;
+		try {
+			uri = await this._ensureSession();
+		} catch (err) {
+			this._logService.error('[clawdius-chat] failed to create Claude session', err);
+			this._webview?.postMessage({ type: 'chatError', text: localize('clawdius.chat.sessionError', "Could not start a Claude session. Check that the Claude Code engine is configured.") });
+			return;
+		}
+
+		const turnId = generateUuid();
+		this._activeTurnId = turnId;
+		this._webview?.postMessage({ type: 'assistantPending', id: turnId });
+
+		const action: SessionTurnStartedAction = {
+			type: ActionType.SessionTurnStarted,
+			turnId,
+			message: { text, origin: { kind: MessageKind.User } },
+		};
+		try {
+			this._agentHostService.dispatch(uri.toString(), action);
+		} catch (err) {
+			this._logService.error('[clawdius-chat] failed to dispatch turn', err);
+			this._activeTurnId = undefined;
+			this._webview?.postMessage({ type: 'chatError', text: localize('clawdius.chat.dispatchError', "Could not send your message to Claude.") });
+		}
+	}
+
+	/**
+	 * Re-derive the active turn's assistant text from the authoritative SessionState on each change and push
+	 * it to the SPA. Reading state (rather than accumulating raw deltas) keeps the bridge simple and correct:
+	 * the markdown response parts always hold the full text-so-far.
+	 */
+	private _onSessionStateChange(): void {
+		const turnId = this._activeTurnId;
+		const subscription = this._subscriptionRef?.object;
+		if (!turnId || !subscription || !this._webview) {
+			return;
+		}
+		const state = subscription.value;
+		if (!state || state instanceof Error) {
+			return;
+		}
+
+		const active = state.activeTurn?.id === turnId ? state.activeTurn : undefined;
+		const completed = active ? undefined : state.turns.find(turn => turn.id === turnId);
+		const turn = active ?? completed;
+		if (!turn) {
+			return;
+		}
+
+		// INC-1: text only. Concatenate markdown response parts in stream order (tool/reasoning parts land in INC-2).
+		const text = turn.responseParts
+			.filter((part): part is MarkdownResponsePart => part.kind === ResponsePartKind.Markdown)
+			.map(part => part.content)
+			.join('');
+		if (text) {
+			this._webview.postMessage({ type: 'setAssistant', id: turnId, text });
+		}
+
+		if (completed) {
+			this._activeTurnId = undefined;
+			if (completed.state === TurnState.Error) {
+				const errorText = completed.error?.message || localize('clawdius.chat.turnError', "Claude could not complete the response.");
+				this._webview.postMessage({ type: 'chatError', text: errorText });
+			}
+			this._webview.postMessage({ type: 'assistantDone', id: turnId });
+		}
+	}
+
+	override dispose(): void {
+		if (this._sessionUri) {
+			if (this._activeTurnId) {
+				const cancel: SessionTurnCancelledAction = { type: ActionType.SessionTurnCancelled, turnId: this._activeTurnId };
+				try {
+					this._agentHostService.dispatch(this._sessionUri.toString(), cancel);
+				} catch {
+					// best-effort cancel on teardown
+				}
+				this._activeTurnId = undefined;
+			}
+			this._agentHostService.disposeSession(this._sessionUri).catch(err => this._logService.error('[clawdius-chat] disposeSession failed', err));
+			this._sessionUri = undefined;
+		}
+		this._subscriptionRef?.dispose();
+		this._subscriptionRef = undefined;
+		super.dispose();
 	}
 
 	private _renderHtml(): string {
@@ -142,12 +266,13 @@ export class ClawdiusChatViewPane extends ViewPane {
 		const welcomeSubtext = localize('clawdius.chat.welcomeSubtext', "Ask questions, request changes, or get help understanding your code.");
 		const placeholder = localize('clawdius.chat.placeholder', "Ask Claude...");
 		const sendLabel = localize('clawdius.chat.send', "Send");
+		const workingLabel = localize('clawdius.chat.working', "Working...");
 
 		// Localized strings used by the client script are passed as a JSON-encoded constant so translations
 		// are escaped correctly and never break out of the <script> element. JSON.stringify escapes quotes and
 		// </script>, but not the U+2028 / U+2029 separators, which are valid JSON yet break a JS expression -
 		// so escape those too.
-		const strings = JSON.stringify({ claude: claudeLabel })
+		const strings = JSON.stringify({ claude: claudeLabel, working: workingLabel })
 			.replace(new RegExp(String.fromCharCode(0x2028), 'g'), '\\u2028')
 			.replace(new RegExp(String.fromCharCode(0x2029), 'g'), '\\u2029');
 
@@ -245,6 +370,14 @@ export class ClawdiusChatViewPane extends ViewPane {
 			padding: 8px 12px;
 		}
 		.msg.assistant .who { color: var(--clawdius-orange); }
+		.msg .bubble.pending { color: var(--vscode-descriptionForeground); font-style: italic; }
+		.msg.error .bubble {
+			color: var(--vscode-inputValidation-errorForeground, var(--vscode-errorForeground));
+			background: var(--vscode-inputValidation-errorBackground, transparent);
+			border: 1px solid var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground));
+			border-radius: 8px;
+			padding: 8px 12px;
+		}
 		.composer {
 			flex: 0 0 auto;
 			display: flex;
@@ -313,23 +446,69 @@ export class ClawdiusChatViewPane extends ViewPane {
 			const welcome = document.getElementById('welcome');
 			const input = document.getElementById('input');
 			const send = document.getElementById('send');
+			const assistantBubbles = Object.create(null);
 
-			function addMessage(role, text) {
-				if (welcome) { welcome.remove(); }
+			function clearWelcome() {
+				if (welcome && welcome.parentNode) { welcome.remove(); }
+			}
+			function scrollDown() {
+				messages.scrollTop = messages.scrollHeight;
+			}
+
+			function addUser(text) {
+				clearWelcome();
 				const msg = document.createElement('div');
-				msg.className = 'msg ' + role;
-				if (role === 'assistant') {
-					const who = document.createElement('div');
-					who.className = 'who';
-					who.textContent = STRINGS.claude;
-					msg.appendChild(who);
-				}
+				msg.className = 'msg user';
 				const bubble = document.createElement('div');
 				bubble.className = 'bubble';
 				bubble.textContent = text;
 				msg.appendChild(bubble);
 				messages.appendChild(msg);
-				messages.scrollTop = messages.scrollHeight;
+				scrollDown();
+			}
+
+			function ensureAssistant(id) {
+				if (assistantBubbles[id]) { return assistantBubbles[id]; }
+				clearWelcome();
+				const msg = document.createElement('div');
+				msg.className = 'msg assistant';
+				msg.setAttribute('data-turn', id);
+				const who = document.createElement('div');
+				who.className = 'who';
+				who.textContent = STRINGS.claude;
+				msg.appendChild(who);
+				const bubble = document.createElement('div');
+				bubble.className = 'bubble pending';
+				bubble.textContent = STRINGS.working;
+				msg.appendChild(bubble);
+				messages.appendChild(msg);
+				assistantBubbles[id] = bubble;
+				scrollDown();
+				return bubble;
+			}
+
+			function setAssistant(id, text) {
+				const bubble = ensureAssistant(id);
+				bubble.classList.remove('pending');
+				bubble.textContent = text;
+				scrollDown();
+			}
+
+			function doneAssistant(id) {
+				const bubble = assistantBubbles[id];
+				if (bubble) { bubble.classList.remove('pending'); }
+			}
+
+			function showError(text) {
+				clearWelcome();
+				const msg = document.createElement('div');
+				msg.className = 'msg error';
+				const bubble = document.createElement('div');
+				bubble.className = 'bubble';
+				bubble.textContent = text;
+				msg.appendChild(bubble);
+				messages.appendChild(msg);
+				scrollDown();
 			}
 
 			function updateSendState() {
@@ -360,9 +539,24 @@ export class ClawdiusChatViewPane extends ViewPane {
 
 			window.addEventListener('message', function (event) {
 				const m = event.data;
-				if (!m || typeof m.type !== 'string' || typeof m.text !== 'string') { return; }
-				if (m.type === 'appendUser') { addMessage('user', m.text); }
-				else if (m.type === 'appendAssistant') { addMessage('assistant', m.text); }
+				if (!m || typeof m.type !== 'string') { return; }
+				switch (m.type) {
+					case 'appendUser':
+						if (typeof m.text === 'string') { addUser(m.text); }
+						break;
+					case 'assistantPending':
+						if (typeof m.id === 'string') { ensureAssistant(m.id); }
+						break;
+					case 'setAssistant':
+						if (typeof m.id === 'string' && typeof m.text === 'string') { setAssistant(m.id, m.text); }
+						break;
+					case 'assistantDone':
+						if (typeof m.id === 'string') { doneAssistant(m.id); }
+						break;
+					case 'chatError':
+						if (typeof m.text === 'string') { showError(m.text); }
+						break;
+				}
 			});
 
 			vscode.postMessage({ type: 'ready' });

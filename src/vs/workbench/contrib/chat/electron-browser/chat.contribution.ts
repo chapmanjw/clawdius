@@ -4,6 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Disposable } from '../../../../base/common/lifecycle.js';
+// CLAWDIUS-BEGIN gate the Ultracode/Agents window launchers in Clawdius mode
+import product from '../../../../platform/product/common/product.js';
+// CLAWDIUS-END
 import { CancellationTokenSource } from '../../../../base/common/cancellation.js';
 import { timeout } from '../../../../base/common/async.js';
 import { autorun } from '../../../../base/common/observable.js';
@@ -232,10 +235,14 @@ class ChatLifecycleHandler extends Disposable {
 	}
 }
 
-registerAction2(OpenWorkspaceInAgentsWindowAction);
-registerAction2(ToggleOpenInAgentsWindowTitleBarAction);
-registerAction2(OpenAgentsWindowAction);
-registerAction2(OpenChatSessionInAgentsWindowAction);
+// CLAWDIUS-BEGIN no Ultracode/Agents window launchers in Clawdius mode (the window runtime is left intact)
+if (product.defaultChatAgent?.entitlementUrl) {
+	registerAction2(OpenWorkspaceInAgentsWindowAction);
+	registerAction2(ToggleOpenInAgentsWindowTitleBarAction);
+	registerAction2(OpenAgentsWindowAction);
+	registerAction2(OpenChatSessionInAgentsWindowAction);
+}
+// CLAWDIUS-END
 registerAction2(StartVoiceChatAction);
 
 registerAction2(VoiceChatInChatViewAction);
@@ -261,8 +268,12 @@ registerWorkbenchContribution2(ChatSuspendThrottlingHandler.ID, ChatSuspendThrot
 registerWorkbenchContribution2(ChatLifecycleHandler.ID, ChatLifecycleHandler, WorkbenchPhase.AfterRestored);
 registerWorkbenchContribution2(AgentHostContribution.ID, AgentHostContribution, WorkbenchPhase.AfterRestored);
 registerWorkbenchContribution2(AgentHostTerminalContribution.ID, AgentHostTerminalContribution, WorkbenchPhase.AfterRestored);
-registerWorkbenchContribution2(OpenWorkspaceInAgentsContribution.ID, OpenWorkspaceInAgentsContribution, WorkbenchPhase.BlockRestore);
-registerWorkbenchContribution2(AgentsHandoffInputTipContribution.ID, AgentsHandoffInputTipContribution, WorkbenchPhase.Eventually);
+// CLAWDIUS-BEGIN no Ultracode banner / handoff tip in Clawdius mode
+if (product.defaultChatAgent?.entitlementUrl) {
+	registerWorkbenchContribution2(OpenWorkspaceInAgentsContribution.ID, OpenWorkspaceInAgentsContribution, WorkbenchPhase.BlockRestore);
+	registerWorkbenchContribution2(AgentsHandoffInputTipContribution.ID, AgentsHandoffInputTipContribution, WorkbenchPhase.Eventually);
+}
+// CLAWDIUS-END
 
 // How long to wait for the agent host to surface an AgentInfo before
 // throwing an error. Long enough for normal startup, short enough to avoid

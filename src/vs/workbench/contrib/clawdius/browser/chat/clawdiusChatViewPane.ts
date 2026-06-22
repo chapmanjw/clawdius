@@ -163,7 +163,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 		if (this._disposed || !message || typeof message !== 'object') {
 			return;
 		}
-		const msg = message as { type?: string; text?: string };
+		const msg = message as { type?: string; text?: string; href?: string };
 		switch (msg.type) {
 			case 'submit': {
 				const text = typeof msg.text === 'string' ? msg.text.trim() : '';
@@ -172,6 +172,15 @@ export class ClawdiusChatViewPane extends ViewPane {
 				}
 				this._post({ type: 'appendUser', text });
 				void this._startTurn(text);
+				break;
+			}
+			case 'openLink': {
+				// Markdown links from the assistant open externally through the trusted opener (the webview
+				// itself cannot navigate under the strict CSP).
+				const href = typeof msg.href === 'string' ? msg.href : '';
+				if (href) {
+					this.openerService.open(href, { openExternal: true }).catch(err => this._logService.warn('[clawdius-chat] open link failed', err));
+				}
 				break;
 			}
 		}
@@ -457,6 +466,24 @@ export class ClawdiusChatViewPane extends ViewPane {
 		}
 		.msg.assistant .who { color: var(--clawdius-orange); }
 		.msg .bubble.pending { color: var(--vscode-descriptionForeground); font-style: italic; }
+		/* Rendered-markdown blocks (assistant responses). */
+		.msg .bubble.markdown { white-space: normal; }
+		.msg .bubble.markdown > :first-child { margin-top: 0; }
+		.msg .bubble.markdown > :last-child { margin-bottom: 0; }
+		.msg .bubble.markdown p { margin: 0 0 8px; }
+		.msg .bubble.markdown h1, .msg .bubble.markdown h2, .msg .bubble.markdown h3,
+		.msg .bubble.markdown h4, .msg .bubble.markdown h5, .msg .bubble.markdown h6 { margin: 12px 0 6px; font-weight: 600; line-height: 1.3; }
+		.msg .bubble.markdown h1 { font-size: 1.4em; }
+		.msg .bubble.markdown h2 { font-size: 1.25em; }
+		.msg .bubble.markdown h3 { font-size: 1.1em; }
+		.msg .bubble.markdown ul, .msg .bubble.markdown ol { margin: 0 0 8px; padding-left: 22px; }
+		.msg .bubble.markdown li { margin: 2px 0; }
+		.msg .bubble.markdown blockquote { margin: 0 0 8px; padding: 2px 0 2px 10px; border-left: 3px solid var(--vscode-textBlockQuote-border, var(--clawdius-orange)); color: var(--vscode-descriptionForeground); }
+		.msg .bubble.markdown code.inline-code { font-family: var(--vscode-editor-font-family, monospace); font-size: 0.9em; background: var(--vscode-textCodeBlock-background, rgba(127,127,127,0.15)); padding: 1px 4px; border-radius: 4px; }
+		.msg .bubble.markdown pre.code-block { margin: 0 0 8px; padding: 10px 12px; background: var(--vscode-textCodeBlock-background, rgba(127,127,127,0.1)); border: 1px solid var(--vscode-widget-border, transparent); border-radius: 6px; overflow-x: auto; }
+		.msg .bubble.markdown pre.code-block code { font-family: var(--vscode-editor-font-family, monospace); font-size: 0.9em; white-space: pre; }
+		.msg .bubble.markdown a.md-link { color: var(--vscode-textLink-foreground); cursor: pointer; text-decoration: none; }
+		.msg .bubble.markdown a.md-link:hover { text-decoration: underline; }
 		.msg.error .bubble {
 			color: var(--vscode-inputValidation-errorForeground, var(--vscode-errorForeground));
 			background: var(--vscode-inputValidation-errorBackground, transparent);
@@ -581,11 +608,170 @@ export class ClawdiusChatViewPane extends ViewPane {
 				return bubble;
 			}
 
+			// Inline markdown: code, bold, italic, links. Manual scan (no regex) so the source stays free of
+			// backslashes/backticks that the outer TS template literal would mangle. Builds DOM nodes via
+			// textContent only - never innerHTML - so it is XSS-safe under the strict CSP.
+			function renderInline(parent, text) {
+				const BT = String.fromCharCode(96);
+				let i = 0;
+				let buf = '';
+				function flush() {
+					if (buf) { parent.appendChild(document.createTextNode(buf)); buf = ''; }
+				}
+				while (i < text.length) {
+					const ch = text[i];
+					if (ch === BT) {
+						const end = text.indexOf(BT, i + 1);
+						if (end > i) {
+							flush();
+							const c = document.createElement('code');
+							c.className = 'inline-code';
+							c.textContent = text.slice(i + 1, end);
+							parent.appendChild(c);
+							i = end + 1;
+							continue;
+						}
+					}
+					if ((ch === '*' && text[i + 1] === '*') || (ch === '_' && text[i + 1] === '_')) {
+						const marker = ch + ch;
+						const end = text.indexOf(marker, i + 2);
+						if (end > i + 1) {
+							flush();
+							const strong = document.createElement('strong');
+							renderInline(strong, text.slice(i + 2, end));
+							parent.appendChild(strong);
+							i = end + 2;
+							continue;
+						}
+					}
+					if (ch === '*' || ch === '_') {
+						const end = text.indexOf(ch, i + 1);
+						if (end > i) {
+							flush();
+							const em = document.createElement('em');
+							renderInline(em, text.slice(i + 1, end));
+							parent.appendChild(em);
+							i = end + 1;
+							continue;
+						}
+					}
+					if (ch === '[') {
+						const closeBracket = text.indexOf(']', i + 1);
+						if (closeBracket > i && text[closeBracket + 1] === '(') {
+							const closeParen = text.indexOf(')', closeBracket + 2);
+							if (closeParen > closeBracket) {
+								flush();
+								const a = document.createElement('a');
+								a.className = 'md-link';
+								a.textContent = text.slice(i + 1, closeBracket);
+								a.setAttribute('data-href', text.slice(closeBracket + 2, closeParen));
+								parent.appendChild(a);
+								i = closeParen + 1;
+								continue;
+							}
+						}
+					}
+					buf += ch;
+					i++;
+				}
+				flush();
+			}
+
+			// Block-level markdown -> DOM: fenced code, headings, lists, blockquotes, paragraphs.
+			function renderMarkdown(md) {
+				const NL = String.fromCharCode(10);
+				const BT = String.fromCharCode(96);
+				const FENCE = BT + BT + BT;
+				const frag = document.createDocumentFragment();
+				const lines = md.split(NL);
+				function orderedItem(s) {
+					let j = 0;
+					while (j < s.length && s[j] >= '0' && s[j] <= '9') { j++; }
+					if (j > 0 && s[j] === '.' && s[j + 1] === ' ') { return s.slice(j + 2); }
+					return null;
+				}
+				function unorderedItem(s) {
+					if (s.startsWith('- ') || s.startsWith('* ') || s.startsWith('+ ')) { return s.slice(2); }
+					return null;
+				}
+				let i = 0;
+				while (i < lines.length) {
+					const t = lines[i].trimStart();
+					if (t.startsWith(FENCE)) {
+						i++;
+						const code = [];
+						while (i < lines.length && !lines[i].trimStart().startsWith(FENCE)) { code.push(lines[i]); i++; }
+						i++;
+						const pre = document.createElement('pre');
+						pre.className = 'code-block';
+						const codeEl = document.createElement('code');
+						codeEl.textContent = code.join(NL);
+						pre.appendChild(codeEl);
+						frag.appendChild(pre);
+						continue;
+					}
+					if (t.startsWith('#')) {
+						let level = 0;
+						while (level < t.length && t[level] === '#') { level++; }
+						if (level >= 1 && level <= 6 && t[level] === ' ') {
+							const h = document.createElement('h' + level);
+							renderInline(h, t.slice(level + 1));
+							frag.appendChild(h);
+							i++;
+							continue;
+						}
+					}
+					if (t.startsWith('>')) {
+						const quote = [];
+						while (i < lines.length && lines[i].trimStart().startsWith('>')) {
+							let q = lines[i].trimStart().slice(1);
+							if (q.startsWith(' ')) { q = q.slice(1); }
+							quote.push(q);
+							i++;
+						}
+						const bq = document.createElement('blockquote');
+						bq.appendChild(renderMarkdown(quote.join(NL)));
+						frag.appendChild(bq);
+						continue;
+					}
+					if (unorderedItem(t) !== null || orderedItem(t) !== null) {
+						const ordered = orderedItem(t) !== null;
+						const listEl = document.createElement(ordered ? 'ol' : 'ul');
+						while (i < lines.length) {
+							const lt = lines[i].trimStart();
+							const content = ordered ? orderedItem(lt) : unorderedItem(lt);
+							if (content === null) { break; }
+							const li = document.createElement('li');
+							renderInline(li, content);
+							listEl.appendChild(li);
+							i++;
+						}
+						frag.appendChild(listEl);
+						continue;
+					}
+					if (t === '') { i++; continue; }
+					const para = [];
+					while (i < lines.length) {
+						const pt = lines[i].trimStart();
+						if (pt === '' || pt.startsWith(FENCE) || pt.startsWith('>') || pt.startsWith('#')) { break; }
+						if (unorderedItem(pt) !== null || orderedItem(pt) !== null) { break; }
+						para.push(lines[i]);
+						i++;
+					}
+					const p = document.createElement('p');
+					renderInline(p, para.join(NL));
+					frag.appendChild(p);
+				}
+				return frag;
+			}
+
 			function setAssistant(id, text) {
 				const bubble = ensureAssistant(id);
 				const stick = isNearBottom();
 				bubble.classList.remove('pending');
-				bubble.textContent = text;
+				bubble.classList.add('markdown');
+				bubble.textContent = '';
+				bubble.appendChild(renderMarkdown(text));
 				if (stick) { toBottom(); }
 			}
 
@@ -638,6 +824,20 @@ export class ClawdiusChatViewPane extends ViewPane {
 				updateSendState();
 			});
 			send.addEventListener('click', submit);
+
+			// Markdown links cannot navigate the webview (strict CSP); route clicks to the host to open them.
+			messages.addEventListener('click', function (e) {
+				let el = e.target;
+				while (el && el !== messages) {
+					if (el.classList && el.classList.contains('md-link')) {
+						e.preventDefault();
+						const href = el.getAttribute('data-href');
+						if (href) { vscode.postMessage({ type: 'openLink', href: href }); }
+						return;
+					}
+					el = el.parentNode;
+				}
+			});
 
 			window.addEventListener('message', function (event) {
 				const m = event.data;

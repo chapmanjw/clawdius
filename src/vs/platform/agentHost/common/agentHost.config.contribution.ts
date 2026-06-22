@@ -49,22 +49,27 @@ configurationRegistry.registerConfiguration({
 		},
 		'chat.editor.defaultProvider': {
 			type: 'string',
-			// CLAWDIUS-BEGIN no copilot cli provider options in the settings picker
-			// The GitHub Copilot CLI providers (copilotEh/copilotAh) are suppressed in Clawdius, so don't
-			// offer them as choices in the Settings editor - only the built-in local harness applies.
-			enum: product.defaultChatAgent?.entitlementUrl ? ['local', 'copilotEh', 'copilotAh'] : ['local'],
+			// CLAWDIUS-BEGIN native agent-host Claude default provider
+			// The GitHub Copilot CLI providers (copilotEh/copilotAh) are suppressed in Clawdius; instead Clawdius
+			// offers (and defaults to) the native agent-host Claude backend (`claudeAh`) so the chat panel opens
+			// an agent-host Claude session - the same engine the workflows/CLI use - rather than the constrained
+			// clawdius-chat shim. Upstream (entitlementUrl present) keeps the Copilot options unchanged.
+			enum: product.defaultChatAgent?.entitlementUrl ? ['local', 'copilotEh', 'copilotAh'] : ['local', 'claudeAh'],
 			enumDescriptions: product.defaultChatAgent?.entitlementUrl ? [
 				nls.localize('chat.editor.defaultProvider.local', "Use the built-in VS Code local chat harness"),
 				nls.localize('chat.editor.defaultProvider.copilotEh', "Use the Extension Host Copilot CLI"),
 				nls.localize('chat.editor.defaultProvider.copilotAh', "Use the Agent Host Copilot CLI"),
 			] : [
 				nls.localize('chat.editor.defaultProvider.local', "Use the built-in VS Code local chat harness"),
+				nls.localize('chat.editor.defaultProvider.claudeAh', "Use the native agent-host Claude Code engine (the Clawdius default)"),
 			],
-			// CLAWDIUS-END
 			description: nls.localize('chat.editor.defaultProvider', "Controls which provider is used as the default for new editor chat sessions."),
-			default: 'local',
+			default: product.defaultChatAgent?.entitlementUrl ? 'local' : 'claudeAh',
 			tags: ['experimental'],
-			experiment: { mode: 'startup' },
+			// In Clawdius the default (claudeAh) is a deliberate static choice; don't let a startup experiment
+			// override it back to local. Upstream keeps it experiment-controlled.
+			...(product.defaultChatAgent?.entitlementUrl ? { experiment: { mode: 'startup' as const } } : {}),
+			// CLAWDIUS-END
 		},
 		'chat.editor.copilotCli.hideExtensionHost': {
 			type: 'boolean',

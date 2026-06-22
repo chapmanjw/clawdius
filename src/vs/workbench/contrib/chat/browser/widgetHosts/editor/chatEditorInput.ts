@@ -23,7 +23,7 @@ import { IChatSessionsService, localChatSessionType } from '../../../common/chat
 import { ChatAgentLocation, ChatEditorTitleMaxLength } from '../../../common/constants.js';
 import { IChatEditingSession, ModifiedFileEntryState } from '../../../common/editing/chatEditingService.js';
 import { IChatModel } from '../../../common/model/chatModel.js';
-import { LocalChatSessionUri, getChatSessionType } from '../../../common/model/chatUri.js';
+import { LocalChatSessionUri, getChatSessionType, isUntitledChatSession } from '../../../common/model/chatUri.js';
 import { IClearEditingSessionConfirmationOptions } from '../../actions/chatActions.js';
 import type { IChatEditorOptions } from './chatEditor.js';
 
@@ -220,6 +220,13 @@ export class ChatEditorInput extends EditorInput implements IEditorCloseHandler 
 			if (!this.model && LocalChatSessionUri.parseLocalSessionId(this._sessionResource)) {
 				this.modelRef.value = this.chatService.startNewLocalSession(ChatAgentLocation.Chat, { canUseTools: true, debugOwner: 'ChatEditorInput#resolveNewLocalSession' });
 			}
+			// CLAWDIUS-BEGIN: an UNTITLED contributed session (e.g. the agent-host-claude default in Clawdius)
+			// whose provider isn't ready must not leave the editor blank (resolve() would otherwise return null).
+			// Fall back to a fresh local session, mirroring the chat panel's acquireDefaultNewSession fallback.
+			if (!this.model && isUntitledChatSession(this._sessionResource)) {
+				this.modelRef.value = this.chatService.startNewLocalSession(ChatAgentLocation.Chat, { canUseTools: true, debugOwner: 'ChatEditorInput#resolveUntitledContributedFallback' });
+			}
+			// CLAWDIUS-END
 		} else if (!this.options.target) {
 			this.modelRef.value = this.chatService.startNewLocalSession(ChatAgentLocation.Chat, { canUseTools: !inputType, debugOwner: 'ChatEditorInput#resolveUntitled' });
 		} else if (this.options.target.data) {

@@ -16,6 +16,9 @@ import { ContextKeyExpr, IContextKeyService } from '../../../../platform/context
 import { ExtensionIdentifier, IExtensionManifest } from '../../../../platform/extensions/common/extensions.js';
 import { SyncDescriptor } from '../../../../platform/instantiation/common/descriptors.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
+// CLAWDIUS-BEGIN retire old chat as the default right pane
+import product from '../../../../platform/product/common/product.js';
+// CLAWDIUS-END
 import { Registry } from '../../../../platform/registry/common/platform.js';
 import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js';
 import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContainer.js';
@@ -37,6 +40,10 @@ import { ChatViewPane } from './widgetHosts/viewPane/chatViewPane.js';
 
 const chatViewIcon = registerIcon('chat-view-icon', Codicon.chatSparkle, localize('chatViewIcon', 'View icon of the chat view.'));
 
+// CLAWDIUS-BEGIN in Clawdius the native webview Claude chat owns the right pane as the default; the old chat
+// stays REGISTERED (workbench services hard-reference ChatViewId) but is non-default + launcher-stripped.
+const clawdiusOldChatIsDefault = !!product.defaultChatAgent?.entitlementUrl;
+// CLAWDIUS-END
 const chatViewContainer: ViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
 	id: ChatViewContainerId,
 	title: localize2('chat.viewContainer.label', "Chat"),
@@ -45,7 +52,7 @@ const chatViewContainer: ViewContainer = Registry.as<IViewContainersRegistry>(Vi
 	storageId: ChatViewContainerId,
 	hideIfEmpty: true,
 	order: 1,
-}, ViewContainerLocation.AuxiliaryBar, { isDefault: true, doNotRegisterOpenCommand: true });
+}, ViewContainerLocation.AuxiliaryBar, { isDefault: clawdiusOldChatIsDefault, doNotRegisterOpenCommand: true });
 
 const chatViewDescriptor: IViewDescriptor = {
 	id: ChatViewId,

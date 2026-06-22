@@ -33,7 +33,7 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 		hideIfEmpty: false,
 		icon: clawdiusChatIcon,
 		order: 1,
-	}, ViewContainerLocation.AuxiliaryBar, { isDefault: false, doNotRegisterOpenCommand: true });
+	}, ViewContainerLocation.AuxiliaryBar, { isDefault: true, doNotRegisterOpenCommand: true });
 
 	const chatView: IViewDescriptor = {
 		id: CLAWDIUS_CHAT_VIEW_ID,

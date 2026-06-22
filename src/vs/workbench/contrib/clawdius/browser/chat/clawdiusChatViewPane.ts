@@ -15,7 +15,7 @@
 // only local assets with zero network egress (CSP default-src 'none').
 
 import * as dom from '../../../../../base/browser/dom.js';
-import { IReference } from '../../../../../base/common/lifecycle.js';
+import { DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { generateUuid } from '../../../../../base/common/uuid.js';
 import { localize } from '../../../../../nls.js';
@@ -53,10 +53,13 @@ export class ClawdiusChatViewPane extends ViewPane {
 	private _webviewContainer: HTMLElement | undefined;
 
 	// Agent-host session state (created lazily on the first user turn).
+	private readonly _sessionDisposables = this._register(new DisposableStore());
 	private _sessionUri: URI | undefined;
-	private _subscriptionRef: IReference<IAgentSubscription<SessionState>> | undefined;
+	private _subscription: IAgentSubscription<SessionState> | undefined;
 	private _activeTurnId: string | undefined;
 	private _sessionInit: Promise<URI> | undefined;
+	private _isTurning = false;
+	private _disposed = false;
 
 	constructor(
 		options: IViewPaneOptions,
@@ -139,7 +142,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 				if (!text) {
 					return;
 				}
-				this._webview.postMessage({ type: 'appendUser', text });
+				this._post({ type: 'appendUser', text });
 				void this._startTurn(text);
 				break;
 			}
@@ -156,10 +159,18 @@ export class ClawdiusChatViewPane extends ViewPane {
 			this._sessionInit = (async () => {
 				const workingDirectory = this._workspaceContextService.getWorkspace().folders[0]?.uri;
 				const uri = await this._agentHostService.createSession({ provider: 'claude', workingDirectory });
+				if (this._disposed) {
+					// The pane was disposed while the session was being created: free the orphaned session.
+					this._agentHostService.disposeSession(uri).catch(err => this._logService.error('[clawdius-chat] disposeSession (orphaned) failed', err));
+					throw new Error('clawdius-chat: pane disposed during session creation');
+				}
 				this._sessionUri = uri;
 				const ref = this._agentHostService.getSubscription(StateComponents.Session, uri, 'ClawdiusChatViewPane');
-				this._subscriptionRef = ref;
-				this._register(ref.object.onDidChange(() => this._onSessionStateChange()));
+				// Tie the subscription reference AND its listener to a session-scoped store, disposed first in
+				// dispose() so onDidChange can never fire after teardown begins.
+				this._sessionDisposables.add(ref);
+				this._subscription = ref.object;
+				this._sessionDisposables.add(ref.object.onDidChange(() => this._onSessionStateChange()));
 				return uri;
 			})();
 			this._sessionInit.catch(() => { this._sessionInit = undefined; });
@@ -169,18 +180,33 @@ export class ClawdiusChatViewPane extends ViewPane {
 
 	/** Send the user's prompt as a new turn and stream the assistant response back to the SPA. */
 	private async _startTurn(text: string): Promise<void> {
+		// ViewPane-level serialization (belt-and-suspenders with the SPA's `busy` flag): never dispatch a
+		// second turn while one is in flight, which would overwrite _activeTurnId and orphan the first turn.
+		if (this._isTurning) {
+			return;
+		}
+		this._isTurning = true;
+
 		let uri: URI;
 		try {
 			uri = await this._ensureSession();
 		} catch (err) {
+			this._isTurning = false;
+			if (this._disposed) {
+				return;
+			}
 			this._logService.error('[clawdius-chat] failed to create Claude session', err);
-			this._webview?.postMessage({ type: 'chatError', text: localize('clawdius.chat.sessionError', "Could not start a Claude session. Check that the Claude Code engine is configured.") });
+			this._post({ type: 'chatError', text: localize('clawdius.chat.sessionError', "Could not start a Claude session. Check that the Claude Code engine is configured.") });
+			return;
+		}
+		if (this._disposed) {
+			this._isTurning = false;
 			return;
 		}
 
 		const turnId = generateUuid();
 		this._activeTurnId = turnId;
-		this._webview?.postMessage({ type: 'assistantPending', id: turnId });
+		this._post({ type: 'assistantPending', id: turnId });
 
 		const action: SessionTurnStartedAction = {
 			type: ActionType.SessionTurnStarted,
@@ -192,7 +218,8 @@ export class ClawdiusChatViewPane extends ViewPane {
 		} catch (err) {
 			this._logService.error('[clawdius-chat] failed to dispatch turn', err);
 			this._activeTurnId = undefined;
-			this._webview?.postMessage({ type: 'chatError', text: localize('clawdius.chat.dispatchError', "Could not send your message to Claude.") });
+			this._isTurning = false;
+			this._post({ type: 'chatError', text: localize('clawdius.chat.dispatchError', "Could not send your message to Claude."), id: turnId });
 		}
 	}
 
@@ -202,13 +229,20 @@ export class ClawdiusChatViewPane extends ViewPane {
 	 * the markdown response parts always hold the full text-so-far.
 	 */
 	private _onSessionStateChange(): void {
+		if (this._disposed) {
+			return;
+		}
 		const turnId = this._activeTurnId;
-		const subscription = this._subscriptionRef?.object;
+		const subscription = this._subscription;
 		if (!turnId || !subscription || !this._webview) {
 			return;
 		}
 		const state = subscription.value;
-		if (!state || state instanceof Error) {
+		if (state instanceof Error) {
+			this._logService.warn('[clawdius-chat] session subscription error', state);
+			return;
+		}
+		if (!state) {
 			return;
 		}
 
@@ -219,26 +253,51 @@ export class ClawdiusChatViewPane extends ViewPane {
 			return;
 		}
 
-		// INC-1: text only. Concatenate markdown response parts in stream order (tool/reasoning parts land in INC-2).
+		// INC-1: text only. Concatenate markdown response parts in stream order. Tool calls, reasoning,
+		// content refs and system notifications are deferred to INC-2; a turn that produces only those leaves
+		// no markdown, handled by the completion fallback below.
 		const text = turn.responseParts
 			.filter((part): part is MarkdownResponsePart => part.kind === ResponsePartKind.Markdown)
 			.map(part => part.content)
 			.join('');
 		if (text) {
-			this._webview.postMessage({ type: 'setAssistant', id: turnId, text });
+			this._post({ type: 'setAssistant', id: turnId, text });
 		}
 
 		if (completed) {
+			// A turn has exactly one terminal signal: chatError (with the bubble id, so the SPA can clear the
+			// pending bubble) OR assistantDone - never both.
 			this._activeTurnId = undefined;
+			this._isTurning = false;
 			if (completed.state === TurnState.Error) {
 				const errorText = completed.error?.message || localize('clawdius.chat.turnError', "Claude could not complete the response.");
-				this._webview.postMessage({ type: 'chatError', text: errorText });
+				this._post({ type: 'chatError', text: errorText, id: turnId });
+			} else {
+				if (!text) {
+					this._post({ type: 'setAssistant', id: turnId, text: localize('clawdius.chat.noText', "Claude finished this turn without text output.") });
+				}
+				this._post({ type: 'assistantDone', id: turnId });
 			}
-			this._webview.postMessage({ type: 'assistantDone', id: turnId });
+		}
+	}
+
+	/** Post to the webview, guarded against a disposed pane / torn-down webview. */
+	private _post(message: unknown): void {
+		if (this._disposed || !this._webview) {
+			return;
+		}
+		try {
+			void this._webview.postMessage(message);
+		} catch (err) {
+			this._logService.debug('[clawdius-chat] postMessage failed (webview likely disposed)', err);
 		}
 	}
 
 	override dispose(): void {
+		this._disposed = true;
+		// Detach the subscription + its onDidChange listener FIRST so no state callback runs during teardown.
+		this._sessionDisposables.dispose();
+		this._subscription = undefined;
 		if (this._sessionUri) {
 			if (this._activeTurnId) {
 				const cancel: SessionTurnCancelledAction = { type: ActionType.SessionTurnCancelled, turnId: this._activeTurnId };
@@ -252,8 +311,6 @@ export class ClawdiusChatViewPane extends ViewPane {
 			this._agentHostService.disposeSession(this._sessionUri).catch(err => this._logService.error('[clawdius-chat] disposeSession failed', err));
 			this._sessionUri = undefined;
 		}
-		this._subscriptionRef?.dispose();
-		this._subscriptionRef = undefined;
 		super.dispose();
 	}
 
@@ -427,7 +484,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 </head>
 <body>
 	<div class="header"><span class="dot"></span><span>${escapeHtml(headerTitle)}</span></div>
-	<div class="messages" id="messages" role="log" aria-live="polite">
+	<div class="messages" id="messages" role="log">
 		<div class="welcome" id="welcome">
 			<div class="mark" aria-hidden="true">C</div>
 			<h1>${escapeHtml(welcomeHeading)}</h1>
@@ -454,7 +511,12 @@ export class ClawdiusChatViewPane extends ViewPane {
 			function clearWelcome() {
 				if (welcome && welcome.parentNode) { welcome.remove(); }
 			}
-			function scrollDown() {
+			// Only auto-scroll while the user is already near the bottom, so streaming updates never yank a
+			// user who scrolled up to read earlier output.
+			function isNearBottom() {
+				return messages.scrollHeight - messages.scrollTop - messages.clientHeight < 60;
+			}
+			function toBottom() {
 				messages.scrollTop = messages.scrollHeight;
 			}
 
@@ -467,7 +529,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 				bubble.textContent = text;
 				msg.appendChild(bubble);
 				messages.appendChild(msg);
-				scrollDown();
+				toBottom();
 			}
 
 			function ensureAssistant(id) {
@@ -486,20 +548,27 @@ export class ClawdiusChatViewPane extends ViewPane {
 				msg.appendChild(bubble);
 				messages.appendChild(msg);
 				assistantBubbles[id] = bubble;
-				scrollDown();
+				toBottom();
 				return bubble;
 			}
 
 			function setAssistant(id, text) {
 				const bubble = ensureAssistant(id);
+				const stick = isNearBottom();
 				bubble.classList.remove('pending');
 				bubble.textContent = text;
-				scrollDown();
+				if (stick) { toBottom(); }
 			}
 
 			function doneAssistant(id) {
 				const bubble = assistantBubbles[id];
 				if (bubble) { bubble.classList.remove('pending'); }
+			}
+
+			function removeAssistant(id) {
+				const bubble = assistantBubbles[id];
+				if (bubble && bubble.parentNode) { bubble.parentNode.remove(); }
+				delete assistantBubbles[id];
 			}
 
 			function showError(text) {
@@ -511,7 +580,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 				bubble.textContent = text;
 				msg.appendChild(bubble);
 				messages.appendChild(msg);
-				scrollDown();
+				toBottom();
 			}
 
 			function updateSendState() {
@@ -555,10 +624,13 @@ export class ClawdiusChatViewPane extends ViewPane {
 						if (typeof m.id === 'string' && typeof m.text === 'string') { setAssistant(m.id, m.text); }
 						break;
 					case 'assistantDone':
-						if (typeof m.id === 'string') { doneAssistant(m.id); busy = false; updateSendState(); }
+						if (typeof m.id === 'string') { doneAssistant(m.id); }
+						busy = false; updateSendState(); input.focus();
 						break;
 					case 'chatError':
-						if (typeof m.text === 'string') { showError(m.text); busy = false; updateSendState(); }
+						if (typeof m.id === 'string') { removeAssistant(m.id); }
+						if (typeof m.text === 'string') { showError(m.text); }
+						busy = false; updateSendState(); input.focus();
 						break;
 				}
 			});

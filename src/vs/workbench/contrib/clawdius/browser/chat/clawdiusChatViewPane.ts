@@ -686,6 +686,9 @@ export class ClawdiusChatViewPane extends ViewPane {
 			const input = document.getElementById('input');
 			const send = document.getElementById('send');
 			const assistantBubbles = Object.create(null);
+			// Tool calls the user has already approved/denied. Persisted across the frequent full-rebuilds so a
+			// re-rendered permission card cannot re-enable its buttons and allow a double-approval.
+			const respondedTools = Object.create(null);
 			// While a turn is streaming we are 'busy': the composer is disabled so INC-1 serializes turns
 			// (one in flight at a time) rather than orphaning the active turn with a concurrent dispatch.
 			let busy = false;
@@ -920,6 +923,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 				title.className = 'perm-title';
 				title.textContent = block.confirmationTitle || STRINGS.permissionTitle;
 				wrap.appendChild(title);
+				const responded = !!respondedTools[block.id];
 				let opts = block.options && block.options.length ? block.options : null;
 				if (!opts) {
 					opts = [{ id: '', label: STRINGS.allow, kind: 'approve' }, { id: '', label: STRINGS.deny, kind: 'deny' }];
@@ -930,7 +934,10 @@ export class ClawdiusChatViewPane extends ViewPane {
 					btn.type = 'button';
 					btn.className = 'perm-btn ' + (o.kind === 'deny' ? 'perm-deny' : 'perm-allow');
 					btn.textContent = o.label;
+					btn.disabled = responded;
 					btn.addEventListener('click', function () {
+						if (respondedTools[block.id]) { return; }
+						respondedTools[block.id] = true;
 						vscode.postMessage({ type: 'toolConfirm', toolCallId: block.id, approved: o.kind === 'approve', optionId: o.id || undefined });
 						const all = wrap.querySelectorAll('button');
 						for (let j = 0; j < all.length; j++) { all[j].disabled = true; }

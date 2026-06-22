@@ -1,0 +1,346 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+// CLAWDIUS-BEGIN native webview Claude chat (Phase 3 INC-0: shell)
+// The native Claude chat ViewPane. It hosts a first-party webview (NOT the extension-backed
+// WebviewViewPane) whose SPA is a faithful, from-scratch replica of the official Claude Code plugin chat -
+// warm palette, message list, composer. The ViewPane is the BRIDGE: the webview iframe cannot import
+// workbench services, so this pane owns the agent-host session and relays to/from the SPA over postMessage
+// (INC-1 wires IAgentHostService here). INC-0 ships the shell only: the composer round-trips a message
+// through the bridge and the pane echoes a placeholder turn, proving the native webview path end-to-end
+// with zero network egress (CSP default-src 'none').
+
+import * as dom from '../../../../../base/browser/dom.js';
+import { generateUuid } from '../../../../../base/common/uuid.js';
+import { localize } from '../../../../../nls.js';
+import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
+import { IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
+import { IContextMenuService } from '../../../../../platform/contextview/browser/contextView.js';
+import { IHoverService } from '../../../../../platform/hover/browser/hover.js';
+import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
+import { IKeybindingService } from '../../../../../platform/keybinding/common/keybinding.js';
+import { IOpenerService } from '../../../../../platform/opener/common/opener.js';
+import { IThemeService } from '../../../../../platform/theme/common/themeService.js';
+import { IViewPaneOptions, ViewPane } from '../../../../browser/parts/views/viewPane.js';
+import { IViewDescriptorService } from '../../../../common/views.js';
+import { IWebviewElement, IWebviewService, WebviewContentPurpose } from '../../../webview/browser/webview.js';
+
+/** Escape text that is interpolated into the webview HTML so a stray character cannot break markup. */
+function escapeHtml(value: string): string {
+	return value
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;')
+		.replace(/'/g, '&#39;');
+}
+
+export class ClawdiusChatViewPane extends ViewPane {
+
+	private _webview: IWebviewElement | undefined;
+	private _webviewContainer: HTMLElement | undefined;
+
+	constructor(
+		options: IViewPaneOptions,
+		@IKeybindingService keybindingService: IKeybindingService,
+		@IContextMenuService contextMenuService: IContextMenuService,
+		@IConfigurationService configurationService: IConfigurationService,
+		@IContextKeyService contextKeyService: IContextKeyService,
+		@IViewDescriptorService viewDescriptorService: IViewDescriptorService,
+		@IInstantiationService instantiationService: IInstantiationService,
+		@IOpenerService openerService: IOpenerService,
+		@IThemeService themeService: IThemeService,
+		@IHoverService hoverService: IHoverService,
+		@IWebviewService private readonly _webviewService: IWebviewService,
+	) {
+		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
+	}
+
+	protected override renderBody(container: HTMLElement): void {
+		super.renderBody(container);
+
+		this._webviewContainer = dom.append(container, dom.$('.clawdius-chat-webview'));
+		this._webviewContainer.style.width = '100%';
+		this._webviewContainer.style.height = '100%';
+
+		const webview = this._register(this._webviewService.createWebviewElement({
+			title: localize('clawdius.chat.title', "Claude Code Chat"),
+			options: {
+				purpose: WebviewContentPurpose.WebviewView,
+				disableServiceWorker: true,
+				retainContextWhenHidden: true,
+			},
+			contentOptions: {
+				allowScripts: true,
+			},
+			extension: undefined,
+		}));
+		this._webview = webview;
+
+		webview.mountTo(this._webviewContainer, dom.getWindow(container));
+		this._register(webview.onMessage(e => this._onDidReceiveMessage(e.message)));
+		webview.setHtml(this._renderHtml());
+	}
+
+	protected override layoutBody(height: number, width: number): void {
+		super.layoutBody(height, width);
+		if (this._webviewContainer) {
+			this._webviewContainer.style.width = `${width}px`;
+			this._webviewContainer.style.height = `${height}px`;
+		}
+	}
+
+	override focus(): void {
+		super.focus();
+		this._webview?.focus();
+	}
+
+	private _onDidReceiveMessage(message: unknown): void {
+		if (!message || typeof message !== 'object') {
+			return;
+		}
+		const msg = message as { type?: string; text?: string };
+		switch (msg.type) {
+			case 'submit': {
+				// INC-0: no backend wired yet. Echo the user turn plus a placeholder assistant turn so the
+				// native webview bridge is verifiable end-to-end. INC-1 replaces this branch with a real
+				// IAgentHostService Claude session (create -> subscribe -> dispatch -> stream).
+				const text = typeof msg.text === 'string' ? msg.text.trim() : '';
+				if (!text) {
+					return;
+				}
+				this._webview?.postMessage({ type: 'appendUser', text });
+				this._webview?.postMessage({
+					type: 'appendAssistant',
+					text: localize('clawdius.chat.inc0Placeholder', "The native chat shell is live - your message round-tripped through the webview bridge. Claude's engine connects in the next build step."),
+				});
+				break;
+			}
+		}
+	}
+
+	private _renderHtml(): string {
+		const nonce = generateUuid();
+
+		const claudeLabel = localize('clawdius.chat.claude', "Claude");
+		const headerTitle = localize('clawdius.chat.headerTitle', "Claude Code");
+		const welcomeHeading = localize('clawdius.chat.welcomeHeading', "Chat with Claude");
+		const welcomeSubtext = localize('clawdius.chat.welcomeSubtext', "Ask questions, request changes, or get help understanding your code.");
+		const placeholder = localize('clawdius.chat.placeholder', "Ask Claude...");
+		const sendLabel = localize('clawdius.chat.send', "Send");
+
+		// Localized strings used by the client script are passed as a JSON-encoded constant so translations
+		// are escaped correctly and never break out of the <script> element.
+		const strings = JSON.stringify({ claude: claudeLabel });
+
+		return `<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}';">
+	<style nonce="${nonce}">
+		:root {
+			--clawdius-orange: #d97757;
+			--clawdius-clay: #c6613f;
+			--clawdius-ivory: #faf9f5;
+		}
+		* { box-sizing: border-box; }
+		html, body {
+			margin: 0;
+			padding: 0;
+			height: 100%;
+			font-family: var(--vscode-font-family);
+			font-size: var(--vscode-font-size, 13px);
+			color: var(--vscode-foreground);
+			background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+		}
+		body { display: flex; flex-direction: column; }
+		.header {
+			flex: 0 0 auto;
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			padding: 8px 12px;
+			border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-panel-border));
+			font-weight: 600;
+		}
+		.header .dot {
+			width: 8px;
+			height: 8px;
+			border-radius: 50%;
+			background: var(--clawdius-orange);
+		}
+		.messages {
+			flex: 1 1 auto;
+			overflow-y: auto;
+			padding: 12px;
+			display: flex;
+			flex-direction: column;
+			gap: 12px;
+		}
+		.welcome {
+			margin: auto;
+			max-width: 320px;
+			text-align: center;
+			color: var(--vscode-descriptionForeground);
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			gap: 8px;
+		}
+		.welcome .mark {
+			width: 40px;
+			height: 40px;
+			border-radius: 12px;
+			background: var(--clawdius-orange);
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			color: var(--clawdius-ivory);
+			font-weight: 700;
+			font-size: 20px;
+		}
+		.welcome h1 { margin: 4px 0 0; font-size: 16px; color: var(--vscode-foreground); }
+		.welcome p { margin: 0; font-size: 13px; line-height: 1.5; }
+		.msg { display: flex; flex-direction: column; gap: 4px; max-width: 100%; }
+		.msg .who {
+			font-size: 11px;
+			font-weight: 600;
+			color: var(--vscode-descriptionForeground);
+		}
+		.msg .bubble {
+			white-space: pre-wrap;
+			word-break: break-word;
+			line-height: 1.5;
+		}
+		.msg.user {
+			align-self: flex-end;
+			max-width: 85%;
+		}
+		.msg.user .bubble {
+			background: var(--vscode-input-background);
+			border: 1px solid var(--vscode-input-border, transparent);
+			border-radius: 10px;
+			padding: 8px 12px;
+		}
+		.msg.assistant .who { color: var(--clawdius-orange); }
+		.composer {
+			flex: 0 0 auto;
+			display: flex;
+			align-items: flex-end;
+			gap: 8px;
+			padding: 8px 12px 12px;
+			border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-panel-border));
+		}
+		.composer textarea {
+			flex: 1 1 auto;
+			resize: none;
+			min-height: 36px;
+			max-height: 160px;
+			padding: 8px 10px;
+			border-radius: 8px;
+			border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+			background: var(--vscode-input-background);
+			color: var(--vscode-input-foreground);
+			font-family: inherit;
+			font-size: inherit;
+			line-height: 1.4;
+			outline: none;
+		}
+		.composer textarea:focus { border-color: var(--clawdius-orange); }
+		.composer textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
+		.composer .send {
+			flex: 0 0 auto;
+			height: 36px;
+			padding: 0 14px;
+			border: none;
+			border-radius: 8px;
+			background: var(--clawdius-orange);
+			color: var(--clawdius-ivory);
+			font-family: inherit;
+			font-size: inherit;
+			font-weight: 600;
+			cursor: pointer;
+		}
+		.composer .send:hover { background: var(--clawdius-clay); }
+		.composer .send:disabled { opacity: 0.5; cursor: default; }
+	</style>
+</head>
+<body>
+	<div class="header"><span class="dot"></span><span>${escapeHtml(headerTitle)}</span></div>
+	<div class="messages" id="messages" role="log" aria-live="polite">
+		<div class="welcome" id="welcome">
+			<div class="mark" aria-hidden="true">C</div>
+			<h1>${escapeHtml(welcomeHeading)}</h1>
+			<p>${escapeHtml(welcomeSubtext)}</p>
+		</div>
+	</div>
+	<div class="composer">
+		<textarea id="input" rows="1" placeholder="${escapeHtml(placeholder)}" aria-label="${escapeHtml(placeholder)}"></textarea>
+		<button class="send" id="send" type="button">${escapeHtml(sendLabel)}</button>
+	</div>
+	<script nonce="${nonce}">
+		(function () {
+			const vscode = acquireVsCodeApi();
+			const STRINGS = ${strings};
+			const messages = document.getElementById('messages');
+			const welcome = document.getElementById('welcome');
+			const input = document.getElementById('input');
+			const send = document.getElementById('send');
+
+			function addMessage(role, text) {
+				if (welcome) { welcome.remove(); }
+				const msg = document.createElement('div');
+				msg.className = 'msg ' + role;
+				if (role === 'assistant') {
+					const who = document.createElement('div');
+					who.className = 'who';
+					who.textContent = STRINGS.claude;
+					msg.appendChild(who);
+				}
+				const bubble = document.createElement('div');
+				bubble.className = 'bubble';
+				bubble.textContent = text;
+				msg.appendChild(bubble);
+				messages.appendChild(msg);
+				messages.scrollTop = messages.scrollHeight;
+			}
+
+			function submit() {
+				const text = input.value.trim();
+				if (!text) { return; }
+				vscode.postMessage({ type: 'submit', text: text });
+				input.value = '';
+				input.style.height = 'auto';
+			}
+
+			input.addEventListener('keydown', function (e) {
+				if (e.key === 'Enter' && !e.shiftKey) {
+					e.preventDefault();
+					submit();
+				}
+			});
+			input.addEventListener('input', function () {
+				input.style.height = 'auto';
+				input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+			});
+			send.addEventListener('click', submit);
+
+			window.addEventListener('message', function (event) {
+				const m = event.data;
+				if (!m || typeof m.type !== 'string') { return; }
+				if (m.type === 'appendUser') { addMessage('user', m.text); }
+				else if (m.type === 'appendAssistant') { addMessage('assistant', m.text); }
+			});
+
+			vscode.postMessage({ type: 'ready' });
+			input.focus();
+		}());
+	</script>
+</body>
+</html>`;
+	}
+}
+// CLAWDIUS-END

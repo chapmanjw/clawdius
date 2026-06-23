@@ -11,10 +11,13 @@
 // is retried on the next launch.
 
 import { Disposable } from '../../../../base/common/lifecycle.js';
+import { localize } from '../../../../nls.js';
+import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { ConfigurationTarget, IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { EXTENSION_INSTALL_SKIP_WALKTHROUGH_CONTEXT } from '../../../../platform/extensionManagement/common/extensionManagement.js';
 import { areSameExtensions } from '../../../../platform/extensionManagement/common/extensionManagementUtil.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
+import { INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
 import { ProgressLocation } from '../../../../platform/progress/common/progress.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IWorkbenchContribution } from '../../../common/contributions.js';
@@ -36,6 +39,8 @@ export class ClawdiusPluginSetupContribution extends Disposable implements IWork
 		@IConfigurationService private readonly _configurationService: IConfigurationService,
 		@IStorageService private readonly _storageService: IStorageService,
 		@ILogService private readonly _logService: ILogService,
+		@INotificationService private readonly _notificationService: INotificationService,
+		@ICommandService private readonly _commandService: ICommandService,
 	) {
 		super();
 		if (this._storageService.getBoolean(ClawdiusPluginSetupContribution.DONE_KEY, StorageScope.APPLICATION, false)) {
@@ -49,10 +54,20 @@ export class ClawdiusPluginSetupContribution extends Disposable implements IWork
 			await this._ensureInstalled();
 			await this._configure();
 			this._storageService.store(ClawdiusPluginSetupContribution.DONE_KEY, true, StorageScope.APPLICATION, StorageTarget.MACHINE);
+			this._notifyReady();
 		} catch (err) {
 			// Do NOT set the done flag: a transient failure (offline, gallery hiccup) is retried next launch.
 			this._logService.warn('[clawdius] first-run Claude Code plugin setup failed; will retry next launch', err);
 		}
+	}
+
+	/** One-time confirmation that the plugin is set up, with a shortcut to change the engine / provider. */
+	private _notifyReady(): void {
+		this._notificationService.prompt(
+			Severity.Info,
+			localize('clawdius.pluginReady', "Claude Code is ready, using its bundled engine and your existing ~/.claude login. You can change the engine or provider in Settings."),
+			[{ label: localize('clawdius.configureEngine', "Configure engine"), run: () => this._commandService.executeCommand('workbench.action.openSettings', 'claudeCode') }],
+		);
 	}
 
 	/** Install `anthropic.claude-code` from the configured gallery (Open VSX) unless it is already installed. */

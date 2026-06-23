@@ -230,10 +230,6 @@ import './contrib/inlineChat/browser/inlineChat.contribution.js';
 import './contrib/clawdius/browser/clawdius.contribution.js';
 // CLAWDIUS-END
 
-// CLAWDIUS-BEGIN native webview Claude chat (Phase 3)
-import './contrib/clawdius/browser/chat/clawdiusChat.contribution.js';
-// CLAWDIUS-END
-
 // Copilot Voice
 import './contrib/agentsVoice/browser/agentsVoice.contribution.js';
 import './contrib/mcp/browser/mcp.contribution.js';

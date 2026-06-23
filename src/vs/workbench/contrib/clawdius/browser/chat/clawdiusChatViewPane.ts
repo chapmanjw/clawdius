@@ -598,7 +598,9 @@ export class ClawdiusChatViewPane extends ViewPane {
 			if (!uri) {
 				continue;
 			}
-			const change = item.after && !item.before ? 'create' : (!item.after && item.before ? 'delete' : 'edit');
+			// Per the FileEdit contract, `after` is absent ONLY for deletions; `before` is absent for BOTH
+			// creations and in-place edits, so it cannot tell create from edit -- we only assert deletion.
+			const change = !item.after ? 'delete' : 'edit';
 			out.push({ path: this._basename(uri), added: item.diff?.added ?? 0, removed: item.diff?.removed ?? 0, change });
 		}
 		return out;
@@ -832,6 +834,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 		.tool-edit .edit-path { font-family: var(--monaco-monospace-font, ui-monospace, monospace); color: var(--vscode-foreground); word-break: break-all; }
 		.tool-edit .edit-add { color: var(--vscode-gitDecoration-addedResourceForeground, #4caf50); font-variant-numeric: tabular-nums; }
 		.tool-edit .edit-del { color: var(--vscode-gitDecoration-deletedResourceForeground, #e05252); font-variant-numeric: tabular-nums; }
+		.tool-edit.change-delete .edit-path { text-decoration: line-through; opacity: 0.8; }
 		.todos-card { margin: 6px 0; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 6px; background: var(--vscode-textCodeBlock-background, rgba(127,127,127,0.06)); padding: 8px 10px; }
 		.todos-header { font-size: 0.82em; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--vscode-descriptionForeground); margin-bottom: 6px; }
 		.todos-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }

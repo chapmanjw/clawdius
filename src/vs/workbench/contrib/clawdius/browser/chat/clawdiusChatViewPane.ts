@@ -24,7 +24,8 @@ import { IAgentSubscription } from '../../../../../platform/agentHost/common/sta
 import { ActionType, SessionModelChangedAction, SessionToolCallApprovedAction, SessionToolCallDeniedAction, SessionTurnStartedAction } from '../../../../../platform/agentHost/common/state/sessionActions.js';
 import { type SessionConfigChangedAction } from '../../../../../platform/agentHost/common/state/protocol/channels-session/actions.js';
 import { getToolFileEdits, MessageKind, ResponsePartKind, StateComponents, ToolCallCancellationReason, ToolCallConfirmationReason, ToolCallStatus, ToolResultContentType, TurnState, type ISessionFileDiff, type MessageAttachment, type ModelSelection, type ResponsePart, type SessionModelInfo, type SessionState, type ToolCallState, type ToolResultContent, type UsageInfo } from '../../../../../platform/agentHost/common/state/sessionState.js';
-import { CompletionItemKind, type CompletionItem } from '../../../../../platform/agentHost/common/state/protocol/commands.js';
+import { CompletionItemKind, ContentEncoding, type CompletionItem } from '../../../../../platform/agentHost/common/state/protocol/commands.js';
+import { computeLineDiff, type ClawdiusDiffLine } from '../../common/clawdiusChatDiff.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from '../../../../../platform/contextview/browser/contextView.js';
@@ -100,6 +101,8 @@ export class ClawdiusChatViewPane extends ViewPane {
 	private _activeTurnId: string | undefined;
 	private _isTurning = false;
 	private _disposed = false;
+	/** Tool-call ids whose file-edit diffs have been resolved (or are in flight), to avoid re-fetching on every render. */
+	private readonly _resolvedDiffs = new Set<string>();
 
 	constructor(
 		options: IViewPaneOptions,
@@ -533,6 +536,77 @@ export class ClawdiusChatViewPane extends ViewPane {
 		const usage = this._latestUsage(state);
 		this._post({ type: 'setUsage', text: usage ? this._usageText(usage) : undefined });
 		this._post({ type: 'setSessionConfig', config: this._sessionConfigControl(state) });
+		this._kickToolDiffs(state);
+	}
+
+	/** For every tool call carrying file edits, resolve the before/after content once and post a rendered line
+	 *  diff. Cached per tool-call id so the frequent streaming re-renders never re-fetch; a freshly-created pane
+	 *  (empty cache) re-resolves so its new webview repaints the diffs. */
+	private _kickToolDiffs(state: SessionState): void {
+		const visit = (parts: readonly ResponsePart[]): void => {
+			for (const part of parts) {
+				if (part.kind !== ResponsePartKind.ToolCall) {
+					continue;
+				}
+				const tc = part.toolCall;
+				const edits = this._rawEdits(tc);
+				if (edits.length && !this._resolvedDiffs.has(tc.toolCallId)) {
+					this._resolvedDiffs.add(tc.toolCallId);
+					void this._resolveToolDiffs(tc.toolCallId, edits);
+				}
+			}
+		};
+		for (const turn of state.turns) {
+			visit(turn.responseParts);
+		}
+		if (state.activeTurn) {
+			visit(state.activeTurn.responseParts);
+		}
+	}
+
+	/** The raw file edits a tool exposes: the pending-confirmation preview, or the completed result content. */
+	private _rawEdits(tc: ToolCallState): readonly ISessionFileDiff[] {
+		if (tc.status === ToolCallStatus.PendingConfirmation) {
+			return tc.edits?.items ?? [];
+		}
+		if (tc.status === ToolCallStatus.Completed || tc.status === ToolCallStatus.PendingResultConfirmation) {
+			return getToolFileEdits(tc);
+		}
+		return [];
+	}
+
+	/** Resolve a single ContentRef to text, or undefined for non-text (binary) content which has no line diff. */
+	private async _readText(ref: { uri: string }): Promise<string | undefined> {
+		const res = await this._agentHostService.resourceRead(URI.parse(ref.uri));
+		return res.encoding === ContentEncoding.Utf8 ? res.data : undefined;
+	}
+
+	/** Resolve each edit's before/after content and post a compact line diff for the tool card. */
+	private async _resolveToolDiffs(toolId: string, edits: readonly ISessionFileDiff[]): Promise<void> {
+		const files: { path: string; lines: ClawdiusDiffLine[] }[] = [];
+		for (const edit of edits) {
+			try {
+				const before = edit.before ? await this._readText(edit.before.content) : '';
+				const after = edit.after ? await this._readText(edit.after.content) : '';
+				if (this._disposed) {
+					return;
+				}
+				if (before === undefined || after === undefined) {
+					continue; // a binary side: no text line diff
+				}
+				const uri = edit.after?.uri ?? edit.before?.uri;
+				const lines = computeLineDiff(before, after, 400);
+				if (lines.length) {
+					files.push({ path: uri ? this._basename(uri) : '', lines });
+				}
+			} catch (err) {
+				this._logService.debug('[clawdius-chat] diff resolve failed', err);
+			}
+		}
+		if (this._disposed || !files.length) {
+			return;
+		}
+		this._post({ type: 'toolDiff', toolId, files });
 	}
 
 	/** Build the descriptor for the session's first mutable string-enum config option (e.g. the approval /
@@ -1000,6 +1074,13 @@ export class ClawdiusChatViewPane extends ViewPane {
 		.tool-edit .edit-add { color: var(--vscode-gitDecoration-addedResourceForeground, #4caf50); font-variant-numeric: tabular-nums; }
 		.tool-edit .edit-del { color: var(--vscode-gitDecoration-deletedResourceForeground, #e05252); font-variant-numeric: tabular-nums; }
 		.tool-edit.change-delete .edit-path { text-decoration: line-through; opacity: 0.8; }
+		.tool-diff { border-top: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); }
+		.tool-diff-file { padding: 5px 10px 2px; font-size: 0.8em; font-weight: 600; color: var(--vscode-descriptionForeground); font-family: var(--monaco-monospace-font, ui-monospace, monospace); word-break: break-all; }
+		.tool-diff-body { max-height: 260px; overflow: auto; font-family: var(--monaco-monospace-font, ui-monospace, monospace); font-size: 0.8em; line-height: 1.35; padding-bottom: 4px; }
+		.diff-line { white-space: pre-wrap; word-break: break-word; padding: 0 10px; }
+		.diff-add { background: var(--vscode-diffEditor-insertedTextBackground, rgba(76,175,80,0.16)); }
+		.diff-del { background: var(--vscode-diffEditor-removedTextBackground, rgba(224,82,82,0.16)); }
+		.diff-ctx { color: var(--vscode-descriptionForeground); }
 		.todos-card { margin: 6px 0; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 6px; background: var(--vscode-textCodeBlock-background, rgba(127,127,127,0.06)); padding: 8px 10px; }
 		.todos-header { font-size: 0.82em; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--vscode-descriptionForeground); margin-bottom: 6px; }
 		.todos-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
@@ -1567,9 +1648,50 @@ export class ClawdiusChatViewPane extends ViewPane {
 				return wrap;
 			}
 
+			const toolDiffs = Object.create(null);
+			function findToolCard(toolId) {
+				const cards = messages.querySelectorAll('.tool-card');
+				for (let i = 0; i < cards.length; i++) {
+					if (cards[i].getAttribute('data-tool-id') === toolId) { return cards[i]; }
+				}
+				return null;
+			}
+			function renderToolDiff(files) {
+				const wrap = document.createElement('div');
+				wrap.className = 'tool-diff';
+				for (let f = 0; f < files.length; f++) {
+					const file = files[f];
+					if (file.path) {
+						const head = document.createElement('div');
+						head.className = 'tool-diff-file';
+						head.textContent = file.path;
+						wrap.appendChild(head);
+					}
+					const body = document.createElement('div');
+					body.className = 'tool-diff-body';
+					const lines = file.lines || [];
+					for (let i = 0; i < lines.length; i++) {
+						const ln = lines[i];
+						const row = document.createElement('div');
+						row.className = 'diff-line diff-' + (ln.t === '+' ? 'add' : (ln.t === '-' ? 'del' : 'ctx'));
+						row.textContent = ln.t + ' ' + ln.s;
+						body.appendChild(row);
+					}
+					wrap.appendChild(body);
+				}
+				return wrap;
+			}
+			function applyToolDiff(toolId) {
+				const card = findToolCard(toolId);
+				if (!card) { return; }
+				const old = card.querySelector('.tool-diff');
+				if (old) { old.remove(); }
+				if (toolDiffs[toolId]) { card.appendChild(renderToolDiff(toolDiffs[toolId])); }
+			}
 			function renderTool(block) {
 				const card = document.createElement('div');
 				card.className = 'tool-card status-' + block.status;
+				card.setAttribute('data-tool-id', block.id);
 				const header = document.createElement('div');
 				header.className = 'tool-header';
 				const name = document.createElement('span');
@@ -1643,6 +1765,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 					c.textContent = STRINGS.cancelled;
 					card.appendChild(c);
 				}
+				if (toolDiffs[block.id]) { card.appendChild(renderToolDiff(toolDiffs[block.id])); }
 				return card;
 			}
 
@@ -1828,6 +1951,9 @@ export class ClawdiusChatViewPane extends ViewPane {
 						break;
 					case 'setSessionConfig':
 						renderConfigSelect(sessionConfig, m.config);
+						break;
+					case 'toolDiff':
+						if (m.toolId && Array.isArray(m.files)) { toolDiffs[m.toolId] = m.files; applyToolDiff(m.toolId); }
 						break;
 					case 'setTriggers':
 						if (Array.isArray(m.chars)) { triggers = m.chars; }

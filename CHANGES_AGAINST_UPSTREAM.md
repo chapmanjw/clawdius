@@ -200,3 +200,40 @@ findings fixed before the feature was considered done.
 - The completion state machine runs as inline webview SPA string-JS; it cannot be unit-tested without a
   browser harness, so its correctness is gated by review. Extract the pure span/diff helpers to a tested
   module if it grows.
+
+## PIVOT: adopt the official Anthropic plugin (SUPERSEDES all the bespoke chat above)
+The bespoke webview chat was the wrong approach. The goal is the REAL Anthropic "Claude Code" plugin pane
+(its own 5 MB webview-view in the secondary sidebar), installed and configured -- not a reinvention, and not
+VS Code's Copilot chat. The official `anthropic.claude-code` is on Open VSX (v2.1.186), and Clawdius's
+`product.json` gallery already points at Open VSX, so we install it on first run.
+
+- **RETIRED** (deleted): the entire bespoke webview chat -- `browser/chat/` (clawdiusChatViewPane,
+  clawdiusChatSessionService, clawdiusChat.contribution), `common/clawdiusChat{Todos,Diff}.ts` + their tests,
+  the `workbench.common.main.ts` import, and the chat-only view IDs in `common/clawdius.ts`. Everything in the
+  two "Phase 3" / "follow-up" chat sections above is SUPERSEDED -- those features now come from the real plugin.
+- **NEW** `src/vs/workbench/contrib/clawdius/browser/clawdiusPluginSetup.ts` (registered from
+  `clawdius.contribution.ts` at `WorkbenchPhase.AfterRestored`, Clawdius-mode only, storage-flagged once):
+  installs `anthropic.claude-code` from the configured gallery (Open VSX) via `IExtensionsWorkbenchService`
+  if not already present, then sets `claudeCode.preferredLocation=sidebar`, `useTerminal=false`,
+  `hideOnboarding=true` via `updateValue(USER)` -- only for keys the user has not overridden -- and shows a
+  one-time "ready / Configure engine" notification. Engine = the plugin's bundled `claude.exe` (225 MB) +
+  the user's `~/.claude` auth; `claudeProcessWrapper` left unset (the field WRAPS, not replaces, the bundled
+  CLI, so it cannot cleanly point at a PATH claude -- confirmed against `clawdiusCliSpawn.ts`). Failures are
+  non-blocking and retried next launch.
+- **KEPT** (unchanged): `extensions/clawdius-chat` + the `defaultChatAgent` product contract -- it is the
+  Clawdius-mode sentinel (~130 core paths gate on `!entitlementUrl`; several read it unguarded; core marks it
+  uninstall-protected), renders no UI of its own, and removing it is a multi-file refactor with high
+  regression risk for zero benefit. The agent-host (`platform/agentHost/**`) + `IClawdiusCliConfigService`
+  (#54) + workflows view + branding + all Copilot-suppression gates stay.
+- **Copilot chat**: already suppressed by the existing gates (`workbench.panel.chat` non-default + hidden view
+  + `hideIfEmpty`); the official plugin's secondary-sidebar pane owns the visible chat. The Clawdius
+  secondary-sidebar toggle labels ("Toggle Claude Code Chat" + claude icons) now correctly describe the
+  plugin's pane -- no change needed.
+
+### Pivot follow-ups (verify in a real build)
+- Open VSX signature verification may reject the auto-install in a BUILT build; if so, add
+  `donotVerifySignature: true` to the `install` options (Open VSX is not signed like the MS marketplace). Noted
+  inline in `clawdiusPluginSetup.ts`.
+- Confirm `disableLoginPrompt`/auth behaves for a logged-in `~/.claude` (no spurious prompt); set it if needed.
+- A `claudeProcessWrapper` -> PATH-claude override (a Clawdius launcher that discards the bundled-binary arg)
+  is an advanced, live-test-required follow-up -- NOT the default.

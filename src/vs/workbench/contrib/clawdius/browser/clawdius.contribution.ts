@@ -22,6 +22,7 @@ import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/
 import { CLAWDIUS_VIEW_CONTAINER_ID, CLAWDIUS_WORKFLOWS_VIEW_ID } from '../common/clawdius.js';
 import { ClawdiusWorkflowsViewPane } from './workflowsViewPane.js';
 import { WorkflowTranscriptContribution } from './workflowTranscript.js';
+import { ClawdiusPluginSetupContribution } from './clawdiusPluginSetup.js';
 
 if (!product.defaultChatAgent?.entitlementUrl) {
 
@@ -53,5 +54,8 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 
 	// The read-only Markdown transcript drill-in for a workflow sub-agent (clawdius-workflow-transcript: scheme).
 	registerWorkbenchContribution2(WorkflowTranscriptContribution.ID, WorkflowTranscriptContribution, WorkbenchPhase.BlockRestore);
+
+	// First run: install + configure the official Claude Code plugin (it owns the visible chat pane).
+	registerWorkbenchContribution2(ClawdiusPluginSetupContribution.ID, ClawdiusPluginSetupContribution, WorkbenchPhase.AfterRestored);
 }
 // CLAWDIUS-END

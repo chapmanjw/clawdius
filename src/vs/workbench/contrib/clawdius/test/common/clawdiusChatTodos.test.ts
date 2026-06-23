@@ -6,7 +6,7 @@
 // CLAWDIUS-BEGIN native webview Claude chat: TodoWrite parse tests
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { parseTodoInput } from '../../common/clawdiusChatTodos.js';
+import { classifyTodoCall, parseTodoInput, selectLiveTodoCallId } from '../../common/clawdiusChatTodos.js';
 
 suite('Clawdius chat - parseTodoInput', () => {
 
@@ -57,6 +57,52 @@ suite('Clawdius chat - parseTodoInput', () => {
 	test('returns undefined when no entry yields usable content', () => {
 		assert.strictEqual(parseTodoInput(JSON.stringify({ todos: [] })), undefined);
 		assert.strictEqual(parseTodoInput(JSON.stringify({ todos: [{ status: 'pending' }, {}] })), undefined);
+	});
+});
+
+suite('Clawdius chat - TodoWrite projection', () => {
+
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('selectLiveTodoCallId picks the last committed call with a list', () => {
+		assert.strictEqual(selectLiveTodoCallId([
+			{ toolCallId: 'a', committed: true, hasList: true },
+			{ toolCallId: 'b', committed: true, hasList: true },
+			{ toolCallId: 'c', committed: false, hasList: true },
+		]), 'b');
+	});
+
+	test('selectLiveTodoCallId ignores non-committed and list-less calls', () => {
+		assert.strictEqual(selectLiveTodoCallId([
+			{ toolCallId: 'a', committed: true, hasList: true },
+			{ toolCallId: 'b', committed: true, hasList: false },
+		]), 'a');
+		assert.strictEqual(selectLiveTodoCallId([
+			{ toolCallId: 'p', committed: false, hasList: true },
+		]), undefined);
+	});
+
+	test('selectLiveTodoCallId returns undefined when no committed call has a list', () => {
+		assert.strictEqual(selectLiveTodoCallId([]), undefined);
+		assert.strictEqual(selectLiveTodoCallId([
+			{ toolCallId: 'a', committed: true, hasList: false },
+			{ toolCallId: 'b', committed: false, hasList: true },
+		]), undefined);
+	});
+
+	test('classifyTodoCall renders the live call as a checklist and suppresses earlier ones', () => {
+		assert.strictEqual(classifyTodoCall(true, true, true), 'todos');
+		assert.strictEqual(classifyTodoCall(true, false, true), 'suppress');
+	});
+
+	test('classifyTodoCall keeps the tool card for non-committed states (preserves approval UI)', () => {
+		assert.strictEqual(classifyTodoCall(false, false, true), 'tool');
+		assert.strictEqual(classifyTodoCall(false, false, false), 'tool');
+	});
+
+	test('classifyTodoCall keeps the tool card when no live checklist exists (never swallows)', () => {
+		assert.strictEqual(classifyTodoCall(true, false, false), 'tool');
+		assert.strictEqual(classifyTodoCall(true, true, false), 'tool');
 	});
 });
 // CLAWDIUS-END

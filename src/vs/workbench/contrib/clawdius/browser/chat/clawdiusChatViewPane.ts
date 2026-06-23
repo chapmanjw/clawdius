@@ -36,7 +36,7 @@ import { IViewPaneOptions, ViewPane } from '../../../../browser/parts/views/view
 import { IViewDescriptorService } from '../../../../common/views.js';
 import { IOverlayWebview, IWebviewService, WebviewContentPurpose } from '../../../webview/browser/webview.js';
 import { IClawdiusChatSessionService } from './clawdiusChatSessionService.js';
-import { ClawdiusTodoItem, parseTodoInput } from '../../common/clawdiusChatTodos.js';
+import { ClawdiusTodoCall, ClawdiusTodoItem, classifyTodoCall, parseTodoInput, selectLiveTodoCallId } from '../../common/clawdiusChatTodos.js';
 
 /** A StringOrMarkdown (string | { markdown }) flattened to plain text for the SPA. */
 function flattenStringOrMarkdown(value: string | { markdown: string } | undefined): string {
@@ -425,16 +425,21 @@ export class ClawdiusChatViewPane extends ViewPane {
 		}
 		if (part.kind === ResponsePartKind.ToolCall) {
 			const tc = part.toolCall;
-			// Collapse a turn's repeated COMMITTED TodoWrite updates into one live checklist. Only a Running or
-			// Completed TodoWrite becomes a checklist; in any other state (esp. PendingConfirmation) the tool
-			// falls through to the normal card so its Approve/Deny -- or cancel -- controls are preserved. This
-			// SPA is the only place the user can answer a permission prompt, so it must never be swallowed.
-			if (tc.toolName === 'TodoWrite' && this._isCommittedTodo(tc)) {
-				if (tc.toolCallId !== lastTodoId) {
+			// Collapse a turn's repeated committed TodoWrite updates into one live checklist. `classifyTodoCall`
+			// returns 'tool' for any non-committed state (esp. PendingConfirmation, so its Approve/Deny survives)
+			// AND whenever no live checklist exists (so an empty/malformed TodoWrite is never swallowed).
+			if (tc.toolName === 'TodoWrite') {
+				const mode = classifyTodoCall(this._isCommittedTodo(tc), tc.toolCallId === lastTodoId, lastTodoId !== undefined);
+				if (mode === 'suppress') {
 					return [];
 				}
-				const todos = this._parseTodos(tc);
-				return todos ? [{ kind: 'todos', id: tc.toolCallId, todos }] : [this._toolBlock(tc)];
+				if (mode === 'todos') {
+					const todos = this._parseTodos(tc);
+					if (todos) {
+						return [{ kind: 'todos', id: tc.toolCallId, todos }];
+					}
+				}
+				return [this._toolBlock(tc)];
 			}
 			return [this._toolBlock(tc)];
 		}
@@ -451,13 +456,14 @@ export class ClawdiusChatViewPane extends ViewPane {
 	/** The tool-call id of the LAST committed TodoWrite in a turn whose input parses to a non-empty todo list,
 	 *  else undefined. Used to collapse the repeated TodoWrite updates into a single live checklist. */
 	private _todoIdForTurn(parts: readonly ResponsePart[]): string | undefined {
-		let id: string | undefined;
+		const calls: ClawdiusTodoCall[] = [];
 		for (const part of parts) {
-			if (part.kind === ResponsePartKind.ToolCall && part.toolCall.toolName === 'TodoWrite' && this._isCommittedTodo(part.toolCall) && this._parseTodos(part.toolCall)) {
-				id = part.toolCall.toolCallId;
+			if (part.kind === ResponsePartKind.ToolCall && part.toolCall.toolName === 'TodoWrite') {
+				const tc = part.toolCall;
+				calls.push({ toolCallId: tc.toolCallId, committed: this._isCommittedTodo(tc), hasList: this._parseTodos(tc) !== undefined });
 			}
 		}
-		return id;
+		return selectLiveTodoCallId(calls);
 	}
 
 	/** Parse a TodoWrite tool call's raw JSON input into a todo list, defensively. Returns undefined when the

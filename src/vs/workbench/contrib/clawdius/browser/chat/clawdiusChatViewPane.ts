@@ -22,7 +22,7 @@ import { localize } from '../../../../../nls.js';
 import { IAgentHostService } from '../../../../../platform/agentHost/common/agentService.js';
 import { IAgentSubscription } from '../../../../../platform/agentHost/common/state/agentSubscription.js';
 import { ActionType, SessionModelChangedAction, SessionToolCallApprovedAction, SessionToolCallDeniedAction, SessionTurnStartedAction } from '../../../../../platform/agentHost/common/state/sessionActions.js';
-import { getToolFileEdits, MessageKind, ResponsePartKind, StateComponents, ToolCallCancellationReason, ToolCallConfirmationReason, ToolCallStatus, ToolResultContentType, TurnState, type ISessionFileDiff, type MessageAttachment, type ResponsePart, type SessionState, type ToolCallState, type ToolResultContent, type UsageInfo } from '../../../../../platform/agentHost/common/state/sessionState.js';
+import { getToolFileEdits, MessageKind, ResponsePartKind, StateComponents, ToolCallCancellationReason, ToolCallConfirmationReason, ToolCallStatus, ToolResultContentType, TurnState, type ISessionFileDiff, type MessageAttachment, type ModelSelection, type ResponsePart, type SessionModelInfo, type SessionState, type ToolCallState, type ToolResultContent, type UsageInfo } from '../../../../../platform/agentHost/common/state/sessionState.js';
 import { CompletionItemKind, type CompletionItem } from '../../../../../platform/agentHost/common/state/protocol/commands.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
@@ -207,7 +207,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 		if (this._disposed || !message || typeof message !== 'object') {
 			return;
 		}
-		const msg = message as { type?: string; text?: string; href?: string; toolCallId?: string; approved?: boolean; optionId?: string; modelId?: string; requestId?: number; offset?: number; attachments?: MessageAttachment[] };
+		const msg = message as { type?: string; text?: string; href?: string; toolCallId?: string; approved?: boolean; optionId?: string; modelId?: string; requestId?: number; offset?: number; attachments?: MessageAttachment[]; key?: string; value?: string };
 		switch (msg.type) {
 			case 'submit': {
 				const text = typeof msg.text === 'string' ? msg.text.trim() : '';
@@ -251,6 +251,10 @@ export class ClawdiusChatViewPane extends ViewPane {
 				this._setModel(typeof msg.modelId === 'string' ? msg.modelId : undefined);
 				break;
 			}
+			case 'setModelConfig': {
+				this._setModelConfig(msg.key, msg.value);
+				break;
+			}
 		}
 	}
 
@@ -278,15 +282,60 @@ export class ClawdiusChatViewPane extends ViewPane {
 		}
 		const root = this._agentHostService.rootState.value;
 		let models: { id: string; name: string }[] = [];
+		let claudeModels: readonly SessionModelInfo[] = [];
 		if (root && !(root instanceof Error)) {
 			const claude = root.agents.find(agent => agent.provider === 'claude');
 			if (claude) {
+				claudeModels = claude.models;
 				models = claude.models.map(model => ({ id: model.id, name: model.name }));
 			}
 		}
 		const state = this._subscription?.value;
-		const current = state && !(state instanceof Error) ? state.summary.model?.id : undefined;
-		this._post({ type: 'setModels', models, current });
+		const selection = state && !(state instanceof Error) ? state.summary.model : undefined;
+		const config = this._modelConfigControl(claudeModels, selection);
+		this._post({ type: 'setModels', models, current: selection?.id, config });
+	}
+
+	/** Build the descriptor for the current model's first string-enum config option (e.g. thinking level) so the
+	 *  SPA can render a small dropdown beside the model picker. Returns undefined when the model exposes none. */
+	private _modelConfigControl(models: readonly SessionModelInfo[], selection: ModelSelection | undefined): { key: string; title: string; options: { value: string; label: string }[]; current: string } | undefined {
+		if (!selection) {
+			return undefined;
+		}
+		const props = models.find(model => model.id === selection.id)?.configSchema?.properties;
+		if (!props) {
+			return undefined;
+		}
+		for (const key of Object.keys(props)) {
+			const prop = props[key];
+			if (prop.type === 'string' && Array.isArray(prop.enum) && prop.enum.length && !prop.readOnly) {
+				const options = prop.enum.map((value, i) => ({ value, label: (prop.enumLabels && prop.enumLabels[i]) || value }));
+				const current = (selection.config && selection.config[key]) || (typeof prop.default === 'string' ? prop.default : prop.enum[0]);
+				return { key, title: prop.title || key, options, current };
+			}
+		}
+		return undefined;
+	}
+
+	/** Set one model config value (e.g. thinkingLevel) by dispatching SessionModelChanged with the merged config
+	 *  for the current model, so the rest of the config is preserved. */
+	private _setModelConfig(key: string | undefined, value: string | undefined): void {
+		if (!this._sessionUri || typeof key !== 'string' || typeof value !== 'string') {
+			return;
+		}
+		const state = this._subscription?.value;
+		const selection = state && !(state instanceof Error) ? state.summary.model : undefined;
+		if (!selection) {
+			return;
+		}
+		const config: Record<string, string> = { ...(selection.config ?? {}) };
+		config[key] = value;
+		const action: SessionModelChangedAction = { type: ActionType.SessionModelChanged, model: { id: selection.id, config } };
+		try {
+			this._agentHostService.dispatch(this._sessionUri.toString(), action);
+		} catch (err) {
+			this._logService.error('[clawdius-chat] failed to set model config', err);
+		}
 	}
 
 	/** Switch the session's model by dispatching a model-changed action. Per the protocol the server defers the
@@ -724,6 +773,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 		const claudeLabel = localize('clawdius.chat.claude', "Claude");
 		const headerTitle = localize('clawdius.chat.headerTitle', "Claude Code");
 		const modelPickerLabel = localize('clawdius.chat.modelPicker', "Model");
+		const modelConfigLabel = localize('clawdius.chat.modelConfig', "Model option");
 		const welcomeHeading = localize('clawdius.chat.welcomeHeading', "Chat with Claude");
 		const welcomeSubtext = localize('clawdius.chat.welcomeSubtext', "Ask questions, request changes, or get help understanding your code.");
 		const placeholder = localize('clawdius.chat.placeholder', "Ask Claude...");
@@ -984,7 +1034,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 	</style>
 </head>
 <body>
-	<div class="header"><span class="dot"></span><span class="header-title">${escapeHtml(headerTitle)}</span><select id="model-picker" class="model-picker" aria-label="${escapeHtml(modelPickerLabel)}" hidden></select></div>
+	<div class="header"><span class="dot"></span><span class="header-title">${escapeHtml(headerTitle)}</span><select id="model-picker" class="model-picker" aria-label="${escapeHtml(modelPickerLabel)}" hidden></select><select id="model-config" class="model-picker model-config" aria-label="${escapeHtml(modelConfigLabel)}" hidden></select></div>
 	<div class="messages" id="messages" role="log">
 		<div class="welcome" id="welcome">
 			<div class="mark" aria-hidden="true">C</div>
@@ -1153,9 +1203,37 @@ export class ClawdiusChatViewPane extends ViewPane {
 					if (modelPicker.value) { vscode.postMessage({ type: 'setModel', modelId: modelPicker.value }); }
 				});
 			}
+			const modelConfig = document.getElementById('model-config');
+			if (modelConfig) {
+				modelConfig.addEventListener('change', function () {
+					const key = modelConfig.getAttribute('data-key');
+					if (key && modelConfig.value) { vscode.postMessage({ type: 'setModelConfig', key: key, value: modelConfig.value }); }
+				});
+			}
+			// The current model's first string-enum config option (e.g. thinking intensity), rebuilt only when the
+			// option set or value changes so streaming pushes do not clobber it.
+			function renderModelConfig(config) {
+				if (!modelConfig) { return; }
+				if (!config || !config.options || !config.options.length) { modelConfig.hidden = true; modelConfig.setAttribute('data-sig', ''); return; }
+				const sig = config.key + '|' + config.options.map(function (o) { return o.value; }).join(',') + '|' + (config.current || '');
+				if (modelConfig.getAttribute('data-sig') === sig) { return; }
+				modelConfig.setAttribute('data-sig', sig);
+				modelConfig.setAttribute('data-key', config.key);
+				if (config.title) { modelConfig.setAttribute('aria-label', config.title); modelConfig.title = config.title; }
+				while (modelConfig.firstChild) { modelConfig.removeChild(modelConfig.firstChild); }
+				for (let i = 0; i < config.options.length; i++) {
+					const opt = document.createElement('option');
+					opt.value = config.options[i].value;
+					opt.textContent = config.options[i].label;
+					if (config.options[i].value === config.current) { opt.selected = true; }
+					modelConfig.appendChild(opt);
+				}
+				modelConfig.hidden = false;
+			}
 			// Rebuild the picker only when the model set or current selection actually changes, so the frequent
 			// full-state pushes during streaming never clobber an open dropdown or reset the selection.
-			function setModels(models, current) {
+			function setModels(models, current, config) {
+				renderModelConfig(config);
 				if (!modelPicker) { return; }
 				if (!models || !models.length) { modelPicker.hidden = true; modelPicker.setAttribute('data-sig', ''); return; }
 				const sig = models.map(function (m) { return m.id; }).join(String.fromCharCode(10)) + '::' + (current || '');
@@ -1687,7 +1765,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 						busy = false; updateSendState(); input.focus();
 						break;
 					case 'setModels':
-						setModels(m.models, m.current);
+						setModels(m.models, m.current, m.config);
 						break;
 					case 'setUsage':
 						setUsage(m.text);

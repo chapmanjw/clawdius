@@ -416,9 +416,11 @@ export class ClawdiusChatViewPane extends ViewPane {
 		this._post({ type: 'setUsage', text: usage ? this._usageText(usage) : undefined });
 	}
 
-	/** The most recent turn's token usage (active turn first, else the last completed turn that carries it). */
+	/** The current turn's token usage: while a turn is active, its own usage (undefined until the report
+	 *  arrives, which hides the strip rather than showing the prior turn's stale numbers); when idle, the last
+	 *  completed turn that carries usage. */
 	private _latestUsage(state: SessionState): UsageInfo | undefined {
-		if (state.activeTurn?.usage) {
+		if (state.activeTurn) {
 			return state.activeTurn.usage;
 		}
 		for (let i = state.turns.length - 1; i >= 0; i--) {

@@ -603,7 +603,13 @@ export class ClawdiusChatViewPane extends ViewPane {
 				this._logService.debug('[clawdius-chat] diff resolve failed', err);
 			}
 		}
-		if (this._disposed || !files.length) {
+		if (this._disposed) {
+			return;
+		}
+		if (!files.length) {
+			// Nothing resolved (all binary, or the refs were not ready yet): drop the marker so a later render --
+			// e.g. once the tool reaches Completed with resolvable result edits -- retries instead of caching empty.
+			this._resolvedDiffs.delete(toolId);
 			return;
 		}
 		this._post({ type: 'toolDiff', toolId, files });

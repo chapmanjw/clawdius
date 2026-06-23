@@ -22,7 +22,7 @@ import { localize } from '../../../../../nls.js';
 import { IAgentHostService } from '../../../../../platform/agentHost/common/agentService.js';
 import { IAgentSubscription } from '../../../../../platform/agentHost/common/state/agentSubscription.js';
 import { ActionType, SessionModelChangedAction, SessionToolCallApprovedAction, SessionToolCallDeniedAction, SessionTurnStartedAction } from '../../../../../platform/agentHost/common/state/sessionActions.js';
-import { MessageKind, ResponsePartKind, StateComponents, ToolCallCancellationReason, ToolCallConfirmationReason, ToolCallStatus, TurnState, type ResponsePart, type SessionState, type ToolCallState } from '../../../../../platform/agentHost/common/state/sessionState.js';
+import { MessageKind, ResponsePartKind, StateComponents, ToolCallCancellationReason, ToolCallConfirmationReason, ToolCallStatus, ToolResultContentType, TurnState, type ResponsePart, type SessionState, type ToolCallState, type ToolResultContent } from '../../../../../platform/agentHost/common/state/sessionState.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from '../../../../../platform/contextview/browser/contextView.js';
@@ -66,6 +66,7 @@ type AssistantBlock =
 		success?: boolean;
 		result?: string;
 		errorText?: string;
+		output?: string;
 		cancelled?: boolean;
 	};
 
@@ -491,9 +492,22 @@ export class ClawdiusChatViewPane extends ViewPane {
 				block.confirmationTitle = flattenStringOrMarkdown(tc.confirmationTitle);
 				block.options = (tc.options ?? []).map(option => ({ id: option.id, label: option.label, kind: option.kind }));
 				break;
+			case ToolCallStatus.Running:
+				// Live output streamed while the tool runs (e.g. terminal text).
+				block.output = this._outputText(tc.content);
+				break;
+			case ToolCallStatus.PendingResultConfirmation:
+				block.success = tc.success;
+				block.result = flattenStringOrMarkdown(tc.pastTenseMessage);
+				block.output = this._outputText(tc.content);
+				if (tc.error) {
+					block.errorText = tc.error.message;
+				}
+				break;
 			case ToolCallStatus.Completed:
 				block.success = tc.success;
 				block.result = flattenStringOrMarkdown(tc.pastTenseMessage);
+				block.output = this._outputText(tc.content);
 				if (tc.error) {
 					block.errorText = tc.error.message;
 				}
@@ -505,6 +519,28 @@ export class ClawdiusChatViewPane extends ViewPane {
 				break;
 		}
 		return block;
+	}
+
+	/** Join a tool result's text-content parts into a single output string, capped so a huge result (a large
+	 *  file read or terminal dump) cannot bloat the webview DOM. Content-only by design: it never consults
+	 *  result status/success, so it is safe for the live Running `content` as well as completed results. Returns
+	 *  undefined when there is no text content. */
+	private _outputText(content: readonly ToolResultContent[] | undefined): string | undefined {
+		if (!content || content.length === 0) {
+			return undefined;
+		}
+		const parts: string[] = [];
+		for (const part of content) {
+			if (part.type === ToolResultContentType.Text) {
+				parts.push(part.text);
+			}
+		}
+		if (parts.length === 0) {
+			return undefined;
+		}
+		const text = parts.join('\n');
+		const limit = 10000;
+		return text.length > limit ? text.slice(0, limit) + '\n' + localize('clawdius.chat.outputTruncated', "... (output truncated)") : text;
 	}
 
 	/** Post to the webview, guarded against a disposed pane / torn-down webview. */
@@ -708,6 +744,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 		.tool-result { padding: 0 10px 8px; font-size: 0.88em; white-space: pre-wrap; word-break: break-word; }
 		.tool-error { padding: 0 10px 8px; font-size: 0.88em; color: var(--vscode-errorForeground); white-space: pre-wrap; word-break: break-word; }
 		.tool-cancelled { padding: 0 10px 8px; font-size: 0.85em; color: var(--vscode-descriptionForeground); font-style: italic; }
+		.tool-output { margin: 0; padding: 8px 10px; max-height: 220px; overflow: auto; font-family: var(--monaco-monospace-font, ui-monospace, monospace); font-size: 0.82em; line-height: 1.4; white-space: pre-wrap; word-break: break-word; color: var(--vscode-foreground); border-top: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); background: var(--vscode-textCodeBlock-background, rgba(127,127,127,0.06)); }
 		.todos-card { margin: 6px 0; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 6px; background: var(--vscode-textCodeBlock-background, rgba(127,127,127,0.06)); padding: 8px 10px; }
 		.todos-header { font-size: 0.82em; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--vscode-descriptionForeground); margin-bottom: 6px; }
 		.todos-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
@@ -1127,6 +1164,12 @@ export class ClawdiusChatViewPane extends ViewPane {
 						e.textContent = block.errorText;
 						card.appendChild(e);
 					}
+				}
+				if (block.output) {
+					const out = document.createElement('pre');
+					out.className = 'tool-output';
+					out.textContent = block.output;
+					card.appendChild(out);
 				}
 				if (block.cancelled) {
 					const c = document.createElement('div');

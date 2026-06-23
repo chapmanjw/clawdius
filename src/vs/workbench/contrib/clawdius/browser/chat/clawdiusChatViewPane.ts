@@ -22,7 +22,7 @@ import { localize } from '../../../../../nls.js';
 import { IAgentHostService } from '../../../../../platform/agentHost/common/agentService.js';
 import { IAgentSubscription } from '../../../../../platform/agentHost/common/state/agentSubscription.js';
 import { ActionType, SessionModelChangedAction, SessionToolCallApprovedAction, SessionToolCallDeniedAction, SessionTurnStartedAction } from '../../../../../platform/agentHost/common/state/sessionActions.js';
-import { MessageKind, ResponsePartKind, StateComponents, ToolCallCancellationReason, ToolCallConfirmationReason, ToolCallStatus, ToolResultContentType, TurnState, type ResponsePart, type SessionState, type ToolCallState, type ToolResultContent } from '../../../../../platform/agentHost/common/state/sessionState.js';
+import { MessageKind, ResponsePartKind, StateComponents, ToolCallCancellationReason, ToolCallConfirmationReason, ToolCallStatus, ToolResultContentType, TurnState, type ResponsePart, type SessionState, type ToolCallState, type ToolResultContent, type UsageInfo } from '../../../../../platform/agentHost/common/state/sessionState.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from '../../../../../platform/contextview/browser/contextView.js';
@@ -412,6 +412,32 @@ export class ClawdiusChatViewPane extends ViewPane {
 
 		this._post({ type: 'setConversation', turns, busy: this._isTurning });
 		this._postModels();
+		const usage = this._latestUsage(state);
+		this._post({ type: 'setUsage', text: usage ? this._usageText(usage) : undefined });
+	}
+
+	/** The most recent turn's token usage (active turn first, else the last completed turn that carries it). */
+	private _latestUsage(state: SessionState): UsageInfo | undefined {
+		if (state.activeTurn?.usage) {
+			return state.activeTurn.usage;
+		}
+		for (let i = state.turns.length - 1; i >= 0; i--) {
+			const usage = state.turns[i].usage;
+			if (usage) {
+				return usage;
+			}
+		}
+		return undefined;
+	}
+
+	/** A short, localized token-usage line for the meter (input / output, plus cache reads when present). */
+	private _usageText(usage: UsageInfo): string {
+		const input = (usage.inputTokens ?? 0).toLocaleString();
+		const output = (usage.outputTokens ?? 0).toLocaleString();
+		const cache = usage.cacheReadTokens ?? 0;
+		return cache > 0
+			? localize('clawdius.chat.usageCached', "{0} tokens in / {1} out (+{2} cached)", input, output, cache.toLocaleString())
+			: localize('clawdius.chat.usage', "{0} tokens in / {1} out", input, output);
 	}
 
 	/** Project a single response part into zero or more serializable blocks for the SPA. `lastTodoId` is the
@@ -797,6 +823,8 @@ export class ClawdiusChatViewPane extends ViewPane {
 			line-height: 1.4;
 			outline: none;
 		}
+		.usage { flex: 0 0 auto; padding: 3px 12px; font-size: 0.76em; color: var(--vscode-descriptionForeground); text-align: right; border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-panel-border)); }
+		.usage[hidden] { display: none; }
 		.composer textarea:focus { border-color: var(--clawdius-orange); }
 		.composer textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
 		.composer .send {
@@ -830,6 +858,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 			<p>${escapeHtml(welcomeSubtext)}</p>
 		</div>
 	</div>
+	<div class="usage" id="usage" hidden></div>
 	<div class="composer">
 		<textarea id="input" rows="1" placeholder="${escapeHtml(placeholder)}" aria-label="${escapeHtml(placeholder)}"></textarea>
 		<button class="send" id="send" type="button" disabled aria-label="${escapeHtml(sendLabel)}">${escapeHtml(sendLabel)}</button>
@@ -843,6 +872,12 @@ export class ClawdiusChatViewPane extends ViewPane {
 			const input = document.getElementById('input');
 			const send = document.getElementById('send');
 			const modelPicker = document.getElementById('model-picker');
+			const usageEl = document.getElementById('usage');
+			function setUsage(text) {
+				if (!usageEl) { return; }
+				if (text) { usageEl.textContent = text; usageEl.hidden = false; }
+				else { usageEl.textContent = ''; usageEl.hidden = true; }
+			}
 			if (modelPicker) {
 				modelPicker.addEventListener('change', function () {
 					if (modelPicker.value) { vscode.postMessage({ type: 'setModel', modelId: modelPicker.value }); }
@@ -1339,6 +1374,9 @@ export class ClawdiusChatViewPane extends ViewPane {
 						break;
 					case 'setModels':
 						setModels(m.models, m.current);
+						break;
+					case 'setUsage':
+						setUsage(m.text);
 						break;
 				}
 			});

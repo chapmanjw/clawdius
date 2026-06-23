@@ -21,8 +21,8 @@ import { generateUuid } from '../../../../../base/common/uuid.js';
 import { localize } from '../../../../../nls.js';
 import { IAgentHostService } from '../../../../../platform/agentHost/common/agentService.js';
 import { IAgentSubscription } from '../../../../../platform/agentHost/common/state/agentSubscription.js';
-import { ActionType, SessionToolCallApprovedAction, SessionToolCallDeniedAction, SessionTurnCancelledAction, SessionTurnStartedAction } from '../../../../../platform/agentHost/common/state/sessionActions.js';
-import { MessageKind, ResponsePartKind, StateComponents, ToolCallCancellationReason, ToolCallConfirmationReason, ToolCallStatus, TurnState, type SessionState, type ToolCallState } from '../../../../../platform/agentHost/common/state/sessionState.js';
+import { ActionType, SessionToolCallApprovedAction, SessionToolCallDeniedAction, SessionTurnStartedAction } from '../../../../../platform/agentHost/common/state/sessionActions.js';
+import { MessageKind, ResponsePartKind, StateComponents, ToolCallCancellationReason, ToolCallConfirmationReason, ToolCallStatus, TurnState, type ResponsePart, type SessionState, type ToolCallState } from '../../../../../platform/agentHost/common/state/sessionState.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from '../../../../../platform/contextview/browser/contextView.js';
@@ -32,10 +32,10 @@ import { IKeybindingService } from '../../../../../platform/keybinding/common/ke
 import { ILogService } from '../../../../../platform/log/common/log.js';
 import { IOpenerService } from '../../../../../platform/opener/common/opener.js';
 import { IThemeService } from '../../../../../platform/theme/common/themeService.js';
-import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { IViewPaneOptions, ViewPane } from '../../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../../common/views.js';
 import { IOverlayWebview, IWebviewService, WebviewContentPurpose } from '../../../webview/browser/webview.js';
+import { IClawdiusChatSessionService } from './clawdiusChatSessionService.js';
 
 /** A StringOrMarkdown (string | { markdown }) flattened to plain text for the SPA. */
 function flattenStringOrMarkdown(value: string | { markdown: string } | undefined): string {
@@ -86,12 +86,12 @@ export class ClawdiusChatViewPane extends ViewPane {
 	private _container: HTMLElement | undefined;
 	private _rootContainer: HTMLElement | undefined;
 
-	// Agent-host session state (created lazily on the first user turn).
+	// The Claude session lives in the window-scoped IClawdiusChatSessionService and OUTLIVES this pane; the pane
+	// subscribes/dispatches against it and re-derives the full conversation from SessionState on each attach.
 	private readonly _sessionDisposables = this._register(new DisposableStore());
 	private _sessionUri: URI | undefined;
 	private _subscription: IAgentSubscription<SessionState> | undefined;
 	private _activeTurnId: string | undefined;
-	private _sessionInit: Promise<URI> | undefined;
 	private _isTurning = false;
 	private _disposed = false;
 
@@ -108,7 +108,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 		@IHoverService hoverService: IHoverService,
 		@IWebviewService private readonly _webviewService: IWebviewService,
 		@IAgentHostService private readonly _agentHostService: IAgentHostService,
-		@IWorkspaceContextService private readonly _workspaceContextService: IWorkspaceContextService,
+		@IClawdiusChatSessionService private readonly _chatSessionService: IClawdiusChatSessionService,
 		@ILogService private readonly _logService: ILogService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
@@ -172,6 +172,12 @@ export class ClawdiusChatViewPane extends ViewPane {
 		if (this.isBodyVisible()) {
 			webview.claim(this, dom.getWindow(this.element), undefined);
 			this._layoutWebview();
+			// Reattach to the window's persistent session (if one exists) and repaint, so reopening the chat
+			// restores the conversation instead of looking empty.
+			const existing = this._chatSessionService.getSession();
+			if (existing) {
+				this._attachToSession(existing);
+			}
 		} else {
 			webview.release(this);
 		}
@@ -217,6 +223,14 @@ export class ClawdiusChatViewPane extends ViewPane {
 				this._respondToToolPermission(msg.toolCallId, msg.approved === true, typeof msg.optionId === 'string' ? msg.optionId : undefined);
 				break;
 			}
+			case 'ready': {
+				// The SPA finished loading: attach to the window's existing session (if any) and paint it.
+				const existing = this._chatSessionService.getSession();
+				if (existing) {
+					this._attachToSession(existing);
+				}
+				break;
+			}
 		}
 	}
 
@@ -236,39 +250,23 @@ export class ClawdiusChatViewPane extends ViewPane {
 		}
 	}
 
-	/**
-	 * Lazily create the Claude agent-host session + state subscription. Created on the first user turn so
-	 * opening the pane never spawns a Claude session until the user actually chats. Concurrent callers share
-	 * the in-flight promise; a failed init is cleared so a later turn can retry.
-	 */
-	private _ensureSession(): Promise<URI> {
-		if (!this._sessionInit) {
-			this._sessionInit = (async () => {
-				const workingDirectory = this._workspaceContextService.getWorkspace().folders[0]?.uri;
-				const uri = await this._agentHostService.createSession({ provider: 'claude', workingDirectory });
-				if (this._disposed) {
-					// The pane was disposed while the session was being created: free the orphaned session.
-					this._agentHostService.disposeSession(uri).catch(err => this._logService.error('[clawdius-chat] disposeSession (orphaned) failed', err));
-					throw new Error('clawdius-chat: pane disposed during session creation');
-				}
-				this._sessionUri = uri;
-				const ref = this._agentHostService.getSubscription(StateComponents.Session, uri, 'ClawdiusChatViewPane');
-				// Tie the subscription reference AND its listener to a session-scoped store, disposed first in
-				// dispose() so onDidChange can never fire after teardown begins.
-				this._sessionDisposables.add(ref);
-				this._subscription = ref.object;
-				this._sessionDisposables.add(ref.object.onDidChange(() => this._onSessionStateChange()));
-				return uri;
-			})();
-			this._sessionInit.catch(() => { this._sessionInit = undefined; });
+	/** Subscribe to the (already-created) session once and repaint. Re-acquires the refcounted subscription if
+	 *  this is a freshly-created pane attaching to a session that is still running in the window service. */
+	private _attachToSession(uri: URI): void {
+		this._sessionUri = uri;
+		if (!this._subscription) {
+			const ref = this._agentHostService.getSubscription(StateComponents.Session, uri, 'ClawdiusChatViewPane');
+			this._sessionDisposables.add(ref);
+			this._subscription = ref.object;
+			this._sessionDisposables.add(ref.object.onDidChange(() => this._renderConversation()));
 		}
-		return this._sessionInit;
+		this._renderConversation();
 	}
 
-	/** Send the user's prompt as a new turn and stream the assistant response back to the SPA. */
+	/** Send the user's prompt as a new turn. The session is owned by the window-scoped service and outlives
+	 *  this pane, so closing/reopening the chat keeps the conversation; the response streams back via state. */
 	private async _startTurn(text: string): Promise<void> {
-		// ViewPane-level serialization (belt-and-suspenders with the SPA's `busy` flag): never dispatch a
-		// second turn while one is in flight, which would overwrite _activeTurnId and orphan the first turn.
+		// One turn at a time (belt-and-suspenders with the SPA's busy flag, which is derived from state).
 		if (this._isTurning) {
 			return;
 		}
@@ -276,7 +274,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 
 		let uri: URI;
 		try {
-			uri = await this._ensureSession();
+			uri = await this._chatSessionService.getOrCreateSession();
 		} catch (err) {
 			this._isTurning = false;
 			if (this._disposed) {
@@ -290,11 +288,10 @@ export class ClawdiusChatViewPane extends ViewPane {
 			this._isTurning = false;
 			return;
 		}
+		this._attachToSession(uri);
 
 		const turnId = generateUuid();
 		this._activeTurnId = turnId;
-		this._post({ type: 'assistantPending', id: turnId });
-
 		const action: SessionTurnStartedAction = {
 			type: ActionType.SessionTurnStarted,
 			turnId,
@@ -306,22 +303,21 @@ export class ClawdiusChatViewPane extends ViewPane {
 			this._logService.error('[clawdius-chat] failed to dispatch turn', err);
 			this._activeTurnId = undefined;
 			this._isTurning = false;
-			this._post({ type: 'chatError', text: localize('clawdius.chat.dispatchError', "Could not send your message to Claude."), id: turnId });
+			this._post({ type: 'chatError', text: localize('clawdius.chat.dispatchError', "Could not send your message to Claude.") });
 		}
 	}
 
 	/**
-	 * Re-derive the active turn's assistant text from the authoritative SessionState on each change and push
-	 * it to the SPA. Reading state (rather than accumulating raw deltas) keeps the bridge simple and correct:
-	 * the markdown response parts always hold the full text-so-far.
+	 * Re-derive the ENTIRE conversation (every turn, in stream order) from the authoritative SessionState and
+	 * push it to the SPA, which rebuilds the transcript. One source of truth: this is why the chat survives the
+	 * pane being disposed/recreated - on reattach the first render repaints the full history from state.
 	 */
-	private _onSessionStateChange(): void {
+	private _renderConversation(): void {
 		if (this._disposed) {
 			return;
 		}
-		const turnId = this._activeTurnId;
 		const subscription = this._subscription;
-		if (!turnId || !subscription || !this._webview) {
+		if (!subscription || !this._webview.value) {
 			return;
 		}
 		const state = subscription.value;
@@ -333,49 +329,40 @@ export class ClawdiusChatViewPane extends ViewPane {
 			return;
 		}
 
-		const active = state.activeTurn?.id === turnId ? state.activeTurn : undefined;
-		const completed = active ? undefined : state.turns.find(turn => turn.id === turnId);
-		const turn = active ?? completed;
-		if (!turn) {
-			return;
+		this._activeTurnId = state.activeTurn?.id;
+		this._isTurning = !!state.activeTurn;
+
+		// Completed turns carry a terminal `state`/`error`; the active turn (if any) is still streaming.
+		const turns = state.turns.map(turn => ({
+			id: turn.id,
+			user: turn.message.text,
+			blocks: turn.responseParts.flatMap(part => this._partBlocks(part)),
+			error: turn.state === TurnState.Error ? (turn.error?.message || localize('clawdius.chat.turnError', "Claude could not complete the response.")) : undefined,
+		}));
+		if (state.activeTurn) {
+			turns.push({
+				id: state.activeTurn.id,
+				user: state.activeTurn.message.text,
+				blocks: state.activeTurn.responseParts.flatMap(part => this._partBlocks(part)),
+				error: undefined,
+			});
 		}
 
-		// INC-2: render the full response stream in order - markdown, reasoning (thinking), and tool calls
-		// (with inline permission cards). Re-derived from the authoritative state on each change so the parts
-		// always hold the full state-so-far. Content refs and system notifications are deferred to a later step.
-		const blocks: AssistantBlock[] = [];
-		for (const part of turn.responseParts) {
-			if (part.kind === ResponsePartKind.Markdown) {
-				if (part.content) {
-					blocks.push({ kind: 'markdown', text: part.content });
-				}
-			} else if (part.kind === ResponsePartKind.Reasoning) {
-				if (part.content) {
-					blocks.push({ kind: 'reasoning', text: part.content });
-				}
-			} else if (part.kind === ResponsePartKind.ToolCall) {
-				blocks.push(this._toolBlock(part.toolCall));
-			}
-		}
-		if (blocks.length > 0) {
-			this._post({ type: 'setAssistantParts', id: turnId, blocks });
-		}
+		this._post({ type: 'setConversation', turns, busy: this._isTurning });
+	}
 
-		if (completed) {
-			// A turn has exactly one terminal signal: chatError (with the bubble id, so the SPA can clear the
-			// pending bubble) OR assistantDone - never both.
-			this._activeTurnId = undefined;
-			this._isTurning = false;
-			if (completed.state === TurnState.Error) {
-				const errorText = completed.error?.message || localize('clawdius.chat.turnError', "Claude could not complete the response.");
-				this._post({ type: 'chatError', text: errorText, id: turnId });
-			} else {
-				if (blocks.length === 0) {
-					this._post({ type: 'setAssistantParts', id: turnId, blocks: [{ kind: 'markdown', text: localize('clawdius.chat.noText', "Claude finished this turn without text output.") }] });
-				}
-				this._post({ type: 'assistantDone', id: turnId });
-			}
+	/** Project a single response part into zero or more serializable blocks for the SPA. */
+	private _partBlocks(part: ResponsePart): AssistantBlock[] {
+		if (part.kind === ResponsePartKind.Markdown) {
+			return part.content ? [{ kind: 'markdown', text: part.content }] : [];
 		}
+		if (part.kind === ResponsePartKind.Reasoning) {
+			return part.content ? [{ kind: 'reasoning', text: part.content }] : [];
+		}
+		if (part.kind === ResponsePartKind.ToolCall) {
+			return [this._toolBlock(part.toolCall)];
+		}
+		return [];
 	}
 
 	/** Project a ToolCallState into a serializable tool block for the SPA (status drives which fields exist). */
@@ -424,22 +411,13 @@ export class ClawdiusChatViewPane extends ViewPane {
 
 	override dispose(): void {
 		this._disposed = true;
-		// Detach the subscription + its onDidChange listener FIRST so no state callback runs during teardown.
+		// Release ONLY this pane's subscription + listener. The session itself is owned by the window-scoped
+		// IClawdiusChatSessionService and is NOT disposed here, nor is the in-flight turn cancelled - so closing
+		// and reopening the chat preserves the conversation (and a running turn keeps streaming).
 		this._sessionDisposables.dispose();
 		this._subscription = undefined;
-		if (this._sessionUri) {
-			if (this._activeTurnId) {
-				const cancel: SessionTurnCancelledAction = { type: ActionType.SessionTurnCancelled, turnId: this._activeTurnId };
-				try {
-					this._agentHostService.dispatch(this._sessionUri.toString(), cancel);
-				} catch {
-					// best-effort cancel on teardown
-				}
-				this._activeTurnId = undefined;
-			}
-			this._agentHostService.disposeSession(this._sessionUri).catch(err => this._logService.error('[clawdius-chat] disposeSession failed', err));
-			this._sessionUri = undefined;
-		}
+		this._sessionUri = undefined;
+		this._activeTurnId = undefined;
 		super.dispose();
 	}
 
@@ -694,7 +672,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 			let busy = false;
 
 			function clearWelcome() {
-				if (welcome && welcome.parentNode) { welcome.remove(); }
+				if (welcome) { welcome.style.display = 'none'; }
 			}
 			// Only auto-scroll while the user is already near the bottom, so streaming updates never yank a
 			// user who scrolled up to read earlier output.
@@ -1042,6 +1020,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 				vscode.postMessage({ type: 'submit', text: text });
 				input.value = '';
 				input.style.height = 'auto';
+				busy = true; // optimistic; the next setConversation confirms the turn is active
 				updateSendState();
 			}
 
@@ -1072,25 +1051,44 @@ export class ClawdiusChatViewPane extends ViewPane {
 				}
 			});
 
+			// Rebuild the whole transcript from the authoritative conversation state. One source of truth, so
+			// reopening the chat (which recreates the pane + webview) repaints the existing conversation rather
+			// than starting over.
+			function setConversation(turns, isBusy) {
+				const stick = isNearBottom();
+				const existingMsgs = messages.querySelectorAll('.msg');
+				for (let i = 0; i < existingMsgs.length; i++) { existingMsgs[i].remove(); }
+				for (const k in assistantBubbles) { delete assistantBubbles[k]; }
+				if (!turns || !turns.length) {
+					if (welcome) { welcome.style.display = ''; }
+				} else {
+					if (welcome) { welcome.style.display = 'none'; }
+					for (let i = 0; i < turns.length; i++) {
+						const t = turns[i];
+						if (typeof t.user === 'string' && t.user.length) { addUser(t.user); }
+						if (t.blocks && t.blocks.length) {
+							setAssistantParts(t.id, t.blocks);
+						} else if (isBusy && i === turns.length - 1) {
+							ensureAssistant(t.id);
+						}
+						if (typeof t.error === 'string' && t.error) { showError(t.error); }
+					}
+				}
+				const wasBusy = busy;
+				busy = isBusy;
+				updateSendState();
+				if (wasBusy && !busy) { input.focus(); }
+				if (stick) { toBottom(); }
+			}
+
 			window.addEventListener('message', function (event) {
 				const m = event.data;
 				if (!m || typeof m.type !== 'string') { return; }
 				switch (m.type) {
-					case 'appendUser':
-						if (typeof m.text === 'string') { addUser(m.text); }
-						break;
-					case 'assistantPending':
-						if (typeof m.id === 'string') { ensureAssistant(m.id); busy = true; updateSendState(); }
-						break;
-					case 'setAssistantParts':
-						if (typeof m.id === 'string' && Array.isArray(m.blocks)) { setAssistantParts(m.id, m.blocks); }
-						break;
-					case 'assistantDone':
-						if (typeof m.id === 'string') { doneAssistant(m.id); }
-						busy = false; updateSendState(); input.focus();
+					case 'setConversation':
+						if (Array.isArray(m.turns)) { setConversation(m.turns, !!m.busy); }
 						break;
 					case 'chatError':
-						if (typeof m.id === 'string') { removeAssistant(m.id); }
 						if (typeof m.text === 'string') { showError(m.text); }
 						busy = false; updateSendState(); input.focus();
 						break;

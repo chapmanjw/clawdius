@@ -1013,6 +1013,9 @@ export class ClawdiusChatViewPane extends ViewPane {
 				if (text) { usageEl.textContent = text; usageEl.hidden = false; }
 				else { usageEl.textContent = ''; usageEl.hidden = true; }
 			}
+			// Inline completion (@-mention / file ref / slash) state machine. NOTE: this runs in the webview as
+			// part of the SPA string, so it cannot be unit-tested without a browser harness; its correctness is
+			// gated by review. If this logic grows, extract the pure span/diff helpers to a testable module.
 			const completionsEl = document.getElementById('completions');
 			let triggers = [];
 			let completionItems = [];

@@ -141,3 +141,48 @@ upstream area touched. Prefer data (`product.json`) and new files over in-place 
 - Move `Ctrl/Cmd+Alt+I` from the old chat to the Clawdius chat (the keybinding strip edit fought file indentation).
 - INC-2 remainder: tool `PendingResultConfirmation` result-approval gate (needs `SessionToolCallResultConfirmed`), live tool `content` (terminal output), TodoWrite checklist, inline diffs + accept/reject, model picker, @-mention, /-slash, plan/accept modes, cost meter. Thinking block re-collapses on each streaming delta (rebuild loses `<details>` open state).
 - Full Ultracode window removal after its config/customization panels are ported to the left Clawdius container.
+
+## Phase 3 follow-up session: chat feature build-out (each Codex-reviewed before/after landing)
+All chat work is in the marked Clawdius files (`clawdiusChatViewPane.ts`, new `common/clawdiusChatTodos.ts` +
+its test) plus two in-place gates. Each feature was reviewed by the Codex ACP agent (via Rutherford) and its
+findings fixed before the feature was considered done.
+
+- `src/vs/platform/agentHost/node/claude/claudeSdkOptions.ts` (in-place, marked): SECURITY fix.
+  `allowDangerouslySkipPermissions` was hardcoded `true`, silently auto-approving every tool. Now set only for
+  `permissionMode === 'bypassPermissions'`. Per the SDK contract (`sdk.d.ts`) `dontAsk` means "don't prompt,
+  DENY if not pre-approved" (auto-deny), so it must NOT skip-and-run - Codex caught that an earlier
+  `|| dontAsk` re-opened the hole. default/acceptEdits/plan/auto/dontAsk all defer to canUseTool.
+- `src/vs/workbench/contrib/chat/browser/agentSessions/experiments/agentSessionsExperiments.contribution.ts`
+  (in-place, marked): the title-bar agent-status badges + CommandCenter/TitleBar menu items are gated behind
+  `if (product.defaultChatAgent?.entitlementUrl)` so they do not register in Clawdius (no stale notifications).
+- `src/vs/workbench/contrib/clawdius/browser/chat/clawdiusChatSessionService.ts` (new): window-scoped service
+  owning the Claude session URI/lifecycle so the conversation survives the pane being disposed/recreated. The
+  ViewPane subscribes/dispatches but never creates/disposes it.
+- `src/vs/workbench/contrib/clawdius/browser/chat/clawdiusChatViewPane.ts` (extended): full-transcript render
+  from authoritative SessionState on each reattach; empty-successful-turn fallback; **model picker** (header
+  dropdown, `SessionModelChanged`, preserves thinkingLevel config across a switch); **TodoWrite live checklist**
+  (collapses a turn's repeated updates to the latest committed list; pending-confirmation TodoWrite keeps its
+  Allow/Deny; never swallows an empty/malformed card); **tool text output** (Running/Completed/
+  PendingResultConfirmation, content-only extractor, capped at 10k chars); **token usage meter** (current
+  turn's tokens, hidden during a fresh stream); **file-edit summaries** (path + added/removed lines on the pending
+  permission card and completed results; only deletion asserted from before/after presence); **inline
+  completions / @-mention / slash** (agent-host `completions()` + `getCompletionTriggerCharacters()`,
+  keyboard-navigable dropdown, span-tracked attachments threaded into the turn with edit-delta adjustment +
+  identity dedupe + stale-response guard).
+- `src/vs/workbench/contrib/clawdius/common/clawdiusChatTodos.ts` (new) + `test/common/clawdiusChatTodos.test.ts`
+  (new): pure TodoWrite parse + projection helpers, unit-tested (parser robustness, live-id selection, render
+  classification incl. the never-swallow guard).
+
+### Still deferred after this session (tracked honestly, NOT done)
+- Full inline DIFF TEXT (resolving FileEdit `ContentRef`s to actual +/- lines) and changeset accept/reject
+  (`StateComponents.Changeset`, `invokeChangesetOperation`). Only at-a-glance edit summaries are done; the
+  permission Allow/Deny already gates whether edits apply.
+- Plan/accept permission-mode toggle, explicit thinking-intensity control (the model `configSchema` form),
+  image paste into the composer.
+- Path-A config neutralization and the `Ctrl/Cmd+Alt+I` keybinding swap (from the night session).
+- `PendingResultConfirmation` result-approval gate: Codex confirmed Claude's mapper emits
+  `SessionToolCallComplete` without `requiresResultConfirmation`, so this state is currently dead code for the
+  Claude host (the tool-output render handles it informationally).
+- The completion state machine runs as inline webview SPA string-JS; it cannot be unit-tested without a
+  browser harness, so its correctness is gated by review. Extract the pure span/diff helpers to a tested
+  module if it grows.

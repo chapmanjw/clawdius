@@ -22,7 +22,8 @@ import { localize } from '../../../../../nls.js';
 import { IAgentHostService } from '../../../../../platform/agentHost/common/agentService.js';
 import { IAgentSubscription } from '../../../../../platform/agentHost/common/state/agentSubscription.js';
 import { ActionType, SessionModelChangedAction, SessionToolCallApprovedAction, SessionToolCallDeniedAction, SessionTurnStartedAction } from '../../../../../platform/agentHost/common/state/sessionActions.js';
-import { getToolFileEdits, MessageKind, ResponsePartKind, StateComponents, ToolCallCancellationReason, ToolCallConfirmationReason, ToolCallStatus, ToolResultContentType, TurnState, type ISessionFileDiff, type ResponsePart, type SessionState, type ToolCallState, type ToolResultContent, type UsageInfo } from '../../../../../platform/agentHost/common/state/sessionState.js';
+import { getToolFileEdits, MessageKind, ResponsePartKind, StateComponents, ToolCallCancellationReason, ToolCallConfirmationReason, ToolCallStatus, ToolResultContentType, TurnState, type ISessionFileDiff, type MessageAttachment, type ResponsePart, type SessionState, type ToolCallState, type ToolResultContent, type UsageInfo } from '../../../../../platform/agentHost/common/state/sessionState.js';
+import { CompletionItemKind, type CompletionItem } from '../../../../../platform/agentHost/common/state/protocol/commands.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from '../../../../../platform/contextview/browser/contextView.js';
@@ -206,15 +207,19 @@ export class ClawdiusChatViewPane extends ViewPane {
 		if (this._disposed || !message || typeof message !== 'object') {
 			return;
 		}
-		const msg = message as { type?: string; text?: string; href?: string; toolCallId?: string; approved?: boolean; optionId?: string; modelId?: string };
+		const msg = message as { type?: string; text?: string; href?: string; toolCallId?: string; approved?: boolean; optionId?: string; modelId?: string; requestId?: number; offset?: number; attachments?: MessageAttachment[] };
 		switch (msg.type) {
 			case 'submit': {
 				const text = typeof msg.text === 'string' ? msg.text.trim() : '';
 				if (!text) {
 					return;
 				}
-				this._post({ type: 'appendUser', text });
-				void this._startTurn(text);
+				const attachments = Array.isArray(msg.attachments) ? msg.attachments : undefined;
+				void this._startTurn(text, attachments);
+				break;
+			}
+			case 'requestCompletions': {
+				void this._requestCompletions(typeof msg.requestId === 'number' ? msg.requestId : 0, typeof msg.text === 'string' ? msg.text : '', typeof msg.offset === 'number' ? msg.offset : 0);
 				break;
 			}
 			case 'openLink': {
@@ -239,6 +244,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 					this._attachToSession(existing);
 				}
 				this._postModels();
+				void this._postTriggers();
 				break;
 			}
 			case 'setModel': {
@@ -309,6 +315,56 @@ export class ClawdiusChatViewPane extends ViewPane {
 		}
 	}
 
+	/** Push the agent host's completion trigger characters (e.g. `@`, `/`) to the SPA so it knows when to ask
+	 *  for completions while the user composes a message. */
+	private async _postTriggers(): Promise<void> {
+		let chars: readonly string[];
+		try {
+			chars = await this._agentHostService.getCompletionTriggerCharacters();
+		} catch (err) {
+			this._logService.debug('[clawdius-chat] completion triggers unavailable', err);
+			return;
+		}
+		if (this._disposed) {
+			return;
+		}
+		this._post({ type: 'setTriggers', chars: [...chars] });
+	}
+
+	/** Resolve completion items for the in-progress message (e.g. an `@`-mention). Creates the session lazily so
+	 *  completions work before the first turn, then posts the items back tagged with the originating requestId so
+	 *  the SPA can drop stale responses. The full attachment travels with each item and is sent back on submit. */
+	private async _requestCompletions(requestId: number, text: string, offset: number): Promise<void> {
+		let uri: URI;
+		try {
+			uri = await this._chatSessionService.getOrCreateSession();
+		} catch {
+			return;
+		}
+		if (this._disposed) {
+			return;
+		}
+		this._attachToSession(uri);
+		let items: CompletionItem[];
+		try {
+			const result = await this._agentHostService.completions({ kind: CompletionItemKind.UserMessage, channel: uri.toString(), text, offset });
+			items = result.items;
+		} catch (err) {
+			this._logService.debug('[clawdius-chat] completions failed', err);
+			return;
+		}
+		if (this._disposed) {
+			return;
+		}
+		const mapped = items.map(item => ({
+			insertText: item.insertText,
+			rangeStart: item.rangeStart,
+			rangeEnd: item.rangeEnd,
+			attachment: item.attachment,
+		}));
+		this._post({ type: 'completions', requestId, items: mapped });
+	}
+
 	/** Subscribe to the (already-created) session once and repaint. Re-acquires the refcounted subscription if
 	 *  this is a freshly-created pane attaching to a session that is still running in the window service. */
 	private _attachToSession(uri: URI): void {
@@ -324,7 +380,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 
 	/** Send the user's prompt as a new turn. The session is owned by the window-scoped service and outlives
 	 *  this pane, so closing/reopening the chat keeps the conversation; the response streams back via state. */
-	private async _startTurn(text: string): Promise<void> {
+	private async _startTurn(text: string, attachments?: readonly MessageAttachment[]): Promise<void> {
 		// One turn at a time (belt-and-suspenders with the SPA's busy flag, which is derived from state).
 		if (this._isTurning) {
 			return;
@@ -354,7 +410,9 @@ export class ClawdiusChatViewPane extends ViewPane {
 		const action: SessionTurnStartedAction = {
 			type: ActionType.SessionTurnStarted,
 			turnId,
-			message: { text, origin: { kind: MessageKind.User } },
+			message: attachments && attachments.length
+				? { text, origin: { kind: MessageKind.User }, attachments: [...attachments] }
+				: { text, origin: { kind: MessageKind.User } },
 		};
 		try {
 			this._agentHostService.dispatch(uri.toString(), action);
@@ -897,6 +955,10 @@ export class ClawdiusChatViewPane extends ViewPane {
 		}
 		.usage { flex: 0 0 auto; padding: 3px 12px; font-size: 0.76em; color: var(--vscode-descriptionForeground); text-align: right; border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-panel-border)); }
 		.usage[hidden] { display: none; }
+		.completions { flex: 0 0 auto; max-height: 180px; overflow-y: auto; border-top: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); background: var(--vscode-editorSuggestWidget-background, var(--vscode-input-background)); }
+		.completions[hidden] { display: none; }
+		.completion-item { padding: 5px 12px; font-size: 0.86em; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--vscode-editorSuggestWidget-foreground, var(--vscode-foreground)); }
+		.completion-item.selected { background: var(--vscode-editorSuggestWidget-selectedBackground, var(--vscode-list-activeSelectionBackground, var(--clawdius-orange))); color: var(--vscode-editorSuggestWidget-selectedForeground, var(--vscode-list-activeSelectionForeground, var(--clawdius-ivory))); }
 		.composer textarea:focus { border-color: var(--clawdius-orange); }
 		.composer textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
 		.composer .send {
@@ -930,6 +992,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 			<p>${escapeHtml(welcomeSubtext)}</p>
 		</div>
 	</div>
+	<div class="completions" id="completions" role="listbox" hidden></div>
 	<div class="usage" id="usage" hidden></div>
 	<div class="composer">
 		<textarea id="input" rows="1" placeholder="${escapeHtml(placeholder)}" aria-label="${escapeHtml(placeholder)}"></textarea>
@@ -949,6 +1012,92 @@ export class ClawdiusChatViewPane extends ViewPane {
 				if (!usageEl) { return; }
 				if (text) { usageEl.textContent = text; usageEl.hidden = false; }
 				else { usageEl.textContent = ''; usageEl.hidden = true; }
+			}
+			const completionsEl = document.getElementById('completions');
+			let triggers = [];
+			let completionItems = [];
+			let completionIndex = -1;
+			let completionReqId = 0;
+			let completionTimer = null;
+			const pendingAttachments = [];
+			function completionsVisible() {
+				return !!completionsEl && !completionsEl.hidden && completionItems.length > 0;
+			}
+			function mentionContext() {
+				if (!triggers.length) { return null; }
+				const pos = input.selectionStart;
+				const text = input.value;
+				for (let i = pos - 1; i >= 0; i--) {
+					const ch = text.charAt(i);
+					if (ch === ' ' || ch === String.fromCharCode(10) || ch === String.fromCharCode(9)) { return null; }
+					if (triggers.indexOf(ch) >= 0) { return { start: i }; }
+				}
+				return null;
+			}
+			function scheduleCompletions() {
+				if (completionTimer) { clearTimeout(completionTimer); }
+				completionTimer = setTimeout(requestCompletions, 120);
+			}
+			function requestCompletions() {
+				if (!mentionContext()) { hideCompletions(); return; }
+				completionReqId++;
+				vscode.postMessage({ type: 'requestCompletions', requestId: completionReqId, text: input.value, offset: input.selectionStart });
+			}
+			function hideCompletions() {
+				completionItems = [];
+				completionIndex = -1;
+				if (completionsEl) {
+					completionsEl.hidden = true;
+					while (completionsEl.firstChild) { completionsEl.removeChild(completionsEl.firstChild); }
+				}
+			}
+			function showCompletions(items) {
+				if (!completionsEl || !items || !items.length) { hideCompletions(); return; }
+				completionItems = items;
+				completionIndex = 0;
+				while (completionsEl.firstChild) { completionsEl.removeChild(completionsEl.firstChild); }
+				for (let i = 0; i < items.length; i++) {
+					const it = items[i];
+					const row = document.createElement('div');
+					row.className = 'completion-item' + (i === 0 ? ' selected' : '');
+					row.setAttribute('role', 'option');
+					row.textContent = (it.attachment && it.attachment.label) ? it.attachment.label : it.insertText;
+					row.addEventListener('mousedown', function (e) { e.preventDefault(); acceptCompletion(i); });
+					completionsEl.appendChild(row);
+				}
+				completionsEl.hidden = false;
+			}
+			function moveCompletion(delta) {
+				if (!completionItems.length) { return; }
+				completionIndex = (completionIndex + delta + completionItems.length) % completionItems.length;
+				const rows = completionsEl.querySelectorAll('.completion-item');
+				for (let i = 0; i < rows.length; i++) {
+					if (i === completionIndex) { rows[i].classList.add('selected'); rows[i].scrollIntoView({ block: 'nearest' }); }
+					else { rows[i].classList.remove('selected'); }
+				}
+			}
+			function acceptCompletion(i) {
+				const it = completionItems[i];
+				if (!it) { hideCompletions(); return; }
+				const text = input.value;
+				const start = (typeof it.rangeStart === 'number') ? it.rangeStart : input.selectionStart;
+				const end = (typeof it.rangeEnd === 'number') ? it.rangeEnd : input.selectionStart;
+				input.value = text.slice(0, start) + it.insertText + text.slice(end);
+				const caret = start + it.insertText.length;
+				input.setSelectionRange(caret, caret);
+				if (it.attachment) { pendingAttachments.push({ insertText: it.insertText, attachment: it.attachment }); }
+				hideCompletions();
+				input.focus();
+				input.style.height = 'auto';
+				input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+				updateSendState();
+			}
+			function collectAttachments(text) {
+				const out = [];
+				for (let i = 0; i < pendingAttachments.length; i++) {
+					if (text.indexOf(pendingAttachments[i].insertText) >= 0) { out.push(pendingAttachments[i].attachment); }
+				}
+				return out;
 			}
 			if (modelPicker) {
 				modelPicker.addEventListener('change', function () {
@@ -1391,14 +1540,23 @@ export class ClawdiusChatViewPane extends ViewPane {
 				if (busy) { return; }
 				const text = input.value.trim();
 				if (!text) { return; }
-				vscode.postMessage({ type: 'submit', text: text });
+				const attachments = collectAttachments(input.value);
+				vscode.postMessage({ type: 'submit', text: text, attachments: attachments });
 				input.value = '';
+				pendingAttachments.length = 0;
+				hideCompletions();
 				input.style.height = 'auto';
 				busy = true; // optimistic; the next setConversation confirms the turn is active
 				updateSendState();
 			}
 
 			input.addEventListener('keydown', function (e) {
+				if (completionsVisible()) {
+					if (e.key === 'ArrowDown') { e.preventDefault(); moveCompletion(1); return; }
+					if (e.key === 'ArrowUp') { e.preventDefault(); moveCompletion(-1); return; }
+					if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); acceptCompletion(completionIndex); return; }
+					if (e.key === 'Escape') { e.preventDefault(); hideCompletions(); return; }
+				}
 				if (e.key === 'Enter' && !e.shiftKey) {
 					e.preventDefault();
 					submit();
@@ -1408,6 +1566,11 @@ export class ClawdiusChatViewPane extends ViewPane {
 				input.style.height = 'auto';
 				input.style.height = Math.min(input.scrollHeight, 160) + 'px';
 				updateSendState();
+				scheduleCompletions();
+			});
+			input.addEventListener('blur', function () { setTimeout(hideCompletions, 120); });
+			input.addEventListener('keyup', function (e) {
+				if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { scheduleCompletions(); }
 			});
 			send.addEventListener('click', submit);
 
@@ -1476,6 +1639,12 @@ export class ClawdiusChatViewPane extends ViewPane {
 						break;
 					case 'setUsage':
 						setUsage(m.text);
+						break;
+					case 'setTriggers':
+						if (Array.isArray(m.chars)) { triggers = m.chars; }
+						break;
+					case 'completions':
+						if (m.requestId === completionReqId && Array.isArray(m.items)) { showCompletions(m.items); }
 						break;
 				}
 			});

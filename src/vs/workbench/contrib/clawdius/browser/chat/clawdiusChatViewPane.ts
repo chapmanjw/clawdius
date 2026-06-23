@@ -449,6 +449,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 			statusRunning: localize('clawdius.chat.statusRunning', "Running..."),
 			statusDone: localize('clawdius.chat.statusDone', "Done"),
 			statusFailed: localize('clawdius.chat.statusFailed', "Failed"),
+			noText: localize('clawdius.chat.noText', "Claude finished this turn without text output."),
 		})
 			.replace(new RegExp(String.fromCharCode(0x2028), 'g'), '\\u2028')
 			.replace(new RegExp(String.fromCharCode(0x2029), 'g'), '\\u2029');
@@ -1066,10 +1067,15 @@ export class ClawdiusChatViewPane extends ViewPane {
 					for (let i = 0; i < turns.length; i++) {
 						const t = turns[i];
 						if (typeof t.user === 'string' && t.user.length) { addUser(t.user); }
+						const isActiveLast = isBusy && i === turns.length - 1;
 						if (t.blocks && t.blocks.length) {
 							setAssistantParts(t.id, t.blocks);
-						} else if (isBusy && i === turns.length - 1) {
+						} else if (isActiveLast) {
 							ensureAssistant(t.id);
+						} else if (!t.error) {
+							// Completed turn with no response blocks and no error: show the no-text fallback so a
+							// valid-but-empty successful turn does not look like a dropped request after reopen.
+							setAssistantParts(t.id, [{ kind: 'markdown', text: STRINGS.noText }]);
 						}
 						if (typeof t.error === 'string' && t.error) { showError(t.error); }
 					}

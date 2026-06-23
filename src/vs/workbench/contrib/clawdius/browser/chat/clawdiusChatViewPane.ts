@@ -589,8 +589,9 @@ export class ClawdiusChatViewPane extends ViewPane {
 	}
 
 	/** Project file edits (from a pending-confirmation preview or a completed result) into compact summaries:
-	 *  file name, added/removed line counts, and whether the file is created / deleted / edited. The diff text
-	 *  itself lives behind ContentRefs that are not resolved here -- this is the at-a-glance footprint. */
+	 *  file name, added/removed line counts, and whether the file is deleted -- the only change kind the
+	 *  contract lets us assert from before/after presence; creations and in-place edits are both reported as
+	 *  'edit'. The diff text itself lives behind ContentRefs that are not resolved here (at-a-glance footprint). */
 	private _fileEdits(items: readonly ISessionFileDiff[]): { path: string; added: number; removed: number; change: string }[] {
 		const out: { path: string; added: number; removed: number; change: string }[] = [];
 		for (const item of items) {
@@ -598,8 +599,9 @@ export class ClawdiusChatViewPane extends ViewPane {
 			if (!uri) {
 				continue;
 			}
-			// Per the FileEdit contract, `after` is absent ONLY for deletions; `before` is absent for BOTH
-			// creations and in-place edits, so it cannot tell create from edit -- we only assert deletion.
+			// `after` absent reliably means deletion. `before` absence is ambiguous per the contract (creation
+			// OR in-place edit) -- and the Claude mapper emits both snapshots even for creates -- so creates and
+			// edits are both reported as 'edit'; only deletion is asserted.
 			const change = !item.after ? 'delete' : 'edit';
 			out.push({ path: this._basename(uri), added: item.diff?.added ?? 0, removed: item.diff?.removed ?? 0, change });
 		}
@@ -618,8 +620,14 @@ export class ClawdiusChatViewPane extends ViewPane {
 		if (query >= 0) {
 			s = s.slice(0, query);
 		}
+		while (s.length > 1 && s.endsWith('/')) {
+			s = s.slice(0, -1);
+		}
 		const slash = s.lastIndexOf('/');
 		const name = slash >= 0 ? s.slice(slash + 1) : s;
+		if (!name) {
+			return uri;
+		}
 		try {
 			return decodeURIComponent(name);
 		} catch {

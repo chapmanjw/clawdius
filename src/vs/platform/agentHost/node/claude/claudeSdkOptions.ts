@@ -126,7 +126,13 @@ export async function buildOptions(
 		...(input.cliResolution.wrapperPath ? { spawnClaudeCodeProcess: createClaudeProcessWrapperSpawn(input.cliResolution.wrapperPath) } : {}),
 		// CLAWDIUS-END
 		abortController: input.abortController,
-		allowDangerouslySkipPermissions: true,
+		// CLAWDIUS-BEGIN respect the permission mode instead of always skipping
+		// Was hardcoded `true`, which silently overrode the "Approvals" / permissionMode setting and
+		// auto-approved EVERY tool, so no Allow/Deny ever surfaced in the native chat. Only the explicit
+		// auto-approve modes skip; default/acceptEdits/plan/auto let the SDK's canUseTool + permissionMode
+		// gate surface confirmations (honoring ~/.claude allow-rules via settingSources below).
+		allowDangerouslySkipPermissions: input.permissionMode === 'bypassPermissions' || input.permissionMode === 'dontAsk',
+		// CLAWDIUS-END
 		canUseTool: input.canUseTool,
 		onElicitation: async req => {
 			logElicitation(req.message ?? '');

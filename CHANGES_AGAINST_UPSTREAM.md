@@ -172,13 +172,17 @@ findings fixed before the feature was considered done.
 - `src/vs/workbench/contrib/clawdius/common/clawdiusChatTodos.ts` (new) + `test/common/clawdiusChatTodos.test.ts`
   (new): pure TodoWrite parse + projection helpers, unit-tested (parser robustness, live-id selection, render
   classification incl. the never-swallow guard).
+- `clawdiusChatViewPane.ts` (continued): **thinking-intensity control** (a second header dropdown for the
+  current model's first string-enum `configSchema` property, dispatches `SessionModelChanged` with merged
+  config); **approvals / plan-mode control** (a header dropdown for the session's first mutable string-enum
+  config property -- `permissionMode`: default/acceptEdits/plan/etc. -- driven by `SessionConfigState.schema`
+  + `.values`, dispatches `SessionConfigChanged`; both config dropdowns share one `renderConfigSelect`).
 
 ### Still deferred after this session (tracked honestly, NOT done)
 - Full inline DIFF TEXT (resolving FileEdit `ContentRef`s to actual +/- lines) and changeset accept/reject
   (`StateComponents.Changeset`, `invokeChangesetOperation`). Only at-a-glance edit summaries are done; the
-  permission Allow/Deny already gates whether edits apply.
-- Plan/accept permission-mode toggle, explicit thinking-intensity control (the model `configSchema` form),
-  image paste into the composer.
+  permission Allow/Deny already gates whether edits apply. LARGE -- best done in a fresh context.
+- Image paste into the composer (clipboard image -> binary `MessageAttachment`). Medium-large.
 - Path-A config neutralization and the `Ctrl/Cmd+Alt+I` keybinding swap (from the night session).
 - `PendingResultConfirmation` result-approval gate: Codex confirmed Claude's mapper emits
   `SessionToolCallComplete` without `requiresResultConfirmation`, so this state is currently dead code for the

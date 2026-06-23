@@ -1019,6 +1019,10 @@ export class ClawdiusChatViewPane extends ViewPane {
 			let completionIndex = -1;
 			let completionReqId = 0;
 			let completionTimer = null;
+			let completionReqText = '';
+			let completionReqOffset = 0;
+			let completionText = '';
+			let lastInputValue = '';
 			const pendingAttachments = [];
 			function completionsVisible() {
 				return !!completionsEl && !completionsEl.hidden && completionItems.length > 0;
@@ -1041,7 +1045,9 @@ export class ClawdiusChatViewPane extends ViewPane {
 			function requestCompletions() {
 				if (!mentionContext()) { hideCompletions(); return; }
 				completionReqId++;
-				vscode.postMessage({ type: 'requestCompletions', requestId: completionReqId, text: input.value, offset: input.selectionStart });
+				completionReqText = input.value;
+				completionReqOffset = input.selectionStart;
+				vscode.postMessage({ type: 'requestCompletions', requestId: completionReqId, text: completionReqText, offset: completionReqOffset });
 			}
 			function hideCompletions() {
 				completionItems = [];
@@ -1080,22 +1086,62 @@ export class ClawdiusChatViewPane extends ViewPane {
 				const it = completionItems[i];
 				if (!it) { hideCompletions(); return; }
 				const text = input.value;
-				const start = (typeof it.rangeStart === 'number') ? it.rangeStart : input.selectionStart;
-				const end = (typeof it.rangeEnd === 'number') ? it.rangeEnd : input.selectionStart;
+				let start;
+				let end;
+				if (input.value === completionText && typeof it.rangeStart === 'number' && typeof it.rangeEnd === 'number') {
+					// Items still match the text they were computed for: use the server-provided range.
+					start = it.rangeStart;
+					end = it.rangeEnd;
+				} else {
+					// Text drifted since the items arrived: replace the CURRENT mention token instead of a stale range.
+					const ctx = mentionContext();
+					if (!ctx) { hideCompletions(); return; }
+					start = ctx.start;
+					end = input.selectionStart;
+				}
 				input.value = text.slice(0, start) + it.insertText + text.slice(end);
 				const caret = start + it.insertText.length;
 				input.setSelectionRange(caret, caret);
-				if (it.attachment) { pendingAttachments.push({ insertText: it.insertText, attachment: it.attachment }); }
+				if (it.attachment) { pendingAttachments.push({ start: start, end: caret, insertText: it.insertText, attachment: it.attachment }); }
+				lastInputValue = input.value;
 				hideCompletions();
 				input.focus();
 				input.style.height = 'auto';
 				input.style.height = Math.min(input.scrollHeight, 160) + 'px';
 				updateSendState();
 			}
+			function adjustSpans(oldText, newText) {
+				if (!pendingAttachments.length || oldText === newText) { return; }
+				// Common-prefix / common-suffix diff: the changed region is [start, oldEnd) -> [start, newEnd).
+				let p = 0;
+				const minLen = Math.min(oldText.length, newText.length);
+				while (p < minLen && oldText.charAt(p) === newText.charAt(p)) { p++; }
+				let suff = 0;
+				while (suff < (minLen - p) && oldText.charAt(oldText.length - 1 - suff) === newText.charAt(newText.length - 1 - suff)) { suff++; }
+				const start = p;
+				const oldEnd = oldText.length - suff;
+				const delta = (newText.length - suff) - oldEnd;
+				for (let i = pendingAttachments.length - 1; i >= 0; i--) {
+					const span = pendingAttachments[i];
+					if (span.end <= start) { continue; }                                  // before the edit: unchanged
+					else if (span.start >= oldEnd) { span.start += delta; span.end += delta; } // after the edit: shift
+					else { pendingAttachments.splice(i, 1); }                             // overlaps the edit: drop it
+				}
+			}
+			function attachmentId(att) {
+				if (!att) { return ''; }
+				return att.uri || att.label || '';
+			}
 			function collectAttachments(text) {
 				const out = [];
+				const seen = [];
 				for (let i = 0; i < pendingAttachments.length; i++) {
-					if (text.indexOf(pendingAttachments[i].insertText) >= 0) { out.push(pendingAttachments[i].attachment); }
+					const span = pendingAttachments[i];
+					if (text.slice(span.start, span.end) !== span.insertText) { continue; }  // the inserted span is no longer intact
+					const id = attachmentId(span.attachment);
+					if (id && seen.indexOf(id) >= 0) { continue; }                          // dedupe identical resources
+					if (id) { seen.push(id); }
+					out.push(span.attachment);
 				}
 				return out;
 			}
@@ -1543,6 +1589,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 				const attachments = collectAttachments(input.value);
 				vscode.postMessage({ type: 'submit', text: text, attachments: attachments });
 				input.value = '';
+				lastInputValue = '';
 				pendingAttachments.length = 0;
 				hideCompletions();
 				input.style.height = 'auto';
@@ -1566,6 +1613,8 @@ export class ClawdiusChatViewPane extends ViewPane {
 				input.style.height = 'auto';
 				input.style.height = Math.min(input.scrollHeight, 160) + 'px';
 				updateSendState();
+				adjustSpans(lastInputValue, input.value);
+				lastInputValue = input.value;
 				scheduleCompletions();
 			});
 			input.addEventListener('blur', function () { setTimeout(hideCompletions, 120); });
@@ -1644,7 +1693,12 @@ export class ClawdiusChatViewPane extends ViewPane {
 						if (Array.isArray(m.chars)) { triggers = m.chars; }
 						break;
 					case 'completions':
-						if (m.requestId === completionReqId && Array.isArray(m.items)) { showCompletions(m.items); }
+						// Only surface items whose ranges still match the live input: drop the response if the text
+						// or caret moved since the request was issued (a newer debounced request will follow).
+						if (m.requestId === completionReqId && input.value === completionReqText && input.selectionStart === completionReqOffset && Array.isArray(m.items)) {
+							completionText = completionReqText;
+							showCompletions(m.items);
+						}
 						break;
 				}
 			});

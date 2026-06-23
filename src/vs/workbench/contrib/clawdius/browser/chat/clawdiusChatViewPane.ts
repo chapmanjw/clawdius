@@ -21,7 +21,7 @@ import { generateUuid } from '../../../../../base/common/uuid.js';
 import { localize } from '../../../../../nls.js';
 import { IAgentHostService } from '../../../../../platform/agentHost/common/agentService.js';
 import { IAgentSubscription } from '../../../../../platform/agentHost/common/state/agentSubscription.js';
-import { ActionType, SessionToolCallApprovedAction, SessionToolCallDeniedAction, SessionTurnStartedAction } from '../../../../../platform/agentHost/common/state/sessionActions.js';
+import { ActionType, SessionModelChangedAction, SessionToolCallApprovedAction, SessionToolCallDeniedAction, SessionTurnStartedAction } from '../../../../../platform/agentHost/common/state/sessionActions.js';
 import { MessageKind, ResponsePartKind, StateComponents, ToolCallCancellationReason, ToolCallConfirmationReason, ToolCallStatus, TurnState, type ResponsePart, type SessionState, type ToolCallState } from '../../../../../platform/agentHost/common/state/sessionState.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
@@ -115,6 +115,9 @@ export class ClawdiusChatViewPane extends ViewPane {
 		// Claim the overlay when the body becomes visible, release it when hidden (e.g. another auxiliary-bar
 		// container is selected). This is what lets the chat survive container switches without going blank.
 		this._register(this.onDidChangeBodyVisibility(() => this._updateVisibility()));
+		// Keep the header model picker in sync as the agent host advertises models (they can arrive after the
+		// pane is built). The current selection is derived from session state and pushed in _renderConversation.
+		this._register(this._agentHostService.rootState.onDidChange(() => this._postModels()));
 	}
 
 	// This pane never shows the base view-welcome UI; its body is entirely the webview. Returning false keeps
@@ -199,7 +202,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 		if (this._disposed || !message || typeof message !== 'object') {
 			return;
 		}
-		const msg = message as { type?: string; text?: string; href?: string; toolCallId?: string; approved?: boolean; optionId?: string };
+		const msg = message as { type?: string; text?: string; href?: string; toolCallId?: string; approved?: boolean; optionId?: string; modelId?: string };
 		switch (msg.type) {
 			case 'submit': {
 				const text = typeof msg.text === 'string' ? msg.text.trim() : '';
@@ -224,11 +227,18 @@ export class ClawdiusChatViewPane extends ViewPane {
 				break;
 			}
 			case 'ready': {
-				// The SPA finished loading: attach to the window's existing session (if any) and paint it.
+				// The SPA finished loading: attach to the window's existing session (if any) and paint it, then
+				// fill the header model picker (models come from the agent-host root state, not the session, so
+				// they show even before the first turn).
 				const existing = this._chatSessionService.getSession();
 				if (existing) {
 					this._attachToSession(existing);
 				}
+				this._postModels();
+				break;
+			}
+			case 'setModel': {
+				this._setModel(typeof msg.modelId === 'string' ? msg.modelId : undefined);
 				break;
 			}
 		}
@@ -247,6 +257,51 @@ export class ClawdiusChatViewPane extends ViewPane {
 			this._agentHostService.dispatch(this._sessionUri.toString(), action);
 		} catch (err) {
 			this._logService.error('[clawdius-chat] failed to dispatch tool confirmation', err);
+		}
+	}
+
+	/** Push the available Claude models (from the agent-host root state) plus the session's current selection
+	 *  to the SPA, which paints the header picker. Safe to call before a session exists. */
+	private _postModels(): void {
+		if (this._disposed || !this._webview.value) {
+			return;
+		}
+		const root = this._agentHostService.rootState.value;
+		let models: { id: string; name: string }[] = [];
+		if (root && !(root instanceof Error)) {
+			const claude = root.agents.find(agent => agent.provider === 'claude');
+			if (claude) {
+				models = claude.models.map(model => ({ id: model.id, name: model.name }));
+			}
+		}
+		const state = this._subscription?.value;
+		const current = state && !(state instanceof Error) ? state.summary.model?.id : undefined;
+		this._post({ type: 'setModels', models, current });
+	}
+
+	/** Switch the session's model by dispatching a model-changed action. Per the protocol the server defers the
+	 *  change to the next turn when one is active, so this is safe to call at any time. */
+	private _setModel(modelId: string | undefined): void {
+		if (!this._sessionUri || typeof modelId !== 'string' || !modelId) {
+			return;
+		}
+		// Preserve the existing model config when switching ids. SessionModelChanged replaces summary.model
+		// VERBATIM, so dispatching { id } alone would erase a configured thinkingLevel (which drives reasoning
+		// effort via resolveClaudeEffort) and persist that loss for resume. thinkingLevel is a cross-model effort
+		// scale, so carrying it forward keeps the user's chosen effort across the switch. NOTE: this does not
+		// validate the carried config against the TARGET model's configSchema, so an effort the target does not
+		// advertise is still applied as-is; an explicit thinking-level control (a later increment) will validate
+		// against configSchema and dispatch the full ModelSelection.
+		const state = this._subscription?.value;
+		const config = state && !(state instanceof Error) ? state.summary.model?.config : undefined;
+		const action: SessionModelChangedAction = {
+			type: ActionType.SessionModelChanged,
+			model: config ? { id: modelId, config } : { id: modelId },
+		};
+		try {
+			this._agentHostService.dispatch(this._sessionUri.toString(), action);
+		} catch (err) {
+			this._logService.error('[clawdius-chat] failed to set model', err);
 		}
 	}
 
@@ -349,6 +404,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 		}
 
 		this._post({ type: 'setConversation', turns, busy: this._isTurning });
+		this._postModels();
 	}
 
 	/** Project a single response part into zero or more serializable blocks for the SPA. */
@@ -426,6 +482,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 
 		const claudeLabel = localize('clawdius.chat.claude', "Claude");
 		const headerTitle = localize('clawdius.chat.headerTitle', "Claude Code");
+		const modelPickerLabel = localize('clawdius.chat.modelPicker', "Model");
 		const welcomeHeading = localize('clawdius.chat.welcomeHeading', "Chat with Claude");
 		const welcomeSubtext = localize('clawdius.chat.welcomeSubtext', "Ask questions, request changes, or get help understanding your code.");
 		const placeholder = localize('clawdius.chat.placeholder', "Ask Claude...");
@@ -494,6 +551,23 @@ export class ClawdiusChatViewPane extends ViewPane {
 			border-radius: 50%;
 			background: var(--clawdius-orange);
 		}
+		.header .header-title { flex: 1 1 auto; }
+		.header .model-picker {
+			flex: 0 0 auto;
+			max-width: 55%;
+			font-family: inherit;
+			font-size: 11px;
+			font-weight: 400;
+			padding: 2px 4px;
+			border-radius: 5px;
+			border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+			background: var(--vscode-input-background);
+			color: var(--vscode-input-foreground);
+			cursor: pointer;
+			outline: none;
+		}
+		.header .model-picker:focus-visible { outline: 1px solid var(--clawdius-orange); outline-offset: 1px; }
+		.header .model-picker[hidden] { display: none; }
 		.messages {
 			flex: 1 1 auto;
 			overflow-y: auto;
@@ -644,7 +718,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 	</style>
 </head>
 <body>
-	<div class="header"><span class="dot"></span><span>${escapeHtml(headerTitle)}</span></div>
+	<div class="header"><span class="dot"></span><span class="header-title">${escapeHtml(headerTitle)}</span><select id="model-picker" class="model-picker" aria-label="${escapeHtml(modelPickerLabel)}" hidden></select></div>
 	<div class="messages" id="messages" role="log">
 		<div class="welcome" id="welcome">
 			<div class="mark" aria-hidden="true">C</div>
@@ -664,6 +738,30 @@ export class ClawdiusChatViewPane extends ViewPane {
 			const welcome = document.getElementById('welcome');
 			const input = document.getElementById('input');
 			const send = document.getElementById('send');
+			const modelPicker = document.getElementById('model-picker');
+			if (modelPicker) {
+				modelPicker.addEventListener('change', function () {
+					if (modelPicker.value) { vscode.postMessage({ type: 'setModel', modelId: modelPicker.value }); }
+				});
+			}
+			// Rebuild the picker only when the model set or current selection actually changes, so the frequent
+			// full-state pushes during streaming never clobber an open dropdown or reset the selection.
+			function setModels(models, current) {
+				if (!modelPicker) { return; }
+				if (!models || !models.length) { modelPicker.hidden = true; modelPicker.setAttribute('data-sig', ''); return; }
+				const sig = models.map(function (m) { return m.id; }).join(String.fromCharCode(10)) + '::' + (current || '');
+				if (modelPicker.getAttribute('data-sig') === sig) { return; }
+				modelPicker.setAttribute('data-sig', sig);
+				while (modelPicker.firstChild) { modelPicker.removeChild(modelPicker.firstChild); }
+				for (let i = 0; i < models.length; i++) {
+					const opt = document.createElement('option');
+					opt.value = models[i].id;
+					opt.textContent = models[i].name;
+					if (current && models[i].id === current) { opt.selected = true; }
+					modelPicker.appendChild(opt);
+				}
+				modelPicker.hidden = false;
+			}
 			const assistantBubbles = Object.create(null);
 			// Tool calls the user has already approved/denied. Persisted across the frequent full-rebuilds so a
 			// re-rendered permission card cannot re-enable its buttons and allow a double-approval.
@@ -1097,6 +1195,9 @@ export class ClawdiusChatViewPane extends ViewPane {
 					case 'chatError':
 						if (typeof m.text === 'string') { showError(m.text); }
 						busy = false; updateSendState(); input.focus();
+						break;
+					case 'setModels':
+						setModels(m.models, m.current);
 						break;
 				}
 			});

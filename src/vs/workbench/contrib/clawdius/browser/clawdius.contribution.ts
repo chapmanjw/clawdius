@@ -55,7 +55,9 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	// The read-only Markdown transcript drill-in for a workflow sub-agent (clawdius-workflow-transcript: scheme).
 	registerWorkbenchContribution2(WorkflowTranscriptContribution.ID, WorkflowTranscriptContribution, WorkbenchPhase.BlockRestore);
 
-	// First run: install + configure the official Claude Code plugin (it owns the visible chat pane).
-	registerWorkbenchContribution2(ClawdiusPluginSetupContribution.ID, ClawdiusPluginSetupContribution, WorkbenchPhase.AfterRestored);
+	// First run: install + configure the official Claude Code plugin (it owns the visible chat pane). Runs at
+	// `Eventually` (idle, a few seconds after restore) so the ~225 MB first-run extension download does not
+	// compete with startup.
+	registerWorkbenchContribution2(ClawdiusPluginSetupContribution.ID, ClawdiusPluginSetupContribution, WorkbenchPhase.Eventually);
 }
 // CLAWDIUS-END

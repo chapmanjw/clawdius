@@ -14,7 +14,7 @@ import { Disposable } from '../../../../base/common/lifecycle.js';
 import { localize } from '../../../../nls.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { ConfigurationTarget, IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
-import { EXTENSION_INSTALL_SKIP_WALKTHROUGH_CONTEXT } from '../../../../platform/extensionManagement/common/extensionManagement.js';
+import { EXTENSION_INSTALL_SKIP_WALKTHROUGH_CONTEXT, ExtensionManagementErrorCode } from '../../../../platform/extensionManagement/common/extensionManagement.js';
 import { areSameExtensions } from '../../../../platform/extensionManagement/common/extensionManagementUtil.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
@@ -76,15 +76,35 @@ export class ClawdiusPluginSetupContribution extends Disposable implements IWork
 		if (installed.some(extension => areSameExtensions(extension.identifier, { id: ClawdiusPluginSetupContribution.EXTENSION_ID }))) {
 			return;
 		}
-		// NOTE: if a built (non-dev) build rejects the Open VSX download on signature verification, add
-		// `donotVerifySignature: true` to these options -- Open VSX does not sign extensions the way the MS
-		// marketplace does. Left off by default so signature verification still applies where it can; flip it
-		// on (with this rationale) if a real build proves it necessary.
-		await this._extensionsWorkbenchService.install(
+		// Verify signatures normally (they ARE enforced in built builds). Open VSX does not sign extensions the
+		// way the MS marketplace does, so a built build can reject this download on a signature-specific failure.
+		// Only THEN retry once without verification: this is a single, known-id bootstrap from the gallery
+		// Clawdius already trusts (Open VSX), not arbitrary install, so the scoped fallback is acceptable.
+		try {
+			await this._install(false);
+		} catch (err) {
+			if (!this._isSignatureFailure(err)) {
+				throw err;
+			}
+			this._logService.warn('[clawdius] Claude Code signature verification failed on Open VSX; retrying the install without verification', err);
+			await this._install(true);
+		}
+	}
+
+	private _install(donotVerifySignature: boolean): Promise<unknown> {
+		return this._extensionsWorkbenchService.install(
 			ClawdiusPluginSetupContribution.EXTENSION_ID,
-			{ context: { [EXTENSION_INSTALL_SKIP_WALKTHROUGH_CONTEXT]: true }, enable: true },
+			{ context: { [EXTENSION_INSTALL_SKIP_WALKTHROUGH_CONTEXT]: true }, enable: true, donotVerifySignature },
 			ProgressLocation.Notification,
 		);
+	}
+
+	private _isSignatureFailure(err: unknown): boolean {
+		const code = (err as { code?: string } | undefined)?.code;
+		return code === ExtensionManagementErrorCode.PackageNotSigned
+			|| code === ExtensionManagementErrorCode.SignatureVerificationInternal
+			|| code === ExtensionManagementErrorCode.SignatureVerificationFailed
+			|| code === ExtensionManagementErrorCode.DownloadSignature;
 	}
 
 	/** Point the plugin at the secondary sidebar + its bundled engine, without clobbering user overrides. */

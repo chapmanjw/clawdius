@@ -5,6 +5,9 @@
 
 import { registerSingleton, InstantiationType } from '../../../../../../platform/instantiation/common/extensions.js';
 import { MenuId, MenuRegistry, registerAction2 } from '../../../../../../platform/actions/common/actions.js';
+// CLAWDIUS-BEGIN no Agents title-bar status widget / chat title-bar button in Clawdius mode
+import product from '../../../../../../platform/product/common/product.js';
+// CLAWDIUS-END
 import { IAgentSessionProjectionService, AgentSessionProjectionService, AGENT_SESSION_PROJECTION_ENABLED_PROVIDERS } from './agentSessionProjectionService.js';
 import { EnterAgentSessionProjectionAction, ExitAgentSessionProjectionAction, ToggleUnifiedAgentsBarAction } from './agentSessionProjectionActions.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../../../common/contributions.js';
@@ -247,38 +250,46 @@ registerAction2(ToggleUnifiedAgentsBarAction);
 registerSingleton(IAgentSessionProjectionService, AgentSessionProjectionService, InstantiationType.Delayed);
 registerSingleton(IAgentTitleBarStatusService, AgentTitleBarStatusService, InstantiationType.Delayed);
 
-registerWorkbenchContribution2(AgentTitleBarStatusRendering.ID, AgentTitleBarStatusRendering, WorkbenchPhase.AfterRestored);
 registerWorkbenchContribution2(AgentSessionReadyContribution.ID, AgentSessionReadyContribution, WorkbenchPhase.AfterRestored);
 
-// Register Agent Status as a menu item in the command center (alongside the search box, not replacing it)
-MenuRegistry.appendMenuItem(MenuId.CommandCenter, {
-	submenu: MenuId.AgentsTitleBarControlMenu,
-	title: localize('agentsControl', "Agents"),
-	icon: Codicon.chatSparkle,
-	when: ContextKeyExpr.and(
-		ChatContextKeys.enabled,
-		ContextKeyExpr.notEquals(`config.${ChatConfiguration.AgentStatusEnabled}`, 'hidden'),
-		ContextKeyExpr.notEquals(`config.${ChatConfiguration.AgentStatusEnabled}`, false),
-		InEditorZenModeContext.negate()
-	),
-	order: 10002 // to the right of the chat button
-});
+// CLAWDIUS-BEGIN no Agents title-bar status widget / chat title-bar button in Clawdius mode
+// The native Claude chat owns the right pane; the old Agents/chat title-bar status badges (unread /
+// in-progress / needs-input counts) and the fallback chat title-bar button target the now-hidden old chat
+// view, so suppress them in Clawdius (empty entitlementUrl). Upstream keeps them.
+if (product.defaultChatAgent?.entitlementUrl) {
+	registerWorkbenchContribution2(AgentTitleBarStatusRendering.ID, AgentTitleBarStatusRendering, WorkbenchPhase.AfterRestored);
 
-// Add to the global title bar if command center is disabled
-MenuRegistry.appendMenuItem(MenuId.TitleBar, {
-	submenu: MenuId.ChatTitleBarMenu,
-	title: localize('title4', "Chat"),
-	group: 'navigation',
-	icon: Codicon.chatSparkle,
-	when: ContextKeyExpr.and(
-		ChatContextKeys.supported,
-		ContextKeyExpr.and(
-			ChatContextKeys.Setup.hidden.negate(),
+	// Register Agent Status as a menu item in the command center (alongside the search box, not replacing it)
+	MenuRegistry.appendMenuItem(MenuId.CommandCenter, {
+		submenu: MenuId.AgentsTitleBarControlMenu,
+		title: localize('agentsControl', "Agents"),
+		icon: Codicon.chatSparkle,
+		when: ContextKeyExpr.and(
+			ChatContextKeys.enabled,
+			ContextKeyExpr.notEquals(`config.${ChatConfiguration.AgentStatusEnabled}`, 'hidden'),
+			ContextKeyExpr.notEquals(`config.${ChatConfiguration.AgentStatusEnabled}`, false),
+			InEditorZenModeContext.negate()
 		),
-		ContextKeyExpr.has('config.window.commandCenter').negate(),
-	),
-	order: 1
-});
+		order: 10002 // to the right of the chat button
+	});
+
+	// Add to the global title bar if command center is disabled
+	MenuRegistry.appendMenuItem(MenuId.TitleBar, {
+		submenu: MenuId.ChatTitleBarMenu,
+		title: localize('title4', "Chat"),
+		group: 'navigation',
+		icon: Codicon.chatSparkle,
+		when: ContextKeyExpr.and(
+			ChatContextKeys.supported,
+			ContextKeyExpr.and(
+				ChatContextKeys.Setup.hidden.negate(),
+			),
+			ContextKeyExpr.has('config.window.commandCenter').negate(),
+		),
+		order: 1
+	});
+}
+// CLAWDIUS-END
 
 // Register a placeholder action to the submenu so it appears (required for submenus)
 MenuRegistry.appendMenuItem(MenuId.AgentsTitleBarControlMenu, {

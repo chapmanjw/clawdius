@@ -34,6 +34,16 @@ export class ClawdiusPluginSetupContribution extends Disposable implements IWork
 	/** Set once the first-run install + config has completed, so it never re-runs. */
 	private static readonly DONE_KEY = 'clawdius.pluginSetup.done';
 
+	/** Install-error identifiers that mean "signature verification failed" (built builds only). Checked against
+	 *  both `.code` and `.name`: across an IPC boundary the error is recreated as a plain Error that preserves
+	 *  `.name` but drops the custom `.code`. */
+	private static readonly SIGNATURE_FAILURE_IDS = new Set<string>([
+		ExtensionManagementErrorCode.PackageNotSigned,
+		ExtensionManagementErrorCode.SignatureVerificationInternal,
+		ExtensionManagementErrorCode.SignatureVerificationFailed,
+		ExtensionManagementErrorCode.DownloadSignature,
+	]);
+
 	constructor(
 		@IExtensionsWorkbenchService private readonly _extensionsWorkbenchService: IExtensionsWorkbenchService,
 		@IConfigurationService private readonly _configurationService: IConfigurationService,
@@ -100,11 +110,11 @@ export class ClawdiusPluginSetupContribution extends Disposable implements IWork
 	}
 
 	private _isSignatureFailure(err: unknown): boolean {
-		const code = (err as { code?: string } | undefined)?.code;
-		return code === ExtensionManagementErrorCode.PackageNotSigned
-			|| code === ExtensionManagementErrorCode.SignatureVerificationInternal
-			|| code === ExtensionManagementErrorCode.SignatureVerificationFailed
-			|| code === ExtensionManagementErrorCode.DownloadSignature;
+		const candidate = err as { code?: unknown; name?: unknown } | undefined;
+		const code = typeof candidate?.code === 'string' ? candidate.code : undefined;
+		const name = typeof candidate?.name === 'string' ? candidate.name : undefined;
+		const ids = ClawdiusPluginSetupContribution.SIGNATURE_FAILURE_IDS;
+		return (code !== undefined && ids.has(code)) || (name !== undefined && ids.has(name));
 	}
 
 	/** Point the plugin at the secondary sidebar + its bundled engine, without clobbering user overrides. */

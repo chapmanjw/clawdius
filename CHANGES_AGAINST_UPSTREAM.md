@@ -177,11 +177,21 @@ findings fixed before the feature was considered done.
   config); **approvals / plan-mode control** (a header dropdown for the session's first mutable string-enum
   config property -- `permissionMode`: default/acceptEdits/plan/etc. -- driven by `SessionConfigState.schema`
   + `.values`, dispatches `SessionConfigChanged`; both config dropdowns share one `renderConfigSelect`).
+- `clawdiusChatViewPane.ts` + new `common/clawdiusChatDiff.ts` (+ test): **inline file-edit diffs** (POST-APPLIED).
+  `_kickToolDiffs` resolves each FileEdit's before/after `ContentRef` (`resourceRead`, Utf8 only), computes a
+  compact unified line diff (`computeLineDiff` / LcsDiff, capped 400 lines, unit-tested), and posts it per
+  tool-call id; the SPA renders +/-/context lines under the card. Cache retries on empty/failure so the
+  Completed-state diff always lands. Codex confirmed Allow/Deny IS the Claude accept/reject gate (no separate
+  changeset accept/reject -- changesets are commit/PR-only).
 
 ### Still deferred after this session (tracked honestly, NOT done)
-- Full inline DIFF TEXT (resolving FileEdit `ContentRef`s to actual +/- lines) and changeset accept/reject
-  (`StateComponents.Changeset`, `invokeChangesetOperation`). Only at-a-glance edit summaries are done; the
-  permission Allow/Deny already gates whether edits apply. LARGE -- best done in a fresh context.
+- **Pre-approval diff PREVIEW**: Codex (High) found Claude's `canUseTool` pending confirmation carries NO
+  `edits`; Claude stages diffs only AFTER the tool runs (`ClaudeFileEditObserver`). So the inline diff shows
+  POST-application, and Allow/Deny is currently answered WITHOUT a diff preview. The SDK `canUseTool` gives only
+  the raw tool input (verified), so a preview means reimplementing Edit/Write/MultiEdit apply at canUseTool in
+  `claudeCanUseTool.ts` (compute after-content, stage before/after refs, populate `state.edits`). This touches
+  the PERMISSION path and feeds the approval decision -- deliberately deferred to a fresh context to avoid a
+  misleading preview or a half-applied change breaking Allow/Deny.
 - Image paste into the composer (clipboard image -> binary `MessageAttachment`). Medium-large.
 - Path-A config neutralization and the `Ctrl/Cmd+Alt+I` keybinding swap (from the night session).
 - `PendingResultConfirmation` result-approval gate: Codex confirmed Claude's mapper emits

@@ -36,6 +36,7 @@ import { IViewPaneOptions, ViewPane } from '../../../../browser/parts/views/view
 import { IViewDescriptorService } from '../../../../common/views.js';
 import { IOverlayWebview, IWebviewService, WebviewContentPurpose } from '../../../webview/browser/webview.js';
 import { IClawdiusChatSessionService } from './clawdiusChatSessionService.js';
+import { ClawdiusTodoItem, parseTodoInput } from '../../common/clawdiusChatTodos.js';
 
 /** A StringOrMarkdown (string | { markdown }) flattened to plain text for the SPA. */
 function flattenStringOrMarkdown(value: string | { markdown: string } | undefined): string {
@@ -52,6 +53,7 @@ function flattenStringOrMarkdown(value: string | { markdown: string } | undefine
 type AssistantBlock =
 	| { kind: 'markdown'; text: string }
 	| { kind: 'reasoning'; text: string }
+	| { kind: 'todos'; id: string; todos: { content: string; status: string }[] }
 	| {
 		kind: 'tool';
 		id: string;
@@ -388,17 +390,21 @@ export class ClawdiusChatViewPane extends ViewPane {
 		this._isTurning = !!state.activeTurn;
 
 		// Completed turns carry a terminal `state`/`error`; the active turn (if any) is still streaming.
-		const turns = state.turns.map(turn => ({
-			id: turn.id,
-			user: turn.message.text,
-			blocks: turn.responseParts.flatMap(part => this._partBlocks(part)),
-			error: turn.state === TurnState.Error ? (turn.error?.message || localize('clawdius.chat.turnError', "Claude could not complete the response.")) : undefined,
-		}));
+		const turns = state.turns.map(turn => {
+			const lastTodoId = this._todoIdForTurn(turn.responseParts);
+			return {
+				id: turn.id,
+				user: turn.message.text,
+				blocks: turn.responseParts.flatMap(part => this._partBlocks(part, lastTodoId)),
+				error: turn.state === TurnState.Error ? (turn.error?.message || localize('clawdius.chat.turnError', "Claude could not complete the response.")) : undefined,
+			};
+		});
 		if (state.activeTurn) {
+			const lastTodoId = this._todoIdForTurn(state.activeTurn.responseParts);
 			turns.push({
 				id: state.activeTurn.id,
 				user: state.activeTurn.message.text,
-				blocks: state.activeTurn.responseParts.flatMap(part => this._partBlocks(part)),
+				blocks: state.activeTurn.responseParts.flatMap(part => this._partBlocks(part, lastTodoId)),
 				error: undefined,
 			});
 		}
@@ -407,8 +413,10 @@ export class ClawdiusChatViewPane extends ViewPane {
 		this._postModels();
 	}
 
-	/** Project a single response part into zero or more serializable blocks for the SPA. */
-	private _partBlocks(part: ResponsePart): AssistantBlock[] {
+	/** Project a single response part into zero or more serializable blocks for the SPA. `lastTodoId` is the
+	 *  tool-call id of the turn's most recent TodoWrite (see {@link _todoIdForTurn}): only that one renders as a
+	 *  checklist so the repeated in-place updates collapse into a single live list. */
+	private _partBlocks(part: ResponsePart, lastTodoId: string | undefined): AssistantBlock[] {
 		if (part.kind === ResponsePartKind.Markdown) {
 			return part.content ? [{ kind: 'markdown', text: part.content }] : [];
 		}
@@ -416,9 +424,50 @@ export class ClawdiusChatViewPane extends ViewPane {
 			return part.content ? [{ kind: 'reasoning', text: part.content }] : [];
 		}
 		if (part.kind === ResponsePartKind.ToolCall) {
-			return [this._toolBlock(part.toolCall)];
+			const tc = part.toolCall;
+			// Collapse a turn's repeated COMMITTED TodoWrite updates into one live checklist. Only a Running or
+			// Completed TodoWrite becomes a checklist; in any other state (esp. PendingConfirmation) the tool
+			// falls through to the normal card so its Approve/Deny -- or cancel -- controls are preserved. This
+			// SPA is the only place the user can answer a permission prompt, so it must never be swallowed.
+			if (tc.toolName === 'TodoWrite' && this._isCommittedTodo(tc)) {
+				if (tc.toolCallId !== lastTodoId) {
+					return [];
+				}
+				const todos = this._parseTodos(tc);
+				return todos ? [{ kind: 'todos', id: tc.toolCallId, todos }] : [this._toolBlock(tc)];
+			}
+			return [this._toolBlock(tc)];
 		}
 		return [];
+	}
+
+	/** A TodoWrite whose list is committed (running or completed) and thus safe to render as a checklist rather
+	 *  than a tool card. Pending-confirmation / streaming / cancelled TodoWrites keep their normal card so any
+	 *  approval or cancel UI survives. */
+	private _isCommittedTodo(tc: ToolCallState): boolean {
+		return tc.status === ToolCallStatus.Running || tc.status === ToolCallStatus.Completed;
+	}
+
+	/** The tool-call id of the LAST committed TodoWrite in a turn whose input parses to a non-empty todo list,
+	 *  else undefined. Used to collapse the repeated TodoWrite updates into a single live checklist. */
+	private _todoIdForTurn(parts: readonly ResponsePart[]): string | undefined {
+		let id: string | undefined;
+		for (const part of parts) {
+			if (part.kind === ResponsePartKind.ToolCall && part.toolCall.toolName === 'TodoWrite' && this._isCommittedTodo(part.toolCall) && this._parseTodos(part.toolCall)) {
+				id = part.toolCall.toolCallId;
+			}
+		}
+		return id;
+	}
+
+	/** Parse a TodoWrite tool call's raw JSON input into a todo list, defensively. Returns undefined when the
+	 *  input is absent (still streaming) or malformed. The pure parse lives in {@link parseTodoInput} so it can
+	 *  be unit-tested without a webview. */
+	private _parseTodos(tc: ToolCallState): ClawdiusTodoItem[] | undefined {
+		if (tc.status === ToolCallStatus.Streaming) {
+			return undefined;
+		}
+		return parseTodoInput(tc.toolInput);
 	}
 
 	/** Project a ToolCallState into a serializable tool block for the SPA (status drives which fields exist). */
@@ -507,6 +556,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 			statusDone: localize('clawdius.chat.statusDone', "Done"),
 			statusFailed: localize('clawdius.chat.statusFailed', "Failed"),
 			noText: localize('clawdius.chat.noText', "Claude finished this turn without text output."),
+			todos: localize('clawdius.chat.todos', "To-dos"),
 		})
 			.replace(new RegExp(String.fromCharCode(0x2028), 'g'), '\\u2028')
 			.replace(new RegExp(String.fromCharCode(0x2029), 'g'), '\\u2029');
@@ -652,6 +702,17 @@ export class ClawdiusChatViewPane extends ViewPane {
 		.tool-result { padding: 0 10px 8px; font-size: 0.88em; white-space: pre-wrap; word-break: break-word; }
 		.tool-error { padding: 0 10px 8px; font-size: 0.88em; color: var(--vscode-errorForeground); white-space: pre-wrap; word-break: break-word; }
 		.tool-cancelled { padding: 0 10px 8px; font-size: 0.85em; color: var(--vscode-descriptionForeground); font-style: italic; }
+		.todos-card { margin: 6px 0; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 6px; background: var(--vscode-textCodeBlock-background, rgba(127,127,127,0.06)); padding: 8px 10px; }
+		.todos-header { font-size: 0.82em; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--vscode-descriptionForeground); margin-bottom: 6px; }
+		.todos-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+		.todo { display: flex; align-items: flex-start; gap: 8px; font-size: 0.9em; line-height: 1.35; }
+		.todo-mark { flex: 0 0 auto; width: 13px; height: 13px; margin-top: 2px; border-radius: 50%; border: 1.5px solid var(--vscode-descriptionForeground); box-sizing: border-box; position: relative; }
+		.todo-in_progress .todo-mark { border-color: var(--clawdius-orange); box-shadow: inset 0 0 0 3px var(--clawdius-orange); }
+		.todo-completed .todo-mark { border-color: var(--clawdius-button-bg); background: var(--clawdius-button-bg); }
+		.todo-completed .todo-mark::after { content: ''; position: absolute; left: 4px; top: 1px; width: 3px; height: 6px; border: solid var(--clawdius-ivory); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
+		.todo-text { flex: 1 1 auto; word-break: break-word; }
+		.todo-completed .todo-text { text-decoration: line-through; color: var(--vscode-descriptionForeground); }
+		.todo-in_progress .todo-text { color: var(--vscode-foreground); font-weight: 500; }
 		.tool-perm { padding: 6px 10px 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 		.perm-title { flex-basis: 100%; font-size: 0.85em; color: var(--vscode-descriptionForeground); }
 		.perm-btn { height: 28px; padding: 0 12px; border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 6px; font-family: inherit; font-size: 0.86em; cursor: pointer; background: var(--vscode-input-background); color: var(--vscode-foreground); }
@@ -1070,6 +1131,36 @@ export class ClawdiusChatViewPane extends ViewPane {
 				return card;
 			}
 
+			function renderTodos(block) {
+				const card = document.createElement('div');
+				card.className = 'todos-card';
+				const todos = block.todos || [];
+				let done = 0;
+				for (let i = 0; i < todos.length; i++) { if (todos[i].status === 'completed') { done++; } }
+				const header = document.createElement('div');
+				header.className = 'todos-header';
+				header.textContent = STRINGS.todos + ' (' + done + '/' + todos.length + ')';
+				card.appendChild(header);
+				const list = document.createElement('ul');
+				list.className = 'todos-list';
+				for (let i = 0; i < todos.length; i++) {
+					const t = todos[i];
+					const li = document.createElement('li');
+					li.className = 'todo todo-' + (t.status || 'pending');
+					const mark = document.createElement('span');
+					mark.className = 'todo-mark';
+					mark.setAttribute('aria-hidden', 'true');
+					li.appendChild(mark);
+					const txt = document.createElement('span');
+					txt.className = 'todo-text';
+					txt.textContent = t.content;
+					li.appendChild(txt);
+					list.appendChild(li);
+				}
+				card.appendChild(list);
+				return card;
+			}
+
 			function setAssistantParts(id, blocks) {
 				const bubble = ensureAssistant(id);
 				const stick = isNearBottom();
@@ -1081,6 +1172,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 					if (b.kind === 'markdown') { bubble.appendChild(renderMarkdown(b.text)); }
 					else if (b.kind === 'reasoning') { bubble.appendChild(renderReasoning(b.text)); }
 					else if (b.kind === 'tool') { bubble.appendChild(renderTool(b)); }
+					else if (b.kind === 'todos') { bubble.appendChild(renderTodos(b)); }
 				}
 				if (stick) { toBottom(); }
 			}

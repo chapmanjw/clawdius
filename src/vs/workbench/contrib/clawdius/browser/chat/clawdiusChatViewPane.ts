@@ -22,6 +22,7 @@ import { localize } from '../../../../../nls.js';
 import { IAgentHostService } from '../../../../../platform/agentHost/common/agentService.js';
 import { IAgentSubscription } from '../../../../../platform/agentHost/common/state/agentSubscription.js';
 import { ActionType, SessionModelChangedAction, SessionToolCallApprovedAction, SessionToolCallDeniedAction, SessionTurnStartedAction } from '../../../../../platform/agentHost/common/state/sessionActions.js';
+import { type SessionConfigChangedAction } from '../../../../../platform/agentHost/common/state/protocol/channels-session/actions.js';
 import { getToolFileEdits, MessageKind, ResponsePartKind, StateComponents, ToolCallCancellationReason, ToolCallConfirmationReason, ToolCallStatus, ToolResultContentType, TurnState, type ISessionFileDiff, type MessageAttachment, type ModelSelection, type ResponsePart, type SessionModelInfo, type SessionState, type ToolCallState, type ToolResultContent, type UsageInfo } from '../../../../../platform/agentHost/common/state/sessionState.js';
 import { CompletionItemKind, type CompletionItem } from '../../../../../platform/agentHost/common/state/protocol/commands.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
@@ -253,6 +254,10 @@ export class ClawdiusChatViewPane extends ViewPane {
 			}
 			case 'setModelConfig': {
 				this._setModelConfig(msg.key, msg.value);
+				break;
+			}
+			case 'setSessionConfigValue': {
+				this._setSessionConfigValue(msg.key, msg.value);
 				break;
 			}
 		}
@@ -527,6 +532,43 @@ export class ClawdiusChatViewPane extends ViewPane {
 		this._postModels();
 		const usage = this._latestUsage(state);
 		this._post({ type: 'setUsage', text: usage ? this._usageText(usage) : undefined });
+		this._post({ type: 'setSessionConfig', config: this._sessionConfigControl(state) });
+	}
+
+	/** Build the descriptor for the session's first mutable string-enum config option (e.g. the approval /
+	 *  permission mode) so the SPA can render a small dropdown. Returns undefined when none is exposed. */
+	private _sessionConfigControl(state: SessionState): { key: string; title: string; options: { value: string; label: string }[]; current: string } | undefined {
+		const props = state.config?.schema?.properties;
+		if (!props) {
+			return undefined;
+		}
+		for (const key of Object.keys(props)) {
+			const prop = props[key];
+			if (prop.sessionMutable && !prop.enumDynamic && prop.type === 'string' && Array.isArray(prop.enum) && prop.enum.length && !prop.readOnly) {
+				const options = prop.enum.map((value, i) => ({ value, label: (prop.enumLabels && prop.enumLabels[i]) || value }));
+				let current = typeof prop.default === 'string' ? prop.default : prop.enum[0];
+				const vals = state.config?.values;
+				if (vals && Object.prototype.hasOwnProperty.call(vals, key) && typeof vals[key] === 'string') {
+					current = vals[key] as string;
+				}
+				return { key, title: prop.title || key, options, current };
+			}
+		}
+		return undefined;
+	}
+
+	/** Change one mutable session config value (e.g. permissionMode) by dispatching SessionConfigChanged, which
+	 *  the server merges into `state.config.values`. */
+	private _setSessionConfigValue(key: string | undefined, value: string | undefined): void {
+		if (!this._sessionUri || typeof key !== 'string' || typeof value !== 'string') {
+			return;
+		}
+		const action: SessionConfigChangedAction = { type: ActionType.SessionConfigChanged, config: { [key]: value } };
+		try {
+			this._agentHostService.dispatch(this._sessionUri.toString(), action);
+		} catch (err) {
+			this._logService.error('[clawdius-chat] failed to set session config', err);
+		}
 	}
 
 	/** The current turn's token usage: while a turn is active, its own usage (undefined until the report
@@ -779,6 +821,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 		const headerTitle = localize('clawdius.chat.headerTitle', "Claude Code");
 		const modelPickerLabel = localize('clawdius.chat.modelPicker', "Model");
 		const modelConfigLabel = localize('clawdius.chat.modelConfig', "Model option");
+		const sessionConfigLabel = localize('clawdius.chat.sessionConfig', "Session option");
 		const welcomeHeading = localize('clawdius.chat.welcomeHeading', "Chat with Claude");
 		const welcomeSubtext = localize('clawdius.chat.welcomeSubtext', "Ask questions, request changes, or get help understanding your code.");
 		const placeholder = localize('clawdius.chat.placeholder', "Ask Claude...");
@@ -837,7 +880,8 @@ export class ClawdiusChatViewPane extends ViewPane {
 			flex: 0 0 auto;
 			display: flex;
 			align-items: center;
-			gap: 8px;
+			flex-wrap: wrap;
+			gap: 6px;
 			padding: 8px 12px;
 			border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-panel-border));
 			font-weight: 600;
@@ -850,8 +894,8 @@ export class ClawdiusChatViewPane extends ViewPane {
 		}
 		.header .header-title { flex: 1 1 auto; }
 		.header .model-picker {
-			flex: 0 0 auto;
-			max-width: 55%;
+			flex: 0 1 auto;
+			max-width: 46%;
 			font-family: inherit;
 			font-size: 11px;
 			font-weight: 400;
@@ -1039,7 +1083,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 	</style>
 </head>
 <body>
-	<div class="header"><span class="dot"></span><span class="header-title">${escapeHtml(headerTitle)}</span><select id="model-picker" class="model-picker" aria-label="${escapeHtml(modelPickerLabel)}" hidden></select><select id="model-config" class="model-picker model-config" aria-label="${escapeHtml(modelConfigLabel)}" hidden></select></div>
+	<div class="header"><span class="dot"></span><span class="header-title">${escapeHtml(headerTitle)}</span><select id="model-picker" class="model-picker" aria-label="${escapeHtml(modelPickerLabel)}" hidden></select><select id="model-config" class="model-picker model-config" aria-label="${escapeHtml(modelConfigLabel)}" hidden></select><select id="session-config" class="model-picker session-config" aria-label="${escapeHtml(sessionConfigLabel)}" hidden></select></div>
 	<div class="messages" id="messages" role="log">
 		<div class="welcome" id="welcome">
 			<div class="mark" aria-hidden="true">C</div>
@@ -1209,36 +1253,43 @@ export class ClawdiusChatViewPane extends ViewPane {
 				});
 			}
 			const modelConfig = document.getElementById('model-config');
+			const sessionConfig = document.getElementById('session-config');
+			// A header config dropdown rebuilt only when its option set or value changes (so streaming pushes do
+			// not clobber it). Shared by the model config (thinking intensity) and session config (approvals).
+			function renderConfigSelect(el, config) {
+				if (!el) { return; }
+				if (!config || !config.options || !config.options.length) { el.hidden = true; el.setAttribute('data-sig', ''); return; }
+				const sig = config.key + '|' + config.options.map(function (o) { return o.value; }).join(',') + '|' + (config.current || '');
+				if (el.getAttribute('data-sig') === sig) { return; }
+				el.setAttribute('data-sig', sig);
+				el.setAttribute('data-key', config.key);
+				if (config.title) { el.setAttribute('aria-label', config.title); el.title = config.title; }
+				while (el.firstChild) { el.removeChild(el.firstChild); }
+				for (let i = 0; i < config.options.length; i++) {
+					const opt = document.createElement('option');
+					opt.value = config.options[i].value;
+					opt.textContent = config.options[i].label;
+					if (config.options[i].value === config.current) { opt.selected = true; }
+					el.appendChild(opt);
+				}
+				el.hidden = false;
+			}
 			if (modelConfig) {
 				modelConfig.addEventListener('change', function () {
 					const key = modelConfig.getAttribute('data-key');
 					if (key && typeof modelConfig.value === 'string') { vscode.postMessage({ type: 'setModelConfig', key: key, value: modelConfig.value }); }
 				});
 			}
-			// The current model's first string-enum config option (e.g. thinking intensity), rebuilt only when the
-			// option set or value changes so streaming pushes do not clobber it.
-			function renderModelConfig(config) {
-				if (!modelConfig) { return; }
-				if (!config || !config.options || !config.options.length) { modelConfig.hidden = true; modelConfig.setAttribute('data-sig', ''); return; }
-				const sig = config.key + '|' + config.options.map(function (o) { return o.value; }).join(',') + '|' + (config.current || '');
-				if (modelConfig.getAttribute('data-sig') === sig) { return; }
-				modelConfig.setAttribute('data-sig', sig);
-				modelConfig.setAttribute('data-key', config.key);
-				if (config.title) { modelConfig.setAttribute('aria-label', config.title); modelConfig.title = config.title; }
-				while (modelConfig.firstChild) { modelConfig.removeChild(modelConfig.firstChild); }
-				for (let i = 0; i < config.options.length; i++) {
-					const opt = document.createElement('option');
-					opt.value = config.options[i].value;
-					opt.textContent = config.options[i].label;
-					if (config.options[i].value === config.current) { opt.selected = true; }
-					modelConfig.appendChild(opt);
-				}
-				modelConfig.hidden = false;
+			if (sessionConfig) {
+				sessionConfig.addEventListener('change', function () {
+					const key = sessionConfig.getAttribute('data-key');
+					if (key && typeof sessionConfig.value === 'string') { vscode.postMessage({ type: 'setSessionConfigValue', key: key, value: sessionConfig.value }); }
+				});
 			}
 			// Rebuild the picker only when the model set or current selection actually changes, so the frequent
 			// full-state pushes during streaming never clobber an open dropdown or reset the selection.
 			function setModels(models, current, config) {
-				renderModelConfig(config);
+				renderConfigSelect(modelConfig, config);
 				if (!modelPicker) { return; }
 				if (!models || !models.length) { modelPicker.hidden = true; modelPicker.setAttribute('data-sig', ''); return; }
 				const sig = models.map(function (m) { return m.id; }).join(String.fromCharCode(10)) + '::' + (current || '');
@@ -1774,6 +1825,9 @@ export class ClawdiusChatViewPane extends ViewPane {
 						break;
 					case 'setUsage':
 						setUsage(m.text);
+						break;
+					case 'setSessionConfig':
+						renderConfigSelect(sessionConfig, m.config);
 						break;
 					case 'setTriggers':
 						if (Array.isArray(m.chars)) { triggers = m.chars; }

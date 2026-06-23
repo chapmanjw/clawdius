@@ -128,10 +128,13 @@ export async function buildOptions(
 		abortController: input.abortController,
 		// CLAWDIUS-BEGIN respect the permission mode instead of always skipping
 		// Was hardcoded `true`, which silently overrode the "Approvals" / permissionMode setting and
-		// auto-approved EVERY tool, so no Allow/Deny ever surfaced in the native chat. Only the explicit
-		// auto-approve modes skip; default/acceptEdits/plan/auto let the SDK's canUseTool + permissionMode
-		// gate surface confirmations (honoring ~/.claude allow-rules via settingSources below).
-		allowDangerouslySkipPermissions: input.permissionMode === 'bypassPermissions' || input.permissionMode === 'dontAsk',
+		// auto-approved EVERY tool, so no Allow/Deny ever surfaced in the native chat. Per the SDK contract
+		// (sdk.d.ts: only `bypassPermissions` "Bypass all permission checks (requires
+		// allowDangerouslySkipPermissions)"), ONLY that mode sets this flag. `dontAsk` means "don't prompt,
+		// DENY if not pre-approved" (an auto-DENY path, sdk.d.ts), so it must NOT skip-and-run; letting it set
+		// this flag would re-open the auto-approve hole. default/acceptEdits/plan/auto/dontAsk all defer to the
+		// SDK's canUseTool + permissionMode gate (honoring ~/.claude allow-rules via settingSources below).
+		allowDangerouslySkipPermissions: input.permissionMode === 'bypassPermissions',
 		// CLAWDIUS-END
 		canUseTool: input.canUseTool,
 		onElicitation: async req => {

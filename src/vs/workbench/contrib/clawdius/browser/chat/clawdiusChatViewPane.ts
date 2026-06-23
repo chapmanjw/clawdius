@@ -310,7 +310,12 @@ export class ClawdiusChatViewPane extends ViewPane {
 			const prop = props[key];
 			if (prop.type === 'string' && Array.isArray(prop.enum) && prop.enum.length && !prop.readOnly) {
 				const options = prop.enum.map((value, i) => ({ value, label: (prop.enumLabels && prop.enumLabels[i]) || value }));
-				const current = (selection.config && selection.config[key]) || (typeof prop.default === 'string' ? prop.default : prop.enum[0]);
+				// Presence check (not truthiness) so a configured empty-string enum value round-trips correctly.
+				let current = typeof prop.default === 'string' ? prop.default : prop.enum[0];
+				const cfg = selection.config;
+				if (cfg && Object.prototype.hasOwnProperty.call(cfg, key) && typeof cfg[key] === 'string') {
+					current = cfg[key];
+				}
 				return { key, title: prop.title || key, options, current };
 			}
 		}
@@ -1207,7 +1212,7 @@ export class ClawdiusChatViewPane extends ViewPane {
 			if (modelConfig) {
 				modelConfig.addEventListener('change', function () {
 					const key = modelConfig.getAttribute('data-key');
-					if (key && modelConfig.value) { vscode.postMessage({ type: 'setModelConfig', key: key, value: modelConfig.value }); }
+					if (key && typeof modelConfig.value === 'string') { vscode.postMessage({ type: 'setModelConfig', key: key, value: modelConfig.value }); }
 				});
 			}
 			// The current model's first string-enum config option (e.g. thinking intensity), rebuilt only when the

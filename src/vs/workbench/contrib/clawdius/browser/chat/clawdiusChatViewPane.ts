@@ -22,7 +22,7 @@ import { localize } from '../../../../../nls.js';
 import { IAgentHostService } from '../../../../../platform/agentHost/common/agentService.js';
 import { IAgentSubscription } from '../../../../../platform/agentHost/common/state/agentSubscription.js';
 import { ActionType, SessionModelChangedAction, SessionToolCallApprovedAction, SessionToolCallDeniedAction, SessionTurnStartedAction } from '../../../../../platform/agentHost/common/state/sessionActions.js';
-import { MessageKind, ResponsePartKind, StateComponents, ToolCallCancellationReason, ToolCallConfirmationReason, ToolCallStatus, ToolResultContentType, TurnState, type ResponsePart, type SessionState, type ToolCallState, type ToolResultContent, type UsageInfo } from '../../../../../platform/agentHost/common/state/sessionState.js';
+import { getToolFileEdits, MessageKind, ResponsePartKind, StateComponents, ToolCallCancellationReason, ToolCallConfirmationReason, ToolCallStatus, ToolResultContentType, TurnState, type ISessionFileDiff, type ResponsePart, type SessionState, type ToolCallState, type ToolResultContent, type UsageInfo } from '../../../../../platform/agentHost/common/state/sessionState.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from '../../../../../platform/contextview/browser/contextView.js';
@@ -67,6 +67,7 @@ type AssistantBlock =
 		result?: string;
 		errorText?: string;
 		output?: string;
+		edits?: { path: string; added: number; removed: number; change: string }[];
 		cancelled?: boolean;
 	};
 
@@ -515,31 +516,47 @@ export class ClawdiusChatViewPane extends ViewPane {
 			invocation: flattenStringOrMarkdown(tc.invocationMessage),
 		};
 		switch (tc.status) {
-			case ToolCallStatus.PendingConfirmation:
+			case ToolCallStatus.PendingConfirmation: {
 				block.pending = true;
 				block.confirmationTitle = flattenStringOrMarkdown(tc.confirmationTitle);
 				block.options = (tc.options ?? []).map(option => ({ id: option.id, label: option.label, kind: option.kind }));
+				// Preview the files this tool will change so the user can see what they are approving.
+				const edits = this._fileEdits(tc.edits?.items ?? []);
+				if (edits.length) {
+					block.edits = edits;
+				}
 				break;
+			}
 			case ToolCallStatus.Running:
 				// Live output streamed while the tool runs (e.g. terminal text).
 				block.output = this._outputText(tc.content);
 				break;
-			case ToolCallStatus.PendingResultConfirmation:
+			case ToolCallStatus.PendingResultConfirmation: {
 				block.success = tc.success;
 				block.result = flattenStringOrMarkdown(tc.pastTenseMessage);
 				block.output = this._outputText(tc.content);
+				const edits = this._fileEdits(getToolFileEdits(tc));
+				if (edits.length) {
+					block.edits = edits;
+				}
 				if (tc.error) {
 					block.errorText = tc.error.message;
 				}
 				break;
-			case ToolCallStatus.Completed:
+			}
+			case ToolCallStatus.Completed: {
 				block.success = tc.success;
 				block.result = flattenStringOrMarkdown(tc.pastTenseMessage);
 				block.output = this._outputText(tc.content);
+				const edits = this._fileEdits(getToolFileEdits(tc));
+				if (edits.length) {
+					block.edits = edits;
+				}
 				if (tc.error) {
 					block.errorText = tc.error.message;
 				}
 				break;
+			}
 			case ToolCallStatus.Cancelled:
 				block.cancelled = true;
 				break;
@@ -569,6 +586,43 @@ export class ClawdiusChatViewPane extends ViewPane {
 		const text = parts.join('\n');
 		const limit = 10000;
 		return text.length > limit ? text.slice(0, limit) + '\n' + localize('clawdius.chat.outputTruncated', "... (output truncated)") : text;
+	}
+
+	/** Project file edits (from a pending-confirmation preview or a completed result) into compact summaries:
+	 *  file name, added/removed line counts, and whether the file is created / deleted / edited. The diff text
+	 *  itself lives behind ContentRefs that are not resolved here -- this is the at-a-glance footprint. */
+	private _fileEdits(items: readonly ISessionFileDiff[]): { path: string; added: number; removed: number; change: string }[] {
+		const out: { path: string; added: number; removed: number; change: string }[] = [];
+		for (const item of items) {
+			const uri = item.after?.uri ?? item.before?.uri;
+			if (!uri) {
+				continue;
+			}
+			const change = item.after && !item.before ? 'create' : (!item.after && item.before ? 'delete' : 'edit');
+			out.push({ path: this._basename(uri), added: item.diff?.added ?? 0, removed: item.diff?.removed ?? 0, change });
+		}
+		return out;
+	}
+
+	/** Last path segment of a URI string (e.g. `file:///c:/a/b.ts` -> `b.ts`), for compact edit labels. The
+	 *  agent-host protocol carries URIs as strings, so this parses rather than using the URI class. */
+	private _basename(uri: string): string {
+		let s = uri;
+		const hash = s.indexOf('#');
+		if (hash >= 0) {
+			s = s.slice(0, hash);
+		}
+		const query = s.indexOf('?');
+		if (query >= 0) {
+			s = s.slice(0, query);
+		}
+		const slash = s.lastIndexOf('/');
+		const name = slash >= 0 ? s.slice(slash + 1) : s;
+		try {
+			return decodeURIComponent(name);
+		} catch {
+			return name;
+		}
 	}
 
 	/** Post to the webview, guarded against a disposed pane / torn-down webview. */
@@ -773,6 +827,11 @@ export class ClawdiusChatViewPane extends ViewPane {
 		.tool-error { padding: 0 10px 8px; font-size: 0.88em; color: var(--vscode-errorForeground); white-space: pre-wrap; word-break: break-word; }
 		.tool-cancelled { padding: 0 10px 8px; font-size: 0.85em; color: var(--vscode-descriptionForeground); font-style: italic; }
 		.tool-output { margin: 0; padding: 8px 10px; max-height: 220px; overflow: auto; font-family: var(--monaco-monospace-font, ui-monospace, monospace); font-size: 0.82em; line-height: 1.4; white-space: pre-wrap; word-break: break-word; color: var(--vscode-foreground); border-top: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); background: var(--vscode-textCodeBlock-background, rgba(127,127,127,0.06)); }
+		.tool-edits { padding: 4px 10px 8px; display: flex; flex-direction: column; gap: 2px; }
+		.tool-edit { display: flex; align-items: center; gap: 8px; font-size: 0.84em; }
+		.tool-edit .edit-path { font-family: var(--monaco-monospace-font, ui-monospace, monospace); color: var(--vscode-foreground); word-break: break-all; }
+		.tool-edit .edit-add { color: var(--vscode-gitDecoration-addedResourceForeground, #4caf50); font-variant-numeric: tabular-nums; }
+		.tool-edit .edit-del { color: var(--vscode-gitDecoration-deletedResourceForeground, #e05252); font-variant-numeric: tabular-nums; }
 		.todos-card { margin: 6px 0; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 6px; background: var(--vscode-textCodeBlock-background, rgba(127,127,127,0.06)); padding: 8px 10px; }
 		.todos-header { font-size: 0.82em; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--vscode-descriptionForeground); margin-bottom: 6px; }
 		.todos-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
@@ -1184,6 +1243,33 @@ export class ClawdiusChatViewPane extends ViewPane {
 					inv.className = 'tool-invocation';
 					inv.textContent = block.invocation;
 					card.appendChild(inv);
+				}
+				if (block.edits && block.edits.length) {
+					const list = document.createElement('div');
+					list.className = 'tool-edits';
+					for (let i = 0; i < block.edits.length; i++) {
+						const e = block.edits[i];
+						const row = document.createElement('div');
+						row.className = 'tool-edit change-' + (e.change || 'edit');
+						const p = document.createElement('span');
+						p.className = 'edit-path';
+						p.textContent = e.path;
+						row.appendChild(p);
+						if (e.added) {
+							const a = document.createElement('span');
+							a.className = 'edit-add';
+							a.textContent = '+' + e.added;
+							row.appendChild(a);
+						}
+						if (e.removed) {
+							const d = document.createElement('span');
+							d.className = 'edit-del';
+							d.textContent = '-' + e.removed;
+							row.appendChild(d);
+						}
+						list.appendChild(row);
+					}
+					card.appendChild(list);
 				}
 				if (block.pending) {
 					card.appendChild(renderPermission(block));

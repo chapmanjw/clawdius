@@ -29,7 +29,9 @@ export function getOnboardingStepTitle(stepId: OnboardingStepId): string {
 		case OnboardingStepId.AiPreference:
 			return localize('onboarding.step.aiPreference', "Your AI Style");
 		case OnboardingStepId.AgentSessions:
-			return localize('onboarding.step.agentSessions', "Build with AI Agents");
+			// CLAWDIUS-BEGIN claude branding
+			return localize('onboarding.step.agentSessions', "Build with Claude Code");
+		// CLAWDIUS-END
 	}
 }
 

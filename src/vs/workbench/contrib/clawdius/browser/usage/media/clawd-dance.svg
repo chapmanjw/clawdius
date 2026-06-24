@@ -1,0 +1,48 @@
+<svg width="47" height="38" viewBox="-5.54 -4.74 58.75 47.5" fill="none" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<style>
+    /* ---- dance moves (loop with periods that divide their windows) ---- */
+    @keyframes sway   { 0%{transform:translate(0,0)} 25%{transform:translate(23.83px,37.08px) rotate(7deg) translate(-23.83px,-37.08px)} 50%{transform:translate(0,0)} 75%{transform:translate(23.83px,37.08px) rotate(-7deg) translate(-23.83px,-37.08px)} 100%{transform:translate(0,0)} }
+    @keyframes bounce { 0%{transform:translate(0px,0px) translate(23.83px,37.08px) scale(1,1) translate(-23.83px,-37.08px)} 22%{transform:translate(0px,1.2px) translate(23.83px,37.08px) scale(1.14,0.84) translate(-23.83px,-37.08px)} 52%{transform:translate(0px,-2.2px) translate(23.83px,37.08px) scale(0.92,1.09) translate(-23.83px,-37.08px)} 80%{transform:translate(0px,0.4px) translate(23.83px,37.08px) scale(1.1,0.88) translate(-23.83px,-37.08px)} 100%{transform:translate(0px,0px) translate(23.83px,37.08px) scale(1,1) translate(-23.83px,-37.08px)} }
+    @keyframes shuffle{ 0%{transform:translate(0px,0px) translate(23.83px,37.08px) rotate(0deg) translate(-23.83px,-37.08px)} 25%{transform:translate(3.5px,0px) translate(23.83px,37.08px) rotate(-5deg) translate(-23.83px,-37.08px)} 50%{transform:translate(0px,0px) translate(23.83px,37.08px) rotate(0deg) translate(-23.83px,-37.08px)} 75%{transform:translate(-3.5px,0px) translate(23.83px,37.08px) rotate(5deg) translate(-23.83px,-37.08px)} 100%{transform:translate(0px,0px) translate(23.83px,37.08px) rotate(0deg) translate(-23.83px,-37.08px)} }
+    @keyframes tap    { 0%,10%{transform:translateY(0)} 25%{transform:translateY(-3px)} 45%,100%{transform:translateY(0)} }
+
+    /* ---- which Clawd is shown when (opacity windows; standstill between dances) ---- */
+    @keyframes selStand{0%{opacity:1} 13.138%{opacity:1} 13.158%{opacity:0} 28.927%{opacity:0} 28.947%{opacity:1} 42.085%{opacity:1} 42.105%{opacity:0} 57.875%{opacity:0} 57.895%{opacity:1} 71.033%{opacity:1} 71.053%{opacity:0} 86.822%{opacity:0} 86.842%{opacity:1} 100%{opacity:1}}
+    @keyframes selSway{0%{opacity:0} 13.138%{opacity:0} 13.158%{opacity:1} 28.927%{opacity:1} 28.947%{opacity:0} 100%{opacity:0}}
+    @keyframes selBounce{0%{opacity:0} 42.085%{opacity:0} 42.105%{opacity:1} 57.875%{opacity:1} 57.895%{opacity:0} 100%{opacity:0}}
+    @keyframes selShuffle{0%{opacity:0} 71.033%{opacity:0} 71.053%{opacity:1} 86.822%{opacity:1} 86.842%{opacity:0} 100%{opacity:0}}
+
+    .stand    { animation: selStand   38s linear infinite; }
+    .sway-c   { animation: selSway    38s linear infinite; opacity:0; }
+    .bounce-c { animation: selBounce  38s linear infinite; opacity:0; }
+    .shuffle-c{ animation: selShuffle 38s linear infinite; opacity:0; }
+
+    .sway    { animation: sway    2s    ease-in-out infinite; animation-delay: 5s; }
+    .bounce  { animation: bounce  1s  ease-in-out infinite; animation-delay: 16s; }
+    .shuffle { animation: shuffle 1s ease-in-out infinite; animation-delay: 27s; }
+    .tapL    { animation: tap 1s ease-in-out infinite; animation-delay: 27s; }
+    .tapR    { animation: tap 1s ease-in-out infinite; animation-delay: 26.5s; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .stand,.sway-c,.bounce-c,.shuffle-c,.sway,.bounce,.shuffle,.tapL,.tapR { animation:none; }
+      .sway-c,.bounce-c,.shuffle-c { opacity:0; } .stand { opacity:1; }
+    }
+  </style>
+  <defs>
+    <g id="cbody"><rect x="5.082" y="0.938" width="4.292" height="9.138"/><rect x="9.233" y="0.938" width="4.292" height="9.138"/><rect x="13.384" y="0.938" width="4.292" height="9.138"/><rect x="17.535" y="0.938" width="4.292" height="9.138"/><rect x="21.686" y="0.938" width="4.292" height="9.138"/><rect x="25.838" y="0.938" width="4.292" height="9.138"/><rect x="29.989" y="0.938" width="4.292" height="9.138"/><rect x="34.14" y="0.938" width="4.292" height="9.138"/><rect x="38.291" y="0.938" width="4.292" height="9.138"/><rect x="0.931" y="9.938" width="4.292" height="9.138"/><rect x="5.082" y="9.938" width="4.292" height="9.138"/><rect x="9.233" y="14.508" width="4.292" height="4.569"/><rect x="13.384" y="9.938" width="4.292" height="9.138"/><rect x="17.535" y="9.938" width="4.292" height="9.138"/><rect x="21.686" y="9.938" width="4.292" height="9.138"/><rect x="25.838" y="9.938" width="4.292" height="9.138"/><rect x="29.989" y="9.938" width="4.292" height="9.138"/><rect x="34.14" y="14.508" width="4.292" height="4.569"/><rect x="38.291" y="9.938" width="4.292" height="9.138"/><rect x="42.442" y="9.938" width="4.292" height="9.138"/><rect x="5.082" y="18.939" width="4.292" height="9.138"/><rect x="9.233" y="18.939" width="4.292" height="9.138"/><rect x="13.384" y="18.939" width="4.292" height="9.138"/><rect x="17.535" y="18.939" width="4.292" height="9.138"/><rect x="21.686" y="18.939" width="4.292" height="9.138"/><rect x="25.838" y="18.939" width="4.292" height="9.138"/><rect x="29.989" y="18.939" width="4.292" height="9.138"/><rect x="34.14" y="18.939" width="4.292" height="9.138"/><rect x="38.291" y="18.939" width="4.292" height="9.138"/></g>
+    <g id="cfootL"><rect x="5.082" y="27.939" width="4.292" height="9.138"/><rect x="13.384" y="27.939" width="4.292" height="9.138"/></g>
+    <g id="cfootR"><rect x="29.989" y="27.939" width="4.292" height="9.138"/><rect x="38.291" y="27.939" width="4.292" height="9.138"/></g>
+  </defs>
+  <!-- standstill -->
+  <g class="stand" fill="#D97757"><use xlink:href="#cbody" href="#cbody"/><use xlink:href="#cfootL" href="#cfootL"/><use xlink:href="#cfootR" href="#cfootR"/></g>
+  <!-- dance 1: sway -->
+  <g class="sway-c"><g class="sway" fill="#D97757"><use xlink:href="#cbody" href="#cbody"/><use xlink:href="#cfootL" href="#cfootL"/><use xlink:href="#cfootR" href="#cfootR"/></g></g>
+  <!-- dance 2: bounce -->
+  <g class="bounce-c"><g class="bounce" fill="#D97757"><use xlink:href="#cbody" href="#cbody"/><use xlink:href="#cfootL" href="#cfootL"/><use xlink:href="#cfootR" href="#cfootR"/></g></g>
+  <!-- dance 3: shuffle (with foot taps) -->
+  <g class="shuffle-c"><g class="shuffle" fill="#D97757">
+    <use xlink:href="#cbody" href="#cbody"/>
+    <g class="tapL"><use xlink:href="#cfootL" href="#cfootL"/></g>
+    <g class="tapR"><use xlink:href="#cfootR" href="#cfootR"/></g>
+  </g></g>
+</svg>

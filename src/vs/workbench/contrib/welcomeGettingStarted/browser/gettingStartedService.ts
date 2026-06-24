@@ -19,6 +19,7 @@ import { FileAccess } from '../../../../base/common/network.js';
 import { EXTENSION_INSTALL_DEP_PACK_CONTEXT, EXTENSION_INSTALL_SKIP_WALKTHROUGH_CONTEXT, IExtensionManagementService } from '../../../../platform/extensionManagement/common/extensionManagement.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { walkthroughs } from '../common/gettingStartedContent.js';
+import product from '../../../../platform/product/common/product.js';
 import { IWorkbenchAssignmentService } from '../../../services/assignment/common/assignmentService.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
@@ -182,6 +183,13 @@ export class WalkthroughsService extends Disposable implements IWalkthroughsServ
 	private registerWalkthroughs() {
 
 		walkthroughs.forEach(async (category, index) => {
+
+			// CLAWDIUS-BEGIN no "Get started with VS Code" setup walkthrough on the welcome page
+			// (it is VS Code onboarding + Copilot setup; Clawdius has its own onboarding + Claude Code panes).
+			if (!product.defaultChatAgent?.entitlementUrl && category.id === 'Setup') {
+				return;
+			}
+			// CLAWDIUS-END
 
 			this._registerWalkthrough({
 				...category,

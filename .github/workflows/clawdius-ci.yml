@@ -111,9 +111,7 @@ jobs:
             "out/vs/sessions/contrib/workflows/test/common/workflowStore.test.js" \
             "out/vs/sessions/contrib/workflows/test/browser/workflowTranscript.test.js" \
             "out/vs/workbench/contrib/chat/test/common/claudeCliAgentPluginDiscovery.test.js" \
-            "out/vs/platform/clawdius/test/common/clawdiusCliConfig.test.js" \
-            "out/vs/workbench/contrib/clawdius/test/common/workflowStore.test.js" \
-            "out/vs/workbench/contrib/clawdius/test/browser/workflowTranscript.test.js"; do
+            "out/vs/platform/clawdius/test/common/clawdiusCliConfig.test.js"; do
             if [ ! -f "$t" ]; then echo "::error::compiled test missing ($t) — transpile path drift"; exit 1; fi
             log="$(basename "$t").log"
             node test/unit/browser/index.js --run "$t" --browser chromium 2>&1 | tee "$log"

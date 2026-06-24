@@ -56,11 +56,11 @@ configurationRegistry.registerConfiguration({
 			// clawdius-chat shim. Upstream (entitlementUrl present) keeps the Copilot options unchanged.
 			enum: product.defaultChatAgent?.entitlementUrl ? ['local', 'copilotEh', 'copilotAh'] : ['local', 'claudeAh'],
 			enumDescriptions: product.defaultChatAgent?.entitlementUrl ? [
-				nls.localize('chat.editor.defaultProvider.local', "Use the built-in VS Code local chat harness"),
+				nls.localize('chat.editor.defaultProvider.local', "Use the built-in Clawdius local chat harness"),
 				nls.localize('chat.editor.defaultProvider.copilotEh', "Use the Extension Host Copilot CLI"),
 				nls.localize('chat.editor.defaultProvider.copilotAh', "Use the Agent Host Copilot CLI"),
 			] : [
-				nls.localize('chat.editor.defaultProvider.local', "Use the built-in VS Code local chat harness"),
+				nls.localize('chat.editor.defaultProvider.local', "Use the built-in Clawdius local chat harness"),
 				nls.localize('chat.editor.defaultProvider.claudeAh', "Use the native agent-host Claude Code engine (the Clawdius default)"),
 			],
 			description: nls.localize('chat.editor.defaultProvider', "Controls which provider is used as the default for new editor chat sessions."),

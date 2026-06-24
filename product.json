@@ -97,14 +97,14 @@
 		"chatExtensionId": "vscode.clawdius-chat",
 		"chatExtensionOutputId": "GitHub.copilot-chat.GitHub Copilot Chat.log",
 		"chatExtensionOutputExtensionStateCommand": "github.copilot.debug.extensionState",
-		"documentationUrl": "https://clawdiuscode.io",
-		"termsStatementUrl": "https://clawdiuscode.io",
-		"privacyStatementUrl": "https://clawdiuscode.io",
-		"skusDocumentationUrl": "https://clawdiuscode.io",
-		"publicCodeMatchesUrl": "https://clawdiuscode.io",
-		"managePlanUrl": "https://clawdiuscode.io",
-		"upgradePlanUrl": "https://clawdiuscode.io",
-		"signUpUrl": "https://clawdiuscode.io",
+		"documentationUrl": "https://github.com/chapmanjw/clawdius",
+		"termsStatementUrl": "https://github.com/chapmanjw/clawdius",
+		"privacyStatementUrl": "https://github.com/chapmanjw/clawdius",
+		"skusDocumentationUrl": "https://github.com/chapmanjw/clawdius",
+		"publicCodeMatchesUrl": "https://github.com/chapmanjw/clawdius",
+		"managePlanUrl": "https://github.com/chapmanjw/clawdius",
+		"upgradePlanUrl": "https://github.com/chapmanjw/clawdius",
+		"signUpUrl": "https://github.com/chapmanjw/clawdius",
 		"provider": {
 			"default": {
 				"id": "github",
@@ -159,7 +159,7 @@
 	"onboardingKeymaps": [
 		{
 			"id": "vscode",
-			"label": "VS Code",
+			"label": "Clawdius Default (VS Code)",
 			"description": "Default keyboard mapping"
 		},
 		{
@@ -223,7 +223,8 @@
 	"sessionsWindowAllowedExtensions": [],
 	"enableTelemetry": false,
 	"trustedExtensionPublishers": [
-		"anthropic"
+		"anthropic",
+		"jeanp413"
 	],
 	"extensionsGallery": {
 		"serviceUrl": "https://open-vsx.org/vscode/gallery",

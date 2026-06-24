@@ -8,6 +8,17 @@ import { isStatusbarEntryLocation, IStatusbarEntryPriority, StatusbarAlignment }
 import { hide, show, isAncestorOfActiveElement } from '../../../../base/browser/dom.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { Emitter } from '../../../../base/common/event.js';
+import product from '../../../../platform/product/common/product.js';
+
+// CLAWDIUS-BEGIN suppress redundant extension status-bar items
+// In Clawdius mode (Copilot eliminated => no defaultChatAgent.entitlementUrl) the official Claude Code plugin's
+// status-bar item is replaced by our own usage indicator + the chat pane, so it is suppressed. The plugin
+// creates its item without an id (so it cannot be matched by id), but every status entry carries its
+// originating extensionId, which is what we match here.
+const CLAWDIUS_SUPPRESSED_STATUSBAR_EXTENSIONS = new Set<string>(
+	product.defaultChatAgent?.entitlementUrl ? [] : ['anthropic.claude-code']
+);
+// CLAWDIUS-END
 
 export interface IStatusbarViewModelEntry {
 	readonly id: string;
@@ -36,6 +47,10 @@ export class StatusbarViewModel extends Disposable {
 	}
 
 	private hidden = new Set<string>();
+
+	// CLAWDIUS: ids of entries suppressed because their extension is in the suppress list (kept separate from
+	// `hidden` so a user storage resync of hidden entries cannot un-suppress them).
+	private readonly clawdiusSuppressed = new Set<string>();
 
 	constructor(private readonly storageService: IStorageService) {
 		super();
@@ -101,6 +116,11 @@ export class StatusbarViewModel extends Disposable {
 		// Add to set of entries
 		this._entries.push(entry);
 
+		// CLAWDIUS: suppress status-bar items from replaced extensions (e.g. the official Claude Code plugin).
+		if (CLAWDIUS_SUPPRESSED_STATUSBAR_EXTENSIONS.has((entry.extensionId ?? '').toLowerCase())) {
+			this.clawdiusSuppressed.add(entry.id);
+		}
+
 		// Update visibility directly
 		this.updateVisibility(entry, false);
 
@@ -117,6 +137,7 @@ export class StatusbarViewModel extends Disposable {
 
 			// Remove from entries
 			this._entries.splice(index, 1);
+			this.clawdiusSuppressed.delete(entry.id); // CLAWDIUS: drop suppression bookkeeping
 
 			// Re-sort entries if this one was used
 			// as reference from other entries
@@ -130,7 +151,7 @@ export class StatusbarViewModel extends Disposable {
 	}
 
 	isHidden(id: string): boolean {
-		return this.hidden.has(id);
+		return this.hidden.has(id) || this.clawdiusSuppressed.has(id); // CLAWDIUS: also hide suppressed-extension entries
 	}
 
 	hide(id: string): void {

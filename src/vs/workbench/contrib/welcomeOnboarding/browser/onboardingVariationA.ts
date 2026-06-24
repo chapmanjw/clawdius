@@ -184,7 +184,7 @@ export class OnboardingVariationA extends Disposable implements IOnboardingServi
 		this.overlay = append(container, $('.onboarding-a-overlay'));
 		this.overlay.setAttribute('role', 'dialog');
 		this.overlay.setAttribute('aria-modal', 'true');
-		this.overlay.setAttribute('aria-label', localize('onboarding.a.aria', "Welcome to Visual Studio Code"));
+		this.overlay.setAttribute('aria-label', localize('onboarding.a.aria', "Welcome to Clawdius"));
 
 		// Card
 		this.card = append(this.overlay, $('.onboarding-a-card'));
@@ -429,7 +429,10 @@ export class OnboardingVariationA extends Disposable implements IOnboardingServi
 		}
 		if (this.nextButton) {
 			if (this.currentStepIndex === 0) {
-				if (this._userSignedIn) {
+				// CLAWDIUS-BEGIN no "Continue without Signing In" - Clawdius has no sign-in step, so the primary
+				// orange "Continue" advances the welcome step.
+				if (this._userSignedIn || !defaultChat.entitlementUrl) {
+					// CLAWDIUS-END
 					this.nextButton.className = 'onboarding-a-btn onboarding-a-btn-primary';
 					this.nextButton.textContent = localize('onboarding.continue', "Continue");
 				} else {
@@ -484,14 +487,20 @@ export class OnboardingVariationA extends Disposable implements IOnboardingServi
 		const content = append(wrapper, $('.onboarding-a-signin-content'));
 		const contentMain = append(content, $('.onboarding-a-signin-content-main'));
 		const title = append(contentMain, $('h2.onboarding-a-signin-title'));
-		title.textContent = localize('onboarding.signIn.heroTitle', "Welcome to VS Code");
+		// CLAWDIUS-BEGIN claude branding (welcome hero says Clawdius, not VS Code; no Copilot sign-in)
+		title.textContent = localize('onboarding.signIn.heroTitle', "Welcome to {0}", product.nameLong);
 
 		const subtitle = append(contentMain, $('p.onboarding-a-signin-subtitle'));
-		subtitle.textContent = localize('onboarding.signIn.heroSubtitle', "Sign in to use GitHub Copilot.");
+		subtitle.textContent = localize('onboarding.signIn.heroSubtitle', "Build with Claude Code, right inside your editor.");
+		// CLAWDIUS-END
 
 		const actions = append(contentMain, $('.onboarding-a-signin-actions'));
 
-		if (this._userSignedIn) {
+		// CLAWDIUS-BEGIN no GitHub/Copilot sign-in on the welcome step (Claude Code handles auth via its own login)
+		if (!defaultChat.entitlementUrl) {
+			// Clawdius: the footer "Continue" button advances; no sign-in actions are shown here.
+		} else if (this._userSignedIn) {
+			// CLAWDIUS-END
 			const signedIn = append(actions, $('.onboarding-a-signin-confirmation'));
 			const icon = append(signedIn, $('span'));
 			icon.classList.add(...ThemeIcon.asClassNameArray(Codicon.check));
@@ -513,6 +522,12 @@ export class OnboardingVariationA extends Disposable implements IOnboardingServi
 		}
 
 		const footer = append(wrapper, $('.onboarding-a-signin-footer'));
+
+		// CLAWDIUS-BEGIN no Copilot sign-in disclaimer in Clawdius mode (there is no sign-in here)
+		if (!defaultChat.entitlementUrl) {
+			return;
+		}
+		// CLAWDIUS-END
 
 		const disclaimerCol = append(footer, $('.onboarding-a-signin-disclaimer-col'));
 
@@ -904,7 +919,9 @@ export class OnboardingVariationA extends Disposable implements IOnboardingServi
 			this._createKbd(localize('onboarding.personalize.tip.shift', "Shift")),
 			'+',
 			this._createKbd(localize('onboarding.personalize.tip.p', "P")),
-			localize('onboarding.personalize.tip.suffix', " to access all VS Code commands."),
+			// CLAWDIUS-BEGIN claude branding (Clawdius command palette, not "VS Code")
+			localize('onboarding.personalize.tip.suffix', " to access all {0} commands.", product.nameShort),
+			// CLAWDIUS-END
 		);
 	}
 
@@ -1135,37 +1152,35 @@ export class OnboardingVariationA extends Disposable implements IOnboardingServi
 
 		const features = append(wrapper, $('.onboarding-a-sessions-features'));
 
-		// Group 1: Chat modes — Plan / Agent
+		// CLAWDIUS-BEGIN claude branding (Clawdius feature tour instead of the Copilot/VS Code agent tour)
+		// Group 1: Claude Code, built in
 		const chatGroup = append(features, $('.onboarding-a-sessions-group'));
 		const chatLabel = append(chatGroup, $('div.onboarding-a-sessions-group-label'));
-		chatLabel.textContent = localize('onboarding.sessions.group.chat', "Agents made for the task");
+		chatLabel.textContent = localize('onboarding.sessions.group.chat', "Claude Code, built in");
 		const chatGrid = append(chatGroup, $('.onboarding-a-sessions-grid.onboarding-a-sessions-grid-2'));
 
-		this._createFeatureCard(chatGrid, Codicon.listOrdered,
-			localize('onboarding.sessions.planMode', "Plan"),
-			localize('onboarding.sessions.planMode.desc', "Produce a structured implementation plan before any code changes, then hand it off to an agent to execute."));
-
 		this._createFeatureCard(chatGrid, Codicon.commentDiscussion,
-			localize('onboarding.sessions.agentMode', "Agent"),
-			localize('onboarding.sessions.agentMode.desc', "Describe a goal. The agent plans the approach, edits files, runs commands, and self-corrects. You review and approve along the way."));
+			localize('onboarding.sessions.chat', "Chat with Claude"),
+			localize('onboarding.sessions.chat.desc', "Claude Code runs in your sidebar using its own engine and your existing login - no extra sign-in needed."));
 
-		// Group 2: ways to run and customize agents beyond the default Chat experience
+		this._createFeatureCard(chatGrid, Codicon.listOrdered,
+			localize('onboarding.sessions.plan', "Plan, then build"),
+			localize('onboarding.sessions.plan.desc', "Ask for a plan first, then hand it off: Claude edits files, runs commands, and self-corrects while you review and approve."));
+
+		// Group 2: make Claude Code yours
 		const moreGroup = append(features, $('.onboarding-a-sessions-group'));
 		const moreLabel = append(moreGroup, $('div.onboarding-a-sessions-group-label'));
-		moreLabel.textContent = localize('onboarding.sessions.group.more', "Agents that work your way");
+		moreLabel.textContent = localize('onboarding.sessions.group.more', "Make it yours");
 		const moreGrid = append(moreGroup, $('.onboarding-a-sessions-grid.onboarding-a-sessions-grid-2'));
 
-		this._createFeatureCard(moreGrid, Codicon.rocket,
-			localize('onboarding.sessions.runAnywhere', "Run Agents Anywhere"),
-			localize('onboarding.sessions.runAnywhere.desc', "Run agents locally for interactive work, in the background with Copilot CLI, or in the cloud with cloud agents that open a pull request your team can review."));
-
 		this._createFeatureCard(moreGrid, Codicon.settingsGear,
-			localize('onboarding.sessions.customize', "Customize Your Agents"),
-			localize('onboarding.sessions.customize.desc', "Tailor Copilot to your project with custom instructions and agents, skills, reusable prompts, and MCP servers that connect to the tools and context you rely on."));
+			localize('onboarding.sessions.configure', "Configure everything"),
+			localize('onboarding.sessions.configure.desc', "Manage memories, sub-agents, skills, slash commands, hooks, permissions, and MCP servers - global or per project - from the Claude Code Config view."));
 
-		// Tutorial link at bottom of content, above footer
-		const docsRow = append(wrapper, $('.onboarding-a-sessions-docs'));
-		this._createDocLink(docsRow, localize('onboarding.sessions.agentsTutorial', "Agents tutorial"), 'https://code.visualstudio.com/docs/copilot/agents/agents-tutorial', 'agentsTutorial');
+		this._createFeatureCard(moreGrid, Codicon.graph,
+			localize('onboarding.sessions.usage', "Track your usage"),
+			localize('onboarding.sessions.usage.desc', "Watch your session and weekly usage against your plan limits from the status bar and the built-in usage dashboard."));
+		// CLAWDIUS-END
 	}
 
 	private _createFeatureCard(parent: HTMLElement, icon: ThemeIcon, title: string, description?: string): HTMLElement {
@@ -1188,19 +1203,7 @@ export class OnboardingVariationA extends Disposable implements IOnboardingServi
 		return kbd;
 	}
 
-	private _createDocLink(parent: HTMLElement, label: string, href: string, linkId?: string): void {
-		const link = this._registerStepFocusable(append(parent, $<HTMLAnchorElement>('a.onboarding-a-doc-link')));
-		link.textContent = label;
-		link.href = href;
-		link.target = '_blank';
-		link.rel = 'noopener';
-		link.prepend(renderIcon(Codicon.linkExternal));
-		if (linkId) {
-			this.stepDisposables.add(addDisposableListener(link, EventType.CLICK, () => {
-				this._logAction('docLinkClick', undefined, linkId);
-			}));
-		}
-	}
+	// CLAWDIUS: _createDocLink removed - the only doc link (the Copilot "Agents tutorial") was dropped.
 
 	private _createInlineLink(parent: HTMLElement, label: string, href: string): HTMLAnchorElement {
 		const link = this._registerStepFocusable(append(parent, $<HTMLAnchorElement>('a.onboarding-a-inline-link')));

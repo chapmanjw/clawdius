@@ -11,6 +11,7 @@
 // is retried on the next launch.
 
 import { Disposable } from '../../../../base/common/lifecycle.js';
+import { isNative, isWindows } from '../../../../base/common/platform.js';
 import { localize } from '../../../../nls.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { ConfigurationTarget, IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
@@ -23,16 +24,28 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
 import { IWorkbenchContribution } from '../../../common/contributions.js';
 import { IExtensionsWorkbenchService } from '../../extensions/common/extensions.js';
 
+/** Open VSX / marketplace id of the official Anthropic Claude Code extension. Module-level (not a static class
+ *  field) so the EXTENSIONS list below can reference it without touching the class binding during its own static
+ *  initialization - a self-reference there throws "Cannot access ... before initialization" at module load. */
+const CLAUDE_CODE_EXTENSION_ID = 'anthropic.claude-code';
+
 /** Install + configure the official Claude Code plugin on first run (Clawdius mode only). */
 export class ClawdiusPluginSetupContribution extends Disposable implements IWorkbenchContribution {
 
 	static readonly ID = 'workbench.contrib.clawdiusPluginSetup';
 
-	/** Open VSX / marketplace id of the official Anthropic Claude Code extension. */
-	private static readonly EXTENSION_ID = 'anthropic.claude-code';
+	/** Extensions Clawdius installs on first run from the configured gallery (Open VSX). `when` gates by
+	 *  platform; `critical` ones (the Claude Code engine) fail the whole setup so it retries next launch,
+	 *  while optional ones are best-effort. The two jeanp413 remotes need their publisher trusted (product.json). */
+	private static readonly EXTENSIONS: ReadonlyArray<{ id: string; critical?: boolean; when?: () => boolean }> = [
+		{ id: CLAUDE_CODE_EXTENSION_ID, critical: true },
+		{ id: 'jeanp413.open-remote-ssh', when: () => isNative },        // Remote - SSH (desktop only)
+		{ id: 'jeanp413.open-remote-wsl', when: () => isNative && isWindows }, // Remote - WSL (Windows desktop only)
+	];
 
-	/** Set once the first-run install + config has completed, so it never re-runs. */
-	private static readonly DONE_KEY = 'clawdius.pluginSetup.done';
+	/** Set once the first-run install + config has completed, so it never re-runs (bumped to re-run when the
+	 *  default extension set changes - e.g. adding the jeanp413 remotes). */
+	private static readonly DONE_KEY = 'clawdius.pluginSetup.done.v2';
 
 	/** Install-error identifiers that mean "signature verification failed" (built builds only). Checked against
 	 *  both `.code` and `.name`: across an IPC boundary the error is recreated as a plain Error that preserves
@@ -80,30 +93,44 @@ export class ClawdiusPluginSetupContribution extends Disposable implements IWork
 		);
 	}
 
-	/** Install `anthropic.claude-code` from the configured gallery (Open VSX) unless it is already installed. */
+	/** Install each default extension from the configured gallery (Open VSX) unless already present. */
 	private async _ensureInstalled(): Promise<void> {
 		const installed = await this._extensionsWorkbenchService.queryLocal();
-		if (installed.some(extension => areSameExtensions(extension.identifier, { id: ClawdiusPluginSetupContribution.EXTENSION_ID }))) {
-			return;
+		const isInstalled = (id: string) => installed.some(extension => areSameExtensions(extension.identifier, { id }));
+		for (const ext of ClawdiusPluginSetupContribution.EXTENSIONS) {
+			if ((ext.when && !ext.when()) || isInstalled(ext.id)) {
+				continue;
+			}
+			try {
+				await this._installExtension(ext.id);
+			} catch (err) {
+				if (ext.critical) {
+					throw err; // critical (the Claude Code engine): fail the setup so it retries next launch
+				}
+				this._logService.warn(`[clawdius] optional first-run install of ${ext.id} failed; skipping`, err);
+			}
 		}
+	}
+
+	private async _installExtension(id: string): Promise<void> {
 		// Verify signatures normally (they ARE enforced in built builds). Open VSX does not sign extensions the
-		// way the MS marketplace does, so a built build can reject this download on a signature-specific failure.
-		// Only THEN retry once without verification: this is a single, known-id bootstrap from the gallery
-		// Clawdius already trusts (Open VSX), not arbitrary install, so the scoped fallback is acceptable.
+		// way the MS marketplace does, so a built build can reject the download on a signature-specific failure.
+		// Only THEN retry once without verification: a known-id bootstrap from the gallery Clawdius already
+		// trusts (Open VSX) for a trusted publisher, not arbitrary install, so the scoped fallback is acceptable.
 		try {
-			await this._install(false);
+			await this._install(id, false);
 		} catch (err) {
 			if (!this._isSignatureFailure(err)) {
 				throw err;
 			}
-			this._logService.warn('[clawdius] Claude Code signature verification failed on Open VSX; retrying the install without verification', err);
-			await this._install(true);
+			this._logService.warn(`[clawdius] ${id} signature verification failed on Open VSX; retrying the install without verification`, err);
+			await this._install(id, true);
 		}
 	}
 
-	private _install(donotVerifySignature: boolean): Promise<unknown> {
+	private _install(id: string, donotVerifySignature: boolean): Promise<unknown> {
 		return this._extensionsWorkbenchService.install(
-			ClawdiusPluginSetupContribution.EXTENSION_ID,
+			id,
 			{ context: { [EXTENSION_INSTALL_SKIP_WALKTHROUGH_CONTEXT]: true }, enable: true, donotVerifySignature },
 			ProgressLocation.Notification,
 		);

@@ -233,7 +233,7 @@ abstract class AbstractGlobalActivityActionViewItem extends CompositeBarActionVi
 		return this.contextMenuActionsProvider();
 	}
 
-	private async run(): Promise<void> {
+	protected async run(): Promise<void> {
 		const disposables = new DisposableStore();
 		const menu = disposables.add(this.menuService.createMenu(this.menuId, this.contextKeyService));
 		const actions = await this.resolveMainMenuActions(menu, disposables);
@@ -297,6 +297,21 @@ export class AccountsActivityActionViewItem extends AbstractGlobalActivityAction
 		this.registerListeners();
 		this.initialize();
 	}
+
+	// CLAWDIUS-BEGIN account button opens the Claude Code usage dashboard
+	// In Clawdius mode (Copilot eliminated => no defaultChatAgent.entitlementUrl) a left-click / Enter on the
+	// bottom-left Account button opens the usage dashboard - which carries the auth/account identity - instead
+	// of the accounts popup menu. Right-click still shows the account menu (sign out / manage). The command id
+	// is referenced by string (not imported) to avoid a browser/parts -> contrib layer violation; the source
+	// of truth is OPEN_USAGE_DASHBOARD_COMMAND_ID in contrib/clawdius/browser/usage/claudeUsageData.ts.
+	protected override async run(): Promise<void> {
+		if (!this.productService.defaultChatAgent?.entitlementUrl) {
+			await this.commandService.executeCommand('clawdius.openUsageDashboard');
+			return;
+		}
+		return super.run();
+	}
+	// CLAWDIUS-END
 
 	private registerListeners(): void {
 		this._register(this.authenticationService.onDidRegisterAuthenticationProvider(async (e) => {

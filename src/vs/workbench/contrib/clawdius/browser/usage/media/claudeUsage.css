@@ -1,0 +1,666 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/* CLAWDIUS-BEGIN claude usage surfaces (status bar, hover popup, dashboard) */
+
+/* The Claude wordmark inherits the host text color via currentColor on its path. */
+.clawdius-claude-logo {
+	flex: none;
+	vertical-align: text-bottom;
+}
+
+/* --- Status-bar indicator --- */
+/* Our usage indicator is the entry's own label text ($(claude) + a block-character bar), so it gets the
+native status-bar cursor / hover-highlight / click for free. The official Claude Code plugin's own status
+item is suppressed by extensionId in StatusbarViewModel (it has no stable DOM id to target via CSS). */
+
+/* Render our usage item's label in monospace so the block-shade session bar fills the character cell and sits
+vertically centered (the proportional UI font draws block glyphs high in the cell). The $(claude) codicon
+keeps its own font (.codicon sets font-family !important), so only the bar text is affected. */
+.monaco-workbench .part.statusbar .statusbar-item[id="clawdius.usage"] .statusbar-item-label {
+	font-family: var(--monaco-monospace-font, "SF Mono", Menlo, Consolas, monospace);
+}
+
+.clawdius-usage-bar {
+	position: relative;
+	height: 5px;
+	border-radius: 3px;
+	background: var(--vscode-statusBarItem-remoteBackground, rgba(127, 127, 127, 0.28));
+	overflow: hidden;
+}
+
+.clawdius-usage-bar-fill {
+	position: absolute;
+	left: 0;
+	top: 0;
+	height: 100%;
+	border-radius: 3px;
+	background: #a78bfa;
+	transition: width 120ms ease-out;
+}
+
+.clawdius-usage-bar-fill.state-warn {
+	background: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+.clawdius-usage-bar-fill.state-crit {
+	background: var(--vscode-editorError-foreground, #f14c4c);
+}
+
+/* --- Hover popup --- */
+
+.clawdius-usage-tooltip {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	min-width: 244px;
+	max-width: 300px;
+	padding: 2px;
+}
+
+.clawdius-usage-header {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-weight: 600;
+}
+
+.clawdius-usage-account {
+	font-size: 11px;
+	opacity: 0.75;
+	margin-top: -6px;
+	word-break: break-word;
+}
+
+.clawdius-usage-account-state {
+	margin-left: 6px;
+	color: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+.clawdius-usage-section {
+	display: flex;
+	flex-direction: column;
+	gap: 9px;
+}
+
+.clawdius-usage-capacity {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.clawdius-usage-capacity-head {
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	gap: 8px;
+	font-size: 12px;
+}
+
+.clawdius-usage-capacity-label {
+	opacity: 0.9;
+}
+
+.clawdius-usage-capacity-pct {
+	font-variant-numeric: tabular-nums;
+	opacity: 0.7;
+}
+
+.clawdius-usage-capacity-reset {
+	font-size: 11px;
+	opacity: 0.55;
+}
+
+.clawdius-usage-note {
+	font-size: 12px;
+	opacity: 0.7;
+}
+
+.clawdius-usage-cta {
+	cursor: pointer;
+	color: var(--vscode-textLink-foreground);
+	font-size: 12px;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	align-self: flex-start;
+}
+
+.clawdius-usage-cta:hover {
+	color: var(--vscode-textLink-activeForeground);
+	text-decoration: underline;
+}
+
+.clawdius-usage-cta-icon {
+	font-size: 13px;
+}
+
+/* =========================================================================================
+Dashboard editor pane - monospace "terminal" aesthetic, mirroring the Claude Code CLI /usage view.
+Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highlights/bars.
+========================================================================================= */
+
+.clawdius-usage-dashboard {
+	height: 100%;
+	overflow: auto;
+	padding: 26px 30px 56px;
+	box-sizing: border-box;
+	color: var(--vscode-foreground);
+	font-family: var(--monaco-monospace-font, "SF Mono", Menlo, Consolas, monospace);
+	font-size: 13px;
+	line-height: 1.5;
+}
+
+/* Match the workbench scrollbar instead of the unstyled native (orange-tinted) one. */
+.clawdius-usage-dashboard::-webkit-scrollbar {
+	width: 14px;
+	height: 14px;
+}
+
+.clawdius-usage-dashboard::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+.clawdius-usage-dashboard::-webkit-scrollbar-thumb {
+	background-color: var(--vscode-scrollbarSlider-background, rgba(135, 128, 122, 0.2));
+	border: 3px solid transparent;
+	background-clip: content-box;
+	border-radius: 7px;
+}
+
+.clawdius-usage-dashboard::-webkit-scrollbar-thumb:hover {
+	background-color: var(--vscode-scrollbarSlider-hoverBackground, rgba(135, 128, 122, 0.4));
+}
+
+.clawdius-usage-dashboard::-webkit-scrollbar-thumb:active {
+	background-color: var(--vscode-scrollbarSlider-activeBackground, rgba(135, 128, 122, 0.6));
+}
+
+.clawdius-usage-dashboard-inner {
+	max-width: 980px;
+	margin: 0 auto;
+	display: flex;
+	flex-direction: column;
+	gap: 28px;
+}
+
+/* The pane is focusable (for scrolling/keyboard) but should not paint a focus outline like a text input. */
+.clawdius-usage-dashboard:focus,
+.clawdius-usage-dashboard:focus-visible {
+	outline: none !important; /* override the workbench [tabindex]:focus focusBorder outline (style.css) */
+}
+
+/* Hero / account band */
+.clawdius-usage-hero {
+	display: flex;
+	align-items: center;
+	gap: 18px;
+	padding: 18px 20px;
+	border: 1px solid var(--vscode-widget-border, rgba(167, 139, 250, 0.25));
+	border-radius: 10px;
+	background: var(--vscode-editorWidget-background, rgba(127, 127, 127, 0.06));
+}
+
+.clawdius-usage-hero-mark {
+	flex: none;
+	width: 58px;
+	height: 47px;
+	background-image: url('./clawd-dance.svg');
+	background-repeat: no-repeat;
+	background-position: center;
+	background-size: contain;
+}
+
+.clawdius-usage-hero-text {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+}
+
+.clawdius-usage-hero-title {
+	font-size: 17px;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+}
+
+.clawdius-usage-hero-sub {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 18px;
+	font-size: 12px;
+}
+
+.clawdius-usage-kv {
+	display: inline-flex;
+	gap: 6px;
+	align-items: baseline;
+}
+
+.clawdius-usage-kv-label {
+	opacity: 0.55;
+}
+
+.clawdius-usage-kv-value {
+	font-variant-numeric: tabular-nums;
+	word-break: break-all;
+}
+
+.clawdius-usage-kv-value.accent {
+	color: #d97757;
+}
+
+.clawdius-usage-hero-meta {
+	font-size: 11px;
+	opacity: 0.5;
+}
+
+.clawdius-usage-hero-spacer {
+	flex: 1 1 auto;
+}
+
+.clawdius-usage-refresh {
+	flex: none;
+	cursor: pointer;
+	border: 1px solid var(--vscode-button-border, rgba(167, 139, 250, 0.4));
+	border-radius: 6px;
+	padding: 5px 14px;
+	font-family: inherit;
+	font-size: 12px;
+	color: var(--vscode-button-secondaryForeground, inherit);
+	background: var(--vscode-button-secondaryBackground, transparent);
+}
+
+.clawdius-usage-refresh:hover {
+	background: var(--vscode-button-secondaryHoverBackground, rgba(167, 139, 250, 0.15));
+}
+
+/* Section blocks */
+.clawdius-usage-block {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+}
+
+.clawdius-usage-block-title {
+	font-size: 12px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.12em;
+	color: #d97757;
+}
+
+.clawdius-usage-block-title::before {
+	content: "> ";
+	opacity: 0.6;
+}
+
+/* Limits - solid bars that flex-fill the row */
+.clawdius-usage-term {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.clawdius-usage-limit-row {
+	display: grid;
+	grid-template-columns: 200px 1fr auto;
+	align-items: center;
+	gap: 14px;
+}
+
+.clawdius-usage-limit-label {
+	opacity: 0.85;
+}
+
+.clawdius-usage-limit-bar {
+	height: 10px;
+	border-radius: 3px;
+	background: rgba(167, 139, 250, 0.18);
+	overflow: hidden;
+}
+
+.clawdius-usage-limit-fill {
+	height: 100%;
+	border-radius: 3px;
+	background: #a78bfa;
+	transition: width 140ms ease-out;
+}
+
+.clawdius-usage-limit-fill.warn {
+	background: var(--vscode-editorWarning-foreground, #e3b341);
+}
+
+.clawdius-usage-limit-fill.crit {
+	background: var(--vscode-editorError-foreground, #f14c4c);
+}
+
+.clawdius-usage-limit-pct {
+	font-variant-numeric: tabular-nums;
+	color: #d97757;
+	text-align: right;
+	white-space: nowrap;
+	min-width: 64px;
+}
+
+.clawdius-usage-limit-pct.warn {
+	color: var(--vscode-editorWarning-foreground, #e3b341);
+}
+
+.clawdius-usage-limit-pct.crit {
+	color: var(--vscode-editorError-foreground, #f14c4c);
+}
+
+.clawdius-usage-limit-reset {
+	font-size: 11px;
+	opacity: 0.5;
+	margin: -4px 0 4px 214px;
+}
+
+/* Non-subscription callout */
+.clawdius-usage-callout {
+	border-left: 3px solid #a78bfa;
+	padding: 4px 0 4px 14px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.clawdius-usage-callout-head {
+	font-weight: 600;
+	color: #a78bfa;
+}
+
+.clawdius-usage-callout-body {
+	font-size: 12px;
+	opacity: 0.75;
+	max-width: 640px;
+}
+
+/* Overview stat grid */
+.clawdius-usage-statgrid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 8px 40px;
+}
+
+.clawdius-usage-stat {
+	display: flex;
+	gap: 10px;
+	align-items: baseline;
+	justify-content: space-between;
+	border-bottom: 1px dotted rgba(127, 127, 127, 0.18);
+	padding-bottom: 4px;
+}
+
+.clawdius-usage-stat-label {
+	opacity: 0.6;
+}
+
+.clawdius-usage-stat-value {
+	color: #d97757;
+	font-variant-numeric: tabular-nums;
+	text-align: right;
+}
+
+/* Contribution heatmap - flex grid of cells that stretch to fill the section width. */
+.clawdius-usage-heatmap {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	width: 100%;
+}
+
+.clawdius-usage-heatmap-months,
+.clawdius-usage-heatmap-body {
+	display: flex;
+	width: 100%;
+}
+
+.clawdius-usage-heatmap-gutter,
+.clawdius-usage-heatmap-weekdays {
+	width: 30px;
+	flex: none;
+}
+
+.clawdius-usage-heatmap-months {
+	height: 14px;
+}
+
+.clawdius-usage-heatmap-mslot {
+	flex: 1 1 0;
+	min-width: 0;
+	font-size: 9px;
+	opacity: 0.55;
+	white-space: nowrap;
+	overflow: visible;
+}
+
+.clawdius-usage-heatmap-weekdays {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.clawdius-usage-heatmap-wd {
+	height: 13px;
+	font-size: 9px;
+	opacity: 0.5;
+	line-height: 13px;
+}
+
+.clawdius-usage-heatmap-grid {
+	display: flex;
+	gap: 2px;
+	flex: 1 1 auto;
+}
+
+.clawdius-usage-heatmap-week {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	flex: 1 1 0;
+	min-width: 0;
+}
+
+.clawdius-usage-heatmap-day {
+	height: 13px;
+	border-radius: 2px;
+	background-color: transparent;
+}
+
+.clawdius-usage-heatmap-day.level-0 {
+	background-image: radial-gradient(circle at center, rgba(150, 150, 165, 0.4) 0 1px, transparent 1.2px);
+}
+
+.clawdius-usage-heatmap-day.level-1 { background-color: rgba(217, 119, 87, 0.30); }
+.clawdius-usage-heatmap-day.level-2 { background-color: rgba(217, 119, 87, 0.55); }
+.clawdius-usage-heatmap-day.level-3 { background-color: rgba(217, 119, 87, 0.80); }
+.clawdius-usage-heatmap-day.level-4 { background-color: #d97757; }
+
+.clawdius-usage-heatmap-legend {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	margin-left: 30px;
+	margin-top: 2px;
+}
+
+.clawdius-usage-heatmap-legend .clawdius-usage-heatmap-day {
+	width: 11px;
+	height: 11px;
+	flex: none;
+}
+
+.clawdius-usage-heatmap-legend-text {
+	font-size: 10px;
+	opacity: 0.55;
+	margin: 0 2px;
+}
+
+/* Range tabs */
+.clawdius-usage-rangetabs {
+	display: flex;
+	gap: 18px;
+	font-size: 12px;
+}
+
+.clawdius-usage-rangetab {
+	cursor: pointer;
+	opacity: 0.55;
+}
+
+.clawdius-usage-rangetab:hover {
+	opacity: 0.85;
+}
+
+.clawdius-usage-rangetab.active {
+	color: #d97757;
+	opacity: 1;
+	font-weight: 600;
+}
+
+/* Tokens-per-day braille line chart */
+.clawdius-usage-chart {
+	display: flex;
+	gap: 10px;
+	align-items: stretch;
+}
+
+.clawdius-usage-chart-yaxis {
+	display: flex;
+	flex-direction: column;
+	justify-content: space-between;
+	text-align: right;
+	font-size: 10px;
+	opacity: 0.55;
+	font-variant-numeric: tabular-nums;
+	min-width: 46px;
+	height: 130px;
+}
+
+.clawdius-usage-chart-plot {
+	flex: 1 1 auto;
+	height: 130px;
+	border-left: 1px solid rgba(127, 127, 127, 0.3);
+	border-bottom: 1px solid rgba(227, 179, 65, 0.5);
+	padding-left: 4px;
+	box-sizing: border-box;
+}
+
+.clawdius-usage-chart-svg {
+	display: block;
+	width: 100%;
+	height: 100%;
+}
+
+.clawdius-usage-chart-xaxis {
+	display: flex;
+	justify-content: space-between;
+	margin-left: 56px;
+	font-size: 10px;
+	opacity: 0.55;
+}
+
+.clawdius-usage-chart-legend {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 16px;
+	font-size: 12px;
+}
+
+.clawdius-usage-legend-item {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.clawdius-usage-legend-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background-color: currentColor;
+	display: inline-block;
+}
+
+/* Model breakdown */
+.clawdius-usage-breakdown {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 10px 40px;
+	margin-top: 4px;
+}
+
+.clawdius-usage-breakdown-head {
+	display: flex;
+	justify-content: space-between;
+	gap: 10px;
+}
+
+.clawdius-usage-breakdown-name {
+	font-weight: 600;
+}
+
+.clawdius-usage-breakdown-pct {
+	opacity: 0.55;
+	font-variant-numeric: tabular-nums;
+}
+
+.clawdius-usage-breakdown-detail {
+	font-size: 11px;
+	opacity: 0.5;
+	font-variant-numeric: tabular-nums;
+}
+
+/* Activity by hour - 24 bars that flex to fill the full row width. */
+.clawdius-usage-hour {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.clawdius-usage-hour-bars {
+	display: flex;
+	align-items: flex-end;
+	gap: 3px;
+	height: 72px;
+}
+
+.clawdius-usage-hour-col {
+	flex: 1 1 0;
+	min-width: 0;
+	display: flex;
+	align-items: flex-end;
+	height: 100%;
+}
+
+.clawdius-usage-hour-bar {
+	width: 100%;
+	min-height: 1px;
+	border-radius: 2px 2px 0 0;
+	background: #d97757;
+}
+
+.clawdius-usage-hour-labels {
+	display: flex;
+	gap: 3px;
+}
+
+.clawdius-usage-hour-label {
+	flex: 1 1 0;
+	min-width: 0;
+	font-size: 10px;
+	opacity: 0.5;
+	text-align: center;
+}
+
+.clawdius-usage-empty {
+	font-size: 13px;
+	opacity: 0.6;
+	padding: 40px 0;
+	text-align: center;
+}
+
+/* CLAWDIUS-END */

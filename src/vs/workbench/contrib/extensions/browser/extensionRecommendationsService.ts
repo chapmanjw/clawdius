@@ -29,6 +29,7 @@ import { RemoteRecommendations } from './remoteRecommendations.js';
 import { IRemoteExtensionsScannerService } from '../../../../platform/remote/common/remoteExtensionsScanner.js';
 import { IUserDataInitializationService } from '../../../services/userData/browser/userDataInit.js';
 import { isString } from '../../../../base/common/types.js';
+import product from '../../../../platform/product/common/product.js';
 
 export class ExtensionRecommendationsService extends Disposable implements IExtensionRecommendationsService {
 
@@ -259,6 +260,15 @@ export class ExtensionRecommendationsService extends Disposable implements IExte
 	}
 
 	private async promptWorkspaceRecommendations(): Promise<void> {
+		// CLAWDIUS-BEGIN no "install recommended extensions for this repository" prompt
+		// Clawdius does not nag to install a repo's recommended extensions. It ships its own curated set (the
+		// official Claude Code plugin + the jeanp413 remotes via first-run setup) and leaves any further extension
+		// choices to the user, who can still browse Recommended in the Extensions view. Only the workspace prompt
+		// is suppressed; file/keymap/exe-based recommendation surfaces are unchanged.
+		if (!product.defaultChatAgent?.entitlementUrl) {
+			return;
+		}
+		// CLAWDIUS-END
 		const installed = await this.extensionsWorkbenchService.queryLocal();
 		const allowedRecommendations = [
 			...this.workspaceRecommendations.recommendations,

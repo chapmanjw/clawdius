@@ -15,9 +15,10 @@
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	background: rgba(0, 0, 0, 0.4);
-	backdrop-filter: blur(8px);
-	-webkit-backdrop-filter: blur(8px);
+	/* CLAWDIUS: a clean solid scrim instead of backdrop-filter blur. The blur bled across the title-bar
+	seam and made the window controls (min/max/close) look fuzzy - the overlay covers the editor area but
+	not the separate title-bar strip the controls sit on. A solid scrim dims uniformly with no fuzz. */
+	background: rgba(0, 0, 0, 0.55);
 	opacity: 0;
 	transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }

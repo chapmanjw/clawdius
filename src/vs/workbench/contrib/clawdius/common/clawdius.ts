@@ -11,6 +11,6 @@
 /** The Clawdius activity-bar / sidebar view container in the main workbench. */
 export const CLAWDIUS_VIEW_CONTAINER_ID = 'workbench.view.clawdius';
 
-/** The native Workflows view (Ultracode multi-agent runs) inside the Clawdius container. */
-export const CLAWDIUS_WORKFLOWS_VIEW_ID = 'workbench.view.clawdius.workflows';
+// The "Claude Code Config" section views inside this container derive their ids from `sectionViewId(section)`
+// in `clawdiusConfig.ts` (one collapsible view per section), so there is no single config-view id here.
 // CLAWDIUS-END

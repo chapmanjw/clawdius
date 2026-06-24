@@ -35,8 +35,8 @@ export class AiStatsStatusBar extends Disposable {
 
 		// CLAWDIUS-BEGIN no vscode AI-stats entry
 		// In Clawdius (Copilot eliminated => no defaultChatAgent.entitlementUrl) the dedicated Claude Code
-		// usage entry (claudeUsageEntry.ts) owns this slot, so suppress VS Code's "AI Usage Statistics" /
-		// "Inline suggestions" status entry to avoid a duplicate.
+		// usage entry (contrib/clawdius/browser/usage/claudeUsageStatusEntry.ts) owns this slot, so suppress
+		// VS Code's "AI Usage Statistics" / "Inline suggestions" status entry to avoid a duplicate.
 		if (!product.defaultChatAgent?.entitlementUrl) {
 			return;
 		}

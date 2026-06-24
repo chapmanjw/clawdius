@@ -129,12 +129,14 @@
 .monaco-workbench .part.editor > .content .editor-group-container > .editor-group-watermark-wrapper .editor-group-watermark .letterpress {
 	width: 100%;
 	max-height: 100%;
-	aspect-ratio: 1/1;
+	/* CLAWDIUS-BEGIN letterpress is the wide Claude Code welcome-art (440x189), not the square Copilot mark */
+	aspect-ratio: 440 / 189;
 	background-image: url('./letterpress-light.svg');
 	background-size: contain;
 	background-position-x: center;
 	background-repeat: no-repeat;
-	max-width: 256px;
+	max-width: 340px;
+	/* CLAWDIUS-END */
 }
 
 .monaco-workbench.vs-dark .part.editor > .content .editor-group-container .editor-group-watermark .letterpress {

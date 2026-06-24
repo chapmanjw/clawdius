@@ -162,7 +162,7 @@ class OpenNewsletterSignupUrlAction extends Action2 {
 	constructor() {
 		super({
 			id: OpenNewsletterSignupUrlAction.ID,
-			title: localize2('newsletterSignup', 'Signup for the VS Code Newsletter'),
+			title: localize2('newsletterSignup', 'Sign Up for the Clawdius Newsletter'),
 			category: Categories.Help,
 			f1: true
 		});
@@ -355,15 +355,19 @@ class AskVSCodeCopilot extends Action2 {
 	}
 }
 
-MenuRegistry.appendMenuItem(MenuId.MenubarHelpMenu, {
-	command: {
-		id: AskVSCodeCopilot.ID,
-		title: localize2('askVScode', 'Ask @vscode'),
-	},
-	order: 7,
-	group: '1_welcome',
-	when: ContextKeyExpr.and(ContextKeyExpr.equals('chatSetupHidden', false), ContextKeyExpr.equals('chatSetupDisabledInWorkspace', false), IsSessionsWindowContext.negate())
-});
+// CLAWDIUS-BEGIN no "Ask @vscode" help entry (it opens a Copilot @vscode chat agent we do not ship)
+if (product.defaultChatAgent?.entitlementUrl) {
+	MenuRegistry.appendMenuItem(MenuId.MenubarHelpMenu, {
+		command: {
+			id: AskVSCodeCopilot.ID,
+			title: localize2('askVScode', 'Ask @vscode'),
+		},
+		order: 7,
+		group: '1_welcome',
+		when: ContextKeyExpr.and(ContextKeyExpr.equals('chatSetupHidden', false), ContextKeyExpr.equals('chatSetupDisabledInWorkspace', false), IsSessionsWindowContext.negate())
+	});
+}
+// CLAWDIUS-END
 
 // --- Actions Registration
 
@@ -405,4 +409,8 @@ if (OpenPrivacyStatementUrlAction.AVAILABLE) {
 
 registerAction2(GetStartedWithAccessibilityFeatures);
 
-registerAction2(AskVSCodeCopilot);
+// CLAWDIUS-BEGIN no "Ask @vscode" command (Copilot @vscode agent is not shipped in Clawdius)
+if (product.defaultChatAgent?.entitlementUrl) {
+	registerAction2(AskVSCodeCopilot);
+}
+// CLAWDIUS-END

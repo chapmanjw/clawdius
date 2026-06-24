@@ -157,7 +157,6 @@ import { ChatSetupContribution, ChatTeardownContribution } from './chatSetup/cha
 import { ChatQuotaNotificationContribution } from './chatQuotaNotification.js';
 import { HasByokModelsContribution } from './hasByokModelsContribution.js';
 import { ChatStatusBarEntry } from './chatStatus/chatStatusEntry.js';
-import { ClaudeUsageStatusEntry } from './chatStatus/claudeUsageEntry.js'; // CLAWDIUS
 import { ChatVariablesService } from './attachments/chatVariables.js';
 import { ChatWidget } from './widget/chatWidget.js';
 import { ChatCodeBlockContextProviderService } from './codeBlockContextProviderService.js';
@@ -2434,7 +2433,7 @@ registerWorkbenchContribution2(ChatQuotaNotificationContribution.ID, ChatQuotaNo
 registerWorkbenchContribution2(HasByokModelsContribution.ID, HasByokModelsContribution, WorkbenchPhase.BlockRestore);
 registerWorkbenchContribution2(ChatTeardownContribution.ID, ChatTeardownContribution, WorkbenchPhase.AfterRestored);
 registerWorkbenchContribution2(ChatStatusBarEntry.ID, ChatStatusBarEntry, WorkbenchPhase.BlockRestore);
-registerWorkbenchContribution2(ClaudeUsageStatusEntry.ID, ClaudeUsageStatusEntry, WorkbenchPhase.BlockRestore); // CLAWDIUS: Claude Code usage entry
+// CLAWDIUS: the Claude Code usage status entry + dashboard moved to contrib/clawdius/browser/usage (registered in clawdius.contribution.ts).
 registerWorkbenchContribution2(BuiltinToolsContribution.ID, BuiltinToolsContribution, WorkbenchPhase.Eventually);
 registerWorkbenchContribution2(UsagesToolContribution.ID, UsagesToolContribution, WorkbenchPhase.BlockRestore);
 registerWorkbenchContribution2(RenameToolContribution.ID, RenameToolContribution, WorkbenchPhase.BlockRestore);

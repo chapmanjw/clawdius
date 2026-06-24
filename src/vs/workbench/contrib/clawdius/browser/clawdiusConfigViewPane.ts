@@ -30,7 +30,7 @@ import { IThemeService } from '../../../../platform/theme/common/themeService.js
 import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
-import { CONFIG_DELETE_COMMAND_ID } from './clawdiusConfigActions.js';
+import { CONFIG_DELETE_COMMAND_ID, CONFIG_MOVE_COMMAND_ID } from './clawdiusConfigActions.js';
 import {
 	ConfigScope, ConfigSection, IClawdiusConfigService, IConfigItem, IConfigScopeGroup, sectionFromViewId,
 } from '../common/clawdiusConfig.js';
@@ -183,6 +183,11 @@ export class ClawdiusConfigSectionViewPane extends ViewPane {
 		const actions: IAction[] = [];
 		if (item.resource) {
 			actions.push(toAction({ id: 'clawdius.config.open', label: localize('clawdius.config.open', "Open"), run: () => this.openItem(item) }));
+		}
+		if (item.canMove) {
+			const toGlobal = item.scope !== ConfigScope.Global;
+			const label = toGlobal ? localize('clawdius.config.moveToGlobal', "Move to Global") : localize('clawdius.config.moveToProject', "Move to Project");
+			actions.push(toAction({ id: CONFIG_MOVE_COMMAND_ID, label, run: () => void this.commandService.executeCommand(CONFIG_MOVE_COMMAND_ID, item) }));
 		}
 		if (item.canDelete) {
 			actions.push(toAction({ id: CONFIG_DELETE_COMMAND_ID, label: localize('clawdius.config.delete', "Delete"), run: () => void this.commandService.executeCommand(CONFIG_DELETE_COMMAND_ID, item) }));

@@ -40,6 +40,7 @@ export function configCreateCommandId(section: ConfigSection): string {
 }
 export const CONFIG_DELETE_COMMAND_ID = 'clawdius.config.delete';
 export const CONFIG_REFRESH_COMMAND_ID = 'clawdius.config.refresh';
+export const CONFIG_MOVE_COMMAND_ID = 'clawdius.config.move';
 
 /** Hook events Claude Code understands (the create picker offers these). */
 const HOOK_EVENTS = ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'SessionStart', 'SessionEnd', 'Stop', 'SubagentStop', 'Notification', 'PreCompact'];
@@ -303,6 +304,94 @@ async function deleteItem(s: IDeleteServices, item: IConfigItem): Promise<void> 
 	}
 }
 
+// --- move between scopes -------------------------------------------------------------------------
+
+/** The on-disk MCP config file for a scope: `<folder>/.mcp.json` (project) or `~/.claude.json` (global). */
+function mcpFileFor(target: IScopeTarget): URI {
+	return target.scope === ConfigScope.Project ? URI.joinPath(target.baseDir, '.mcp.json') : URI.joinPath(target.baseDir, '.claude.json');
+}
+
+async function pickMoveTarget(s: ICreateServices, dests: IScopeTarget[]): Promise<IScopeTarget | undefined> {
+	if (dests.length === 0) { return undefined; }
+	if (dests.length === 1) { return dests[0]; }
+	const picked = await s.quickInput.pick(
+		dests.map(t => ({ label: t.label, target: t })),
+		{ placeHolder: localize('clawdius.config.pickMoveTarget', "Move to which scope?") },
+	);
+	return picked?.target;
+}
+
+async function confirmMove(dialogService: IDialogService, label: string, destLabel: string): Promise<boolean> {
+	const r = await dialogService.confirm({
+		message: localize('clawdius.config.confirmMove', "Move '{0}' to {1}?", label, destLabel),
+		detail: localize('clawdius.config.confirmMoveDetail', "A copy is created in the target scope and the original is moved to the trash."),
+		primaryButton: localize('clawdius.config.move', "Move"),
+	});
+	return r.confirmed;
+}
+
+/** Move a file/folder-backed item (agent / command / skill) to the other scope's matching section folder. */
+async function moveFileItem(s: ICreateServices, dialogService: IDialogService, item: IConfigItem, targets: IScopeTarget[]): Promise<void> {
+	const source = item.targetResource ?? item.resource;
+	if (!source) { return; }
+	const sourceRoot = targets.find(t => source.path.startsWith(t.claudeDir.path + '/'));
+	if (!sourceRoot) { return; }
+	const dest = await pickMoveTarget(s, targets.filter(t => t !== sourceRoot));
+	if (!dest) {
+		await dialogService.info(localize('clawdius.config.noMoveTarget', "There is no other scope to move to. Open a workspace folder to enable Global <-> Project moves."));
+		return;
+	}
+	// Preserve the path relative to the source `.claude` dir (e.g. `agents/foo.md`, `commands/git/commit.md`).
+	const rel = source.path.slice(sourceRoot.claudeDir.path.length + 1);
+	const destResource = URI.joinPath(dest.claudeDir, ...rel.split('/'));
+	if (await s.fileService.exists(destResource)) {
+		await dialogService.info(localize('clawdius.config.moveExists', "'{0}' already exists in {1}.", item.label, dest.label));
+		return;
+	}
+	if (!(await confirmMove(dialogService, item.label, dest.label))) { return; }
+	await s.fileService.copy(source, destResource, false);
+	await s.fileService.del(source, { useTrash: true, recursive: true });
+	await openResource(s, item.backing === ConfigBacking.Folder ? URI.joinPath(destResource, 'SKILL.md') : destResource);
+}
+
+/** Move a JSONC-backed item (an MCP server) to the other scope's MCP file, preserving the entry. */
+async function moveJsoncItem(s: ICreateServices, dialogService: IDialogService, item: IConfigItem, targets: IScopeTarget[]): Promise<void> {
+	if (!item.resource || !item.jsonPath) { return; }
+	const path: JSONPath = [...item.jsonPath];
+	const value = getAtPath(await readJson(s.fileService, item.resource), path);
+	if (value === undefined) { return; }
+	const dest = await pickMoveTarget(s, targets.filter(t => t.scope !== item.scope));
+	if (!dest) {
+		await dialogService.info(localize('clawdius.config.noMoveTarget', "There is no other scope to move to. Open a workspace folder to enable Global <-> Project moves."));
+		return;
+	}
+	const destResource = mcpFileFor(dest);
+	if (getAtPath(await readJson(s.fileService, destResource), path) !== undefined) {
+		await dialogService.info(localize('clawdius.config.moveExists', "'{0}' already exists in {1}.", item.label, dest.label));
+		return;
+	}
+	if (!(await confirmMove(dialogService, item.label, dest.label))) { return; }
+	await ensureJsonFile(s, destResource);
+	await s.jsonEditing.write(destResource, [{ path, value }], true);
+	await s.jsonEditing.write(item.resource, [{ path, value: undefined }], true);
+	await openResource(s, destResource);
+}
+
+async function moveItem(s: ICreateServices, dialogService: IDialogService, item: IConfigItem): Promise<void> {
+	if (!item.canMove) { return; }
+	try {
+		const targets = await resolveScopeTargets(s);
+		if (item.backing === ConfigBacking.Jsonc) {
+			await moveJsoncItem(s, dialogService, item, targets);
+		} else {
+			await moveFileItem(s, dialogService, item, targets);
+		}
+		await s.configService.refresh(true);
+	} catch (err) {
+		s.logService.error('[Clawdius] move config item failed', err);
+	}
+}
+
 // --- registration --------------------------------------------------------------------------------
 
 function createServices(accessor: ServicesAccessor): ICreateServices {
@@ -372,6 +461,21 @@ export function registerClawdiusConfigActions(): void {
 				configService: accessor.get(IClawdiusConfigService),
 				logService: accessor.get(ILogService),
 			}, item);
+		}
+	});
+
+	registerAction2(class extends Action2 {
+		constructor() {
+			super({
+				id: CONFIG_MOVE_COMMAND_ID,
+				title: localize2('clawdius.config.move', "Move"),
+				category: CATEGORY,
+				f1: false,
+			});
+		}
+		override run(accessor: ServicesAccessor, item?: IConfigItem): Promise<void> {
+			if (!item) { return Promise.resolve(); }
+			return moveItem(createServices(accessor), accessor.get(IDialogService), item);
 		}
 	});
 }

@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           lfs: false # upstream LFS test caches 404 and are not needed; never smudge in CI
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
       - name: Forbidden-content scanner is falsifiable (planted string must fail)
@@ -76,7 +76,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           lfs: false # upstream LFS test caches 404 and are not needed; never smudge in CI
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
           cache: npm

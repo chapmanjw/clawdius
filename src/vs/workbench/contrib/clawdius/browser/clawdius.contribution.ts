@@ -31,9 +31,11 @@ import { EditorPaneDescriptor, IEditorPaneRegistry } from '../../../browser/edit
 import { EditorExtensions, IEditorFactoryRegistry, IEditorSerializer } from '../../../common/editor.js';
 import { EditorInput } from '../../../common/editor/editorInput.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
-import { Action2, registerAction2 } from '../../../../platform/actions/common/actions.js';
+import { Action2, MenuId, registerAction2 } from '../../../../platform/actions/common/actions.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
+import { IOpenerService } from '../../../../platform/opener/common/opener.js';
+import { URI } from '../../../../base/common/uri.js';
 import { ClaudeUsageStatusEntry } from './usage/claudeUsageStatusEntry.js';
 import { ClaudeUsageDashboardEditor } from './usage/claudeUsageDashboardEditor.js';
 import { ClaudeUsageDashboardInput } from './usage/claudeUsageDashboardInput.js';
@@ -70,6 +72,27 @@ class OpenClaudeUsageDashboardAction extends Action2 {
 			await commandService.executeCommand(REFRESH_CAPACITY_COMMAND_ID);
 		} catch { /* ignore - the dashboard still renders from cached + local data */ }
 		await editorService.openEditor(ClaudeUsageDashboardInput.instance, { pinned: true, revealIfOpened: true });
+	}
+}
+
+// Lightweight "Check for Updates": Clawdius has no auto-update server yet (product.json sets no updateUrl, so
+// the built-in updater is Disabled/MissingConfiguration), so this opens the GitHub releases page where testers
+// download the latest build. It lives in the Manage (gear) menu's `7_update` group - where the native update
+// item would sit - so the slot is not empty. Replace with the real IUpdateService flow once an update server +
+// signed release pipeline exist (see clawdius-private-docs release plan).
+const CLAWDIUS_RELEASES_URL = 'https://github.com/chapmanjw/clawdius/releases';
+class ClawdiusCheckForUpdatesAction extends Action2 {
+	constructor() {
+		super({
+			id: 'clawdius.checkForUpdates',
+			title: localize2('clawdius.checkForUpdates', "Check for Updates..."),
+			category: localize2('clawdius.category', "Clawdius"),
+			f1: true,
+			menu: { id: MenuId.GlobalActivity, group: '7_update', order: 1 },
+		});
+	}
+	override async run(accessor: ServicesAccessor): Promise<void> {
+		await accessor.get(IOpenerService).open(URI.parse(CLAWDIUS_RELEASES_URL));
 	}
 }
 
@@ -132,5 +155,8 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	);
 	Registry.as<IEditorFactoryRegistry>(EditorExtensions.EditorFactory).registerEditorSerializer(ClaudeUsageDashboardInput.ID, ClaudeUsageDashboardInputSerializer);
 	registerAction2(OpenClaudeUsageDashboardAction);
+
+	// Manage-gear "Check for Updates..." -> opens the Clawdius releases page (no auto-update server yet).
+	registerAction2(ClawdiusCheckForUpdatesAction);
 }
 // CLAWDIUS-END

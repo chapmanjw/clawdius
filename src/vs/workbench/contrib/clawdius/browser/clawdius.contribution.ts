@@ -42,6 +42,10 @@ import { ClawdiusEffortStatusEntry, SetEffortLevelAction } from './clawdiusEffor
 import { ClaudeUsageDashboardEditor } from './usage/claudeUsageDashboardEditor.js';
 import { ClaudeUsageDashboardInput } from './usage/claudeUsageDashboardInput.js';
 import { OPEN_USAGE_DASHBOARD_COMMAND_ID, REFRESH_CAPACITY_COMMAND_ID } from './usage/claudeUsageData.js';
+import { ClaudeControlCenterEditor } from './control/claudeControlCenterEditor.js';
+import { ClaudeControlCenterInput } from './control/claudeControlCenterInput.js';
+import { ContextKeyExpr } from '../../../../platform/contextkey/common/contextkey.js';
+import { Codicon } from '../../../../base/common/codicons.js';
 
 // Singleton dashboard input round-trips with no state (everything is read live from local files on open).
 class ClaudeUsageDashboardInputSerializer implements IEditorSerializer {
@@ -74,6 +78,33 @@ class OpenClaudeUsageDashboardAction extends Action2 {
 			await commandService.executeCommand(REFRESH_CAPACITY_COMMAND_ID);
 		} catch { /* ignore - the dashboard still renders from cached + local data */ }
 		await editorService.openEditor(ClaudeUsageDashboardInput.instance, { pinned: true, revealIfOpened: true });
+	}
+}
+
+// Singleton Control Center input round-trips with no state (scope + tab are in-pane; data is read live on open).
+class ClaudeControlCenterInputSerializer implements IEditorSerializer {
+	canSerialize(): boolean { return true; }
+	serialize(): string { return ''; }
+	deserialize(): EditorInput { return ClaudeControlCenterInput.instance; }
+}
+
+// Opens (or reveals) the interactive Control Center (Permissions tab in the MVP). Reachable from the gear on
+// the Permissions config section title and the command palette.
+const OPEN_CONTROL_CENTER_COMMAND_ID = 'clawdius.openControlCenter';
+class OpenClaudeControlCenterAction extends Action2 {
+	constructor() {
+		super({
+			id: OPEN_CONTROL_CENTER_COMMAND_ID,
+			title: localize2('clawdius.control.openCmd', "Manage Permissions"),
+			category: localize2('clawdius.category', "Clawdius"),
+			icon: Codicon.settingsGear,
+			f1: true,
+			menu: [{ id: MenuId.ViewTitle, when: ContextKeyExpr.equals('view', sectionViewId(ConfigSection.Permissions)), group: 'navigation', order: 0 }],
+		});
+	}
+	override async run(accessor: ServicesAccessor): Promise<void> {
+		const editorService = accessor.get(IEditorService);
+		await editorService.openEditor(ClaudeControlCenterInput.instance, { pinned: true, revealIfOpened: true });
 	}
 }
 
@@ -168,6 +199,15 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	);
 	Registry.as<IEditorFactoryRegistry>(EditorExtensions.EditorFactory).registerEditorSerializer(ClaudeUsageDashboardInput.ID, ClaudeUsageDashboardInputSerializer);
 	registerAction2(OpenClaudeUsageDashboardAction);
+
+	// Config Control Center (MVP: interactive Permissions tab) - a native DOM editor pane that edits the
+	// selected scope's settings.json permissions block. Opened from the Permissions config section gear.
+	Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
+		EditorPaneDescriptor.create(ClaudeControlCenterEditor, ClaudeControlCenterEditor.ID, localize('clawdius.control.pane', "Claude Code Control Center")),
+		[new SyncDescriptor(ClaudeControlCenterInput)],
+	);
+	Registry.as<IEditorFactoryRegistry>(EditorExtensions.EditorFactory).registerEditorSerializer(ClaudeControlCenterInput.ID, ClaudeControlCenterInputSerializer);
+	registerAction2(OpenClaudeControlCenterAction);
 
 	// Manage-gear "Check for Updates..." -> opens the Clawdius releases page (no auto-update server yet).
 	registerAction2(ClawdiusCheckForUpdatesAction);

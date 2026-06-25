@@ -63,9 +63,9 @@ const PERMISSION_PLAN_FOREGROUND = registerColor('clawdius.permissionPlanForegro
 }, localize('clawdius.perm.planForeground', "Foreground of the Clawdius permission-mode status item when Plan mode is the default."));
 
 /** Visual tone -> drives status-bar coloring. safe = green fill; none = plain; warn/danger = filled background. */
-type ModeTone = 'safe' | 'none' | 'warn' | 'danger';
+export type ModeTone = 'safe' | 'none' | 'warn' | 'danger';
 
-interface IPermissionModeInfo {
+export interface IPermissionModeInfo {
 	readonly value: PermissionMode;
 	/** Display label mirroring the plugin's chat selector. */
 	readonly label: string;
@@ -80,7 +80,7 @@ interface IPermissionModeInfo {
  * closest stock codicons (the plugin's own glyphs are bespoke SVGs in its webview, not codicons; exact parity
  * would require adding them to an icon font).
  */
-function permissionModes(): IPermissionModeInfo[] {
+export function permissionModes(): IPermissionModeInfo[] {
 	return [
 		{ value: 'plan', label: localize('clawdius.perm.plan', "Plan mode"), detail: localize('clawdius.perm.plan.detail', "Claude will explore the code and present a plan before editing"), icon: Codicon.eye, tone: 'safe' },
 		{ value: 'default', label: localize('clawdius.perm.default', "Ask before edits"), detail: localize('clawdius.perm.default.detail', "Claude will ask for approval before making each edit"), icon: Codicon.shield, tone: 'none' },

@@ -19,6 +19,7 @@ import { ILogService } from '../../../../platform/log/common/log.js';
 import { AgentHostEnabledSettingId, AgentHostIpcChannels, IAgentCreateSessionConfig, IAgentHostInspectInfo, IAgentHostService, IAgentHostSocketInfo, IAgentResolveSessionConfigParams, IAgentSessionConfigCompletionsParams, IAgentSessionMetadata, AuthenticateParams, AuthenticateResult, isAgentHostEnabled, IMcpNotification } from '../../../../platform/agentHost/common/agentService.js';
 import { AgentHostIpcChannelTransport } from '../../../../platform/agentHost/browser/agentHostIpcChannelTransport.js';
 import { RemoteAgentHostProtocolClient } from '../../../../platform/agentHost/browser/remoteAgentHostProtocolClient.js';
+import type { IClaudeMcpToolDiscoveryResult } from '../../../../platform/agentHost/common/claudeMcpToolDiscovery.js';
 import type { IActiveSubscriptionInfo, IAgentSubscription } from '../../../../platform/agentHost/common/state/agentSubscription.js';
 import type { CompletionsParams, CompletionsResult, CreateTerminalParams, ResolveSessionConfigResult, SessionConfigCompletionsResult } from '../../../../platform/agentHost/common/state/protocol/commands.js';
 import type { InvokeChangesetOperationParams, InvokeChangesetOperationResult } from '../../../../platform/agentHost/common/state/protocol/channels-changeset/commands.js';
@@ -144,6 +145,12 @@ export class EditorRemoteAgentHostServiceClient extends Disposable implements IA
 	async getInspectInfo(_tryEnable: boolean): Promise<IAgentHostInspectInfo | undefined> {
 		return undefined;
 	}
+
+	// CLAWDIUS-BEGIN live MCP tool discovery (#93): not wired for the remote agent host (local SDK session only).
+	async discoverMcpServerTools(_serverName: string, _workingDirectoryPath: string): Promise<IClaudeMcpToolDiscoveryResult> {
+		return { status: 'error', tools: [], message: 'MCP tool discovery is only available with the local Agent Host.' };
+	}
+	// CLAWDIUS-END
 
 	// ---- IAgentConnection delegation ---------------------------------------
 	// All getters delegate directly to the eagerly-created protocol client so

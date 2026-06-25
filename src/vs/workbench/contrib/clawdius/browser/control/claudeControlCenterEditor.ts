@@ -41,6 +41,8 @@ import { IEditorGroup } from '../../../../services/editor/common/editorGroupsSer
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IJSONEditingService } from '../../../../services/configuration/common/jsonEditing.js';
 import { IPathService } from '../../../../services/path/common/pathService.js';
+import { IAgentHostService } from '../../../../../platform/agentHost/common/agentService.js';
+import { IClaudeMcpTool, IClaudeMcpToolDiscoveryResult } from '../../../../../platform/agentHost/common/claudeMcpToolDiscovery.js';
 import { ConfigSection, IClawdiusConfigService } from '../../common/clawdiusConfig.js';
 import {
 	ALLOW_BYPASS_KEY, INITIAL_PERMISSION_MODE_KEY, PermissionMode, parsePermissionMode, permissionModeWrites, permissionModes,
@@ -84,8 +86,12 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		builtinTool: string;
 		builtinSpec: string;
 		server: string;
-		mcpSelect: string; // '' = (All tools); '__other' = type a tool name; (a real tool name once #93 lands)
+		mcpSelect: string; // '' = (All tools); '__other' = type a name; '__load' = run discovery; or a real tool name
 		mcpTool: string;
+		mcpLoading: boolean;
+		mcpLoadedServer: string;            // server the loaded tools belong to ('' = none loaded)
+		mcpLoadedTools: readonly IClaudeMcpTool[];
+		mcpLoadMessage: string;             // status/error from the last load ('' = none)
 		text: string;
 	} | undefined;
 
@@ -102,6 +108,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@IEditorService private readonly editorService: IEditorService,
 		@IClawdiusConfigService private readonly configService: IClawdiusConfigService,
+		@IAgentHostService private readonly agentHostService: IAgentHostService,
 	) {
 		super(ClaudeControlCenterEditor.ID, group, telemetryService, themeService, storageService);
 		// Re-render when the default-mode setting changes anywhere (e.g. the status-bar pill), so the two stay
@@ -347,7 +354,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		append(head, h('span.clawdius-control-bk-cnt')).textContent = String(rules.length);
 		append(head, h('.clawdius-control-spacer'));
 		this.button(head, localize('clawdius.control.addRule', "Add rule"), () => {
-			this.adding = { bucket: meta.bucket, mode: 'builtin', builtinTool: '', builtinSpec: '', server: '', mcpSelect: '', mcpTool: '', text: '' };
+			this.adding = { bucket: meta.bucket, mode: 'builtin', builtinTool: '', builtinSpec: '', server: '', mcpSelect: '', mcpTool: '', mcpLoading: false, mcpLoadedServer: '', mcpLoadedTools: [], mcpLoadMessage: '', text: '' };
 			this.render();
 		}, 'add', Codicon.add);
 
@@ -460,20 +467,51 @@ export class ClaudeControlCenterEditor extends EditorPane {
 				opt.textContent = name;
 				if (name === a.server) { opt.selected = true; }
 			}
-			serverSel.disabled = servers.length === 0;
-			this.renderStore.add(addDisposableListener(serverSel, EventType.CHANGE, () => { a.server = serverSel.value; refreshPreview(); }));
+			serverSel.disabled = servers.length === 0 || a.mcpLoading;
+			this.renderStore.add(addDisposableListener(serverSel, EventType.CHANGE, () => {
+				a.server = serverSel.value;
+				if (a.mcpSelect !== '__other') { a.mcpSelect = ''; } // a loaded-tool selection is server-specific
+				this.render();
+			}));
 
-			// Tool selector: (All tools) or "Specific tool..." (the live tool list arrives with #93).
+			// Tool selector: (All tools), each discovered tool (for THIS server), Specific tool by name..., and
+			// Load tool names... (the live discovery action).
 			const toolSel = append(row, h('select.clawdius-control-select')) as HTMLSelectElement;
 			toolSel.setAttribute('aria-label', localize('clawdius.control.mcpToolSel', "MCP tool"));
+			toolSel.disabled = a.mcpLoading;
 			const optAll = append(toolSel, h('option')) as HTMLOptionElement;
 			optAll.value = '';
 			optAll.textContent = localize('clawdius.control.allToolsOpt', "(All tools)");
+			const loaded = a.mcpLoadedServer === a.server ? a.mcpLoadedTools : [];
 			const optOther = append(toolSel, h('option')) as HTMLOptionElement;
 			optOther.value = '__other';
-			optOther.textContent = localize('clawdius.control.specificTool', "Specific tool...");
-			toolSel.value = a.mcpSelect === '__other' ? '__other' : '';
-			this.renderStore.add(addDisposableListener(toolSel, EventType.CHANGE, () => { a.mcpSelect = toolSel.value; this.render(); }));
+			optOther.textContent = localize('clawdius.control.specificTool', "Specific tool by name...");
+			const optLoad = append(toolSel, h('option')) as HTMLOptionElement;
+			optLoad.value = '__load';
+			optLoad.textContent = loaded.length > 0 ? localize('clawdius.control.reloadTools', "Reload tool names...") : localize('clawdius.control.loadTools', "Load tool names...");
+			// The actual tool names list BELOW the action options (under a disabled separator).
+			if (loaded.length > 0) {
+				const sep = append(toolSel, h('option')) as HTMLOptionElement;
+				sep.value = '__sep';
+				sep.disabled = true;
+				sep.textContent = localize('clawdius.control.toolsHeader', "--- tools ---");
+			}
+			for (const tool of loaded) {
+				const opt = append(toolSel, h('option')) as HTMLOptionElement;
+				opt.value = tool.name;
+				opt.textContent = tool.name;
+			}
+			toolSel.value = a.mcpSelect === '__other' ? '__other'
+				: (a.mcpSelect && loaded.some(t => t.name === a.mcpSelect)) ? a.mcpSelect
+					: '';
+			this.renderStore.add(addDisposableListener(toolSel, EventType.CHANGE, () => {
+				if (toolSel.value === '__load') {
+					void this.loadMcpTools(a.server);
+				} else {
+					a.mcpSelect = toolSel.value;
+					this.render();
+				}
+			}));
 
 			if (a.mcpSelect === '__other') {
 				const toolInput = append(row, h('input.clawdius-control-input')) as HTMLInputElement;
@@ -502,7 +540,14 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		this.button(row, localize('clawdius.control.cancel', "Cancel"), () => { this.adding = undefined; this.render(); }, 'ghost');
 
 		if (a.mode === 'mcp') {
-			append(wrap, h('.clawdius-control-addnote')).textContent = localize('clawdius.control.mcpToolNote', "Pick (All tools), or name a specific tool. A live list of this server's tools needs connecting to the server - coming soon.");
+			const note = append(wrap, h('.clawdius-control-addnote'));
+			if (a.mcpLoading) {
+				note.textContent = localize('clawdius.control.mcpLoading', "Connecting to \"{0}\" to load its tools...", a.server);
+			} else if (a.mcpLoadMessage) {
+				note.textContent = a.mcpLoadMessage;
+			} else {
+				note.textContent = localize('clawdius.control.mcpToolNote', "Pick (All tools) or a tool by name. \"Load tool names...\" briefly connects to the server (may contact a remote service) to list its tools.");
+			}
 		}
 
 		refreshPreview();
@@ -515,8 +560,47 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const a = this.adding;
 		if (!a) { return ''; }
 		if (a.mode === 'builtin') { return builtinRule(a.builtinTool, a.builtinSpec) ?? ''; }
-		if (a.mode === 'mcp') { return mcpToolRule(a.server, a.mcpSelect === '__other' ? a.mcpTool : '') ?? ''; }
+		if (a.mode === 'mcp') { return mcpToolRule(a.server, this.mcpResolvedTool(a)) ?? ''; }
 		return a.text.trim();
+	}
+
+	/** Resolve the MCP tool the selector currently targets ('' = all tools on the server). */
+	private mcpResolvedTool(a: { mcpSelect: string; mcpTool: string }): string {
+		if (a.mcpSelect === '' || a.mcpSelect === '__load') { return ''; }
+		return a.mcpSelect === '__other' ? a.mcpTool : a.mcpSelect;
+	}
+
+	/** Run live tool discovery for the chosen MCP server (user-initiated; connects to the server). */
+	private async loadMcpTools(server: string): Promise<void> {
+		const a = this.adding;
+		if (!a) { return; }
+		if (!server) { this.toast(localize('clawdius.control.pickServerFirst', "Pick an MCP server first.")); a.mcpSelect = ''; this.render(); return; }
+		a.mcpLoading = true;
+		a.mcpLoadMessage = '';
+		a.mcpSelect = '';
+		this.render();
+		const cwd = (this.workspaceService.getWorkspace().folders[0]?.uri ?? await this.pathService.userHome()).fsPath;
+		let result: IClaudeMcpToolDiscoveryResult;
+		try {
+			result = await this.agentHostService.discoverMcpServerTools(server, cwd);
+		} catch (err) {
+			result = { status: 'error', tools: [], message: err instanceof Error ? err.message : String(err) };
+		}
+		// Bail if the add box was closed / replaced (e.g. a rule was committed) while loading.
+		if (this.adding !== a) { return; }
+		a.mcpLoading = false;
+		if (result.status === 'connected') {
+			a.mcpLoadedServer = server;
+			a.mcpLoadedTools = result.tools;
+			a.mcpLoadMessage = result.tools.length > 0
+				? localize('clawdius.control.loadedN', "Loaded {0} tool(s) from \"{1}\".", result.tools.length, server)
+				: localize('clawdius.control.loadedNone', "\"{0}\" connected but reported no tools.", server);
+		} else {
+			a.mcpLoadedServer = '';
+			a.mcpLoadedTools = [];
+			a.mcpLoadMessage = result.message ?? localize('clawdius.control.loadFailed', "Could not load tools ({0}).", result.status);
+		}
+		this.render();
 	}
 
 	private commitAdd(): void {
@@ -527,15 +611,15 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			rule = builtinRule(a.builtinTool, a.builtinSpec);
 			if (!rule) { this.toast(localize('clawdius.control.pickTool', "Pick a tool first.")); return; }
 		} else if (a.mode === 'mcp') {
-			rule = mcpToolRule(a.server, a.mcpSelect === '__other' ? a.mcpTool : '');
+			rule = mcpToolRule(a.server, this.mcpResolvedTool(a));
 			if (!rule) { this.toast(localize('clawdius.control.pickServer', "Pick an MCP server first.")); return; }
 		} else {
 			rule = a.text.trim();
 			if (!rule) { this.toast(localize('clawdius.control.invalid', "Enter a rule first.")); return; }
 		}
-		// Keep the add box open + reset value fields, preserving the mode + chosen tool/server context for
-		// rapid multi-add.
-		this.adding = { bucket: a.bucket, mode: a.mode, builtinTool: a.builtinTool, builtinSpec: '', server: a.server, mcpSelect: a.mcpSelect, mcpTool: '', text: '' };
+		// Keep the add box open + reset value fields, preserving the mode + chosen tool/server context (and any
+		// loaded MCP tool list) for rapid multi-add.
+		this.adding = { bucket: a.bucket, mode: a.mode, builtinTool: a.builtinTool, builtinSpec: '', server: a.server, mcpSelect: a.mcpSelect === '__other' ? '__other' : '', mcpTool: '', mcpLoading: false, mcpLoadedServer: a.mcpLoadedServer, mcpLoadedTools: a.mcpLoadedTools, mcpLoadMessage: a.mcpLoadMessage, text: '' };
 		void this.apply({ type: 'addRule', bucket: a.bucket, rule });
 	}
 

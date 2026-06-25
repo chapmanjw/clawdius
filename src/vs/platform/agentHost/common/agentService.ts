@@ -13,6 +13,7 @@ import { URI } from '../../../base/common/uri.js';
 import type { IConfigurationService } from '../../configuration/common/configuration.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 import type { ISyncedCustomization } from './agentPluginManager.js';
+import type { IClaudeMcpToolDiscoveryResult } from './claudeMcpToolDiscovery.js';
 import type { IAgentServerToolHost } from './agentServerTools.js';
 import type { IActiveSubscriptionInfo, IAgentSubscription } from './state/agentSubscription.js';
 import type { IRemoteWatchHandle } from './agentHostFileSystemProvider.js';
@@ -1369,4 +1370,13 @@ export interface IAgentHostService extends IAgentConnection {
 	 * enabled.
 	 */
 	getInspectInfo(tryEnable: boolean): Promise<IAgentHostInspectInfo | undefined>;
+
+	// CLAWDIUS-BEGIN live MCP tool discovery (#93)
+	/**
+	 * Connect to a configured MCP server (a short-lived Claude SDK session rooted at `workingDirectoryPath`)
+	 * and return its tools. User-initiated only (the Control Center "Load tool names..." action). Returns a
+	 * `disabled` result when the agent host is off, and self-caps so the renderer never hangs.
+	 */
+	discoverMcpServerTools(serverName: string, workingDirectoryPath: string): Promise<IClaudeMcpToolDiscoveryResult>;
+	// CLAWDIUS-END
 }

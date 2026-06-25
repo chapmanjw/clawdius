@@ -24,6 +24,8 @@ import { CopilotAgent } from './copilot/copilotAgent.js';
 import { CopilotApiService, ICopilotApiService } from './shared/copilotApiService.js';
 import { ClaudeAgent } from './claude/claudeAgent.js';
 import { ClaudeAgentSdkService, ClaudeSdkPackage, IClaudeAgentSdkService } from './claude/claudeAgentSdkService.js';
+import { ClaudeMcpToolDiscoveryChannelName, IClaudeMcpToolDiscoveryService } from '../common/claudeMcpToolDiscovery.js';
+import { ClaudeMcpToolDiscoveryService } from './claude/claudeMcpToolDiscoveryService.js';
 // CLAWDIUS-BEGIN cli backend resolution
 import { IClawdiusCliConfigService } from '../../clawdius/common/clawdiusCliConfig.js';
 import { ClawdiusCliConfigService } from '../../clawdius/node/clawdiusCliConfigService.js';
@@ -173,6 +175,12 @@ async function startAgentHost(): Promise<void> {
 		diServices.set(IClaudeProxyService, claudeProxyService);
 		const claudeAgentSdkService = instantiationService.createInstance(ClaudeAgentSdkService);
 		diServices.set(IClaudeAgentSdkService, claudeAgentSdkService);
+		// CLAWDIUS-BEGIN live MCP tool discovery (#93): a short-lived SDK session lists a configured MCP
+		// server's tools on demand (user-initiated "Load tool names..." in the Permissions Control Center).
+		const mcpToolDiscoveryService = instantiationService.createInstance(ClaudeMcpToolDiscoveryService);
+		diServices.set(IClaudeMcpToolDiscoveryService, mcpToolDiscoveryService);
+		server.registerChannel(ClaudeMcpToolDiscoveryChannelName, ProxyChannel.fromService(mcpToolDiscoveryService, disposables));
+		// CLAWDIUS-END
 		const codexProxyService = disposables.add(instantiationService.createInstance(CodexProxyService));
 		diServices.set(ICodexProxyService, codexProxyService);
 		const agentHostOTelService = disposables.add(instantiationService.createInstance(AgentHostOTelService));

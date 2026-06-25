@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { DeferredPromise } from '../../../base/common/async.js';
+import { DeferredPromise, timeout } from '../../../base/common/async.js';
 import { Emitter, Relay } from '../../../base/common/event.js';
 import { Disposable, DisposableStore, IReference } from '../../../base/common/lifecycle.js';
 import { IObservable, ISettableObservable, observableValue } from '../../../base/common/observable.js';
@@ -31,6 +31,7 @@ import { AGENT_HOST_CLIENT_RESOURCE_CHANNEL, AgentHostClientResourceChannel } fr
 import { TELEMETRY_CRASH_REPORTER_SETTING_ID, TELEMETRY_OLD_SETTING_ID, TELEMETRY_SETTING_ID } from '../../telemetry/common/telemetry.js';
 import { getTelemetryLevel } from '../../telemetry/common/telemetryUtils.js';
 import { AgentHostTelemetryLevelConfigKey, AgentHostSessionSyncEnabledConfigKey, SESSION_SYNC_ENABLED_SETTING_ID, telemetryLevelToAgentHostConfigValue } from '../common/agentHostSchema.js';
+import { ClaudeMcpToolDiscoveryChannelName, IClaudeMcpToolDiscoveryResult, IClaudeMcpToolDiscoveryService } from '../common/claudeMcpToolDiscovery.js';
 
 /**
  * Renderer-side implementation of {@link IAgentHostService} that connects
@@ -46,6 +47,7 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 
 	private readonly _clientEventually = new DeferredPromise<MessagePortClient>();
 	private readonly _proxy: IAgentService;
+	private readonly _mcpDiscoveryProxy: IClaudeMcpToolDiscoveryService;
 	private readonly _ahpLogger: AhpJsonlLogger | undefined;
 	private readonly _connectionTracker: IConnectionTrackerService;
 	private readonly _subscriptionManager: AgentSubscriptionManager;
@@ -106,6 +108,12 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 			}))
 			: undefined;
 		this._proxy = this._ahpLogger ? wrapAgentServiceWithAhpLogging(rawProxy, this._ahpLogger) : rawProxy;
+
+		// CLAWDIUS-BEGIN live MCP tool discovery (#93): a delayed-channel proxy to the agentHost discovery service.
+		this._mcpDiscoveryProxy = ProxyChannel.toService<IClaudeMcpToolDiscoveryService>(
+			getDelayedChannel(this._clientEventually.p.then(client => client.getChannel(ClaudeMcpToolDiscoveryChannelName)))
+		);
+		// CLAWDIUS-END
 
 		this._connectionTracker = ProxyChannel.toService<IConnectionTrackerService>(
 			getDelayedChannel(this._clientEventually.p.then(client => client.getChannel(AgentHostIpcChannels.ConnectionTracker)))
@@ -327,4 +335,27 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 	getInspectInfo(tryEnable: boolean): Promise<IAgentHostInspectInfo | undefined> {
 		return this._connectionTracker.getInspectInfo(tryEnable);
 	}
+
+	// CLAWDIUS-BEGIN live MCP tool discovery (#93)
+	async discoverMcpServerTools(serverName: string, workingDirectoryPath: string): Promise<IClaudeMcpToolDiscoveryResult> {
+		// Readiness guard: when the agent host is disabled the delayed channel would queue forever; report it
+		// instead of hanging. We never auto-_connect() from a config dropdown.
+		if (!isAgentHostEnabled(this._configurationService)) {
+			return { status: 'disabled', tools: [], message: 'The Agent Host is disabled; enable it to load MCP tools.' };
+		}
+		// Race READINESS, not the call (codex): if we issued the RPC on the delayed channel and the renderer
+		// timeout won, the discovery request would stay queued on `_clientEventually` and fire later - contacting
+		// the MCP server AFTER the UI reported a timeout, breaking the click-only egress contract. So wait for
+		// the MessagePort client to connect first; if it does not within the cap, return WITHOUT ever issuing
+		// the RPC. Once ready the call is live (not queued) and the node service self-caps at 25s.
+		const ready = await Promise.race([
+			this._clientEventually.p.then(() => true),
+			timeout(30_000).then(() => false),
+		]);
+		if (!ready) {
+			return { status: 'timeout', tools: [], message: 'Timed out reaching the Agent Host.' };
+		}
+		return this._mcpDiscoveryProxy.discoverServerTools(serverName, workingDirectoryPath);
+	}
+	// CLAWDIUS-END
 }

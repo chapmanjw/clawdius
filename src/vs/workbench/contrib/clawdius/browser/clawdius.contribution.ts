@@ -38,6 +38,7 @@ import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ClaudeUsageStatusEntry } from './usage/claudeUsageStatusEntry.js';
 import { ClawdiusPermissionModeStatusEntry, SetPermissionModeAction } from './clawdiusPermissionModeStatusEntry.js';
+import { ClawdiusEffortStatusEntry, SetEffortLevelAction } from './clawdiusEffortStatusEntry.js';
 import { ClaudeUsageDashboardEditor } from './usage/claudeUsageDashboardEditor.js';
 import { ClaudeUsageDashboardInput } from './usage/claudeUsageDashboardInput.js';
 import { OPEN_USAGE_DASHBOARD_COMMAND_ID, REFRESH_CAPACITY_COMMAND_ID } from './usage/claudeUsageData.js';
@@ -155,6 +156,11 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	// It is a default control, not a live-session mirror - the plugin does not expose the live mode (see file).
 	registerWorkbenchContribution2(ClawdiusPermissionModeStatusEntry.ID, ClawdiusPermissionModeStatusEntry, WorkbenchPhase.BlockRestore);
 	registerAction2(SetPermissionModeAction);
+
+	// Effort-level status pill (N3-3d): shows + sets the DEFAULT effort for new Claude conversations, backed by
+	// ~/.claude/settings.json (effortLevel + the ultracode flag) - the same file the plugin's chat selector uses.
+	registerWorkbenchContribution2(ClawdiusEffortStatusEntry.ID, ClawdiusEffortStatusEntry, WorkbenchPhase.BlockRestore);
+	registerAction2(SetEffortLevelAction);
 
 	Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
 		EditorPaneDescriptor.create(ClaudeUsageDashboardEditor, ClaudeUsageDashboardEditor.ID, localize('clawdius.usage.dashboardPane', "Claude Code Usage")),

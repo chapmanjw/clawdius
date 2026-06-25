@@ -1,0 +1,110 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/* CLAWDIUS-BEGIN status-bar block-meter cells + per-cell animation (effort + usage) */
+
+/*
+Each bar cell is a fixed-height CSS RECTANGLE, not a text glyph: the renderer emits one .clawdius-meter-cell
+span per block char, and we hide the glyph (font-size:0) and draw the cell ourselves. The full-block (U+2588)
+and light-shade (U+2591) glyphs sit at different heights in the font, which is what made the bars look
+off-centre and unequal; a fixed-height box centred by the label's flexbox (align-items:center) removes the
+font metrics entirely, so both bars align perfectly with each other and with the text + icons.
+*/
+.monaco-workbench .part.statusbar .clawdius-meter-cell {
+	display: inline-block;
+	width: 5px;
+	height: 10px;
+	font-size: 0; /* hide the underlying block char; the box IS the cell */
+	background-color: currentColor;
+}
+
+/* Empty track cells: dim. */
+.monaco-workbench .part.statusbar .clawdius-meter-cell.empty {
+	background-color: currentColor;
+	opacity: 0.28;
+}
+
+/* The per-cell split drops the literal space after the icon - restore a small gap before the first cell. */
+.monaco-workbench .part.statusbar .codicon + .clawdius-meter-cell {
+	margin-left: 4px;
+}
+
+/*
+Shrink + lower the Claude status icons: 13px so they match the smaller bars/text, and nudged down 1px because
+the codicon glyph sits high in its box (so the text was reading low next to it).
+*/
+.monaco-workbench .part.statusbar .statusbar-item[id="clawdius.effort"] .codicon,
+.monaco-workbench .part.statusbar .statusbar-item[id="clawdius.permissionMode"] .codicon,
+.monaco-workbench .part.statusbar .statusbar-item[id="clawdius.usage"] .codicon {
+	font-size: 13px;
+	position: relative;
+	top: 1px;
+}
+
+/*
+Max: each filled cell flows smoothly (linear) through a 7-stop pastel rainbow - solid colour per cell
+(blocky), gradual transitions so the wave glides; a per-cell negative delay scrolls it evenly. Seamless:
+keyframe ends on its start colour.
+*/
+.monaco-workbench .part.statusbar .clawdius-meter-cell.state-max.fill {
+	background-color: #EB5F57;
+	animation: clawdius-effort-rainbow 10s linear infinite;
+	animation-delay: calc(var(--clawdius-i, 0) * -1s);
+}
+
+@keyframes clawdius-effort-rainbow {
+	0% { background-color: #EB5F57; }
+	14% { background-color: #F58B57; }
+	28% { background-color: #FAC35F; }
+	42% { background-color: #91C882; }
+	57% { background-color: #82AADC; }
+	71% { background-color: #9B82C8; }
+	85% { background-color: #C882B4; }
+	100% { background-color: #EB5F57; }
+}
+
+/* Ultracode: bright violet -> lavender -> near-white and back, same calm 10s smooth flow. */
+.monaco-workbench .part.statusbar .clawdius-meter-cell.state-ultra.fill {
+	background-color: #ECE4FF;
+	animation: clawdius-effort-ultra 10s linear infinite;
+	animation-delay: calc(var(--clawdius-i, 0) * -1s);
+}
+
+@keyframes clawdius-effort-ultra {
+	0% { background-color: #8C50F0; }
+	17% { background-color: #A98CF5; }
+	33% { background-color: #C9B8FA; }
+	50% { background-color: #ECE4FF; }
+	67% { background-color: #C9B8FA; }
+	83% { background-color: #A98CF5; }
+	100% { background-color: #8C50F0; }
+}
+
+/* Respect reduced motion: freeze on a colour. */
+.monaco-workbench.monaco-reduce-motion .part.statusbar .clawdius-meter-cell.state-max.fill {
+	animation: none;
+	background-color: #EB5F57;
+}
+
+.monaco-workbench.monaco-reduce-motion .part.statusbar .clawdius-meter-cell.state-ultra.fill {
+	animation: none;
+	background-color: #ECE4FF;
+}
+
+/*
+Hover: brighten the pill's OWN colour instead of painting the default grey/orange hover over it. Only the
+coloured states; plain pills keep the native hover.
+*/
+.monaco-workbench .part.statusbar > .items-container > .statusbar-item[id="clawdius.effort"].has-background-color:hover,
+.monaco-workbench .part.statusbar > .items-container > .statusbar-item[id="clawdius.permissionMode"].has-background-color:hover {
+	filter: brightness(1.2);
+}
+
+.monaco-workbench .part.statusbar > .items-container > .statusbar-item[id="clawdius.effort"].has-background-color a:hover:not(.disabled),
+.monaco-workbench .part.statusbar > .items-container > .statusbar-item[id="clawdius.permissionMode"].has-background-color a:hover:not(.disabled) {
+	background-color: transparent !important;
+}
+
+/* CLAWDIUS-END */

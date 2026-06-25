@@ -35,8 +35,9 @@ import { localize, localize2 } from '../../../../nls.js';
 import product from '../../../../platform/product/common/product.js';
 import { ConfigurationTarget, IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { Action2 } from '../../../../platform/actions/common/actions.js';
+import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
-import { IQuickInputService, IQuickPickItem } from '../../../../platform/quickinput/common/quickInput.js';
+import { IQuickInputService, IQuickPickItem, QuickPickInput } from '../../../../platform/quickinput/common/quickInput.js';
 import { registerColor } from '../../../../platform/theme/common/colorRegistry.js';
 import { themeColorFromId } from '../../../../platform/theme/common/themeService.js';
 import { IWorkbenchContribution } from '../../../common/contributions.js';
@@ -205,12 +206,20 @@ export class SetPermissionModeAction extends Action2 {
 	override async run(accessor: ServicesAccessor): Promise<void> {
 		const quickInputService = accessor.get(IQuickInputService);
 		const configurationService = accessor.get(IConfigurationService);
+		const commandService = accessor.get(ICommandService);
 
 		const current = readMode(configurationService);
-		const picks = permissionModePicks(current);
-		const activeItem = picks.find(p => p.mode === current);
+		const wasBypassAllowed = bypassAllowed(configurationService);
+		const basePicks = permissionModePicks(current);
+		const activeItem = basePicks.find(p => p.mode === current);
+		// A trailing separator pins a note at the BOTTOM of the list (consistent with the effort widget).
+		const picks: QuickPickInput<IModePick>[] = [
+			...basePicks,
+			{ type: 'separator', label: localize('clawdius.perm.reloadNote', "Changing the default permission mode reloads the open Claude chat to apply it.") },
+		];
 
 		const chosen = await quickInputService.pick(picks, {
+			title: localize('clawdius.perm.reloadTitle', "Changing the default permission mode reloads the open Claude chat"),
 			placeHolder: localize('clawdius.perm.placeholder', "Select the default permission mode for new Claude conversations"),
 			matchOnDetail: true,
 			activeItem,
@@ -222,6 +231,15 @@ export class SetPermissionModeAction extends Action2 {
 		// configured-but-gated-off value.
 		for (const write of permissionModeWrites(chosen.mode)) {
 			await configurationService.updateValue(write.key, write.value, ConfigurationTarget.USER);
+		}
+		// Reload the open Claude chat so the new default applies (consistent with the effort widget) - but only
+		// when the EFFECTIVE configuration changed, since restartExtensionHost restarts all extensions. That is
+		// either a mode change OR newly enabling the bypass gate (picking Bypass when it was configured-but-gated-
+		// off flips the gate to true without changing the mode string, yet the behavior does change).
+		const modeChanged = chosen.mode !== current;
+		const bypassGateEnabled = chosen.mode === 'bypassPermissions' && !wasBypassAllowed;
+		if (modeChanged || bypassGateEnabled) {
+			await commandService.executeCommand('workbench.action.restartExtensionHost');
 		}
 	}
 }
@@ -259,8 +277,9 @@ export class ClawdiusPermissionModeStatusEntry extends Disposable implements IWo
 		if (this.entry.value) {
 			this.entry.value.update(props);
 		} else {
-			// Sit immediately to the LEFT of the usage entry so the Claude status items cluster together.
-			this.entry.value = this.statusbarService.addEntry(props, 'clawdius.permissionMode', StatusbarAlignment.RIGHT, { location: { id: 'clawdius.usage', priority: 100 }, alignment: StatusbarAlignment.LEFT });
+			// Absolute priority (not a relative anchor) so the Claude status items keep a stable, deterministic
+			// position: effort (100.07), permission (100.06), then the usage meter to their right.
+			this.entry.value = this.statusbarService.addEntry(props, 'clawdius.permissionMode', StatusbarAlignment.RIGHT, 100.06);
 		}
 	}
 

@@ -946,6 +946,7 @@
 		"--editor-font-size",
 		"--background-dark",
 		"--background-light",
+		"--clawdius-i",
 		"--mobile-diff-tok-comment",
 		"--mobile-diff-tok-string",
 		"--mobile-diff-tok-keyword",

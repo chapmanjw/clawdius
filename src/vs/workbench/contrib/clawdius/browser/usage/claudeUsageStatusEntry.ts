@@ -33,6 +33,10 @@ import {
 /** Middle-dot separator, built via char code to keep the source ASCII-only. */
 const SEP = String.fromCharCode(0xB7);
 
+/** NUL sentinel the label renderer recognises to emit per-cell bar spans (so the bar sizes/aligns like the
+ * effort meter). The "usage" class keeps the cells in the entry's own colour. */
+const NUL = String.fromCharCode(0);
+
 /** Width (in block characters) of the inline session bar in the status-bar label. */
 const STATUS_BAR_CELLS = 10;
 
@@ -142,7 +146,7 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 		// `command`, and updates the label in place - so there is no custom DOM to swap and no hover flicker.
 		const hasLimits = this.account ? providerHasLimits(this.account.provider) : true;
 		const session = hasLimits ? this.sessionWindow() : undefined;
-		const text = session ? `$(claude) ${blockBar(session.util / 100, STATUS_BAR_CELLS)}` : '$(claude)';
+		const text = session ? `$(claude) ${NUL}usage${NUL}${blockBar(session.util / 100, STATUS_BAR_CELLS)}${NUL}` : '$(claude)';
 
 		return {
 			name: localize('clawdius.usage.name', "Claude Code Usage"),

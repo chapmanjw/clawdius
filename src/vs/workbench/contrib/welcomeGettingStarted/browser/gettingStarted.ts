@@ -152,6 +152,10 @@ export class GettingStartedPage extends EditorPane {
 	private readonly recentlyOpenedList = this._register(new MutableDisposable<GettingStartedIndexList<RecentEntry>>());
 	private readonly startList = this._register(new MutableDisposable<GettingStartedIndexList<IWelcomePageStartEntry>>());
 	private readonly gettingStartedList = this._register(new MutableDisposable<GettingStartedIndexList<IResolvedWalkthrough>>());
+	// CLAWDIUS-BEGIN permanent Control Center welcome section + injected Claude session start entry
+	private readonly controlCenterList = this._register(new MutableDisposable<GettingStartedIndexList<IWelcomePageStartEntry>>());
+	private readonly clawdiusStartCommands = new Map<string, string>();
+	// CLAWDIUS-END
 
 	private stepsSlide!: HTMLElement;
 	private categoriesSlide!: HTMLElement;
@@ -463,11 +467,23 @@ export class GettingStartedPage extends EditorPane {
 				if (selected) {
 					this.telemetryService.publicLog2<GettingStartedActionEvent, GettingStartedActionClassification>('gettingStarted.ActionExecuted', { command: 'selectStartEntry', argument, walkthroughId: this.currentWalkthrough?.id });
 					this.runStepCommand(selected.content.command);
-				} else {
+				}
+				// CLAWDIUS-BEGIN injected start entries (e.g. "New Claude Code Session...") are not in the static startEntries table
+				else if (this.clawdiusStartCommands.has(argument)) {
+					this.runStepCommand(this.clawdiusStartCommands.get(argument)!);
+				}
+				// CLAWDIUS-END
+				else {
 					throw Error('could not find start entry with id: ' + argument);
 				}
 				break;
 			}
+			// CLAWDIUS-BEGIN open a Control Center tab from the permanent welcome section
+			case 'selectControlCenterTab': {
+				this.commandService.executeCommand('clawdius.openControlCenter', argument);
+				break;
+			}
+			// CLAWDIUS-END
 			case 'hideCategory': {
 				this.hideCategory(argument);
 				break;
@@ -936,6 +952,10 @@ export class GettingStartedPage extends EditorPane {
 		const startList = this.buildStartList();
 		const recentList = this.buildRecentlyOpenedList();
 		const gettingStartedList = this.buildGettingStartedWalkthroughsList();
+		// CLAWDIUS-BEGIN permanent Control Center section (Clawdius mode only)
+		const controlCenterList = !this.productService.defaultChatAgent?.entitlementUrl ? this.buildControlCenterList() : undefined;
+		const controlCenterEls = controlCenterList ? [controlCenterList.getDomElement()] : [];
+		// CLAWDIUS-END
 
 		const footerChildren: HTMLElement[] = [];
 		if (canShowAgentsBanner(this.chatEntitlementService)) {
@@ -958,26 +978,23 @@ export class GettingStartedPage extends EditorPane {
 		const footer = $('.footer', {}, ...footerChildren);
 
 		const layoutLists = () => {
-			if (gettingStartedList.itemCount) {
-				this.container.classList.remove('noWalkthroughs');
-				reset(rightColumn, gettingStartedList.getDomElement());
-			}
-			else {
-				this.container.classList.add('noWalkthroughs');
-				reset(rightColumn);
-			}
+			// CLAWDIUS: the right column (Walkthroughs + Recent) is composed in layoutRecentList
+			this.container.classList.toggle('noWalkthroughs', !gettingStartedList.itemCount);
 			setTimeout(() => this.categoriesPageScrollbar?.scanDomNode(), 50);
 			layoutRecentList();
 		};
 
 		const layoutRecentList = () => {
+			// CLAWDIUS: the left column is always Start, then Control Center
+			reset(leftColumn, startList.getDomElement(), ...controlCenterEls);
 			if (this.container.classList.contains('noWalkthroughs')) {
 				recentList.setLimit(10);
-				reset(leftColumn, startList.getDomElement());
+				// CLAWDIUS: with no walkthroughs, Recent fills the right column
 				reset(rightColumn, recentList.getDomElement());
 			} else {
 				recentList.setLimit(5);
-				reset(leftColumn, startList.getDomElement(), recentList.getDomElement());
+				// CLAWDIUS: Walkthroughs, then Recent beneath them in the right column
+				reset(rightColumn, gettingStartedList.getDomElement(), recentList.getDomElement());
 			}
 		};
 
@@ -1172,10 +1189,73 @@ export class GettingStartedPage extends EditorPane {
 				contextService: this.contextService
 			});
 
-		startList.setEntries(parsedStartEntries);
+		// CLAWDIUS-BEGIN prepend "New Claude Code Session..." in Clawdius mode (opens the official plugin in an editor tab)
+		const entries = [...parsedStartEntries];
+		if (!this.productService.defaultChatAgent?.entitlementUrl) {
+			const newSessionCommand = 'command:claude-vscode.editor.open';
+			this.clawdiusStartCommands.set('clawdius.newSession', newSessionCommand);
+			entries.unshift({
+				id: 'clawdius.newSession',
+				title: localize('gettingStarted.clawdiusNewSession.title', "New Claude Code Session..."),
+				description: localize('gettingStarted.clawdiusNewSession.description', "Start a new Claude Code session in an editor tab."),
+				command: 'claude-vscode.editor.open',
+				order: -1,
+				icon: { type: 'icon', icon: Codicon.claude },
+				when: ContextKeyExpr.true(),
+			});
+		}
+		startList.setEntries(entries);
+		// CLAWDIUS-END
 		startList.onDidChange(() => this.registerDispatchListeners());
 		return startList;
 	}
+
+	// CLAWDIUS-BEGIN permanent "Control Center" welcome section: one deep-link per Control Center tab
+	private buildControlCenterList(): GettingStartedIndexList<IWelcomePageStartEntry> {
+		const renderControlCenterEntry = (entry: IWelcomePageStartEntry): HTMLElement =>
+			$('li',
+				{}, $('button.button-link',
+					{
+						'x-dispatch': 'selectControlCenterTab:' + entry.id,
+						title: entry.description,
+					},
+					this.iconWidgetFor(entry),
+					$('span', {}, entry.title)));
+
+		const tabs: { id: string; title: string; description: string; icon: ThemeIcon }[] = [
+			{ id: 'usage', title: localize('gettingStarted.clawdiusControl.usage', "Usage"), description: localize('gettingStarted.clawdiusControl.usage.description', "View your local Claude Code usage and sessions."), icon: Codicon.graphLine },
+			{ id: 'permissions', title: localize('gettingStarted.clawdiusControl.permissions', "Permissions"), description: localize('gettingStarted.clawdiusControl.permissions.description', "Review and edit tool permission rules."), icon: Codicon.shield },
+			{ id: 'mcp', title: localize('gettingStarted.clawdiusControl.mcp', "MCP Servers"), description: localize('gettingStarted.clawdiusControl.mcp.description', "Add and configure MCP servers."), icon: Codicon.server },
+			{ id: 'skills', title: localize('gettingStarted.clawdiusControl.skills', "Skills"), description: localize('gettingStarted.clawdiusControl.skills.description', "Browse and manage your skills."), icon: Codicon.lightbulb },
+			{ id: 'plugins', title: localize('gettingStarted.clawdiusControl.plugins', "Plugins"), description: localize('gettingStarted.clawdiusControl.plugins.description', "Manage plugins and marketplaces."), icon: Codicon.extensions },
+			{ id: 'hooks', title: localize('gettingStarted.clawdiusControl.hooks', "Hooks"), description: localize('gettingStarted.clawdiusControl.hooks.description', "Configure lifecycle hooks."), icon: Codicon.symbolEvent },
+		];
+
+		const entries: IWelcomePageStartEntry[] = tabs.map((tab, index) => ({
+			id: tab.id,
+			title: tab.title,
+			description: tab.description,
+			command: '',
+			order: index,
+			icon: { type: 'icon', icon: tab.icon },
+			when: ContextKeyExpr.true(),
+		}));
+
+		const controlCenterList = this.controlCenterList.value = new GettingStartedIndexList(
+			{
+				title: localize('gettingStarted.clawdiusControl.title', "Control Center"),
+				klass: 'start-container',
+				limit: 10,
+				renderElement: renderControlCenterEntry,
+				rankElement: e => -e.order,
+				contextService: this.contextService
+			});
+
+		controlCenterList.setEntries(entries);
+		controlCenterList.onDidChange(() => this.registerDispatchListeners());
+		return controlCenterList;
+	}
+	// CLAWDIUS-END
 
 	private buildGettingStartedWalkthroughsList(): GettingStartedIndexList<IResolvedWalkthrough> {
 
@@ -1271,6 +1351,7 @@ export class GettingStartedPage extends EditorPane {
 		this.detailsPageScrollbar?.scanDomNode();
 
 		this.startList.value?.layout(size);
+		this.controlCenterList.value?.layout(size); // CLAWDIUS
 		this.gettingStartedList.value?.layout(size);
 		this.recentlyOpenedList.value?.layout(size);
 

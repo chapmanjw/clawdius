@@ -93,4 +93,16 @@ export function pluginState(state: IPluginsState, id: string): PluginState {
 export function pluginEnabledWrite(id: string, next: PluginState): IJsonWrite {
 	return { path: ['enabledPlugins', id], value: next === 'unset' ? undefined : next === 'on' };
 }
+
+// --- Hooks ---------------------------------------------------------------------------------------------------
+
+/** Whether the `disableAllHooks` kill switch is set (also disables statusLine execution). Absent = false. */
+export function parseDisableAllHooks(settings: Record<string, unknown>): boolean {
+	return settings['disableAllHooks'] === true;
+}
+
+/** The write to set the all-hooks kill switch. `false` deletes the key (absent = enabled). */
+export function disableAllHooksWrite(value: boolean): IJsonWrite {
+	return { path: ['disableAllHooks'], value: value ? true : undefined };
+}
 // CLAWDIUS-END

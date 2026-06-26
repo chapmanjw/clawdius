@@ -59,7 +59,7 @@ import {
 	ControlScope, PermissionIntent, classifySettings, invertIntent, planPermissionIntent, resolvePermissionsSettingsUri,
 } from './claudeControlCenterData.js';
 import {
-	ISkillsState, PluginState, SkillOverride, disableBundledSkillsWrite, parseSkills, pluginEnabledWrite, skillOverrideWrite,
+	ISkillsState, PluginState, SkillOverride, disableAllHooksWrite, disableBundledSkillsWrite, parseDisableAllHooks, parseSkills, pluginEnabledWrite, skillOverrideWrite,
 } from './claudeControlTabsModel.js';
 import { ISkillIssue, ISkillValidation, validateSkillPackage } from './claudeSkillValidationModel.js';
 import {
@@ -180,7 +180,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			this.mcpDefs.clear();
 			this.mcpDefsLoaded = false;
 			this.mcpTabTools.clear();
-			if (this.adding?.mode === 'mcp' || this.tab === 'skills' || this.tab === 'plugins' || this.tab === 'mcp') { this.render(); }
+			if (this.adding?.mode === 'mcp' || this.tab === 'skills' || this.tab === 'plugins' || this.tab === 'mcp' || this.tab === 'hooks') { this.render(); }
 		}));
 	}
 
@@ -360,6 +360,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			case 'skills': this.renderSkillsTab(inner); break;
 			case 'plugins': this.renderPluginsTab(inner); break;
 			case 'mcp': this.renderMcpTab(inner); break;
+			case 'hooks': this.renderHooksTab(inner); break;
 			default: this.renderPermissionsTab(inner); break;
 		}
 	}
@@ -384,7 +385,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			{ tab: 'mcp', label: localize('clawdius.control.tab.mcp', "MCP"), ready: true },
 			{ tab: 'skills', label: localize('clawdius.control.tab.skills', "Skills"), ready: true },
 			{ tab: 'plugins', label: localize('clawdius.control.tab.plugins', "Plugins"), ready: true },
-			{ tab: 'hooks', label: localize('clawdius.control.tab.hooks', "Hooks"), ready: false },
+			{ tab: 'hooks', label: localize('clawdius.control.tab.hooks', "Hooks"), ready: true },
 		];
 		for (const def of tabs) {
 			if (!def.ready) {
@@ -1300,6 +1301,87 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		append(track, h('span.clawdius-control-toggle-thumb'));
 		append(toggle, h('span.clawdius-control-toggle-text')).textContent = value ? localize('clawdius.control.toggleOn', "On") : localize('clawdius.control.toggleOff', "Off");
 		this.renderStore.add(addDisposableListener(toggle, EventType.CLICK, () => onChange(!value)));
+	}
+
+	// --- Hooks tab ---
+
+	private renderHooksTab(parent: HTMLElement): void {
+		this.renderHero(parent,
+			localize('clawdius.control.hooks.title', "Hooks"),
+			localize('clawdius.control.hooks.sub', "Shell commands Claude runs on events (PreToolUse, SessionStart, ...). Edits your own ~/.claude configuration."));
+
+		const scopeBlock = this.block(parent, localize('clawdius.control.hooks.scopeTitle', "Where these changes apply"));
+		this.renderScopeBar(scopeBlock);
+		if (this.snapshot?.kind === 'malformed') { this.renderMalformed(scopeBlock); return; }
+
+		const settings = this.snapshot?.kind === 'ok' ? this.snapshot.settings : {};
+		const allOff = parseDisableAllHooks(settings);
+
+		const master = this.block(parent, localize('clawdius.control.hooks.masterTitle', "All hooks"));
+		this.renderToggleRow(master,
+			localize('clawdius.control.hooks.disableLabel', "Disable all hooks"),
+			localize('clawdius.control.hooks.disableHint', "Turns off every hook and statusLine execution (disableAllHooks). Individual hooks stay configured."),
+			allOff,
+			next => void this.setDisableAllHooks(next));
+
+		// Per-event display. Editing a hook entry opens the settings file; full add/edit forms land later.
+		const block = append(parent, h('.clawdius-control-block'));
+		const hd = append(block, h('.clawdius-control-bar'));
+		append(hd, h('.clawdius-control-block-title')).textContent = localize('clawdius.control.hooks.listTitle', "Hooks by event");
+		append(hd, h('.clawdius-control-spacer'));
+		this.button(hd, localize('clawdius.control.hooks.new', "New hook"), () => void this.createHook(), 'add', Codicon.add);
+		if (allOff) {
+			append(block, h('.clawdius-control-scope-hint')).textContent = localize('clawdius.control.hooks.allOffNote', "All hooks are currently disabled by the switch above.");
+		}
+
+		const hooks = this.collectHooks();
+		if (hooks.length === 0) {
+			append(block, h('.clawdius-control-empty')).textContent = localize('clawdius.control.hooks.none', "No hooks configured. Click New hook to add one for an event.");
+			return;
+		}
+		for (const item of hooks) { this.renderHookRow(block, item); }
+	}
+
+	/** Hook events from the scanned config (each event with its hook count + backing settings file). */
+	private collectHooks(): IConfigItem[] {
+		const out: IConfigItem[] = [];
+		for (const scope of this.configService.snapshot.scopes) {
+			for (const sec of scope.sections) {
+				if (sec.section === ConfigSection.Hooks) { out.push(...sec.items); }
+			}
+		}
+		return out;
+	}
+
+	private renderHookRow(parent: HTMLElement, item: IConfigItem): void {
+		const origin = item.scope === ConfigScope.Global
+			? localize('clawdius.control.scope.global', "Global")
+			: localize('clawdius.control.scope.project', "Project (shared)");
+		const row = append(parent, h('.clawdius-control-caprow'));
+		const info = append(row, h('.clawdius-control-cap-info'));
+		const nameEl = append(info, h('.clawdius-control-cap-name'));
+		append(nameEl, h('span')).textContent = item.label;
+		append(nameEl, h('span.clawdius-control-cap-origin')).textContent = origin;
+		if (item.description) { append(info, h('.clawdius-control-cap-desc')).textContent = item.description; }
+		append(row, h('.clawdius-control-spacer'));
+		const acts = append(row, h('.clawdius-control-cap-acts'));
+		if (item.resource) {
+			this.iconButton(acts, Codicon.edit, localize('clawdius.control.hooks.open', "Open in settings.json"),
+				() => void this.editorService.openEditor({ resource: item.resource!, options: { pinned: true } }));
+		}
+	}
+
+	private async createHook(): Promise<void> {
+		// Reuses the Config tree's create command: prompts the event + appends a template hook entry, then opens.
+		await this.commandService.executeCommand(configCreateCommandId(ConfigSection.Hooks));
+	}
+
+	private async setDisableAllHooks(value: boolean): Promise<void> {
+		const uri = await this.scopeUri(this.scope);
+		if (!uri) { return; }
+		await this.writeSettingsAtUri(uri, [disableAllHooksWrite(value)],
+			value ? localize('clawdius.control.hooks.toastOff', "All hooks disabled") : localize('clawdius.control.hooks.toastOn', "All hooks enabled"),
+			() => void this.writeSettingsAtUri(uri, [disableAllHooksWrite(!value)], localize('clawdius.control.hooks.undo', "Reverted")));
 	}
 
 	// --- MCP tab ---

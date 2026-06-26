@@ -276,6 +276,17 @@ block titles, brand orange (#d97757) accents, lavender (#a78bfa) highlights, and
 .clawdius-control-skill-file:focus-within .clawdius-control-cap-acts { opacity: 1; }
 .clawdius-control-skill-newfile { padding-top: 2px; }
 
+/* MCP tab: the project approval segment, server definition, and per-tool permission rows */
+.clawdius-control-mcp-approval { display: inline-flex; align-items: center; gap: 8px; }
+.clawdius-control-mcp-eff { font-size: 10px; opacity: 0.55; white-space: nowrap; }
+.clawdius-control-mcp-def { display: flex; flex-direction: column; gap: 6px; }
+.clawdius-control-mcp-defline { display: flex; align-items: baseline; gap: 8px; font-size: 12px; min-width: 0; }
+.clawdius-control-mcp-detail { font-family: var(--monaco-monospace-font, monospace); opacity: 0.85; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clawdius-control-mcp-secret { font-size: 11px; opacity: 0.6; }
+.clawdius-control-mcp-tool { display: flex; align-items: center; gap: 8px; padding: 5px 4px; font-size: 12px; border-top: 1px solid var(--vscode-panel-border); }
+.clawdius-control-mcp-tool:first-of-type { border-top: none; }
+.clawdius-control-mcp-permacts { display: inline-flex; gap: 5px; align-items: center; }
+
 /* keyboard focus rings */
 .clawdius-control button:focus-visible,
 .clawdius-control input:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }

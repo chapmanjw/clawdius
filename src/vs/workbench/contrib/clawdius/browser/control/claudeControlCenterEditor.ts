@@ -62,7 +62,11 @@ import {
 	ISkillsState, PluginState, SkillOverride, disableBundledSkillsWrite, parseSkills, pluginEnabledWrite, skillOverrideWrite,
 } from './claudeControlTabsModel.js';
 import { ISkillIssue, ISkillValidation, validateSkillPackage } from './claudeSkillValidationModel.js';
+import {
+	IMcpDefSummary, McpApproval, enableAllProjectMcpServersWrite, mcpApproval, mcpApprovalWrites, mcpEffectiveApproval, parseMcpSettings, summarizeMcpDef,
+} from './claudeMcpModel.js';
 import { basename, isEqual, isEqualOrParent } from '../../../../../base/common/resources.js';
+import { parse as parseJsonc } from '../../../../../base/common/jsonc.js';
 import { IDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
 
 type Snapshot =
@@ -98,7 +102,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	// Skills tab package state (keyed by the skill folder fsPath). Caches are cleared on a config change; the
 	// generation counter bumps on every clear so a slower in-flight read never writes a stale result back.
 	private expandedSkill: string | undefined;
-	private skillsGeneration = 0;
+	private cacheGeneration = 0;
 	private isPaneDisposed = false;
 	private readonly skillValidations = new Map<string, ISkillValidation>();
 	private readonly skillValidating = new Set<string>();
@@ -107,6 +111,13 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	/** Expanded subdirectories in an expanded skill's file tree, keyed by directory fsPath. Default: collapsed. */
 	private readonly expandedSkillDirs = new Set<string>();
 	private skillFileForm: { folderPath: string; target: string; name: string } | undefined;
+
+	// MCP tab state. Defs (read from the backing JSON) are keyed by row id (scope::name); discovered tools are
+	// keyed by server name (discovery targets Claude's effective runtime server). Caches share cacheGeneration.
+	private expandedMcpServer: string | undefined;
+	private readonly mcpDefs = new Map<string, IMcpDefSummary>();
+	private mcpDefsLoaded = false;
+	private readonly mcpTabTools = new Map<string, { loading: boolean; tools: readonly IClaudeMcpTool[]; message: string }>();
 	/**
 	 * An open inline add-rule editor. Three modes (codex classification): 'builtin' = a Claude built-in tool
 	 * (dropdown + optional specifier); 'mcp' = an MCP server tool (server dropdown + (All tools) / specific
@@ -155,15 +166,21 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		// Refresh when the scanned config changes: the MCP add box's server dropdown, or the Skills list. A skill
 		// folder may have changed on disk, so drop the per-skill validation + file caches (they re-read lazily).
 		this._register(this.configService.onDidChange(() => {
-			if (this.tab === 'skills') {
-				this.skillsGeneration++;
-				this.skillValidations.clear();
-				this.skillValidating.clear();
-				this.skillFiles.clear();
-				this.skillFilesLoading.clear();
-				this.expandedSkillDirs.clear();
-			}
-			if (this.adding?.mode === 'mcp' || this.tab === 'skills' || this.tab === 'plugins') { this.render(); }
+			// Any scanned-config change can affect the lazy per-row caches (skills SKILL.md + files, MCP defs +
+			// discovered tools), and we can't tell from the event which files changed - so drop them all
+			// unconditionally and bump the generation so an in-flight read can't write a stale result back. This
+			// runs regardless of the active tab (e.g. editing .mcp.json while on another tab must not leave stale
+			// MCP defs behind).
+			this.cacheGeneration++;
+			this.skillValidations.clear();
+			this.skillValidating.clear();
+			this.skillFiles.clear();
+			this.skillFilesLoading.clear();
+			this.expandedSkillDirs.clear();
+			this.mcpDefs.clear();
+			this.mcpDefsLoaded = false;
+			this.mcpTabTools.clear();
+			if (this.adding?.mode === 'mcp' || this.tab === 'skills' || this.tab === 'plugins' || this.tab === 'mcp') { this.render(); }
 		}));
 	}
 
@@ -342,6 +359,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			case 'permissions': this.renderPermissionsTab(inner); break;
 			case 'skills': this.renderSkillsTab(inner); break;
 			case 'plugins': this.renderPluginsTab(inner); break;
+			case 'mcp': this.renderMcpTab(inner); break;
 			default: this.renderPermissionsTab(inner); break;
 		}
 	}
@@ -363,7 +381,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const tabs: { readonly tab: ControlTab; readonly label: string; readonly ready: boolean }[] = [
 			{ tab: 'usage', label: localize('clawdius.control.tab.usage', "Usage"), ready: true },
 			{ tab: 'permissions', label: localize('clawdius.control.tab.permissions', "Permissions"), ready: true },
-			{ tab: 'mcp', label: localize('clawdius.control.tab.mcp', "MCP"), ready: false },
+			{ tab: 'mcp', label: localize('clawdius.control.tab.mcp', "MCP"), ready: true },
 			{ tab: 'skills', label: localize('clawdius.control.tab.skills', "Skills"), ready: true },
 			{ tab: 'plugins', label: localize('clawdius.control.tab.plugins', "Plugins"), ready: true },
 			{ tab: 'hooks', label: localize('clawdius.control.tab.hooks', "Hooks"), ready: false },
@@ -950,14 +968,14 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	private async ensureSkillValidations(folders: readonly URI[]): Promise<void> {
 		const todo = folders.filter(f => !this.skillValidations.has(f.fsPath) && !this.skillValidating.has(f.fsPath));
 		if (todo.length === 0) { return; }
-		const gen = this.skillsGeneration;
+		const gen = this.cacheGeneration;
 		for (const f of todo) { this.skillValidating.add(f.fsPath); }
 		const results = await Promise.all(todo.map(async folder => {
 			let content: string | undefined;
 			try { content = (await this.fileService.readFile(URI.joinPath(folder, 'SKILL.md'))).value.toString(); } catch { content = undefined; }
 			return { key: folder.fsPath, validation: validateSkillPackage({ directoryName: basename(folder), skillMdContent: content }) };
 		}));
-		if (this.isPaneDisposed || gen !== this.skillsGeneration) { return; } // stale: caches were cleared / pane gone
+		if (this.isPaneDisposed || gen !== this.cacheGeneration) { return; } // stale: caches were cleared / pane gone
 		for (const r of results) { this.skillValidations.set(r.key, r.validation); }
 		for (const f of todo) { this.skillValidating.delete(f.fsPath); }
 		if (this.tab === 'skills') { this.render(); }
@@ -1179,11 +1197,11 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	private async ensureSkillFiles(folder: URI): Promise<void> {
 		const key = folder.fsPath;
 		if (this.skillFiles.has(key) || this.skillFilesLoading.has(key)) { return; }
-		const gen = this.skillsGeneration;
+		const gen = this.cacheGeneration;
 		this.skillFilesLoading.add(key);
 		const files = await this.loadSkillFiles(folder);
 		this.skillFilesLoading.delete(key);
-		if (this.isPaneDisposed || gen !== this.skillsGeneration) { return; }
+		if (this.isPaneDisposed || gen !== this.cacheGeneration) { return; }
 		this.skillFiles.set(key, files);
 		if (this.tab === 'skills' && this.expandedSkill === key) { this.render(); }
 	}
@@ -1282,6 +1300,273 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		append(track, h('span.clawdius-control-toggle-thumb'));
 		append(toggle, h('span.clawdius-control-toggle-text')).textContent = value ? localize('clawdius.control.toggleOn', "On") : localize('clawdius.control.toggleOff', "Off");
 		this.renderStore.add(addDisposableListener(toggle, EventType.CLICK, () => onChange(!value)));
+	}
+
+	// --- MCP tab ---
+
+	private renderMcpTab(parent: HTMLElement): void {
+		this.renderHero(parent,
+			localize('clawdius.control.mcp.title', "MCP Servers"),
+			localize('clawdius.control.mcp.sub', "Inspect MCP servers, approve project servers, and set per-tool permissions. Edits your own ~/.claude configuration."));
+
+		const scopeBlock = this.block(parent, localize('clawdius.control.mcp.scopeTitle', "Where approvals + permissions apply"));
+		this.renderScopeBar(scopeBlock);
+		if (this.snapshot?.kind === 'malformed') { this.renderMalformed(scopeBlock); return; }
+
+		const settings = this.snapshot?.kind === 'ok' ? this.snapshot.settings : {};
+		const mcpState = parseMcpSettings(settings);
+		void this.ensureMcpDefs();
+
+		const servers = this.collectMcpServers();
+		const globalServers = servers.filter(s => s.scope === ConfigScope.Global);
+		// Approvals write to scopeUri('project')/('projectLocal'), which resolve through the FIRST workspace
+		// folder. Limit the project list to that folder's .mcp.json so a multi-root approval never targets the
+		// wrong project's settings (carrying per-row project-settings URIs is a later refinement).
+		const firstFolder = this.workspaceService.getWorkspace().folders[0]?.uri;
+		const projectServers = servers.filter(s => s.scope === ConfigScope.Project && (!firstFolder || isEqualOrParent(s.resource, firstFolder)));
+
+		const gblock = this.block(parent, localize('clawdius.control.mcp.globalTitle', "Global MCP servers"));
+		append(gblock, h('.clawdius-control-scope-hint')).textContent = localize('clawdius.control.mcp.globalNote', "Defined in ~/.claude.json. Always available - inspect them and set per-tool permissions.");
+		if (globalServers.length === 0) {
+			append(gblock, h('.clawdius-control-empty')).textContent = localize('clawdius.control.mcp.noGlobal', "No global MCP servers configured.");
+		} else {
+			for (const server of globalServers) { this.renderMcpServerRow(gblock, server, false, mcpState); }
+		}
+
+		const hasWorkspace = this.workspaceService.getWorkspace().folders.length > 0;
+		if (hasWorkspace || projectServers.length > 0) {
+			const pblock = this.block(parent, localize('clawdius.control.mcp.projectTitle', "Project MCP servers"));
+			append(pblock, h('.clawdius-control-scope-hint')).textContent = localize('clawdius.control.mcp.projectNote', "Defined in this project's .mcp.json. Approve or reject which ones Claude may use.");
+			this.renderToggleRow(pblock,
+				localize('clawdius.control.mcp.enableAll', "Approve all project MCP servers"),
+				localize('clawdius.control.mcp.enableAllHint', "Auto-approves every server in .mcp.json (enableAllProjectMcpServers); individual Reject still wins."),
+				mcpState.enableAllProjectServers,
+				next => void this.setEnableAllMcp(next));
+			if (projectServers.length === 0) {
+				append(pblock, h('.clawdius-control-empty')).textContent = localize('clawdius.control.mcp.noProject', "No project MCP servers in .mcp.json.");
+			} else {
+				for (const server of projectServers) { this.renderMcpServerRow(pblock, server, true, mcpState); }
+			}
+		}
+	}
+
+	/** MCP servers from the scanned config (per scope), with the backing JSON file for the def + reveal. */
+	private collectMcpServers(): { id: string; name: string; scope: ConfigScope; resource: URI }[] {
+		const out: { id: string; name: string; scope: ConfigScope; resource: URI }[] = [];
+		for (const scope of this.configService.snapshot.scopes) {
+			for (const sec of scope.sections) {
+				if (sec.section !== ConfigSection.Mcp) { continue; }
+				for (const item of sec.items) {
+					if (item.resource) { out.push({ id: item.id, name: item.label, scope: scope.scope, resource: item.resource }); }
+				}
+			}
+		}
+		return out.sort((a, b) => a.name.localeCompare(b.name));
+	}
+
+	/** Read each distinct backing JSON file once and summarize every server's def (transport, redacted detail). */
+	private async ensureMcpDefs(): Promise<void> {
+		if (this.mcpDefsLoaded) { return; }
+		this.mcpDefsLoaded = true;
+		const gen = this.cacheGeneration;
+		const byFile = new Map<string, { resource: URI; items: { id: string; name: string }[] }>();
+		for (const s of this.collectMcpServers()) {
+			const key = s.resource.toString();
+			const entry = byFile.get(key) ?? { resource: s.resource, items: [] };
+			entry.items.push({ id: s.id, name: s.name });
+			byFile.set(key, entry);
+		}
+		const defs = new Map<string, IMcpDefSummary>();
+		await Promise.all([...byFile.values()].map(async file => {
+			const raw = await this.readRaw(file.resource);
+			let servers: Record<string, unknown> = {};
+			if (raw !== undefined) {
+				try {
+					const parsed = parseJsonc<{ mcpServers?: Record<string, unknown> }>(raw);
+					servers = (parsed?.mcpServers && typeof parsed.mcpServers === 'object') ? parsed.mcpServers : {};
+				} catch { servers = {}; }
+			}
+			for (const it of file.items) { defs.set(it.id, summarizeMcpDef(servers[it.name])); }
+		}));
+		if (this.isPaneDisposed || gen !== this.cacheGeneration) { return; }
+		for (const [k, v] of defs) { this.mcpDefs.set(k, v); }
+		if (this.tab === 'mcp') { this.render(); }
+	}
+
+	private toggleMcpExpand(id: string): void {
+		this.expandedMcpServer = this.expandedMcpServer === id ? undefined : id;
+		this.render();
+	}
+
+	private renderMcpServerRow(parent: HTMLElement, server: { id: string; name: string; scope: ConfigScope; resource: URI }, isProject: boolean, mcpState: ReturnType<typeof parseMcpSettings>): void {
+		const expanded = this.expandedMcpServer === server.id;
+		const def = this.mcpDefs.get(server.id);
+
+		const row = append(parent, h('.clawdius-control-caprow'));
+		const chevron = this.iconButton(row, expanded ? Codicon.chevronDown : Codicon.chevronRight,
+			expanded ? localize('clawdius.control.mcp.hide', "Hide details") : localize('clawdius.control.mcp.show', "Show details"),
+			() => this.toggleMcpExpand(server.id));
+		chevron.classList.add('clawdius-control-skill-chevron');
+
+		const info = append(row, h('.clawdius-control-cap-info'));
+		const nameEl = append(info, h('.clawdius-control-cap-name'));
+		append(nameEl, h('span')).textContent = server.name;
+		if (def && def.transport !== 'unknown') {
+			append(nameEl, h('span.clawdius-control-cap-origin.muted')).textContent = def.transport;
+		}
+		if (def?.detail) { append(info, h('.clawdius-control-cap-desc')).textContent = def.detail; }
+
+		append(row, h('.clawdius-control-spacer'));
+		if (isProject) {
+			this.renderMcpApprovalControl(row, server.name, mcpState);
+		} else {
+			append(row, h('span.clawdius-control-skill-badge.checking')).textContent = localize('clawdius.control.mcp.configured', "configured");
+		}
+
+		if (expanded) { this.renderMcpServerPanel(parent, server, def); }
+	}
+
+	/** The 3-state Approved / Rejected / Default control for a project server (+ an effective-state hint). */
+	private renderMcpApprovalControl(parent: HTMLElement, name: string, mcpState: ReturnType<typeof parseMcpSettings>): void {
+		const wrap = append(parent, h('.clawdius-control-mcp-approval'));
+		const current = mcpApproval(mcpState, name);
+		const seg = append(wrap, h('.clawdius-control-seg.clawdius-control-seg-sm'));
+		const opts: { value: McpApproval; label: string }[] = [
+			{ value: 'approved', label: localize('clawdius.control.mcp.approved', "Approved") },
+			{ value: 'rejected', label: localize('clawdius.control.mcp.rejected', "Rejected") },
+			{ value: 'default', label: localize('clawdius.control.mcp.default', "Default") },
+		];
+		for (const opt of opts) {
+			const b = append(seg, h('button.clawdius-control-mode')) as HTMLButtonElement;
+			if (opt.value === current) { b.classList.add('active'); }
+			append(b, h('span.clawdius-control-mode-name')).textContent = opt.label;
+			b.setAttribute('aria-pressed', opt.value === current ? 'true' : 'false');
+			this.renderStore.add(addDisposableListener(b, EventType.CLICK, () => void this.applyMcpApproval(name, opt.value)));
+		}
+		if (current === 'default' && mcpEffectiveApproval(mcpState, name) === 'approved-by-enable-all') {
+			append(wrap, h('span.clawdius-control-mcp-eff')).textContent = localize('clawdius.control.mcp.effApproved', "approved by default");
+		}
+	}
+
+	private renderMcpServerPanel(parent: HTMLElement, server: { id: string; name: string; scope: ConfigScope; resource: URI }, def: IMcpDefSummary | undefined): void {
+		const panel = append(parent, h('.clawdius-control-skill-panel'));
+
+		const defBlock = append(panel, h('.clawdius-control-mcp-def'));
+		if (def && def.detail) {
+			const line = append(defBlock, h('.clawdius-control-mcp-defline'));
+			append(line, h('span.clawdius-control-skill-files-title')).textContent = def.transport;
+			append(line, h('span.clawdius-control-mcp-detail')).textContent = def.detail;
+		}
+		if (def && def.envKeys.length > 0) {
+			append(defBlock, h('.clawdius-control-mcp-secret')).textContent = localize('clawdius.control.mcp.env', "env: {0} (values hidden)", def.envKeys.join(', '));
+		}
+		if (def && def.headerKeys.length > 0) {
+			append(defBlock, h('.clawdius-control-mcp-secret')).textContent = localize('clawdius.control.mcp.headers', "headers: {0} (values hidden)", def.headerKeys.join(', '));
+		}
+		this.button(defBlock, localize('clawdius.control.mcp.openDef', "Open definition"), () => void this.editorService.openEditor({ resource: server.resource, options: { pinned: true } }), 'link');
+
+		// Tools + per-tool permissions.
+		const hd = append(panel, h('.clawdius-control-bar'));
+		append(hd, h('.clawdius-control-skill-files-title')).textContent = localize('clawdius.control.mcp.tools', "Tools + permissions");
+		append(hd, h('.clawdius-control-spacer'));
+		const tools = this.mcpTabTools.get(server.name);
+		this.button(hd, tools && tools.tools.length > 0 ? localize('clawdius.control.mcp.reloadTools', "Reload tools") : localize('clawdius.control.mcp.loadTools', "Load tools"),
+			() => void this.loadMcpToolsForServer(server.name), 'add', Codicon.refresh);
+
+		// Server-level rule (all tools) is always available.
+		this.renderMcpToolPermRow(panel, server.name, undefined);
+		if (tools?.loading) {
+			append(panel, h('.clawdius-control-skill-loading')).textContent = localize('clawdius.control.mcp.connecting', "Connecting to \"{0}\" to load its tools...", server.name);
+		} else if (tools && tools.tools.length > 0) {
+			for (const tool of tools.tools) { this.renderMcpToolPermRow(panel, server.name, tool.name); }
+		} else if (tools && tools.message) {
+			append(panel, h('.clawdius-control-skill-loading')).textContent = tools.message;
+		} else {
+			append(panel, h('.clawdius-control-addnote')).textContent = localize('clawdius.control.mcp.loadNote', "Load this server's tools to set per-tool rules. Connecting briefly runs the server (may execute a command or contact a remote service).");
+		}
+	}
+
+	/** A permission row for an MCP rule (all tools = mcp__server, or a specific tool = mcp__server__tool). */
+	private renderMcpToolPermRow(parent: HTMLElement, server: string, tool: string | undefined): void {
+		const rule = mcpToolRule(server, tool ?? '');
+		if (!rule) { return; }
+		const state = this.snapshot?.kind === 'ok' ? parsePermissions(this.snapshot.settings) : undefined;
+		const bucket: PermissionBucket | undefined = state?.allow.includes(rule) ? 'allow' : state?.ask.includes(rule) ? 'ask' : state?.deny.includes(rule) ? 'deny' : undefined;
+
+		const row = append(parent, h('.clawdius-control-mcp-tool'));
+		append(row, h('span.clawdius-control-skill-file-ico')).classList.add(...ThemeIcon.asClassNameArray(tool ? Codicon.tools : Codicon.server));
+		append(row, h('span.clawdius-control-skill-file-name')).textContent = tool ?? localize('clawdius.control.mcp.allTools', "All tools");
+		append(row, h('.clawdius-control-spacer'));
+		const acts = append(row, h('.clawdius-control-mcp-permacts'));
+		for (const meta of this.bucketMetas()) {
+			const b = append(acts, h('button.clawdius-control-addmode')) as HTMLButtonElement;
+			b.textContent = meta.label;
+			if (bucket === meta.bucket) { b.classList.add('active'); }
+			this.renderStore.add(addDisposableListener(b, EventType.CLICK, () => void this.apply({ type: 'addRule', bucket: meta.bucket, rule })));
+		}
+		if (bucket) {
+			this.iconButton(acts, Codicon.clearAll, localize('clawdius.control.mcp.clearRule', "Clear rule"), () => void this.apply({ type: 'removeRule', bucket, rule }));
+		}
+	}
+
+	private async loadMcpToolsForServer(server: string): Promise<void> {
+		if (this.mcpTabTools.get(server)?.loading) { return; }
+		this.mcpTabTools.set(server, { loading: true, tools: [], message: '' });
+		this.render();
+		const cwd = (this.workspaceService.getWorkspace().folders[0]?.uri ?? await this.pathService.userHome()).fsPath;
+		let result: IClaudeMcpToolDiscoveryResult;
+		try {
+			result = await this.agentHostService.discoverMcpServerTools(server, cwd);
+		} catch (err) {
+			result = { status: 'error', tools: [], message: err instanceof Error ? err.message : String(err) };
+		}
+		if (this.isPaneDisposed) { return; }
+		if (result.status === 'connected') {
+			this.mcpTabTools.set(server, { loading: false, tools: result.tools, message: result.tools.length > 0 ? '' : localize('clawdius.control.mcp.noTools', "\"{0}\" connected but reported no tools.", server) });
+		} else {
+			this.mcpTabTools.set(server, { loading: false, tools: [], message: result.message ?? localize('clawdius.control.mcp.loadFailed', "Could not load tools ({0}).", result.status) });
+		}
+		this.render();
+	}
+
+	/** Approve / reject / reset a project server. Race-safe: recompute the array writes from a FRESH read.
+	 *  `targetUri` pins the write (and its Undo) to the scope captured at action time, so an Undo after a scope
+	 *  switch still lands in the original settings file. */
+	private async applyMcpApproval(name: string, next: McpApproval, targetUri?: URI): Promise<void> {
+		const uri = targetUri ?? await this.scopeUri(this.scope);
+		if (!uri) { return; }
+		const cls = classifySettings(await this.readRaw(uri));
+		if (cls.kind === 'malformed') {
+			this.notificationService.error(localize('clawdius.control.malformedSettings', "Can't save changes: {0} is not valid JSON. Fix the file and try again.", uri.fsPath));
+			await this.load();
+			return;
+		}
+		const latest = parseMcpSettings(cls.settings);
+		const prev = mcpApproval(latest, name);
+		if (prev === next) { return; }
+		const writes = mcpApprovalWrites(latest, name, next);
+		if (writes.length === 0) { return; }
+		try {
+			if (cls.needsSeed) { await this.fileService.writeFile(uri, VSBuffer.fromString('{}\n')); }
+			await this.jsonEditing.write(uri, writes.map(w => ({ path: [...w.path], value: w.value })), true);
+		} catch (err) {
+			this.notificationService.error(localize('clawdius.control.saveFailed', "Could not save changes: {0}", err instanceof Error ? err.message : String(err)));
+			return;
+		}
+		void this.configService.refresh(true);
+		await this.load();
+		const label = next === 'approved' ? localize('clawdius.control.mcp.toastApproved', "Approved \"{0}\"", name)
+			: next === 'rejected' ? localize('clawdius.control.mcp.toastRejected', "Rejected \"{0}\"", name)
+				: localize('clawdius.control.mcp.toastDefault', "Reset \"{0}\" to default", name);
+		this.toast(label, () => void this.applyMcpApproval(name, prev, uri));
+	}
+
+	private async setEnableAllMcp(value: boolean): Promise<void> {
+		const uri = await this.scopeUri(this.scope);
+		if (!uri) { return; }
+		await this.writeSettingsAtUri(uri, [enableAllProjectMcpServersWrite(value)],
+			value ? localize('clawdius.control.mcp.allOn', "Approving all project MCP servers") : localize('clawdius.control.mcp.allOff', "No longer auto-approving project MCP servers"),
+			() => void this.writeSettingsAtUri(uri, [enableAllProjectMcpServersWrite(!value)], localize('clawdius.control.mcp.allUndo', "Reverted")));
 	}
 
 	// --- Plugins tab ---

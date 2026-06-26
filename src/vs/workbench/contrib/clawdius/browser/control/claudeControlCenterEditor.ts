@@ -15,7 +15,10 @@
 //     resolved against a FRESH read at apply time (claudeControlCenterData.planPermissionIntent), never a
 //     stale render-time snapshot.
 // Visual language mirrors the Claude Code Usage dashboard (monospace base, clawd hero mark, "> SECTION" block
-// titles, brand-orange accents). MCP/Skills/Plugins/Hooks tabs are stubs here; they land in later increments.
+// titles, brand-orange accents). Tabs share one pane shell + one scope selector over the same settings.json;
+// `this.tab` dispatches the body. Permissions + Skills are built; MCP/Plugins/Hooks are "soon" stubs that land
+// in later increments. Per-tab parse/write logic lives in pure models (claudePermissionsModel,
+// claudeControlTabsModel) so the pane only does file IO, IJSONEditingService.write, and DOM.
 
 import './media/claudeControlCenter.css';
 import { $ as h, addDisposableListener, append, clearNode, Dimension, EventType, size } from '../../../../../base/browser/dom.js';
@@ -43,23 +46,33 @@ import { IJSONEditingService } from '../../../../services/configuration/common/j
 import { IPathService } from '../../../../services/path/common/pathService.js';
 import { IAgentHostService } from '../../../../../platform/agentHost/common/agentService.js';
 import { IClaudeMcpTool, IClaudeMcpToolDiscoveryResult } from '../../../../../platform/agentHost/common/claudeMcpToolDiscovery.js';
-import { ConfigSection, IClawdiusConfigService } from '../../common/clawdiusConfig.js';
+import { ICommandService } from '../../../../../platform/commands/common/commands.js';
+import { ConfigScope, ConfigSection, IClawdiusConfigService, IConfigItem } from '../../common/clawdiusConfig.js';
+import { CONFIG_DELETE_COMMAND_ID, configCreateCommandId } from '../clawdiusConfigActions.js';
 import {
 	ALLOW_BYPASS_KEY, INITIAL_PERMISSION_MODE_KEY, PermissionMode, parsePermissionMode, permissionModeWrites, permissionModes,
 } from '../clawdiusPermissionModeStatusEntry.js';
 import { ClaudeControlCenterInput } from './claudeControlCenterInput.js';
-import { BUILTIN_TOOLS, IPermissionsState, PERMISSION_BUCKETS, PermissionBucket, builtinRule, mcpToolRule, parsePermissions, parseRule } from './claudePermissionsModel.js';
+import { BUILTIN_TOOLS, IJsonWrite, IPermissionsState, PERMISSION_BUCKETS, PermissionBucket, builtinRule, mcpToolRule, parsePermissions, parseRule } from './claudePermissionsModel.js';
 import {
 	ControlScope, PermissionIntent, classifySettings, invertIntent, planPermissionIntent, resolvePermissionsSettingsUri,
 } from './claudeControlCenterData.js';
+import {
+	ISkillsState, SkillOverride, disableBundledSkillsWrite, parseSkills, skillOverrideWrite,
+} from './claudeControlTabsModel.js';
+
+/** The Control Center tabs. Each is a scope-aware view over the same settings.json the scope selector picks. */
+type ControlTab = 'permissions' | 'mcp' | 'skills' | 'plugins' | 'hooks';
 
 type Snapshot =
-	| { readonly kind: 'ok'; readonly uri: URI; readonly state: IPermissionsState }
+	| { readonly kind: 'ok'; readonly uri: URI; readonly settings: Record<string, unknown> }
 	| { readonly kind: 'malformed'; readonly uri: URI }
 	| { readonly kind: 'unavailable' };
 
 interface IScopeMeta { readonly scope: ControlScope; readonly label: string; readonly hint: string; readonly file: string }
 interface IBucketMeta { readonly bucket: PermissionBucket; readonly label: string }
+/** One row in the Skills tab: a skill name, its origins, and the backing config item(s) for Open / Delete. */
+interface ISkillRow { readonly name: string; readonly description?: string; readonly origins: string[]; readonly items: IConfigItem[] }
 type BtnVariant = 'primary' | 'ghost' | 'link' | 'danger' | 'add';
 
 export class ClaudeControlCenterEditor extends EditorPane {
@@ -74,6 +87,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	private readonly toastTimer = this._register(new MutableDisposable());
 
 	private scope: ControlScope = 'global';
+	private tab: ControlTab = 'permissions';
 	private snapshot: Snapshot | undefined;
 	/**
 	 * An open inline add-rule editor. Three modes (codex classification): 'builtin' = a Claude built-in tool
@@ -109,6 +123,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		@IEditorService private readonly editorService: IEditorService,
 		@IClawdiusConfigService private readonly configService: IClawdiusConfigService,
 		@IAgentHostService private readonly agentHostService: IAgentHostService,
+		@ICommandService private readonly commandService: ICommandService,
 	) {
 		super(ClaudeControlCenterEditor.ID, group, telemetryService, themeService, storageService);
 		// Re-render when the default-mode setting changes anywhere (e.g. the status-bar pill), so the two stay
@@ -118,9 +133,9 @@ export class ClaudeControlCenterEditor extends EditorPane {
 				this.render();
 			}
 		}));
-		// Refresh the MCP add box's server dropdown when the scanned config changes.
+		// Refresh when the scanned config changes: the MCP add box's server dropdown, or the Skills list.
 		this._register(this.configService.onDidChange(() => {
-			if (this.adding?.mode === 'mcp') { this.render(); }
+			if (this.adding?.mode === 'mcp' || this.tab === 'skills') { this.render(); }
 		}));
 	}
 
@@ -173,13 +188,15 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const cls = classifySettings(await this.readRaw(uri));
 		this.snapshot = cls.kind === 'malformed'
 			? { kind: 'malformed', uri }
-			: { kind: 'ok', uri, state: parsePermissions(cls.settings) };
+			: { kind: 'ok', uri, settings: cls.settings };
 		this.render();
 	}
 
-	/** Resolve a captured rule intent against a FRESH read, then write. Race-safe by construction. */
-	private async apply(intent: PermissionIntent): Promise<void> {
-		const uri = await this.scopeUri(this.scope);
+	/** Resolve a captured rule intent against a FRESH read, then write. Race-safe by construction. `targetUri`
+	 *  pins the write to a scope captured at action time, so an Undo issued after a scope switch still lands in
+	 *  the original file (it defaults to the current scope for the initial action). */
+	private async apply(intent: PermissionIntent, targetUri?: URI): Promise<void> {
+		const uri = targetUri ?? await this.scopeUri(this.scope);
 		if (!uri) { return; }
 		const cls = classifySettings(await this.readRaw(uri));
 		if (cls.kind === 'malformed') {
@@ -210,7 +227,37 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const undo = invertIntent(intent, latest);
 		void this.configService.refresh(true);
 		await this.load();
-		this.toast(this.describeRule(intent), undo ? () => void this.apply(undo) : undefined);
+		this.toast(this.describeRule(intent), undo ? () => void this.apply(undo, uri) : undefined);
+	}
+
+	/**
+	 * Write absolute settings.json keys to a SPECIFIC file (Skills / Plugins / Hooks toggles). Unlike a
+	 * permission rule (a relative array mutation that must re-plan against the latest state), these are absolute
+	 * key SETS - the user picks a concrete value - so a re-read-then-write is race-safe: we never clobber an
+	 * array we computed from a stale render. We still re-read to honour the malformed-file refusal + seed gate.
+	 * The uri is captured at the moment of the user action (callers resolve `scopeUri` first), so an Undo - whose
+	 * toast can outlive a scope switch - always targets the file it was meant for, not whatever scope the pane
+	 * happens to show later.
+	 */
+	private async writeSettingsAtUri(uri: URI, writes: readonly IJsonWrite[], toastMessage: string, onUndo?: () => void): Promise<void> {
+		const cls = classifySettings(await this.readRaw(uri));
+		if (cls.kind === 'malformed') {
+			this.notificationService.error(localize('clawdius.control.malformedSettings', "Can't save changes: {0} is not valid JSON. Fix the file and try again.", uri.fsPath));
+			await this.load();
+			return;
+		}
+		try {
+			if (cls.needsSeed) {
+				await this.fileService.writeFile(uri, VSBuffer.fromString('{}\n'));
+			}
+			await this.jsonEditing.write(uri, writes.map(w => ({ path: [...w.path], value: w.value })), true);
+		} catch (err) {
+			this.notificationService.error(localize('clawdius.control.saveFailed', "Could not save changes: {0}", err instanceof Error ? err.message : String(err)));
+			return;
+		}
+		void this.configService.refresh(true);
+		await this.load();
+		this.toast(toastMessage, onUndo);
 	}
 
 	/** Set the default mode (claudeCode.initialPermissionMode + bypass gate) - the same write the pill makes. */
@@ -254,31 +301,60 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const inner = this.content;
 
 		this.renderTabs(inner);
-		this.renderHero(inner);
-		this.renderModeBlock(inner);
-		this.renderRulesBlock(inner);
+		switch (this.tab) {
+			case 'permissions': this.renderPermissionsTab(inner); break;
+			case 'skills': this.renderSkillsTab(inner); break;
+			default: this.renderPermissionsTab(inner); break;
+		}
 	}
 
 	private renderTabs(parent: HTMLElement): void {
 		const strip = append(parent, h('.clawdius-control-tabs'));
-		const active = append(strip, h('button.clawdius-control-tab.active')) as HTMLButtonElement;
-		active.textContent = localize('clawdius.control.tab.permissions', "Permissions");
-		active.setAttribute('aria-selected', 'true');
-		for (const label of [localize('clawdius.control.tab.mcp', "MCP"), localize('clawdius.control.tab.skills', "Skills"), localize('clawdius.control.tab.plugins', "Plugins"), localize('clawdius.control.tab.hooks', "Hooks")]) {
-			const t = append(strip, h('button.clawdius-control-tab.soon')) as HTMLButtonElement;
-			t.textContent = label;
-			t.disabled = true;
-			t.title = localize('clawdius.control.tab.soonTip', "{0} controls arrive in a later update", label);
-			append(t, h('span.clawdius-control-soon')).textContent = localize('clawdius.control.soon', "soon");
+		strip.setAttribute('role', 'tablist');
+		const tabs: { readonly tab: ControlTab; readonly label: string; readonly ready: boolean }[] = [
+			{ tab: 'permissions', label: localize('clawdius.control.tab.permissions', "Permissions"), ready: true },
+			{ tab: 'mcp', label: localize('clawdius.control.tab.mcp', "MCP"), ready: false },
+			{ tab: 'skills', label: localize('clawdius.control.tab.skills', "Skills"), ready: true },
+			{ tab: 'plugins', label: localize('clawdius.control.tab.plugins', "Plugins"), ready: false },
+			{ tab: 'hooks', label: localize('clawdius.control.tab.hooks', "Hooks"), ready: false },
+		];
+		for (const def of tabs) {
+			if (!def.ready) {
+				const t = append(strip, h('button.clawdius-control-tab.soon')) as HTMLButtonElement;
+				t.textContent = def.label;
+				t.disabled = true;
+				t.title = localize('clawdius.control.tab.soonTip', "{0} controls arrive in a later update", def.label);
+				append(t, h('span.clawdius-control-soon')).textContent = localize('clawdius.control.soon', "soon");
+				continue;
+			}
+			const btn = append(strip, h('button.clawdius-control-tab')) as HTMLButtonElement;
+			btn.textContent = def.label;
+			btn.setAttribute('role', 'tab');
+			const active = def.tab === this.tab;
+			if (active) { btn.classList.add('active'); }
+			btn.setAttribute('aria-selected', active ? 'true' : 'false');
+			this.renderStore.add(addDisposableListener(btn, EventType.CLICK, () => {
+				if (this.tab !== def.tab) { this.tab = def.tab; this.adding = undefined; this.render(); }
+			}));
 		}
 	}
 
-	private renderHero(parent: HTMLElement): void {
+	private renderHero(parent: HTMLElement, title: string, sub: string): void {
 		const hero = append(parent, h('.clawdius-control-hero'));
 		append(hero, h('.clawdius-control-hero-mark'));
 		const text = append(hero, h('.clawdius-control-hero-text'));
-		append(text, h('.clawdius-control-hero-title')).textContent = localize('clawdius.control.heroTitle', "Permissions");
-		append(text, h('.clawdius-control-hero-sub')).textContent = localize('clawdius.control.heroSub', "Set how Claude starts new conversations and which actions it may take. Edits your own ~/.claude configuration.");
+		append(text, h('.clawdius-control-hero-title')).textContent = title;
+		append(text, h('.clawdius-control-hero-sub')).textContent = sub;
+	}
+
+	// --- Permissions tab ---
+
+	private renderPermissionsTab(parent: HTMLElement): void {
+		this.renderHero(parent,
+			localize('clawdius.control.heroTitle', "Permissions"),
+			localize('clawdius.control.heroSub', "Set how Claude starts new conversations and which actions it may take. Edits your own ~/.claude configuration."));
+		this.renderModeBlock(parent);
+		this.renderRulesBlock(parent);
 	}
 
 	private renderModeBlock(parent: HTMLElement): void {
@@ -303,8 +379,28 @@ export class ClaudeControlCenterEditor extends EditorPane {
 
 	private renderRulesBlock(parent: HTMLElement): void {
 		const block = this.block(parent, localize('clawdius.control.rules', "Permission rules"));
+		this.renderScopeBar(block);
+		if (this.snapshot?.kind === 'unavailable') {
+			append(block, h('.clawdius-control-empty')).textContent = localize('clawdius.control.noFolder', "Open a folder to edit project permissions. Global permissions are always available.");
+			return;
+		}
+		if (this.snapshot?.kind === 'malformed') {
+			this.renderMalformed(block);
+			return;
+		}
+		if (this.snapshot?.kind === 'ok') {
+			const state = parsePermissions(this.snapshot.settings);
+			for (const meta of this.bucketMetas()) {
+				this.renderBucket(block, state, meta);
+			}
+		}
+	}
+
+	/** The shared scope selector (Global / Project / Project-local) + "Open settings.json" + active-file caption.
+	 *  Used by every scope-aware tab; switching scope reloads the settings.json the whole pane reads. */
+	private renderScopeBar(parent: HTMLElement): void {
 		const metas = this.scopeMetas();
-		const bar = append(block, h('.clawdius-control-bar'));
+		const bar = append(parent, h('.clawdius-control-bar'));
 		const scopes = append(bar, h('.clawdius-control-scopes'));
 		scopes.setAttribute('role', 'tablist');
 		for (const meta of metas) {
@@ -322,26 +418,17 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		// Caption clarifying the active scope (global vs shared vs personal) and the exact file it writes.
 		const active = metas.find(m => m.scope === this.scope);
 		if (active) {
-			const cap = append(block, h('.clawdius-control-scope-hint'));
+			const cap = append(parent, h('.clawdius-control-scope-hint'));
 			append(cap, h('span')).textContent = active.hint;
 			append(cap, h('span.clawdius-control-scope-file')).textContent = active.file;
 		}
+	}
 
-		if (this.snapshot?.kind === 'unavailable') {
-			append(block, h('.clawdius-control-empty')).textContent = localize('clawdius.control.noFolder', "Open a folder to edit project permissions. Global permissions are always available.");
-			return;
-		}
-		if (this.snapshot?.kind === 'malformed') {
-			const box = append(block, h('.clawdius-control-error'));
-			append(box, h('.clawdius-control-error-head')).textContent = localize('clawdius.control.malformedHead', "This settings.json is not valid JSON");
-			append(box, h('.clawdius-control-error-body')).textContent = localize('clawdius.control.malformedBody', "Editing is disabled so the file is never clobbered. Open it, fix the JSON, then come back.");
-			return;
-		}
-		if (this.snapshot?.kind === 'ok') {
-			for (const meta of this.bucketMetas()) {
-				this.renderBucket(block, this.snapshot.state, meta);
-			}
-		}
+	/** The shared "this settings.json is not valid JSON - editing disabled" panel. */
+	private renderMalformed(parent: HTMLElement): void {
+		const box = append(parent, h('.clawdius-control-error'));
+		append(box, h('.clawdius-control-error-head')).textContent = localize('clawdius.control.malformedHead', "This settings.json is not valid JSON");
+		append(box, h('.clawdius-control-error-body')).textContent = localize('clawdius.control.malformedBody', "Editing is disabled so the file is never clobbered. Open it, fix the JSON, then come back.");
 	}
 
 	private renderBucket(parent: HTMLElement, state: IPermissionsState, meta: IBucketMeta): void {
@@ -647,6 +734,184 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			}
 		}
 		return [...names].sort((x, y) => x.localeCompare(y));
+	}
+
+	// --- Skills tab ---
+
+	private renderSkillsTab(parent: HTMLElement): void {
+		this.renderHero(parent,
+			localize('clawdius.control.skills.title', "Skills"),
+			localize('clawdius.control.skills.sub', "Create skills, open them to edit, and control how each is offered to Claude. Edits your own ~/.claude configuration."));
+
+		const scopeBlock = this.block(parent, localize('clawdius.control.skills.scopeTitle', "Where these changes apply"));
+		this.renderScopeBar(scopeBlock);
+		if (this.snapshot?.kind === 'malformed') { this.renderMalformed(scopeBlock); return; }
+
+		const settings = this.snapshot?.kind === 'ok' ? this.snapshot.settings : {};
+		const state = parseSkills(settings);
+
+		// Bundled-skills kill switch (a global concept, but written per-scope like everything else here).
+		const bundled = this.block(parent, localize('clawdius.control.skills.bundledTitle', "Bundled skills & workflows"));
+		this.renderToggleRow(bundled,
+			localize('clawdius.control.skills.bundledLabel', "Disable bundled skills & workflows"),
+			localize('clawdius.control.skills.bundledHint', "Removes the skills and workflows that ship with Claude Code. Your own skills, plugins, and project skills are unaffected."),
+			state.disableBundled,
+			next => void this.setDisableBundled(next));
+
+		// Your skills: create / open / delete, plus the per-skill access control.
+		const block = append(parent, h('.clawdius-control-block'));
+		const hd = append(block, h('.clawdius-control-bar'));
+		append(hd, h('.clawdius-control-block-title')).textContent = localize('clawdius.control.skills.listTitle', "Your skills");
+		append(hd, h('.clawdius-control-spacer'));
+		this.button(hd, localize('clawdius.control.skills.new', "New Skill"), () => void this.createSkill(), 'add', Codicon.add);
+		const note = append(block, h('.clawdius-control-scope-hint'));
+		append(note, h('span')).textContent = localize('clawdius.control.skills.listNote', "Each skill is a folder with a SKILL.md. The control sets how the skill is offered to Claude - it stays on disk either way.");
+
+		const skills = this.collectSkills(state);
+		if (skills.length === 0) {
+			append(block, h('.clawdius-control-empty')).textContent = localize('clawdius.control.skills.none', "No skills yet. Click New Skill to scaffold one, or add a folder under ~/.claude/skills.");
+			return;
+		}
+		for (const skill of skills) {
+			this.renderSkillRow(block, skill, state.overrides[skill.name] ?? 'on');
+		}
+	}
+
+	/** Discovered skills (from the scanned config, deduped by name across scopes) plus any override-only names.
+	 *  Each row keeps the backing config item(s) so Open / Delete can act on the file on disk. */
+	private collectSkills(state: ISkillsState): ISkillRow[] {
+		const map = new Map<string, { name: string; description?: string; origins: Set<string>; items: IConfigItem[] }>();
+		for (const scope of this.configService.snapshot.scopes) {
+			const origin = scope.scope === ConfigScope.Global
+				? localize('clawdius.control.scope.global', "Global")
+				: (scope.folderName ?? localize('clawdius.control.scope.project', "Project (shared)"));
+			for (const sec of scope.sections) {
+				if (sec.section !== ConfigSection.Skills) { continue; }
+				for (const item of sec.items) {
+					const existing = map.get(item.label);
+					if (existing) {
+						existing.origins.add(origin);
+						existing.items.push(item);
+						if (!existing.description && item.description) { existing.description = item.description; }
+					} else {
+						map.set(item.label, { name: item.label, description: item.description, origins: new Set([origin]), items: [item] });
+					}
+				}
+			}
+		}
+		// Surface override-only keys (e.g. a bundled or plugin skill overridden by name, not present on disk),
+		// so an existing override is never hidden from the user. These have no backing item -> no Open / Delete.
+		for (const name of Object.keys(state.overrides)) {
+			if (!map.has(name)) { map.set(name, { name, description: undefined, origins: new Set(), items: [] }); }
+		}
+		return [...map.values()]
+			.map(s => ({ name: s.name, description: s.description, origins: [...s.origins], items: s.items }))
+			.sort((a, b) => a.name.localeCompare(b.name));
+	}
+
+	/** The skill file to Open / Delete for a row: prefer one in the currently-selected scope, else the first. */
+	private representativeSkillItem(skill: ISkillRow): IConfigItem | undefined {
+		const wantScope = this.scope === 'global' ? ConfigScope.Global : ConfigScope.Project;
+		return skill.items.find(i => i.scope === wantScope) ?? skill.items[0];
+	}
+
+	private renderSkillRow(parent: HTMLElement, skill: ISkillRow, current: SkillOverride): void {
+		const row = append(parent, h('.clawdius-control-caprow'));
+		const info = append(row, h('.clawdius-control-cap-info'));
+		const nameEl = append(info, h('.clawdius-control-cap-name'));
+		append(nameEl, h('span')).textContent = skill.name;
+		const origin = append(nameEl, h('span.clawdius-control-cap-origin'));
+		if (skill.origins.length > 0) {
+			origin.textContent = skill.origins.join(', ');
+		} else {
+			origin.classList.add('muted');
+			origin.textContent = localize('clawdius.control.skills.overrideOnly', "override only");
+		}
+		if (skill.description) {
+			append(info, h('.clawdius-control-cap-desc')).textContent = skill.description;
+		}
+		append(row, h('.clawdius-control-spacer'));
+		this.renderSkillStateControl(row, skill.name, current);
+		const acts = append(row, h('.clawdius-control-cap-acts'));
+		const item = this.representativeSkillItem(skill);
+		if (item) {
+			this.iconButton(acts, Codicon.edit, localize('clawdius.control.skills.open', "Open SKILL.md"), () => void this.openSkill(item));
+			this.iconButton(acts, Codicon.trash, localize('clawdius.control.skills.delete', "Delete skill"), () => void this.deleteSkill(item), true);
+		}
+	}
+
+	/** Scaffold a new skill (reuses the Config tree's create command: prompts scope + name, opens SKILL.md). */
+	private async createSkill(): Promise<void> {
+		await this.commandService.executeCommand(configCreateCommandId(ConfigSection.Skills));
+		// The create command refreshes the scanned config; our onDidChange listener re-renders the Skills tab.
+	}
+
+	private async openSkill(item: IConfigItem): Promise<void> {
+		if (item.resource) { await this.editorService.openEditor({ resource: item.resource, options: { pinned: true } }); }
+	}
+
+	/** Delete a skill (reuses the Config tree's delete command: confirms, moves the folder to the trash). */
+	private async deleteSkill(item: IConfigItem): Promise<void> {
+		await this.commandService.executeCommand(CONFIG_DELETE_COMMAND_ID, item);
+	}
+
+	private renderSkillStateControl(parent: HTMLElement, name: string, current: SkillOverride): void {
+		const seg = append(parent, h('.clawdius-control-seg.clawdius-control-seg-sm'));
+		for (const opt of this.skillStateOptions()) {
+			const b = append(seg, h('button.clawdius-control-mode')) as HTMLButtonElement;
+			const active = opt.value === current;
+			if (active) { b.classList.add('active'); }
+			append(b, h('span.clawdius-control-mode-name')).textContent = opt.label;
+			b.title = opt.detail;
+			b.setAttribute('aria-label', `${name}: ${opt.label} - ${opt.detail}`);
+			b.setAttribute('aria-pressed', active ? 'true' : 'false');
+			this.renderStore.add(addDisposableListener(b, EventType.CLICK, () => void this.setSkillOverride(name, current, opt.value)));
+		}
+	}
+
+	private skillStateOptions(): { value: SkillOverride; label: string; detail: string }[] {
+		return [
+			{ value: 'on', label: localize('clawdius.control.skills.on', "On"), detail: localize('clawdius.control.skills.onHint', "Listed with its description. The model can use it and you can run /name.") },
+			{ value: 'name-only', label: localize('clawdius.control.skills.nameOnly', "Name Only"), detail: localize('clawdius.control.skills.nameOnlyHint', "Listed without its description (saves context). Still fully usable.") },
+			{ value: 'user-invocable-only', label: localize('clawdius.control.skills.manual', "Manual Only"), detail: localize('clawdius.control.skills.manualHint', "Hidden from the model. You can still run it with /name.") },
+			{ value: 'off', label: localize('clawdius.control.skills.off', "Off"), detail: localize('clawdius.control.skills.offHint', "Hidden from both the model and you.") },
+		];
+	}
+
+	private async setSkillOverride(name: string, prev: SkillOverride, next: SkillOverride): Promise<void> {
+		if (prev === next) { return; }
+		const uri = await this.scopeUri(this.scope);
+		if (!uri) { return; }
+		const label = this.skillStateOptions().find(o => o.value === next)?.label ?? next;
+		await this.writeSettingsAtUri(uri, [skillOverrideWrite(name, next)],
+			localize('clawdius.control.skills.toast', "Set \"{0}\" to {1}", name, label),
+			() => void this.writeSettingsAtUri(uri, [skillOverrideWrite(name, prev)], localize('clawdius.control.skills.undoToast', "Reverted \"{0}\"", name)));
+	}
+
+	private async setDisableBundled(value: boolean): Promise<void> {
+		const uri = await this.scopeUri(this.scope);
+		if (!uri) { return; }
+		await this.writeSettingsAtUri(uri, [disableBundledSkillsWrite(value)],
+			value ? localize('clawdius.control.skills.bundledToastOff', "Bundled skills disabled") : localize('clawdius.control.skills.bundledToastOn', "Bundled skills enabled"),
+			() => void this.writeSettingsAtUri(uri, [disableBundledSkillsWrite(!value)], localize('clawdius.control.skills.bundledUndo', "Reverted bundled skills")));
+	}
+
+	/** A reusable label + description + on/off switch row (Skills bundled toggle, later Plugins / Hooks). */
+	private renderToggleRow(parent: HTMLElement, label: string, hint: string, value: boolean, onChange: (next: boolean) => void): void {
+		const row = append(parent, h('.clawdius-control-caprow'));
+		const info = append(row, h('.clawdius-control-cap-info'));
+		append(info, h('.clawdius-control-cap-name')).textContent = label;
+		append(info, h('.clawdius-control-cap-desc')).textContent = hint;
+		append(row, h('.clawdius-control-spacer'));
+		const toggle = append(row, h('button.clawdius-control-toggle')) as HTMLButtonElement;
+		if (value) { toggle.classList.add('on'); }
+		toggle.setAttribute('role', 'switch');
+		toggle.setAttribute('aria-checked', value ? 'true' : 'false');
+		toggle.setAttribute('aria-label', label);
+		const track = append(toggle, h('span.clawdius-control-toggle-track'));
+		append(track, h('span.clawdius-control-toggle-thumb'));
+		append(toggle, h('span.clawdius-control-toggle-text')).textContent = value ? localize('clawdius.control.toggleOn', "On") : localize('clawdius.control.toggleOff', "Off");
+		this.renderStore.add(addDisposableListener(toggle, EventType.CLICK, () => onChange(!value)));
 	}
 
 	private toast(message: string, onUndo?: () => void): void {

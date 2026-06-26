@@ -192,6 +192,44 @@ block titles, brand orange (#d97757) accents, lavender (#a78bfa) highlights, and
 .clawdius-control-iconbtn.danger:hover { color: #f06d68; }
 .clawdius-control-iconbtn .codicon { font-size: 14px; }
 
+/* capability rows (Skills / Plugins / Hooks): name + description on the left, a control on the right */
+.clawdius-control-caprow {
+	display: flex; align-items: center; gap: 16px; padding: 10px 13px;
+	border: 1px solid var(--vscode-widget-border, rgba(127, 127, 127, 0.25)); border-radius: 9px;
+	background: var(--vscode-editorWidget-background, rgba(127, 127, 127, 0.04));
+}
+.clawdius-control-cap-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.clawdius-control-cap-name { display: inline-flex; align-items: baseline; gap: 9px; font-size: 12.5px; font-weight: 600; }
+.clawdius-control-cap-origin {
+	font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em;
+	background: rgba(201, 184, 250, 0.15); color: #c9b8fa; border-radius: 4px; padding: 1px 5px;
+}
+.clawdius-control-cap-origin.muted { background: rgba(127, 127, 127, 0.15); color: var(--vscode-descriptionForeground); }
+.clawdius-control-cap-desc { font-size: 11.5px; opacity: 0.62; max-width: 540px; }
+.clawdius-control-cap-acts { display: inline-flex; gap: 4px; margin-left: 8px; }
+
+/* small segmented control (per-skill 4-state) - a denser variant of the default-mode segment */
+.clawdius-control-seg-sm { flex: none; gap: 5px; }
+.clawdius-control-seg-sm .clawdius-control-mode { padding: 4px 9px; border-radius: 6px; }
+.clawdius-control-seg-sm .clawdius-control-mode-name { font-size: 11.5px; }
+
+/* on/off switch (bundled-skills toggle, later Plugins / Hooks) */
+.clawdius-control-toggle {
+	display: inline-flex; align-items: center; gap: 8px; flex: none;
+	background: none; border: none; color: var(--vscode-foreground); font: inherit; cursor: pointer; padding: 0;
+}
+.clawdius-control-toggle-track {
+	position: relative; width: 34px; height: 18px; border-radius: 9px;
+	background: rgba(127, 127, 127, 0.3); transition: background 0.12s;
+}
+.clawdius-control-toggle-thumb {
+	position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+	background: var(--vscode-foreground); opacity: 0.85; transition: left 0.12s;
+}
+.clawdius-control-toggle.on .clawdius-control-toggle-track { background: #d97757; }
+.clawdius-control-toggle.on .clawdius-control-toggle-thumb { left: 18px; opacity: 1; background: #241008; }
+.clawdius-control-toggle-text { font-size: 11px; opacity: 0.7; min-width: 20px; text-align: left; }
+
 /* keyboard focus rings */
 .clawdius-control button:focus-visible,
 .clawdius-control input:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }

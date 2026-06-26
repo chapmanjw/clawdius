@@ -43,7 +43,7 @@ interface IBuckets {
 /** A single IJSONEditingService edit: set `value` at `path` (value `undefined` deletes the key). */
 export interface IJsonWrite {
 	readonly path: ReadonlyArray<string>;
-	readonly value: string | ReadonlyArray<string> | undefined;
+	readonly value: string | boolean | ReadonlyArray<string> | undefined;
 }
 
 /** Trim a rule; return undefined for blank input (blank rules are never written). */

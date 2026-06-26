@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 // CLAWDIUS-BEGIN Claude Code Config model
-// Types for the "Claude Code Config" tree: the user's Claude Code configuration across two scopes (Global
+// Types for the "Claude Code Config" model: the user's Claude Code configuration across two scopes (Global
 // ~/.claude and the workspace's Project .claude) and the sections within each (memories, agents, skills,
 // slash commands, plugins, MCP servers, hooks, permissions). Everything is read from local files only.
 
@@ -42,32 +42,7 @@ export const CONFIG_SECTIONS: ReadonlyArray<ConfigSection> = [
 	ConfigSection.Plugins,
 ];
 
-/** The view id for a section's collapsible pane in the Clawdius container. */
-export function sectionViewId(section: ConfigSection): string {
-	return `workbench.view.clawdius.config.${section}`;
-}
-
-/** The section a `sectionViewId()` refers to, or undefined if the id is not a section view. */
-export function sectionFromViewId(viewId: string): ConfigSection | undefined {
-	const suffix = viewId.startsWith('workbench.view.clawdius.config.') ? viewId.slice('workbench.view.clawdius.config.'.length) : undefined;
-	return CONFIG_SECTIONS.find(s => s === suffix);
-}
-
-/** A one-line description shown as the section's welcome text (Kiro-style). */
-export function sectionDescription(section: ConfigSection): string {
-	switch (section) {
-		case ConfigSection.Memories: return 'Persistent instructions Claude Code loads every session (CLAUDE.md).';
-		case ConfigSection.Commands: return 'Reusable slash commands you can run in Claude Code.';
-		case ConfigSection.Skills: return 'Reusable agent skills, each a folder with a SKILL.md.';
-		case ConfigSection.Agents: return 'Task-specific sub-agents with their own prompt and tools.';
-		case ConfigSection.Hooks: return 'Shell commands Claude Code runs on events (PreToolUse, SessionStart, ...).';
-		case ConfigSection.Permissions: return 'Allow / ask / deny rules controlling what Claude Code may do.';
-		case ConfigSection.Mcp: return 'Model Context Protocol servers that give Claude Code extra tools.';
-		case ConfigSection.Plugins: return 'Installed Claude Code plugins and their enabled state.';
-	}
-}
-
-/** Label for the section's primary "create" action / welcome button. */
+/** Label for the section's primary "create" action. */
 export function sectionCreateLabel(section: ConfigSection): string {
 	switch (section) {
 		case ConfigSection.Memories: return 'New Memory File';
@@ -154,21 +129,7 @@ export interface IClawdiusConfigSnapshot {
 	readonly scopes: ReadonlyArray<IConfigScopeGroup>;
 }
 
-/** Human label for a section. */
-export function sectionLabel(section: ConfigSection): string {
-	switch (section) {
-		case ConfigSection.Memories: return 'Memories';
-		case ConfigSection.Agents: return 'Sub-Agents';
-		case ConfigSection.Skills: return 'Skills';
-		case ConfigSection.Commands: return 'Slash Commands';
-		case ConfigSection.Plugins: return 'Plugins';
-		case ConfigSection.Mcp: return 'MCP Servers';
-		case ConfigSection.Hooks: return 'Hooks';
-		case ConfigSection.Permissions: return 'Permissions';
-	}
-}
-
-/** Shared, container-wide config service: one scan + watcher set feeds all eight section views. */
+/** Shared, container-wide config service: one scan + watcher set produces the snapshot the Control Center reads. */
 export const IClawdiusConfigService = createDecorator<IClawdiusConfigService>('clawdiusConfigService');
 
 export interface IClawdiusConfigService {

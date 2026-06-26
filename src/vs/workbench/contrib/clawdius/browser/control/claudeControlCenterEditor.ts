@@ -47,6 +47,7 @@ import { IPathService } from '../../../../services/path/common/pathService.js';
 import { IAgentHostService } from '../../../../../platform/agentHost/common/agentService.js';
 import { IClaudeMcpTool, IClaudeMcpToolDiscoveryResult } from '../../../../../platform/agentHost/common/claudeMcpToolDiscovery.js';
 import { ICommandService } from '../../../../../platform/commands/common/commands.js';
+import { ITerminalService, ITerminalGroupService } from '../../../terminal/browser/terminal.js';
 import { ConfigScope, ConfigSection, IClawdiusConfigService, IConfigItem } from '../../common/clawdiusConfig.js';
 import { CONFIG_DELETE_COMMAND_ID, configCreateCommandId } from '../clawdiusConfigActions.js';
 import {
@@ -63,7 +64,7 @@ import {
 } from './claudeControlTabsModel.js';
 import { ISkillIssue, ISkillValidation, validateSkillPackage } from './claudeSkillValidationModel.js';
 import {
-	IMcpDefSummary, McpApproval, enableAllProjectMcpServersWrite, mcpApproval, mcpApprovalWrites, mcpEffectiveApproval, parseMcpSettings, summarizeMcpDef,
+	IMcpDefSummary, McpApproval, McpTransport, enableAllProjectMcpServersWrite, mcpApproval, mcpApprovalWrites, mcpEffectiveApproval, parseMcpSettings, summarizeMcpDef,
 } from './claudeMcpModel.js';
 import { basename, isEqual, isEqualOrParent } from '../../../../../base/common/resources.js';
 import { parse as parseJsonc } from '../../../../../base/common/jsonc.js';
@@ -80,6 +81,8 @@ interface IBucketMeta { readonly bucket: PermissionBucket; readonly label: strin
 interface ISkillRow { readonly name: string; readonly description?: string; readonly origins: string[]; readonly items: IConfigItem[] }
 /** A file inside an expanded skill package (the skill folder + one level into its subdirectories). */
 interface ISkillFileEntry { readonly name: string; readonly resource: URI; readonly isDirectory: boolean; readonly relPath: string; readonly isSkillMd: boolean }
+/** A valid `plugin-id@marketplace-id` (no shell metacharacters, so it is safe to put in a terminal command). */
+const PLUGIN_ID_RE = /^[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+$/;
 type BtnVariant = 'primary' | 'ghost' | 'link' | 'danger' | 'add';
 
 export class ClaudeControlCenterEditor extends EditorPane {
@@ -118,6 +121,10 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	private readonly mcpDefs = new Map<string, IMcpDefSummary>();
 	private mcpDefsLoaded = false;
 	private readonly mcpTabTools = new Map<string, { loading: boolean; tools: readonly IClaudeMcpTool[]; message: string }>();
+	/** An open "add MCP server" form (per section). transport drives which fields apply. */
+	private mcpAddForm: { scope: 'global' | 'project'; name: string; transport: McpTransport; command: string; args: string; url: string } | undefined;
+	/** An open "add plugin" form on the Plugins tab. */
+	private pluginAddForm: { id: string } | undefined;
 	/**
 	 * An open inline add-rule editor. Three modes (codex classification): 'builtin' = a Claude built-in tool
 	 * (dropdown + optional specifier); 'mcp' = an MCP server tool (server dropdown + (All tools) / specific
@@ -154,6 +161,8 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		@IAgentHostService private readonly agentHostService: IAgentHostService,
 		@ICommandService private readonly commandService: ICommandService,
 		@IDialogService private readonly dialogService: IDialogService,
+		@ITerminalService private readonly terminalService: ITerminalService,
+		@ITerminalGroupService private readonly terminalGroupService: ITerminalGroupService,
 	) {
 		super(ClaudeControlCenterEditor.ID, group, telemetryService, themeService, storageService);
 		// Re-render when the default-mode setting changes anywhere (e.g. the status-bar pill), so the two stay
@@ -371,9 +380,17 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	showTab(tab: ControlTab): void {
 		if (this.tab !== tab || tab === 'usage') {
 			this.tab = tab;
-			this.adding = undefined;
+			this.clearTransientForms();
 			this.render();
 		}
+	}
+
+	/** Drop any open inline add/edit forms (permission add box, MCP add server, plugin add) on navigation. */
+	private clearTransientForms(): void {
+		this.adding = undefined;
+		this.mcpAddForm = undefined;
+		this.pluginAddForm = undefined;
+		this.skillFileForm = undefined;
 	}
 
 	private renderTabs(parent: HTMLElement): void {
@@ -403,7 +420,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			if (active) { btn.classList.add('active'); }
 			btn.setAttribute('aria-selected', active ? 'true' : 'false');
 			this.renderStore.add(addDisposableListener(btn, EventType.CLICK, () => {
-				if (this.tab !== def.tab) { this.tab = def.tab; this.adding = undefined; this.render(); }
+				if (this.tab !== def.tab) { this.tab = def.tab; this.clearTransientForms(); this.render(); }
 			}));
 		}
 	}
@@ -1407,8 +1424,13 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const firstFolder = this.workspaceService.getWorkspace().folders[0]?.uri;
 		const projectServers = servers.filter(s => s.scope === ConfigScope.Project && (!firstFolder || isEqualOrParent(s.resource, firstFolder)));
 
-		const gblock = this.block(parent, localize('clawdius.control.mcp.globalTitle', "Global MCP servers"));
+		const gblock = append(parent, h('.clawdius-control-block'));
+		const ghd = append(gblock, h('.clawdius-control-bar'));
+		append(ghd, h('.clawdius-control-block-title')).textContent = localize('clawdius.control.mcp.globalTitle', "Global MCP servers");
+		append(ghd, h('.clawdius-control-spacer'));
+		this.button(ghd, localize('clawdius.control.mcp.newServer', "New server"), () => this.openMcpAddForm('global'), 'add', Codicon.add);
 		append(gblock, h('.clawdius-control-scope-hint')).textContent = localize('clawdius.control.mcp.globalNote', "Defined in ~/.claude.json. Always available - inspect them and set per-tool permissions.");
+		if (this.mcpAddForm?.scope === 'global') { this.renderMcpAddForm(gblock); }
 		if (globalServers.length === 0) {
 			append(gblock, h('.clawdius-control-empty')).textContent = localize('clawdius.control.mcp.noGlobal', "No global MCP servers configured.");
 		} else {
@@ -1417,13 +1439,18 @@ export class ClaudeControlCenterEditor extends EditorPane {
 
 		const hasWorkspace = this.workspaceService.getWorkspace().folders.length > 0;
 		if (hasWorkspace || projectServers.length > 0) {
-			const pblock = this.block(parent, localize('clawdius.control.mcp.projectTitle', "Project MCP servers"));
+			const pblock = append(parent, h('.clawdius-control-block'));
+			const phd = append(pblock, h('.clawdius-control-bar'));
+			append(phd, h('.clawdius-control-block-title')).textContent = localize('clawdius.control.mcp.projectTitle', "Project MCP servers");
+			append(phd, h('.clawdius-control-spacer'));
+			if (hasWorkspace) { this.button(phd, localize('clawdius.control.mcp.newServer', "New server"), () => this.openMcpAddForm('project'), 'add', Codicon.add); }
 			append(pblock, h('.clawdius-control-scope-hint')).textContent = localize('clawdius.control.mcp.projectNote', "Defined in this project's .mcp.json. Approve or reject which ones Claude may use.");
 			this.renderToggleRow(pblock,
 				localize('clawdius.control.mcp.enableAll', "Approve all project MCP servers"),
 				localize('clawdius.control.mcp.enableAllHint', "Auto-approves every server in .mcp.json (enableAllProjectMcpServers); individual Reject still wins."),
 				mcpState.enableAllProjectServers,
 				next => void this.setEnableAllMcp(next));
+			if (this.mcpAddForm?.scope === 'project') { this.renderMcpAddForm(pblock); }
 			if (projectServers.length === 0) {
 				append(pblock, h('.clawdius-control-empty')).textContent = localize('clawdius.control.mcp.noProject', "No project MCP servers in .mcp.json.");
 			} else {
@@ -1431,6 +1458,110 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			}
 		}
 	}
+
+	private openMcpAddForm(scope: 'global' | 'project'): void {
+		this.mcpAddForm = { scope, name: '', transport: 'stdio', command: '', args: '', url: '' };
+		this.render();
+	}
+
+	/** The backing JSON for new MCP servers: ~/.claude.json (global) or <first folder>/.mcp.json (project). */
+	private async mcpBackingFile(scope: 'global' | 'project'): Promise<URI | undefined> {
+		if (scope === 'global') { return URI.joinPath(await this.pathService.userHome(), '.claude.json'); }
+		const folder = this.workspaceService.getWorkspace().folders[0]?.uri;
+		return folder ? URI.joinPath(folder, '.mcp.json') : undefined;
+	}
+
+	private renderMcpAddForm(parent: HTMLElement): void {
+		const form = this.mcpAddForm;
+		if (!form) { return; }
+		const wrap = append(parent, h('.clawdius-control-mcp-addform'));
+
+		const nameRow = append(wrap, h('.clawdius-control-addrow'));
+		const name = append(nameRow, h('input.clawdius-control-input')) as HTMLInputElement;
+		name.type = 'text'; name.value = form.name;
+		name.placeholder = localize('clawdius.control.mcp.namePh', "server name, e.g. my-server");
+		name.setAttribute('aria-label', localize('clawdius.control.mcp.nameLabel', "Server name"));
+		this.renderStore.add(addDisposableListener(name, EventType.INPUT, () => { form.name = name.value; }));
+		const transport = append(nameRow, h('select.clawdius-control-select')) as HTMLSelectElement;
+		transport.setAttribute('aria-label', localize('clawdius.control.mcp.transportLabel', "Transport"));
+		for (const t of ['stdio', 'http', 'sse'] as const) {
+			const o = append(transport, h('option')) as HTMLOptionElement;
+			o.value = t; o.textContent = t;
+			if (t === form.transport) { o.selected = true; }
+		}
+		this.renderStore.add(addDisposableListener(transport, EventType.CHANGE, () => { form.transport = transport.value as McpTransport; this.render(); }));
+
+		const detailRow = append(wrap, h('.clawdius-control-addrow'));
+		if (form.transport === 'stdio') {
+			const command = append(detailRow, h('input.clawdius-control-input')) as HTMLInputElement;
+			command.type = 'text'; command.value = form.command;
+			command.placeholder = localize('clawdius.control.mcp.commandPh', "command, e.g. uvx or npx");
+			command.setAttribute('aria-label', localize('clawdius.control.mcp.commandLabel', "Command"));
+			this.renderStore.add(addDisposableListener(command, EventType.INPUT, () => { form.command = command.value; }));
+			const args = append(detailRow, h('input.clawdius-control-input')) as HTMLInputElement;
+			args.type = 'text'; args.value = form.args;
+			args.placeholder = localize('clawdius.control.mcp.argsPh', "args (space-separated)");
+			args.setAttribute('aria-label', localize('clawdius.control.mcp.argsLabel', "Arguments"));
+			this.renderStore.add(addDisposableListener(args, EventType.INPUT, () => { form.args = args.value; }));
+		} else {
+			const url = append(detailRow, h('input.clawdius-control-input')) as HTMLInputElement;
+			url.type = 'text'; url.value = form.url;
+			url.placeholder = localize('clawdius.control.mcp.urlPh', "https://host/mcp");
+			url.setAttribute('aria-label', localize('clawdius.control.mcp.urlLabel', "Server URL"));
+			this.renderStore.add(addDisposableListener(url, EventType.INPUT, () => { form.url = url.value; }));
+		}
+
+		const actions = append(wrap, h('.clawdius-control-addrow'));
+		this.button(actions, localize('clawdius.control.mcp.create', "Create"), () => void this.createMcpServer(), 'primary');
+		this.button(actions, localize('clawdius.control.cancel', "Cancel"), () => { this.mcpAddForm = undefined; this.render(); }, 'ghost');
+		append(wrap, h('.clawdius-control-addnote')).textContent = localize('clawdius.control.mcp.addNote', "Writes the server to the backing JSON and opens it - add env / headers there (they hold secrets).");
+	}
+
+	private async createMcpServer(): Promise<void> {
+		const form = this.mcpAddForm;
+		if (!form) { return; }
+		const name = form.name.trim();
+		if (!name || /[^a-zA-Z0-9_.-]/.test(name)) {
+			this.toast(localize('clawdius.control.mcp.badName', "Enter a simple server name (letters, numbers, '-', '_', '.')."));
+			return;
+		}
+		const uri = await this.mcpBackingFile(form.scope);
+		if (!uri) { return; }
+		let def: Record<string, unknown>;
+		if (form.transport === 'stdio') {
+			const command = form.command.trim();
+			if (!command) { this.toast(localize('clawdius.control.mcp.needCommand', "Enter a command.")); return; }
+			def = { command, args: form.args.trim() ? form.args.trim().split(/\s+/) : [] };
+		} else {
+			const url = form.url.trim();
+			if (!url) { this.toast(localize('clawdius.control.mcp.needUrl', "Enter a URL.")); return; }
+			def = { type: form.transport, url };
+		}
+		// Refuse to clobber an existing server.
+		const raw = await this.readRaw(uri);
+		if (raw !== undefined) {
+			try {
+				const parsed = parseJsonc<{ mcpServers?: Record<string, unknown> }>(raw);
+				if (parsed?.mcpServers && typeof parsed.mcpServers === 'object' && Object.hasOwn(parsed.mcpServers, name)) {
+					this.toast(localize('clawdius.control.mcp.exists', "A server named \"{0}\" already exists here.", name));
+					return;
+				}
+			} catch { /* malformed file - the write below would surface the error */ }
+		}
+		try {
+			if (raw === undefined || raw.trim().length === 0) { await this.fileService.writeFile(uri, VSBuffer.fromString('{}\n')); }
+			await this.jsonEditing.write(uri, [{ path: ['mcpServers', name], value: def }], true);
+		} catch (err) {
+			this.notificationService.error(localize('clawdius.control.mcp.createFailed', "Could not add the server: {0}", err instanceof Error ? err.message : String(err)));
+			return;
+		}
+		this.mcpAddForm = undefined;
+		void this.configService.refresh(true);
+		await this.editorService.openEditor({ resource: uri, options: { pinned: true } });
+		this.render();
+	}
+
+	// --- MCP tab ---
 
 	/** MCP servers from the scanned config (per scope), with the backing JSON file for the def + reveal. */
 	private collectMcpServers(): { id: string; name: string; scope: ConfigScope; resource: URI }[] {
@@ -1657,13 +1788,62 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		this.renderHero(parent,
 			localize('clawdius.control.plugins.title', "Plugins"),
 			localize('clawdius.control.plugins.sub', "Enable or disable installed Claude Code plugins. Plugins apply globally - writes enabledPlugins to ~/.claude/settings.json."));
+
+		const addBlock = this.block(parent, localize('clawdius.control.plugins.addTitle', "Add a plugin"));
+		this.renderPluginAdd(addBlock);
+
 		const block = this.block(parent, localize('clawdius.control.plugins.listTitle', "Installed plugins"));
 		const plugins = this.collectPlugins();
 		if (plugins.length === 0) {
-			append(block, h('.clawdius-control-empty')).textContent = localize('clawdius.control.plugins.none', "No plugins installed. Install plugins with the Claude Code CLI (claude plugin install).");
+			append(block, h('.clawdius-control-empty')).textContent = localize('clawdius.control.plugins.none', "No plugins installed yet. Add one above, or install via the Claude Code CLI.");
 			return;
 		}
 		for (const plugin of plugins) { this.renderPluginRow(block, plugin); }
+	}
+
+	/** Enable a plugin by id (writes enabledPlugins) and/or install it via the CLI in an integrated terminal. */
+	private renderPluginAdd(parent: HTMLElement): void {
+		const wrap = append(parent, h('.clawdius-control-mcp-addform'));
+		const row = append(wrap, h('.clawdius-control-addrow'));
+		const input = append(row, h('input.clawdius-control-input')) as HTMLInputElement;
+		input.type = 'text';
+		input.value = this.pluginAddForm?.id ?? '';
+		input.placeholder = localize('clawdius.control.plugins.idPh', "plugin-id@marketplace-id");
+		input.setAttribute('aria-label', localize('clawdius.control.plugins.idLabel', "Plugin id"));
+		this.renderStore.add(addDisposableListener(input, EventType.INPUT, () => { this.pluginAddForm = { id: input.value }; }));
+		this.button(row, localize('clawdius.control.plugins.enable', "Enable"), () => void this.enablePluginById(), 'primary');
+		this.button(row, localize('clawdius.control.plugins.install', "Install in terminal"), () => void this.installPluginInTerminal(), 'link');
+		append(wrap, h('.clawdius-control-addnote')).textContent = localize('clawdius.control.plugins.addNote', "Enable writes enabledPlugins (the plugin must already be installed). Install in terminal opens a terminal with `claude plugin install` ready to run.");
+	}
+
+	private async enablePluginById(): Promise<void> {
+		const id = (this.pluginAddForm?.id ?? '').trim();
+		if (!PLUGIN_ID_RE.test(id)) {
+			this.toast(localize('clawdius.control.plugins.badId', "Enter a plugin id as plugin-id@marketplace-id."));
+			return;
+		}
+		const uri = await this.scopeUri('global');
+		if (!uri) { return; }
+		this.pluginAddForm = undefined;
+		await this.writeSettingsAtUri(uri, [pluginEnabledWrite(id, 'on')],
+			localize('clawdius.control.plugins.enabledToast', "Enabled \"{0}\"", id),
+			() => void this.writeSettingsAtUri(uri, [pluginEnabledWrite(id, 'unset')], localize('clawdius.control.plugins.undo', "Reverted \"{0}\"", id)));
+	}
+
+	private async installPluginInTerminal(): Promise<void> {
+		const id = (this.pluginAddForm?.id ?? '').trim();
+		// An id is optional (you can complete the command in the terminal), but if given it must be the strict
+		// plugin-id shape - never let arbitrary text reach a shell command.
+		if (id && !PLUGIN_ID_RE.test(id)) {
+			this.toast(localize('clawdius.control.plugins.badIdInstall', "That isn't a valid plugin-id@marketplace-id."));
+			return;
+		}
+		const cwd = this.workspaceService.getWorkspace().folders[0]?.uri ?? await this.pathService.userHome();
+		const instance = await this.terminalService.createTerminal({ cwd });
+		this.terminalService.setActiveInstance(instance);
+		this.terminalGroupService.showPanel(true);
+		// Pre-fill the install command (not auto-run) so the user reviews + handles any marketplace prompts.
+		instance.sendText(id ? `claude plugin install ${id}` : 'claude plugin install ', false);
 	}
 
 	/** Installed + configured plugins from the scanned config (global; the CLI scopes plugins globally). */

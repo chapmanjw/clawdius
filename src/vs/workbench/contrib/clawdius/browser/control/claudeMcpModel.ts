@@ -80,7 +80,7 @@ export function enableAllProjectMcpServersWrite(value: boolean): IJsonWrite {
 
 // --- server definition summary (transport + redacted detail) -------------------------------------------------
 
-export type McpTransport = 'stdio' | 'http' | 'sse' | 'unknown';
+export type McpTransport = 'stdio' | 'http' | 'sse' | 'unknown'; // exported for the add-server form
 
 /** Redact a remote URL for display: keep scheme/host/path, strip userinfo + query/hash (may carry tokens). */
 function redactUrl(url: string): string {

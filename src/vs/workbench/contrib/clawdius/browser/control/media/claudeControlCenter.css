@@ -286,6 +286,11 @@ block titles, brand orange (#d97757) accents, lavender (#a78bfa) highlights, and
 .clawdius-control-mcp-tool { display: flex; align-items: center; gap: 8px; padding: 5px 4px; font-size: 12px; border-top: 1px solid var(--vscode-panel-border); }
 .clawdius-control-mcp-tool:first-of-type { border-top: none; }
 .clawdius-control-mcp-permacts { display: inline-flex; gap: 5px; align-items: center; }
+.clawdius-control-mcp-addform {
+	display: flex; flex-direction: column; gap: 8px; padding: 10px 12px;
+	border: 1px solid var(--vscode-widget-border, rgba(127, 127, 127, 0.25)); border-radius: 9px;
+	background: var(--vscode-editorWidget-background, rgba(127, 127, 127, 0.04));
+}
 
 /* keyboard focus rings */
 .clawdius-control button:focus-visible,

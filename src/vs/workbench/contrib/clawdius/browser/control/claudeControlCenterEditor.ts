@@ -125,6 +125,8 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	private readonly skillFilesLoading = new Set<string>();
 	/** Expanded subdirectories in an expanded skill's file tree, keyed by directory fsPath. Default: collapsed. */
 	private readonly expandedSkillDirs = new Set<string>();
+	/** Marketplaces the user has expanded in the Browse list (collapsed by default; a search auto-expands matches). */
+	private readonly expandedMarketplaces = new Set<string>();
 	private skillFileForm: { folderPath: string; target: string; name: string } | undefined;
 
 	// MCP tab state. Defs (read from the backing JSON) are keyed by row id (scope::name); discovered tools are
@@ -2351,26 +2353,56 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const installedIds = new Set(data.installed.map(p => p.id));
 		const statusById = new Map<string, string>(this.collectPlugins().map(p => [p.id, p.status] as const));
 		const filter = this.pluginFilter.trim().toLowerCase();
-		const matches = filter.length === 0
-			? data.catalog
-			: data.catalog.filter(p => p.name.toLowerCase().includes(filter)
-				|| (p.description ? p.description.toLowerCase().includes(filter) : false)
-				|| p.marketplace.toLowerCase().includes(filter));
+		const matchesFilter = (p: ICatalogPlugin): boolean => filter.length === 0
+			|| p.name.toLowerCase().includes(filter)
+			|| (p.description ? p.description.toLowerCase().includes(filter) : false)
+			|| (p.author ? p.author.toLowerCase().includes(filter) : false)
+			|| p.marketplace.toLowerCase().includes(filter);
 
-		if (matches.length === 0) {
+		// Group the catalog under collapsible marketplace headers. The official catalog is large, so groups are
+		// collapsed by default and capped when open; a search auto-expands every group that still has a match.
+		const perGroupCap = 60;
+		let shownAnything = false;
+		for (const marketplace of data.marketplaces) {
+			const all = data.catalog.filter(p => p.marketplace === marketplace.name);
+			if (all.length === 0) { continue; }
+			const matched = all.filter(matchesFilter);
+			if (filter.length > 0 && matched.length === 0) { continue; }
+			shownAnything = true;
+			const installedHere = all.filter(p => installedIds.has(p.id)).length;
+			const expanded = filter.length > 0 || this.expandedMarketplaces.has(marketplace.name);
+
+			const header = append(block, h('.clawdius-control-skill-file.dir'));
+			const chevron = this.iconButton(header,
+				expanded ? Codicon.chevronDown : Codicon.chevronRight,
+				expanded ? localize('clawdius.control.plugins.collapseGroup', "Collapse") : localize('clawdius.control.plugins.expandGroup', "Expand"),
+				() => {
+					if (this.expandedMarketplaces.has(marketplace.name)) { this.expandedMarketplaces.delete(marketplace.name); } else { this.expandedMarketplaces.add(marketplace.name); }
+					this.render();
+				});
+			chevron.classList.add('clawdius-control-skill-tree-chevron');
+			append(header, h('span.clawdius-control-skill-file-name')).textContent = marketplace.name;
+			const count = filter.length > 0
+				? localize('clawdius.control.plugins.groupCountFiltered', "{0} of {1}", matched.length, all.length)
+				: all.length === 1
+					? localize('clawdius.control.plugins.groupCountOne', "1 plugin")
+					: localize('clawdius.control.plugins.groupCount', "{0} plugins", all.length);
+			append(header, h('span.clawdius-control-skill-file-count')).textContent = installedHere > 0
+				? localize('clawdius.control.plugins.groupCountInstalled', "{0}, {1} installed", count, installedHere)
+				: count;
+
+			if (!expanded) { continue; }
+			const capped = filter.length === 0 && matched.length > perGroupCap;
+			const shown = capped ? matched.slice(0, perGroupCap) : matched;
+			for (const plugin of shown) {
+				this.renderCatalogRow(block, plugin, installedIds.has(plugin.id), statusById.get(plugin.id));
+			}
+			if (capped) {
+				append(block, h('.clawdius-control-addnote')).textContent = localize('clawdius.control.plugins.capped', "Showing first {0} of {1} - search to narrow.", perGroupCap, matched.length);
+			}
+		}
+		if (!shownAnything) {
 			append(block, h('.clawdius-control-empty')).textContent = localize('clawdius.control.plugins.noMatches', "No plugins match \"{0}\".", this.pluginFilter.trim());
-			return;
-		}
-
-		// The official catalog is large; cap the unfiltered list so the pane stays responsive.
-		const cap = 60;
-		const capped = filter.length === 0 && matches.length > cap;
-		const shown = capped ? matches.slice(0, cap) : matches;
-		for (const plugin of shown) {
-			this.renderCatalogRow(block, plugin, installedIds.has(plugin.id), statusById.get(plugin.id));
-		}
-		if (capped) {
-			append(block, h('.clawdius-control-addnote')).textContent = localize('clawdius.control.plugins.capped', "Showing first {0} of {1} - search to narrow.", cap, matches.length);
 		}
 	}
 
@@ -2385,22 +2417,23 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const info = append(row, h('.clawdius-control-cap-info'));
 		const nameEl = append(info, h('.clawdius-control-cap-name'));
 		append(nameEl, h('span')).textContent = plugin.name;
-		append(nameEl, h('span.clawdius-control-cap-origin')).textContent = plugin.marketplace;
-		if (plugin.category) { append(nameEl, h('span.clawdius-control-cap-origin.muted')).textContent = plugin.category; }
-		const desc = this.truncate(plugin.description, 140);
+		if (plugin.category) { append(nameEl, h('span.clawdius-control-cap-origin')).textContent = plugin.category; }
+		if (plugin.author) { append(nameEl, h('span.clawdius-control-cap-origin.muted')).textContent = localize('clawdius.control.plugins.byAuthor', "by {0}", plugin.author); }
+		const desc = this.truncate(plugin.description, 160);
 		if (desc) { append(info, h('.clawdius-control-cap-desc')).textContent = desc; }
 		append(row, h('.clawdius-control-spacer'));
 		this.button(row, localize('clawdius.control.plugins.installBtn', "Install"), () => void this.installCatalogPlugin(plugin.id), 'primary', Codicon.cloudDownload);
 	}
 
-	/** The one-line hint for an installed catalog plugin's toggle row: marketplace, optional category, optional
-	 *  truncated description. */
+	/** The one-line hint for an installed catalog plugin's toggle row: optional category + author, optional truncated
+	 *  description. The marketplace is omitted - it is shown on the group header the row sits under. */
 	private catalogHint(plugin: ICatalogPlugin): string {
-		const meta = plugin.category
-			? localize('clawdius.control.plugins.metaCat', "{0} - {1}", plugin.marketplace, plugin.category)
-			: plugin.marketplace;
+		const meta = plugin.category && plugin.author
+			? localize('clawdius.control.plugins.metaCatAuthor', "{0} - by {1}", plugin.category, plugin.author)
+			: plugin.category ?? (plugin.author ? localize('clawdius.control.plugins.byAuthor', "by {0}", plugin.author) : '');
 		const desc = this.truncate(plugin.description, 120);
-		return desc ? localize('clawdius.control.plugins.metaDesc', "{0} - {1}", meta, desc) : meta;
+		if (meta && desc) { return localize('clawdius.control.plugins.metaDesc', "{0} - {1}", meta, desc); }
+		return desc ?? meta ?? plugin.marketplace;
 	}
 
 	/** Trim + cap free text for display, appending an ellipsis when cut. Empty / missing text returns undefined. */

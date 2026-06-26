@@ -89,7 +89,7 @@ function emptyModelTokens(): IModelTokens {
 }
 
 /** Local YYYY-MM-DD for an epoch-ms timestamp (the dashboard heatmap + charts are in local time). */
-function localDateKey(ms: number): string {
+export function localDateKey(ms: number): string {
 	const d = new Date(ms);
 	return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }

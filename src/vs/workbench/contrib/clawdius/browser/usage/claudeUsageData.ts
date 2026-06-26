@@ -32,48 +32,14 @@ export interface IClaudeCapacity {
 	readonly subscription?: { readonly type?: string; readonly plan?: string } | null;
 }
 
-// --- Historical stats from ~/.claude/stats-cache.json (written by the CLI) ---
+// --- Historical stats shape (single source of truth in the platform model, so the transcript-derived node
+// service and the renderer agree). The CLI's ~/.claude/stats-cache.json is parsed into the same shape by
+// readStats below; the accurate, always-current values come from the transcript aggregator. ---
 
-export interface IClaudeModelStat {
-	readonly inputTokens?: number;
-	readonly outputTokens?: number;
-	readonly cacheReadInputTokens?: number;
-	readonly cacheCreationInputTokens?: number;
-	readonly webSearchRequests?: number;
-}
-
-export interface IClaudeDailyActivity {
-	readonly date?: string;
-	readonly messageCount?: number;
-	readonly sessionCount?: number;
-	readonly toolCallCount?: number;
-}
-
-/** Per-day per-model token totals (drives the Tokens-per-Day line chart). */
-export interface IClaudeDailyModelTokens {
-	readonly date?: string;
-	readonly tokensByModel?: { readonly [model: string]: number };
-}
-
-/** The single longest session by wall-clock duration (ms). */
-export interface IClaudeLongestSession {
-	readonly sessionId?: string;
-	readonly duration?: number;
-	readonly messageCount?: number;
-	readonly timestamp?: string;
-}
-
-export interface IClaudeStats {
-	readonly modelUsage?: { readonly [model: string]: IClaudeModelStat };
-	readonly dailyActivity?: ReadonlyArray<IClaudeDailyActivity>;
-	readonly dailyModelTokens?: ReadonlyArray<IClaudeDailyModelTokens>;
-	readonly hourCounts?: { readonly [hour: string]: number };
-	readonly longestSession?: IClaudeLongestSession;
-	readonly totalSessions?: number;
-	readonly totalMessages?: number;
-	readonly firstSessionDate?: string;
-	readonly lastComputedDate?: string;
-}
+import type {
+	IClaudeModelStat, IClaudeDailyActivity, IClaudeDailyModelTokens, IClaudeLongestSession, IClaudeStats,
+} from '../../../../../platform/clawdius/common/claudeUsageStatsModel.js';
+export type { IClaudeModelStat, IClaudeDailyActivity, IClaudeDailyModelTokens, IClaudeLongestSession, IClaudeStats };
 
 /** A model token row resolved for charts: friendly label + family + total tokens (in+out). */
 export interface IModelTokenRow {

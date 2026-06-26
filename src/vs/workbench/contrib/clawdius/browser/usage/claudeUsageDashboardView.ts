@@ -21,12 +21,16 @@ import { URI } from '../../../../../base/common/uri.js';
 import { localize } from '../../../../../nls.js';
 import { ICommandService } from '../../../../../platform/commands/common/commands.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
+import { IAgentHostService } from '../../../../../platform/agentHost/common/agentService.js';
 import { IPathService } from '../../../../services/path/common/pathService.js';
 import {
 	capacityWindows, compact, computeStreaks, formatDuration, IClaudeAccount, IClaudeCapacity, IClaudeDailyModelTokens,
 	IClaudeStats, modelLabel, providerHasLimits, providerLabel, readAccount, readCapacity, readStats,
 	REFRESH_CAPACITY_COMMAND_ID, resetLabel, resolveModelRows,
 } from './claudeUsageData.js';
+
+/** Where the session/token stats came from: our accurate transcript aggregate, the CLI's cache, or nothing. */
+type StatsSource = 'transcripts' | 'cli' | 'none';
 
 type Range = 'all' | '30d' | '7d';
 
@@ -45,6 +49,7 @@ function utilStateOf(util: number): 'warn' | 'crit' | undefined {
 
 interface ILoaded {
 	readonly stats: IClaudeStats | undefined;
+	readonly statsSource: StatsSource;
 	readonly capacity: IClaudeCapacity | undefined;
 	readonly account: IClaudeAccount;
 	readonly refreshedAt: Date | undefined;
@@ -73,6 +78,7 @@ export class ClaudeUsageDashboardView extends Disposable {
 		private readonly fileService: IFileService,
 		private readonly pathService: IPathService,
 		private readonly commandService: ICommandService,
+		private readonly agentHostService: IAgentHostService,
 	) {
 		super();
 	}
@@ -81,12 +87,13 @@ export class ClaudeUsageDashboardView extends Disposable {
 		return URI.joinPath(await this.pathService.userHome(), '.claude');
 	}
 
-	/** Read local stats + capacity + account and render. Never egresses (a restored host never fetches).
-	 *  Bails if the token is cancelled OR the view was disposed mid-read (e.g. the Control Center left the Usage
-	 *  tab while a local read was in flight) - so a late completion never renders into a detached node. */
+	/** Two-phase load (all local reads; zero egress). Phase 1: capacity + account + the CLI stats-cache fallback,
+	 *  rendered immediately so the dashboard never blocks. Phase 2: the accurate transcript aggregate (a few
+	 *  seconds cold, near-instant warm) replaces the stats when it lands. Bails if cancelled or disposed mid-read
+	 *  (e.g. the Control Center left the Usage tab) so a late completion never renders into a detached node. */
 	async load(token: CancellationToken): Promise<void> {
 		const dir = await this.claudeDir();
-		const [stats, capacity] = await Promise.all([readStats(this.fileService, dir), readCapacity(this.fileService, dir)]);
+		const [cliStats, capacity] = await Promise.all([readStats(this.fileService, dir), readCapacity(this.fileService, dir)]);
 		if (token.isCancellationRequested || this.disposed) { return; }
 		const account = await readAccount(this.fileService, dir, capacity);
 		let refreshedAt: Date | undefined;
@@ -97,8 +104,27 @@ export class ClaudeUsageDashboardView extends Disposable {
 			refreshedAt = undefined;
 		}
 		if (token.isCancellationRequested || this.disposed) { return; }
-		this.loaded = { stats, capacity, account, refreshedAt };
+		// Phase 1: paint immediately with the CLI cache (or nothing) as a fast fallback.
+		this.loaded = { stats: cliStats, statsSource: cliStats ? 'cli' : 'none', capacity, account, refreshedAt };
 		this.render();
+		// Phase 2: compute the accurate, always-current stats from the raw transcripts and swap them in.
+		await this.loadTranscriptStats(token);
+	}
+
+	/** Aggregate the raw transcripts (off the UI thread, via the agentHost) and swap in the accurate stats. */
+	private async loadTranscriptStats(token: CancellationToken): Promise<void> {
+		const home = (await this.pathService.userHome()).fsPath;
+		let result;
+		try {
+			result = await this.agentHostService.getUsageStats(home);
+		} catch {
+			return; // keep the CLI-cache fallback already shown
+		}
+		if (token.isCancellationRequested || this.disposed || !this.loaded) { return; }
+		if (result.status === 'ok' && result.stats) {
+			this.loaded = { ...this.loaded, stats: result.stats, statsSource: 'transcripts' };
+			this.render();
+		}
 	}
 
 	private async refreshOnDemand(): Promise<void> {
@@ -127,12 +153,12 @@ export class ClaudeUsageDashboardView extends Disposable {
 
 	private render(): void {
 		if (this.disposed || !this.loaded) { return; }
-		const { stats, capacity, account, refreshedAt } = this.loaded;
+		const { stats, statsSource, capacity, account, refreshedAt } = this.loaded;
 		this.renderStore.clear();
 		clearNode(this.container);
 		const inner = append(this.container, h('.clawdius-usage-dashboard-inner'));
 
-		this.renderHero(inner, account, refreshedAt, stats?.lastComputedDate);
+		this.renderHero(inner, account, refreshedAt, statsSource, stats?.lastComputedDate);
 		this.renderLimits(inner, capacity, account);
 		if (stats) {
 			this.renderOverview(inner, stats);
@@ -156,7 +182,7 @@ export class ClaudeUsageDashboardView extends Disposable {
 		return isNaN(dt.getTime()) ? date : dt.toLocaleDateString();
 	}
 
-	private renderHero(parent: HTMLElement, account: IClaudeAccount, refreshedAt: Date | undefined, statsComputedDate: string | undefined): void {
+	private renderHero(parent: HTMLElement, account: IClaudeAccount, refreshedAt: Date | undefined, statsSource: StatsSource, statsComputedDate: string | undefined): void {
 		const hero = append(parent, h('.clawdius-usage-hero'));
 		append(hero, h('.clawdius-usage-hero-mark'));
 		const text = append(hero, h('.clawdius-usage-hero-text'));
@@ -176,11 +202,18 @@ export class ClaudeUsageDashboardView extends Disposable {
 		part(localize('clawdius.usage.dash.auth', "Auth"), account.signedIn ? localize('clawdius.usage.dash.signedIn', "Signed in") : localize('clawdius.usage.dash.signedOut', "Signed out"));
 
 		// Two distinct data sources, made explicit so the totals are never mistaken for live: the session/token
-		// stats come from the Claude CLI's local stats cache (recomputed by the CLI, not per-session), while the
-		// limit bars are a live fetch refreshed on open / Refresh.
-		append(text, h('.clawdius-usage-hero-meta')).textContent = statsComputedDate
-			? localize('clawdius.usage.dash.statsComputed', "Session + token stats computed {0} by the Claude CLI (recomputed when you run a CLI session).", this.formatDay(statsComputedDate))
-			: localize('clawdius.usage.dash.statsLocal', "Session + token stats come from the Claude CLI's local history.");
+		// stats are computed from your raw transcripts (always current, deduped - differs from the engine's
+		// over-counted cache), while the limit bars are a live fetch refreshed on open / Refresh.
+		const statsMeta = append(text, h('.clawdius-usage-hero-meta'));
+		if (statsSource === 'transcripts') {
+			statsMeta.textContent = localize('clawdius.usage.dash.statsTranscripts', "Session + token stats from your session transcripts (deduped, always current).");
+		} else if (statsSource === 'cli') {
+			statsMeta.textContent = statsComputedDate
+				? localize('clawdius.usage.dash.statsCli', "Session + token stats from the Claude CLI cache, computed {0} (the Agent Host is off; transcript stats unavailable).", this.formatDay(statsComputedDate))
+				: localize('clawdius.usage.dash.statsCliNoDate', "Session + token stats from the Claude CLI cache (the Agent Host is off).");
+		} else {
+			statsMeta.textContent = localize('clawdius.usage.dash.statsComputing', "Computing session + token stats from your transcripts...");
+		}
 		append(text, h('.clawdius-usage-hero-meta')).textContent = refreshedAt
 			? localize('clawdius.usage.dash.metaRefreshed', "Live limits last refreshed {0}.", refreshedAt.toLocaleString())
 			: localize('clawdius.usage.dash.metaLocal', "Live limits refresh when you open this view or click Refresh.");
@@ -188,7 +221,7 @@ export class ClaudeUsageDashboardView extends Disposable {
 		append(hero, h('.clawdius-usage-hero-spacer'));
 		const refresh = append(hero, h('button.clawdius-usage-refresh'));
 		refresh.textContent = localize('clawdius.usage.dash.refresh', "Refresh");
-		refresh.title = localize('clawdius.usage.dash.refreshTip', "Refresh live subscription limits. Session + token stats are recomputed by the Claude CLI, not here.");
+		refresh.title = localize('clawdius.usage.dash.refreshTip', "Refresh live subscription limits and recompute session + token stats from your transcripts.");
 		this.renderStore.add(addDisposableListener(refresh, EventType.CLICK, () => void this.refreshOnDemand()));
 	}
 

@@ -14,6 +14,7 @@ import type { IConfigurationService } from '../../configuration/common/configura
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 import type { ISyncedCustomization } from './agentPluginManager.js';
 import type { IClaudeMcpToolDiscoveryResult } from './claudeMcpToolDiscovery.js';
+import type { IClaudeUsageStatsResult } from '../../clawdius/common/claudeUsageStats.js';
 import type { IAgentServerToolHost } from './agentServerTools.js';
 import type { IActiveSubscriptionInfo, IAgentSubscription } from './state/agentSubscription.js';
 import type { IRemoteWatchHandle } from './agentHostFileSystemProvider.js';
@@ -1378,5 +1379,14 @@ export interface IAgentHostService extends IAgentConnection {
 	 * `disabled` result when the agent host is off, and self-caps so the renderer never hangs.
 	 */
 	discoverMcpServerTools(serverName: string, workingDirectoryPath: string): Promise<IClaudeMcpToolDiscoveryResult>;
+	// CLAWDIUS-END
+
+	// CLAWDIUS-BEGIN transcript-derived usage stats (#94)
+	/**
+	 * Aggregate the raw Claude transcripts under `<homeDirPath>/.claude/projects` into accurate, always-current
+	 * dashboard stats (incremental cache; only changed files re-parsed). Returns an `unavailable` result when the
+	 * agent host is off (the caller falls back to the engine's stats-cache.json). Zero egress - local reads only.
+	 */
+	getUsageStats(homeDirPath: string): Promise<IClaudeUsageStatsResult>;
 	// CLAWDIUS-END
 }

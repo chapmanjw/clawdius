@@ -32,6 +32,7 @@ import { TELEMETRY_CRASH_REPORTER_SETTING_ID, TELEMETRY_OLD_SETTING_ID, TELEMETR
 import { getTelemetryLevel } from '../../telemetry/common/telemetryUtils.js';
 import { AgentHostTelemetryLevelConfigKey, AgentHostSessionSyncEnabledConfigKey, SESSION_SYNC_ENABLED_SETTING_ID, telemetryLevelToAgentHostConfigValue } from '../common/agentHostSchema.js';
 import { ClaudeMcpToolDiscoveryChannelName, IClaudeMcpToolDiscoveryResult, IClaudeMcpToolDiscoveryService } from '../common/claudeMcpToolDiscovery.js';
+import { ClaudeUsageStatsChannelName, IClaudeUsageStatsResult, IClaudeUsageStatsService } from '../../clawdius/common/claudeUsageStats.js';
 
 /**
  * Renderer-side implementation of {@link IAgentHostService} that connects
@@ -48,6 +49,7 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 	private readonly _clientEventually = new DeferredPromise<MessagePortClient>();
 	private readonly _proxy: IAgentService;
 	private readonly _mcpDiscoveryProxy: IClaudeMcpToolDiscoveryService;
+	private readonly _usageStatsProxy: IClaudeUsageStatsService;
 	private readonly _ahpLogger: AhpJsonlLogger | undefined;
 	private readonly _connectionTracker: IConnectionTrackerService;
 	private readonly _subscriptionManager: AgentSubscriptionManager;
@@ -112,6 +114,11 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 		// CLAWDIUS-BEGIN live MCP tool discovery (#93): a delayed-channel proxy to the agentHost discovery service.
 		this._mcpDiscoveryProxy = ProxyChannel.toService<IClaudeMcpToolDiscoveryService>(
 			getDelayedChannel(this._clientEventually.p.then(client => client.getChannel(ClaudeMcpToolDiscoveryChannelName)))
+		);
+		// CLAWDIUS-END
+		// CLAWDIUS-BEGIN transcript-derived usage stats (#94): a delayed-channel proxy to the agentHost aggregator.
+		this._usageStatsProxy = ProxyChannel.toService<IClaudeUsageStatsService>(
+			getDelayedChannel(this._clientEventually.p.then(client => client.getChannel(ClaudeUsageStatsChannelName)))
 		);
 		// CLAWDIUS-END
 
@@ -356,6 +363,25 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 			return { status: 'timeout', tools: [], message: 'Timed out reaching the Agent Host.' };
 		}
 		return this._mcpDiscoveryProxy.discoverServerTools(serverName, workingDirectoryPath);
+	}
+	// CLAWDIUS-END
+
+	// CLAWDIUS-BEGIN transcript-derived usage stats (#94)
+	async getUsageStats(homeDirPath: string): Promise<IClaudeUsageStatsResult> {
+		if (!isAgentHostEnabled(this._configurationService)) {
+			return { status: 'unavailable', message: 'The Agent Host is disabled; usage stats come from the CLI cache.' };
+		}
+		// Wait for the MessagePort client before issuing the RPC (a disabled/not-yet-ready host would queue the
+		// call on the delayed channel forever). Local file reads only - zero egress - so the readiness wait is
+		// purely about not hanging, not an egress contract.
+		const ready = await Promise.race([
+			this._clientEventually.p.then(() => true),
+			timeout(30_000).then(() => false),
+		]);
+		if (!ready) {
+			return { status: 'unavailable', message: 'Timed out reaching the Agent Host.' };
+		}
+		return this._usageStatsProxy.getUsageStats(homeDirPath);
 	}
 	// CLAWDIUS-END
 }

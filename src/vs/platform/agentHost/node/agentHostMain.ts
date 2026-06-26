@@ -26,6 +26,8 @@ import { ClaudeAgent } from './claude/claudeAgent.js';
 import { ClaudeAgentSdkService, ClaudeSdkPackage, IClaudeAgentSdkService } from './claude/claudeAgentSdkService.js';
 import { ClaudeMcpToolDiscoveryChannelName, IClaudeMcpToolDiscoveryService } from '../common/claudeMcpToolDiscovery.js';
 import { ClaudeMcpToolDiscoveryService } from './claude/claudeMcpToolDiscoveryService.js';
+import { ClaudeUsageStatsChannelName, IClaudeUsageStatsService } from '../../clawdius/common/claudeUsageStats.js';
+import { ClaudeUsageStatsService } from '../../clawdius/node/claudeUsageStatsService.js';
 // CLAWDIUS-BEGIN cli backend resolution
 import { IClawdiusCliConfigService } from '../../clawdius/common/clawdiusCliConfig.js';
 import { ClawdiusCliConfigService } from '../../clawdius/node/clawdiusCliConfigService.js';
@@ -180,6 +182,12 @@ async function startAgentHost(): Promise<void> {
 		const mcpToolDiscoveryService = instantiationService.createInstance(ClaudeMcpToolDiscoveryService);
 		diServices.set(IClaudeMcpToolDiscoveryService, mcpToolDiscoveryService);
 		server.registerChannel(ClaudeMcpToolDiscoveryChannelName, ProxyChannel.fromService(mcpToolDiscoveryService, disposables));
+		// CLAWDIUS-END
+		// CLAWDIUS-BEGIN transcript-derived usage stats (#94): aggregate ~/.claude/projects/**/*.jsonl off the
+		// UI thread into accurate, always-current dashboard stats (the engine's stats-cache.json goes stale).
+		const usageStatsService = instantiationService.createInstance(ClaudeUsageStatsService);
+		diServices.set(IClaudeUsageStatsService, usageStatsService);
+		server.registerChannel(ClaudeUsageStatsChannelName, ProxyChannel.fromService(usageStatsService, disposables));
 		// CLAWDIUS-END
 		const codexProxyService = disposables.add(instantiationService.createInstance(CodexProxyService));
 		diServices.set(ICodexProxyService, codexProxyService);

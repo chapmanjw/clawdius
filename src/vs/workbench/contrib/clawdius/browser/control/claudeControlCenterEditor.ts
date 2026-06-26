@@ -369,7 +369,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		// .clawdius-usage-dashboard-inner into this host and owns its own range tabs + Refresh; we keep it alive
 		// while this tab shows and dispose it on tab switch. load() reads only local files (no startup egress).
 		const host = append(parent, h('.clawdius-control-usage'));
-		const view = new ClaudeUsageDashboardView(host, this.fileService, this.pathService, this.commandService);
+		const view = new ClaudeUsageDashboardView(host, this.fileService, this.pathService, this.commandService, this.agentHostService);
 		this.usageView.value = view;
 		void view.load(CancellationToken.None);
 	}

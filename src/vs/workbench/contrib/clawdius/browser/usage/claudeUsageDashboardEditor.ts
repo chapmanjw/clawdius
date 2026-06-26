@@ -15,6 +15,7 @@ import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { MutableDisposable } from '../../../../../base/common/lifecycle.js';
 import { ICommandService } from '../../../../../platform/commands/common/commands.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
+import { IAgentHostService } from '../../../../../platform/agentHost/common/agentService.js';
 import { IStorageService } from '../../../../../platform/storage/common/storage.js';
 import { ITelemetryService } from '../../../../../platform/telemetry/common/telemetry.js';
 import { IThemeService } from '../../../../../platform/theme/common/themeService.js';
@@ -41,6 +42,7 @@ export class ClaudeUsageDashboardEditor extends EditorPane {
 		@IFileService private readonly fileService: IFileService,
 		@IPathService private readonly pathService: IPathService,
 		@ICommandService private readonly commandService: ICommandService,
+		@IAgentHostService private readonly agentHostService: IAgentHostService,
 	) {
 		super(ClaudeUsageDashboardEditor.ID, group, telemetryService, themeService, storageService);
 	}
@@ -52,7 +54,7 @@ export class ClaudeUsageDashboardEditor extends EditorPane {
 
 	override async setInput(input: ClaudeUsageDashboardInput, options: IEditorOptions | undefined, context: IEditorOpenContext, token: CancellationToken): Promise<void> {
 		await super.setInput(input, options, context, token);
-		const view = new ClaudeUsageDashboardView(this.container, this.fileService, this.pathService, this.commandService);
+		const view = new ClaudeUsageDashboardView(this.container, this.fileService, this.pathService, this.commandService, this.agentHostService);
 		this.view.value = view;
 		await view.load(token);
 	}

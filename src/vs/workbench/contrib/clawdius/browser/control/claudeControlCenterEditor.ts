@@ -104,6 +104,8 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	private readonly skillValidating = new Set<string>();
 	private readonly skillFiles = new Map<string, readonly ISkillFileEntry[]>();
 	private readonly skillFilesLoading = new Set<string>();
+	/** Expanded subdirectories in an expanded skill's file tree, keyed by directory fsPath. Default: collapsed. */
+	private readonly expandedSkillDirs = new Set<string>();
 	private skillFileForm: { folderPath: string; target: string; name: string } | undefined;
 	/**
 	 * An open inline add-rule editor. Three modes (codex classification): 'builtin' = a Claude built-in tool
@@ -159,6 +161,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 				this.skillValidating.clear();
 				this.skillFiles.clear();
 				this.skillFilesLoading.clear();
+				this.expandedSkillDirs.clear();
 			}
 			if (this.adding?.mode === 'mcp' || this.tab === 'skills') { this.render(); }
 		}));
@@ -1020,25 +1023,56 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		}
 	}
 
+	/** Render the package files as a collapsible tree: root files, then each subdirectory as a foldable node. */
 	private renderSkillFileList(parent: HTMLElement, folder: URI, files: readonly ISkillFileEntry[]): void {
 		if (files.length === 0) {
 			append(parent, h('.clawdius-control-skill-emptyfiles')).textContent = localize('clawdius.control.skills.noFiles', "No files.");
 			return;
 		}
 		const list = append(parent, h('.clawdius-control-skill-filelist'));
+		// Root files (no '/' in the path), in their existing order (SKILL.md first).
 		for (const f of files) {
-			const row = append(list, h('.clawdius-control-skill-file'));
-			if (f.isDirectory) { row.classList.add('dir'); }
-			append(row, h('span.clawdius-control-skill-file-ico')).classList.add(...ThemeIcon.asClassNameArray(f.isDirectory ? Codicon.folder : Codicon.file));
-			append(row, h('span.clawdius-control-skill-file-name')).textContent = f.relPath;
-			append(row, h('.clawdius-control-spacer'));
-			if (!f.isDirectory) {
-				const acts = append(row, h('.clawdius-control-cap-acts'));
-				this.iconButton(acts, Codicon.goToFile, localize('clawdius.control.skills.openFile', "Open"), () => void this.editorService.openEditor({ resource: f.resource, options: { pinned: true } }));
-				if (!f.isSkillMd) {
-					this.iconButton(acts, Codicon.trash, localize('clawdius.control.skills.deleteFile', "Delete file"), () => void this.deleteSkillFile(folder, f), true);
+			if (!f.isDirectory && !f.relPath.includes('/')) { this.renderSkillFileEntry(list, folder, f, 0); }
+		}
+		// Each top-level subdirectory as a collapsible node, with its files nested one level under it.
+		for (const dir of files) {
+			if (!dir.isDirectory || dir.relPath.includes('/')) { continue; }
+			const dirKey = dir.resource.fsPath;
+			const expanded = this.expandedSkillDirs.has(dirKey);
+			const childCount = files.filter(f => !f.isDirectory && f.relPath.startsWith(`${dir.relPath}/`)).length;
+			const row = append(list, h('.clawdius-control-skill-file.dir'));
+			const chevron = this.iconButton(row,
+				expanded ? Codicon.chevronDown : Codicon.chevronRight,
+				expanded ? localize('clawdius.control.skills.collapseDir', "Collapse folder") : localize('clawdius.control.skills.expandDir', "Expand folder"),
+				() => {
+					if (expanded) { this.expandedSkillDirs.delete(dirKey); } else { this.expandedSkillDirs.add(dirKey); }
+					this.render();
+				});
+			chevron.classList.add('clawdius-control-skill-tree-chevron');
+			append(row, h('span.clawdius-control-skill-file-ico')).classList.add(...ThemeIcon.asClassNameArray(Codicon.folder));
+			append(row, h('span.clawdius-control-skill-file-name')).textContent = `${dir.name}/`;
+			append(row, h('span.clawdius-control-skill-file-count')).textContent = childCount === 1 ? localize('clawdius.control.skills.oneItem', "1 item") : localize('clawdius.control.skills.nItems', "{0} items", childCount);
+			if (expanded) {
+				const prefix = `${dir.relPath}/`;
+				for (const f of files) {
+					if (!f.isDirectory && f.relPath.startsWith(prefix)) { this.renderSkillFileEntry(list, folder, f, 1); }
 				}
 			}
+		}
+	}
+
+	/** A single file row in the tree, indented by depth; shows the file name (not the full relative path). */
+	private renderSkillFileEntry(list: HTMLElement, folder: URI, file: ISkillFileEntry, depth: number): void {
+		const row = append(list, h('.clawdius-control-skill-file'));
+		row.style.paddingLeft = `${4 + depth * 20}px`;
+		append(row, h('.clawdius-control-skill-tree-twistyspace')); // align the file icon under sibling folder icons
+		append(row, h('span.clawdius-control-skill-file-ico')).classList.add(...ThemeIcon.asClassNameArray(Codicon.file));
+		append(row, h('span.clawdius-control-skill-file-name')).textContent = file.name;
+		append(row, h('.clawdius-control-spacer'));
+		const acts = append(row, h('.clawdius-control-cap-acts'));
+		this.iconButton(acts, Codicon.goToFile, localize('clawdius.control.skills.openFile', "Open"), () => void this.editorService.openEditor({ resource: file.resource, options: { pinned: true } }));
+		if (!file.isSkillMd) {
+			this.iconButton(acts, Codicon.trash, localize('clawdius.control.skills.deleteFile', "Delete file"), () => void this.deleteSkillFile(folder, file), true);
 		}
 	}
 

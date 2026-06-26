@@ -2174,7 +2174,11 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const hd = append(block, h('.clawdius-control-bar'));
 		append(hd, h('.clawdius-control-block-title')).textContent = localize('clawdius.control.plugins.listTitle', "Installed plugins");
 		append(hd, h('.clawdius-control-spacer'));
-		this.button(hd, localize('clawdius.control.plugins.addBtn', "Add plugin"), () => { this.pluginAddOpen = !this.pluginAddOpen; this.render(); }, 'add', Codicon.add);
+		this.button(hd,
+			this.pluginAddOpen ? localize('clawdius.control.plugins.addCancel', "Cancel") : localize('clawdius.control.plugins.addBtn', "Add plugin"),
+			() => { this.pluginAddOpen = !this.pluginAddOpen; this.render(); },
+			this.pluginAddOpen ? 'ghost' : 'add',
+			this.pluginAddOpen ? Codicon.close : Codicon.add);
 
 		if (this.pluginAddOpen) { this.renderPluginAddPanel(block); }
 
@@ -2234,7 +2238,11 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const hd = append(block, h('.clawdius-control-bar'));
 		append(hd, h('.clawdius-control-block-title')).textContent = localize('clawdius.control.plugins.marketplacesTitle', "Marketplaces");
 		append(hd, h('.clawdius-control-spacer'));
-		this.button(hd, localize('clawdius.control.plugins.marketplaceAddBtn', "Add marketplace"), () => { this.marketplaceAddOpen = !this.marketplaceAddOpen; this.render(); }, 'add', Codicon.add);
+		this.button(hd,
+			this.marketplaceAddOpen ? localize('clawdius.control.plugins.marketplaceAddCancel', "Cancel") : localize('clawdius.control.plugins.marketplaceAddBtn', "Add marketplace"),
+			() => { this.marketplaceAddOpen = !this.marketplaceAddOpen; this.render(); },
+			this.marketplaceAddOpen ? 'ghost' : 'add',
+			this.marketplaceAddOpen ? Codicon.close : Codicon.add);
 
 		if (this.marketplaceAddOpen) {
 			const wrap = append(block, h('.clawdius-control-mcp-addform'));

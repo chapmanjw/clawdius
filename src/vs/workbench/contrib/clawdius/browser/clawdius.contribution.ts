@@ -90,9 +90,10 @@ class ClaudeControlCenterInputSerializer implements IEditorSerializer {
 	deserialize(): EditorInput { return ClaudeControlCenterInput.instance; }
 }
 
-// Opens (or reveals) the interactive Control Center (Usage / Permissions / Skills / ... tabs). An optional first
-// argument selects which tab to land on (default: Permissions). Reachable from the gear on the Permissions
-// config section title, the bottom-left Account button, the usage status-bar widget, and the command palette.
+// Opens (or reveals) the interactive Control Center. An optional first argument selects which tab to land on;
+// with none it stays on the editor's default (Usage). The account button + usage status-bar widget pass
+// 'usage'; the Permissions config-section gear opens via OpenControlCenterPermissionsAction (passes
+// 'permissions'); the command palette passes nothing.
 class OpenClaudeControlCenterAction extends Action2 {
 	constructor() {
 		super({
@@ -101,22 +102,42 @@ class OpenClaudeControlCenterAction extends Action2 {
 			category: localize2('clawdius.category', "Clawdius"),
 			icon: Codicon.settingsGear,
 			f1: true,
-			menu: [{ id: MenuId.ViewTitle, when: ContextKeyExpr.equals('view', sectionViewId(ConfigSection.Permissions)), group: 'navigation', order: 0 }],
 		});
 	}
 	override async run(accessor: ServicesAccessor, tab?: ControlTab): Promise<void> {
 		// IMPORTANT: resolve services BEFORE the first await (a ServicesAccessor is only valid synchronously).
 		const editorService = accessor.get(IEditorService);
 		const commandService = accessor.get(ICommandService);
+		// Guard the arg: a menu invocation can pass its own context object as the first arg, which must never be
+		// mistaken for a tab.
+		const target: ControlTab | undefined = typeof tab === 'string' ? tab : undefined;
 		// Opening on the Usage tab is a user-initiated moment to refresh live capacity (the sole allowed egress
 		// for the usage surface), so the bars are current before the view reads the local cache. This runs only on
 		// explicit open - a workbench restore never invokes this action - so startup stays zero-egress.
-		if (tab === 'usage') {
+		if (target === 'usage') {
 			try { await commandService.executeCommand(REFRESH_CAPACITY_COMMAND_ID); } catch { /* offline / extension inactive - show cached */ }
 		}
 		const pane = await editorService.openEditor(ClaudeControlCenterInput.instance, { pinned: true, revealIfOpened: true });
 		// Land on the requested tab. Done after open (not via input state) so it also switches an already-open pane.
-		if (tab && pane instanceof ClaudeControlCenterEditor) { pane.showTab(tab); }
+		if (target && pane instanceof ClaudeControlCenterEditor) { pane.showTab(target); }
+	}
+}
+
+// The gear on the Permissions config-section title: opens the Control Center directly on its Permissions tab
+// (its contextual home), rather than the default Usage tab. A thin wrapper so the fixed tab arg is explicit.
+class OpenControlCenterPermissionsAction extends Action2 {
+	constructor() {
+		super({
+			id: 'clawdius.openControlCenterPermissions',
+			title: localize2('clawdius.control.openPermissionsCmd', "Manage Permissions"),
+			category: localize2('clawdius.category', "Clawdius"),
+			icon: Codicon.settingsGear,
+			f1: false,
+			menu: [{ id: MenuId.ViewTitle, when: ContextKeyExpr.equals('view', sectionViewId(ConfigSection.Permissions)), group: 'navigation', order: 0 }],
+		});
+	}
+	override async run(accessor: ServicesAccessor): Promise<void> {
+		await accessor.get(ICommandService).executeCommand(OPEN_CONTROL_CENTER_COMMAND_ID, 'permissions');
 	}
 }
 
@@ -220,6 +241,7 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	);
 	Registry.as<IEditorFactoryRegistry>(EditorExtensions.EditorFactory).registerEditorSerializer(ClaudeControlCenterInput.ID, ClaudeControlCenterInputSerializer);
 	registerAction2(OpenClaudeControlCenterAction);
+	registerAction2(OpenControlCenterPermissionsAction);
 
 	// Manage-gear "Check for Updates..." -> opens the Clawdius releases page (no auto-update server yet).
 	registerAction2(ClawdiusCheckForUpdatesAction);

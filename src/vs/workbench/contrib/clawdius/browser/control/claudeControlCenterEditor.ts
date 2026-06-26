@@ -85,7 +85,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	private readonly toastTimer = this._register(new MutableDisposable());
 
 	private scope: ControlScope = 'global';
-	private tab: ControlTab = 'permissions';
+	private tab: ControlTab = 'usage';
 	private snapshot: Snapshot | undefined;
 	/** The Usage tab hosts the shared usage dashboard view; kept alive only while that tab is showing. */
 	private readonly usageView = this._register(new MutableDisposable<ClaudeUsageDashboardView>());

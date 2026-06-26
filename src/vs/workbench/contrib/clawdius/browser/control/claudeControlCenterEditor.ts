@@ -59,7 +59,7 @@ import {
 	ControlScope, PermissionIntent, classifySettings, invertIntent, planPermissionIntent, resolvePermissionsSettingsUri,
 } from './claudeControlCenterData.js';
 import {
-	ISkillsState, SkillOverride, disableBundledSkillsWrite, parseSkills, skillOverrideWrite,
+	ISkillsState, PluginState, SkillOverride, disableBundledSkillsWrite, parseSkills, pluginEnabledWrite, skillOverrideWrite,
 } from './claudeControlTabsModel.js';
 import { ISkillIssue, ISkillValidation, validateSkillPackage } from './claudeSkillValidationModel.js';
 import { basename, isEqual, isEqualOrParent } from '../../../../../base/common/resources.js';
@@ -163,7 +163,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 				this.skillFilesLoading.clear();
 				this.expandedSkillDirs.clear();
 			}
-			if (this.adding?.mode === 'mcp' || this.tab === 'skills') { this.render(); }
+			if (this.adding?.mode === 'mcp' || this.tab === 'skills' || this.tab === 'plugins') { this.render(); }
 		}));
 	}
 
@@ -341,6 +341,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			case 'usage': this.renderUsageTab(inner); break;
 			case 'permissions': this.renderPermissionsTab(inner); break;
 			case 'skills': this.renderSkillsTab(inner); break;
+			case 'plugins': this.renderPluginsTab(inner); break;
 			default: this.renderPermissionsTab(inner); break;
 		}
 	}
@@ -364,7 +365,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			{ tab: 'permissions', label: localize('clawdius.control.tab.permissions', "Permissions"), ready: true },
 			{ tab: 'mcp', label: localize('clawdius.control.tab.mcp', "MCP"), ready: false },
 			{ tab: 'skills', label: localize('clawdius.control.tab.skills', "Skills"), ready: true },
-			{ tab: 'plugins', label: localize('clawdius.control.tab.plugins', "Plugins"), ready: false },
+			{ tab: 'plugins', label: localize('clawdius.control.tab.plugins', "Plugins"), ready: true },
 			{ tab: 'hooks', label: localize('clawdius.control.tab.hooks', "Hooks"), ready: false },
 		];
 		for (const def of tabs) {
@@ -1281,6 +1282,62 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		append(track, h('span.clawdius-control-toggle-thumb'));
 		append(toggle, h('span.clawdius-control-toggle-text')).textContent = value ? localize('clawdius.control.toggleOn', "On") : localize('clawdius.control.toggleOff', "Off");
 		this.renderStore.add(addDisposableListener(toggle, EventType.CLICK, () => onChange(!value)));
+	}
+
+	// --- Plugins tab ---
+
+	private renderPluginsTab(parent: HTMLElement): void {
+		this.renderHero(parent,
+			localize('clawdius.control.plugins.title', "Plugins"),
+			localize('clawdius.control.plugins.sub', "Enable or disable installed Claude Code plugins. Plugins apply globally - writes enabledPlugins to ~/.claude/settings.json."));
+		const block = this.block(parent, localize('clawdius.control.plugins.listTitle', "Installed plugins"));
+		const plugins = this.collectPlugins();
+		if (plugins.length === 0) {
+			append(block, h('.clawdius-control-empty')).textContent = localize('clawdius.control.plugins.none', "No plugins installed. Install plugins with the Claude Code CLI (claude plugin install).");
+			return;
+		}
+		for (const plugin of plugins) { this.renderPluginRow(block, plugin); }
+	}
+
+	/** Installed + configured plugins from the scanned config (global; the CLI scopes plugins globally). */
+	private collectPlugins(): { id: string; status: string }[] {
+		const map = new Map<string, string>();
+		for (const scope of this.configService.snapshot.scopes) {
+			for (const sec of scope.sections) {
+				if (sec.section !== ConfigSection.Plugins) { continue; }
+				for (const item of sec.items) { map.set(item.label, item.description ?? 'installed'); }
+			}
+		}
+		return [...map.entries()].map(([id, status]) => ({ id, status })).sort((a, b) => a.id.localeCompare(b.id));
+	}
+
+	private renderPluginRow(parent: HTMLElement, plugin: { id: string; status: string }): void {
+		// Plugin ids are `plugin-id@marketplace-id`; show the plugin name with the marketplace + status as the hint.
+		const at = plugin.id.indexOf('@');
+		const name = at > 0 ? plugin.id.slice(0, at) : plugin.id;
+		const marketplace = at > 0 ? plugin.id.slice(at + 1) : undefined;
+		const statusLabel = this.pluginStatusLabel(plugin.status);
+		const hint = marketplace ? localize('clawdius.control.plugins.fromStatus', "{0} - {1}", marketplace, statusLabel) : statusLabel;
+		// 'installed' (no explicit enabledPlugins entry) and 'enabled' both read as on; only 'disabled' is off.
+		this.renderToggleRow(parent, name, hint, plugin.status !== 'disabled', next => void this.setPluginEnabled(plugin.id, next));
+	}
+
+	private pluginStatusLabel(status: string): string {
+		switch (status) {
+			case 'enabled': return localize('clawdius.control.plugins.statusEnabled', "enabled");
+			case 'disabled': return localize('clawdius.control.plugins.statusDisabled', "disabled");
+			default: return localize('clawdius.control.plugins.statusInstalled', "installed");
+		}
+	}
+
+	private async setPluginEnabled(id: string, enabled: boolean): Promise<void> {
+		const uri = await this.scopeUri('global'); // plugins are a global concept in the CLI
+		if (!uri) { return; }
+		const next: PluginState = enabled ? 'on' : 'off';
+		const prev: PluginState = enabled ? 'off' : 'on';
+		await this.writeSettingsAtUri(uri, [pluginEnabledWrite(id, next)],
+			enabled ? localize('clawdius.control.plugins.toastOn', "Enabled \"{0}\"", id) : localize('clawdius.control.plugins.toastOff', "Disabled \"{0}\"", id),
+			() => void this.writeSettingsAtUri(uri, [pluginEnabledWrite(id, prev)], localize('clawdius.control.plugins.undo', "Reverted \"{0}\"", id)));
 	}
 
 	private toast(message: string, onUndo?: () => void): void {

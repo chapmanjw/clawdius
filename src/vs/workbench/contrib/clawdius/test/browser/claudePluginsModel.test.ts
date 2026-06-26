@@ -32,18 +32,18 @@ suite('claudePluginsModel', () => {
 		assert.deepStrictEqual(parseKnownMarketplaces([1, 2]), []);
 	});
 
-	test('parseMarketplaceCatalog: id composition, author object vs string, skip nameless + junk', () => {
+	test('parseMarketplaceCatalog: id composition, author object vs string, homepage http(s)-only, skip nameless + junk', () => {
 		const result = parseMarketplaceCatalog({
 			name: 'mp', plugins: [
-				{ name: 'fmt', description: 'Formatter', author: { name: 'Ada' }, category: 'tools' },
-				{ name: 'lint', author: 'Grace' },
+				{ name: 'fmt', description: 'Formatter', author: { name: 'Ada' }, category: 'tools', homepage: 'https://fmt.example' },
+				{ name: 'lint', author: 'Grace', homepage: 'ftp://nope' },
 				{ description: 'no name - skipped' },
 				'not-an-object',
 			],
 		}, 'mp');
 		assert.deepStrictEqual(result, [
-			{ id: 'fmt@mp', name: 'fmt', marketplace: 'mp', description: 'Formatter', author: 'Ada', category: 'tools' },
-			{ id: 'lint@mp', name: 'lint', marketplace: 'mp', description: undefined, author: 'Grace', category: undefined },
+			{ id: 'fmt@mp', name: 'fmt', marketplace: 'mp', description: 'Formatter', author: 'Ada', category: 'tools', homepage: 'https://fmt.example' },
+			{ id: 'lint@mp', name: 'lint', marketplace: 'mp', description: undefined, author: 'Grace', category: undefined, homepage: undefined },
 		]);
 		assert.deepStrictEqual(parseMarketplaceCatalog({ plugins: 'nope' }, 'mp'), []);
 		assert.deepStrictEqual(parseMarketplaceCatalog(undefined, 'mp'), []);

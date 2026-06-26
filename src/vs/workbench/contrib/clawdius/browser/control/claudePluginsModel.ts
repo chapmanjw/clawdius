@@ -27,6 +27,7 @@ export interface ICatalogPlugin {
 	readonly description?: string;
 	readonly author?: string;
 	readonly category?: string;
+	readonly homepage?: string;
 }
 
 /** One locally installed plugin (a key in installed_plugins.json). */
@@ -68,6 +69,13 @@ function catalogAuthor(author: unknown): string | undefined {
 	return undefined;
 }
 
+/** A string that is an http(s) URL, else undefined. Keeps non-web / junk homepages out of the UI (and out of any
+ *  opener call). */
+function webUrl(value: unknown): string | undefined {
+	const s = nonEmptyString(value);
+	return s && (s.startsWith('http://') || s.startsWith('https://')) ? s : undefined;
+}
+
 /** Parse known_marketplaces.json into a sorted-by-name list. Each key is a marketplace name. */
 export function parseKnownMarketplaces(json: unknown): IMarketplace[] {
 	if (!isRecord(json)) { return []; }
@@ -99,6 +107,7 @@ export function parseMarketplaceCatalog(json: unknown, marketplaceName: string):
 			description: nonEmptyString(raw['description']),
 			author: catalogAuthor(raw['author']),
 			category: nonEmptyString(raw['category']),
+			homepage: webUrl(raw['homepage']),
 		});
 	}
 	return out;

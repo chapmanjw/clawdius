@@ -32,6 +32,7 @@ import { URI } from '../../../../../base/common/uri.js';
 import { localize } from '../../../../../nls.js';
 import { ConfigurationTarget, IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
+import { IOpenerService } from '../../../../../platform/opener/common/opener.js';
 import { IHoverService } from '../../../../../platform/hover/browser/hover.js';
 import { INotificationService } from '../../../../../platform/notification/common/notification.js';
 import { IQuickInputService } from '../../../../../platform/quickinput/common/quickInput.js';
@@ -193,6 +194,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		@IThemeService themeService: IThemeService,
 		@IStorageService storageService: IStorageService,
 		@IFileService private readonly fileService: IFileService,
+		@IOpenerService private readonly openerService: IOpenerService,
 		@IPathService private readonly pathService: IPathService,
 		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService,
 		@IJSONEditingService private readonly jsonEditing: IJSONEditingService,
@@ -1388,11 +1390,17 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		append(info, h('.clawdius-control-cap-name')).textContent = label;
 		append(info, h('.clawdius-control-cap-desc')).textContent = hint;
 		append(row, h('.clawdius-control-spacer'));
-		const toggle = append(row, h('button.clawdius-control-toggle')) as HTMLButtonElement;
+		this.appendToggle(row, value, label, onChange);
+	}
+
+	/** Append an On/Off switch control to a row. Shared by renderToggleRow and the catalog rows (which carry extra
+	 *  actions next to the switch). */
+	private appendToggle(parent: HTMLElement, value: boolean, ariaLabel: string, onChange: (next: boolean) => void): void {
+		const toggle = append(parent, h('button.clawdius-control-toggle')) as HTMLButtonElement;
 		if (value) { toggle.classList.add('on'); }
 		toggle.setAttribute('role', 'switch');
 		toggle.setAttribute('aria-checked', value ? 'true' : 'false');
-		toggle.setAttribute('aria-label', label);
+		toggle.setAttribute('aria-label', ariaLabel);
 		const track = append(toggle, h('span.clawdius-control-toggle-track'));
 		append(track, h('span.clawdius-control-toggle-thumb'));
 		append(toggle, h('span.clawdius-control-toggle-text')).textContent = value ? localize('clawdius.control.toggleOn', "On") : localize('clawdius.control.toggleOff', "Off");
@@ -2245,6 +2253,13 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		if (this.tab === 'plugins') { this.render(); }
 	}
 
+	/** Re-read the local plugin sources (e.g. after a `claude plugin marketplace update` in the terminal). Keeps the
+	 *  current data visible until the fresh read lands (no Loading flash). */
+	private refreshPluginsData(): void {
+		this.pluginsLoaded = false;
+		void this.loadPluginsData();
+	}
+
 	/** Read + JSON.parse a local file, or undefined if it is missing / unreadable / not valid JSON. */
 	private async readJson(uri: URI): Promise<unknown> {
 		const raw = await this.readRaw(uri);
@@ -2262,6 +2277,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const hd = append(block, h('.clawdius-control-bar'));
 		append(hd, h('.clawdius-control-block-title')).textContent = localize('clawdius.control.plugins.marketplacesTitle', "Marketplaces");
 		append(hd, h('.clawdius-control-spacer'));
+		this.button(hd, localize('clawdius.control.plugins.refresh', "Refresh"), () => this.refreshPluginsData(), 'ghost', Codicon.refresh);
 		this.button(hd,
 			this.marketplaceAddOpen ? localize('clawdius.control.plugins.marketplaceAddCancel', "Cancel") : localize('clawdius.control.plugins.marketplaceAddBtn', "Add marketplace"),
 			() => { this.marketplaceAddOpen = !this.marketplaceAddOpen; this.render(); },
@@ -2406,13 +2422,9 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		}
 	}
 
-	/** A single catalog plugin. Installed plugins reuse the enable/disable toggle (on = installed and not explicitly
-	 *  disabled in enabledPlugins); not-installed plugins get an Install button that hands off to a terminal. */
+	/** A single catalog plugin: name + category + author + description, then actions - an optional Homepage link, a
+	 *  Details hand-off, and either the enable/disable toggle (installed) or an Install hand-off (not installed). */
 	private renderCatalogRow(parent: HTMLElement, plugin: ICatalogPlugin, installed: boolean, status: string | undefined): void {
-		if (installed) {
-			this.renderToggleRow(parent, plugin.name, this.catalogHint(plugin), status !== 'disabled', next => void this.setPluginEnabled(plugin.id, next));
-			return;
-		}
 		const row = append(parent, h('.clawdius-control-caprow'));
 		const info = append(row, h('.clawdius-control-cap-info'));
 		const nameEl = append(info, h('.clawdius-control-cap-name'));
@@ -2422,18 +2434,34 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const desc = this.truncate(plugin.description, 160);
 		if (desc) { append(info, h('.clawdius-control-cap-desc')).textContent = desc; }
 		append(row, h('.clawdius-control-spacer'));
-		this.button(row, localize('clawdius.control.plugins.installBtn', "Install"), () => void this.installCatalogPlugin(plugin.id), 'primary', Codicon.cloudDownload);
+		if (plugin.homepage) {
+			const homepage = plugin.homepage;
+			this.iconButton(row, Codicon.linkExternal, localize('clawdius.control.plugins.homepage', "Open homepage"), () => void this.openPluginHomepage(homepage));
+		}
+		this.iconButton(row, Codicon.info, localize('clawdius.control.plugins.details', "Show details in terminal"), () => void this.pluginDetailsInTerminal(plugin.id));
+		if (installed) {
+			this.appendToggle(row, status !== 'disabled', plugin.name, next => void this.setPluginEnabled(plugin.id, next));
+		} else {
+			this.button(row, localize('clawdius.control.plugins.installBtn', "Install"), () => void this.installCatalogPlugin(plugin.id), 'primary', Codicon.cloudDownload);
+		}
 	}
 
-	/** The one-line hint for an installed catalog plugin's toggle row: optional category + author, optional truncated
-	 *  description. The marketplace is omitted - it is shown on the group header the row sits under. */
-	private catalogHint(plugin: ICatalogPlugin): string {
-		const meta = plugin.category && plugin.author
-			? localize('clawdius.control.plugins.metaCatAuthor', "{0} - by {1}", plugin.category, plugin.author)
-			: plugin.category ?? (plugin.author ? localize('clawdius.control.plugins.byAuthor', "by {0}", plugin.author) : '');
-		const desc = this.truncate(plugin.description, 120);
-		if (meta && desc) { return localize('clawdius.control.plugins.metaDesc', "{0} - {1}", meta, desc); }
-		return desc ?? meta ?? plugin.marketplace;
+	/** Open a plugin's homepage in the external browser. Only http(s) URLs reach here (the catalog parser drops the
+	 *  rest), but re-check the scheme before handing it to the opener. */
+	private async openPluginHomepage(url: string): Promise<void> {
+		let uri: URI;
+		try { uri = URI.parse(url, true); } catch { return; }
+		if (uri.scheme !== 'http' && uri.scheme !== 'https') {
+			this.toast(localize('clawdius.control.plugins.badHomepage', "That plugin's homepage isn't a web link."));
+			return;
+		}
+		await this.openerService.open(uri, { openExternal: true });
+	}
+
+	/** Show a plugin's component inventory + projected token cost via the CLI in a terminal (gated on PLUGIN_ID_RE). */
+	private async pluginDetailsInTerminal(id: string): Promise<void> {
+		if (!PLUGIN_ID_RE.test(id)) { this.toast(localize('clawdius.control.plugins.badId', "Enter a plugin id as plugin-id@marketplace-id.")); return; }
+		await this.sendClaudeCommandToTerminal(`claude plugin details ${id}`);
 	}
 
 	/** Trim + cap free text for display, appending an ellipsis when cut. Empty / missing text returns undefined. */

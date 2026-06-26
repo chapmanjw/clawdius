@@ -605,10 +605,15 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		append(name, h('span')).textContent = meta.label;
 		append(head, h('span.clawdius-control-bk-cnt')).textContent = String(rules.length);
 		append(head, h('.clawdius-control-spacer'));
-		this.button(head, localize('clawdius.control.addRule', "Add rule"), () => {
-			this.adding = { bucket: meta.bucket, mode: 'builtin', builtinTool: '', builtinSpec: '', server: '', mcpSelect: '', mcpTool: '', mcpLoading: false, mcpLoadedServer: '', mcpLoadedTools: [], mcpLoadMessage: '', text: '' };
-			this.render();
-		}, 'add', Codicon.add);
+		const addRuleOpen = this.adding?.bucket === meta.bucket;
+		this.button(head,
+			addRuleOpen ? localize('clawdius.control.cancel', "Cancel") : localize('clawdius.control.addRule', "Add rule"),
+			() => {
+				this.adding = addRuleOpen ? undefined : { bucket: meta.bucket, mode: 'builtin', builtinTool: '', builtinSpec: '', server: '', mcpSelect: '', mcpTool: '', mcpLoading: false, mcpLoadedServer: '', mcpLoadedTools: [], mcpLoadMessage: '', text: '' };
+				this.render();
+			},
+			addRuleOpen ? 'ghost' : 'add',
+			addRuleOpen ? Codicon.close : Codicon.add);
 
 		if (rules.length === 0 && this.adding?.bucket !== meta.bucket) {
 			append(bucket, h('.clawdius-control-emptyrule')).textContent = localize('clawdius.control.noRules', "No rules here yet.");
@@ -1089,10 +1094,15 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const fhd = append(panel, h('.clawdius-control-bar'));
 		append(fhd, h('.clawdius-control-skill-files-title')).textContent = localize('clawdius.control.skills.files', "Files");
 		append(fhd, h('.clawdius-control-spacer'));
-		this.button(fhd, localize('clawdius.control.skills.newFile', "New file"), () => {
-			this.skillFileForm = { folderPath: folder.fsPath, target: '', name: '' };
-			this.render();
-		}, 'add', Codicon.add);
+		const newFileOpen = this.skillFileForm?.folderPath === folder.fsPath;
+		this.button(fhd,
+			newFileOpen ? localize('clawdius.control.cancel', "Cancel") : localize('clawdius.control.skills.newFile', "New file"),
+			() => {
+				this.skillFileForm = newFileOpen ? undefined : { folderPath: folder.fsPath, target: '', name: '' };
+				this.render();
+			},
+			newFileOpen ? 'ghost' : 'add',
+			newFileOpen ? Codicon.close : Codicon.add);
 
 		const files = this.skillFiles.get(folder.fsPath);
 		if (!files) {
@@ -1495,7 +1505,12 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const ghd = append(gblock, h('.clawdius-control-bar'));
 		append(ghd, h('.clawdius-control-block-title')).textContent = localize('clawdius.control.mcp.globalTitle', "Global MCP servers");
 		append(ghd, h('.clawdius-control-spacer'));
-		this.button(ghd, localize('clawdius.control.mcp.newServer', "New server"), () => this.openMcpAddForm('global'), 'add', Codicon.add);
+		const gAddOpen = this.mcpForm?.scope === 'global' && this.mcpForm.mode === 'add';
+		this.button(ghd,
+			gAddOpen ? localize('clawdius.control.cancel', "Cancel") : localize('clawdius.control.mcp.newServer', "New server"),
+			() => { if (gAddOpen) { this.mcpForm = undefined; this.render(); } else { this.openMcpAddForm('global'); } },
+			gAddOpen ? 'ghost' : 'add',
+			gAddOpen ? Codicon.close : Codicon.add);
 		append(gblock, h('.clawdius-control-scope-hint')).textContent = localize('clawdius.control.mcp.globalNote', "Defined in ~/.claude.json. Always available - inspect them and set per-tool permissions.");
 		if (this.mcpForm?.scope === 'global' && this.mcpForm.mode === 'add') { this.renderMcpForm(gblock); }
 		if (globalServers.length === 0) {
@@ -1510,7 +1525,14 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			const phd = append(pblock, h('.clawdius-control-bar'));
 			append(phd, h('.clawdius-control-block-title')).textContent = localize('clawdius.control.mcp.projectTitle', "Project MCP servers");
 			append(phd, h('.clawdius-control-spacer'));
-			if (hasWorkspace) { this.button(phd, localize('clawdius.control.mcp.newServer', "New server"), () => this.openMcpAddForm('project'), 'add', Codicon.add); }
+			if (hasWorkspace) {
+				const pAddOpen = this.mcpForm?.scope === 'project' && this.mcpForm.mode === 'add';
+				this.button(phd,
+					pAddOpen ? localize('clawdius.control.cancel', "Cancel") : localize('clawdius.control.mcp.newServer', "New server"),
+					() => { if (pAddOpen) { this.mcpForm = undefined; this.render(); } else { this.openMcpAddForm('project'); } },
+					pAddOpen ? 'ghost' : 'add',
+					pAddOpen ? Codicon.close : Codicon.add);
+			}
 			append(pblock, h('.clawdius-control-scope-hint')).textContent = localize('clawdius.control.mcp.projectNote', "Defined in this project's .mcp.json. Approve or reject which ones Claude may use.");
 			this.renderToggleRow(pblock,
 				localize('clawdius.control.mcp.enableAll', "Approve all project MCP servers"),

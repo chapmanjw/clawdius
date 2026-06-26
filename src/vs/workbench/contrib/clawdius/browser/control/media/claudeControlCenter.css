@@ -230,6 +230,47 @@ block titles, brand orange (#d97757) accents, lavender (#a78bfa) highlights, and
 .clawdius-control-toggle.on .clawdius-control-toggle-thumb { left: 18px; opacity: 1; background: #241008; }
 .clawdius-control-toggle-text { font-size: 11px; opacity: 0.7; min-width: 20px; text-align: left; }
 
+/* Skills package: expand chevron, spec-validation badge, and the expanded file/validation panel */
+.clawdius-control-skill-chevron { padding: 2px 4px; }
+.clawdius-control-skill-chevron-spacer { width: 26px; flex: none; }
+
+.clawdius-control-skill-badge {
+	display: inline-flex; align-items: center; gap: 4px; font-size: 9px; text-transform: uppercase;
+	letter-spacing: 0.05em; border-radius: 4px; padding: 1px 6px; flex: none;
+}
+.clawdius-control-skill-badge-ico { font-size: 11px; }
+.clawdius-control-skill-badge.checking { background: rgba(127, 127, 127, 0.15); color: var(--vscode-descriptionForeground); }
+.clawdius-control-skill-badge.ok { background: rgba(108, 186, 106, 0.14); color: #6cba6a; }
+.clawdius-control-skill-badge.warn { background: rgba(227, 179, 65, 0.14); color: #e3b341; }
+.clawdius-control-skill-badge.err { background: rgba(240, 109, 104, 0.14); color: #f06d68; }
+
+.clawdius-control-skill-panel {
+	display: flex; flex-direction: column; gap: 12px; margin: -4px 0 6px 30px; padding: 12px 14px;
+	border: 1px solid var(--vscode-widget-border, rgba(127, 127, 127, 0.25)); border-radius: 9px;
+	background: var(--vscode-editorWidget-background, rgba(127, 127, 127, 0.04));
+}
+.clawdius-control-skill-issues { display: flex; flex-direction: column; gap: 5px; }
+.clawdius-control-skill-issue { display: flex; align-items: flex-start; gap: 7px; font-size: 12px; }
+.clawdius-control-skill-issue-ico { font-size: 13px; margin-top: 1px; flex: none; }
+.clawdius-control-skill-issue.error { color: #e7a6a3; }
+.clawdius-control-skill-issue.error .clawdius-control-skill-issue-ico { color: #f06d68; }
+.clawdius-control-skill-issue.warning { color: #e3c48f; }
+.clawdius-control-skill-issue.warning .clawdius-control-skill-issue-ico { color: #e3b341; }
+.clawdius-control-skill-allgood { font-size: 12px; color: #6cba6a; }
+
+.clawdius-control-skill-files-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: #d97757; }
+.clawdius-control-skill-loading, .clawdius-control-skill-emptyfiles { font-size: 12px; opacity: 0.55; }
+.clawdius-control-skill-filelist { display: flex; flex-direction: column; }
+.clawdius-control-skill-file { display: flex; align-items: center; gap: 8px; padding: 4px; font-size: 12px; border-top: 1px solid var(--vscode-panel-border); }
+.clawdius-control-skill-file:first-child { border-top: none; }
+.clawdius-control-skill-file.dir { opacity: 0.7; font-weight: 600; }
+.clawdius-control-skill-file-ico { font-size: 13px; opacity: 0.8; }
+.clawdius-control-skill-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clawdius-control-skill-file .clawdius-control-cap-acts { opacity: 0; transition: opacity 0.1s; }
+.clawdius-control-skill-file:hover .clawdius-control-cap-acts,
+.clawdius-control-skill-file:focus-within .clawdius-control-cap-acts { opacity: 1; }
+.clawdius-control-skill-newfile { padding-top: 2px; }
+
 /* keyboard focus rings */
 .clawdius-control button:focus-visible,
 .clawdius-control input:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }

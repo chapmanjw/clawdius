@@ -61,6 +61,9 @@ import {
 import {
 	ISkillsState, SkillOverride, disableBundledSkillsWrite, parseSkills, skillOverrideWrite,
 } from './claudeControlTabsModel.js';
+import { ISkillIssue, ISkillValidation, validateSkillPackage } from './claudeSkillValidationModel.js';
+import { basename, isEqual, isEqualOrParent } from '../../../../../base/common/resources.js';
+import { IDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
 
 type Snapshot =
 	| { readonly kind: 'ok'; readonly uri: URI; readonly settings: Record<string, unknown> }
@@ -71,6 +74,8 @@ interface IScopeMeta { readonly scope: ControlScope; readonly label: string; rea
 interface IBucketMeta { readonly bucket: PermissionBucket; readonly label: string }
 /** One row in the Skills tab: a skill name, its origins, and the backing config item(s) for Open / Delete. */
 interface ISkillRow { readonly name: string; readonly description?: string; readonly origins: string[]; readonly items: IConfigItem[] }
+/** A file inside an expanded skill package (the skill folder + one level into its subdirectories). */
+interface ISkillFileEntry { readonly name: string; readonly resource: URI; readonly isDirectory: boolean; readonly relPath: string; readonly isSkillMd: boolean }
 type BtnVariant = 'primary' | 'ghost' | 'link' | 'danger' | 'add';
 
 export class ClaudeControlCenterEditor extends EditorPane {
@@ -89,6 +94,17 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	private snapshot: Snapshot | undefined;
 	/** The Usage tab hosts the shared usage dashboard view; kept alive only while that tab is showing. */
 	private readonly usageView = this._register(new MutableDisposable<ClaudeUsageDashboardView>());
+
+	// Skills tab package state (keyed by the skill folder fsPath). Caches are cleared on a config change; the
+	// generation counter bumps on every clear so a slower in-flight read never writes a stale result back.
+	private expandedSkill: string | undefined;
+	private skillsGeneration = 0;
+	private isPaneDisposed = false;
+	private readonly skillValidations = new Map<string, ISkillValidation>();
+	private readonly skillValidating = new Set<string>();
+	private readonly skillFiles = new Map<string, readonly ISkillFileEntry[]>();
+	private readonly skillFilesLoading = new Set<string>();
+	private skillFileForm: { folderPath: string; target: string; name: string } | undefined;
 	/**
 	 * An open inline add-rule editor. Three modes (codex classification): 'builtin' = a Claude built-in tool
 	 * (dropdown + optional specifier); 'mcp' = an MCP server tool (server dropdown + (All tools) / specific
@@ -124,6 +140,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		@IClawdiusConfigService private readonly configService: IClawdiusConfigService,
 		@IAgentHostService private readonly agentHostService: IAgentHostService,
 		@ICommandService private readonly commandService: ICommandService,
+		@IDialogService private readonly dialogService: IDialogService,
 	) {
 		super(ClaudeControlCenterEditor.ID, group, telemetryService, themeService, storageService);
 		// Re-render when the default-mode setting changes anywhere (e.g. the status-bar pill), so the two stay
@@ -133,8 +150,16 @@ export class ClaudeControlCenterEditor extends EditorPane {
 				this.render();
 			}
 		}));
-		// Refresh when the scanned config changes: the MCP add box's server dropdown, or the Skills list.
+		// Refresh when the scanned config changes: the MCP add box's server dropdown, or the Skills list. A skill
+		// folder may have changed on disk, so drop the per-skill validation + file caches (they re-read lazily).
 		this._register(this.configService.onDidChange(() => {
+			if (this.tab === 'skills') {
+				this.skillsGeneration++;
+				this.skillValidations.clear();
+				this.skillValidating.clear();
+				this.skillFiles.clear();
+				this.skillFilesLoading.clear();
+			}
 			if (this.adding?.mode === 'mcp' || this.tab === 'skills') { this.render(); }
 		}));
 	}
@@ -160,6 +185,12 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		if (this.container) {
 			size(this.container, dimension.width, dimension.height);
 		}
+	}
+
+	override dispose(): void {
+		// Stops late async Skills reads (validation / file lists) from rendering into the torn-down pane.
+		this.isPaneDisposed = true;
+		super.dispose();
 	}
 
 	// --- scope + IO ---
@@ -291,7 +322,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	// --- rendering ---
 
 	private render(): void {
-		if (!this.container) { return; }
+		if (!this.container || this.isPaneDisposed) { return; }
 		this.renderStore.clear();
 		if (!this.content) {
 			this.content = append(this.container, h('.clawdius-control-inner'));
@@ -799,6 +830,9 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			append(block, h('.clawdius-control-empty')).textContent = localize('clawdius.control.skills.none', "No skills yet. Click New Skill to scaffold one, or add a folder under ~/.claude/skills.");
 			return;
 		}
+		// Validate every on-disk skill's SKILL.md off the paint path; the batch re-renders once for the badges.
+		const folders = skills.map(s => this.representativeSkillItem(s)?.targetResource).filter((u): u is URI => !!u);
+		void this.ensureSkillValidations(folders);
 		for (const skill of skills) {
 			this.renderSkillRow(block, skill, state.overrides[skill.name] ?? 'on');
 		}
@@ -843,7 +877,22 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	}
 
 	private renderSkillRow(parent: HTMLElement, skill: ISkillRow, current: SkillOverride): void {
+		const item = this.representativeSkillItem(skill);
+		const folder = item?.targetResource;
+		const expanded = !!folder && this.expandedSkill === folder.fsPath;
+
 		const row = append(parent, h('.clawdius-control-caprow'));
+		// Expand chevron (on-disk skills only - override-only rows have no package to inspect).
+		if (folder) {
+			const chevron = this.iconButton(row,
+				expanded ? Codicon.chevronDown : Codicon.chevronRight,
+				expanded ? localize('clawdius.control.skills.collapse', "Hide files") : localize('clawdius.control.skills.expand', "Show files"),
+				() => this.toggleSkillExpand(folder));
+			chevron.classList.add('clawdius-control-skill-chevron');
+		} else {
+			append(row, h('.clawdius-control-skill-chevron-spacer'));
+		}
+
 		const info = append(row, h('.clawdius-control-cap-info'));
 		const nameEl = append(info, h('.clawdius-control-cap-name'));
 		append(nameEl, h('span')).textContent = skill.name;
@@ -854,17 +903,276 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			origin.classList.add('muted');
 			origin.textContent = localize('clawdius.control.skills.overrideOnly', "override only");
 		}
+		if (folder) { this.renderSkillBadge(nameEl, folder.fsPath); }
 		if (skill.description) {
 			append(info, h('.clawdius-control-cap-desc')).textContent = skill.description;
 		}
 		append(row, h('.clawdius-control-spacer'));
 		this.renderSkillStateControl(row, skill.name, current);
 		const acts = append(row, h('.clawdius-control-cap-acts'));
-		const item = this.representativeSkillItem(skill);
 		if (item) {
 			this.iconButton(acts, Codicon.edit, localize('clawdius.control.skills.open', "Open SKILL.md"), () => void this.openSkill(item));
 			this.iconButton(acts, Codicon.trash, localize('clawdius.control.skills.delete', "Delete skill"), () => void this.deleteSkill(item), true);
 		}
+
+		if (expanded && folder) { this.renderSkillPanel(parent, folder); }
+	}
+
+	/** A compact spec-validation badge for a skill row (from the cache, or 'checking' until the read lands). */
+	private renderSkillBadge(parent: HTMLElement, folderPath: string): void {
+		const v = this.skillValidations.get(folderPath);
+		const badge = append(parent, h('span.clawdius-control-skill-badge'));
+		if (!v) {
+			badge.classList.add('checking');
+			append(badge, h('span')).textContent = localize('clawdius.control.skills.checking', "checking");
+			return;
+		}
+		const icon = (codicon: ThemeIcon) => append(badge, h('span.clawdius-control-skill-badge-ico')).classList.add(...ThemeIcon.asClassNameArray(codicon));
+		if (v.errors.length > 0) {
+			badge.classList.add('err'); icon(Codicon.error);
+			append(badge, h('span')).textContent = v.errors.length === 1 ? localize('clawdius.control.skills.oneError', "1 error") : localize('clawdius.control.skills.nErrors', "{0} errors", v.errors.length);
+		} else if (v.warnings.length > 0) {
+			badge.classList.add('warn'); icon(Codicon.warning);
+			append(badge, h('span')).textContent = v.warnings.length === 1 ? localize('clawdius.control.skills.oneWarning', "1 warning") : localize('clawdius.control.skills.nWarnings', "{0} warnings", v.warnings.length);
+		} else {
+			badge.classList.add('ok'); icon(Codicon.pass);
+			append(badge, h('span')).textContent = localize('clawdius.control.skills.valid', "valid");
+		}
+	}
+
+	/** Validate every on-disk skill's SKILL.md (off the paint path); re-render once when the batch lands. The
+	 *  generation guard drops results if the caches were cleared (a config change) or the pane was disposed mid
+	 *  read, so a slow read never writes a stale badge back into a now-empty cache. */
+	private async ensureSkillValidations(folders: readonly URI[]): Promise<void> {
+		const todo = folders.filter(f => !this.skillValidations.has(f.fsPath) && !this.skillValidating.has(f.fsPath));
+		if (todo.length === 0) { return; }
+		const gen = this.skillsGeneration;
+		for (const f of todo) { this.skillValidating.add(f.fsPath); }
+		const results = await Promise.all(todo.map(async folder => {
+			let content: string | undefined;
+			try { content = (await this.fileService.readFile(URI.joinPath(folder, 'SKILL.md'))).value.toString(); } catch { content = undefined; }
+			return { key: folder.fsPath, validation: validateSkillPackage({ directoryName: basename(folder), skillMdContent: content }) };
+		}));
+		if (this.isPaneDisposed || gen !== this.skillsGeneration) { return; } // stale: caches were cleared / pane gone
+		for (const r of results) { this.skillValidations.set(r.key, r.validation); }
+		for (const f of todo) { this.skillValidating.delete(f.fsPath); }
+		if (this.tab === 'skills') { this.render(); }
+	}
+
+	private toggleSkillExpand(folder: URI): void {
+		const fp = folder.fsPath;
+		this.expandedSkill = this.expandedSkill === fp ? undefined : fp;
+		this.skillFileForm = undefined;
+		if (this.expandedSkill === fp) { void this.ensureSkillFiles(folder); }
+		this.render();
+	}
+
+	/** The expanded skill package: validation issues, the file list (open/delete), and a new-file form. */
+	private renderSkillPanel(parent: HTMLElement, folder: URI): void {
+		const panel = append(parent, h('.clawdius-control-skill-panel'));
+		const v = this.skillValidations.get(folder.fsPath);
+		if (v && (v.errors.length > 0 || v.warnings.length > 0)) {
+			const issues = append(panel, h('.clawdius-control-skill-issues'));
+			for (const e of v.errors) { this.renderSkillIssue(issues, e); }
+			for (const w of v.warnings) { this.renderSkillIssue(issues, w); }
+		} else if (v) {
+			append(panel, h('.clawdius-control-skill-allgood')).textContent = localize('clawdius.control.skills.allValid', "SKILL.md is valid against the Agent Skills spec.");
+		}
+
+		const fhd = append(panel, h('.clawdius-control-bar'));
+		append(fhd, h('.clawdius-control-skill-files-title')).textContent = localize('clawdius.control.skills.files', "Files");
+		append(fhd, h('.clawdius-control-spacer'));
+		this.button(fhd, localize('clawdius.control.skills.newFile', "New file"), () => {
+			this.skillFileForm = { folderPath: folder.fsPath, target: '', name: '' };
+			this.render();
+		}, 'add', Codicon.add);
+
+		const files = this.skillFiles.get(folder.fsPath);
+		if (!files) {
+			append(panel, h('.clawdius-control-skill-loading')).textContent = localize('clawdius.control.skills.loadingFiles', "Loading files...");
+			void this.ensureSkillFiles(folder); // (re)start the load if the cache was cleared while expanded
+		} else {
+			this.renderSkillFileList(panel, folder, files);
+		}
+		if (this.skillFileForm?.folderPath === folder.fsPath) { this.renderNewFileForm(panel, folder); }
+	}
+
+	private renderSkillIssue(parent: HTMLElement, issue: ISkillIssue): void {
+		const row = append(parent, h(`.clawdius-control-skill-issue.${issue.severity}`));
+		append(row, h('span.clawdius-control-skill-issue-ico')).classList.add(...ThemeIcon.asClassNameArray(issue.severity === 'error' ? Codicon.error : Codicon.warning));
+		append(row, h('span')).textContent = this.skillIssueMessage(issue);
+	}
+
+	/** Map a (localization-free) validation issue code to a localized, user-facing message. */
+	private skillIssueMessage(issue: ISkillIssue): string {
+		switch (issue.code) {
+			case 'missing-skill-md': return localize('clawdius.control.skills.v.missingMd', "Missing or empty SKILL.md.");
+			case 'no-frontmatter': return localize('clawdius.control.skills.v.noFrontmatter', "SKILL.md has no YAML frontmatter (--- ... ---).");
+			case 'name-missing': return localize('clawdius.control.skills.v.nameMissing', "Missing required 'name'.");
+			case 'name-too-long': return localize('clawdius.control.skills.v.nameLong', "'name' exceeds {0} characters.", issue.arg);
+			case 'name-format': return localize('clawdius.control.skills.v.nameFormat', "'name' must be lowercase letters, numbers, and single hyphens (no leading, trailing, or double hyphens).");
+			case 'name-folder-mismatch': return localize('clawdius.control.skills.v.nameDir', "'name' must match the skill folder name '{0}'.", issue.arg);
+			case 'description-missing': return localize('clawdius.control.skills.v.descMissing', "Missing required 'description'.");
+			case 'description-too-long': return localize('clawdius.control.skills.v.descLong', "'description' exceeds {0} characters.", issue.arg);
+			case 'description-short': return localize('clawdius.control.skills.v.descShort', "'description' is very short; describe what the skill does and when to use it.");
+			case 'compatibility-too-long': return localize('clawdius.control.skills.v.compatLong', "'compatibility' exceeds {0} characters.", issue.arg);
+			case 'body-too-long': return localize('clawdius.control.skills.v.bodyLong', "SKILL.md is over {0} lines; consider moving detail into references/.", issue.arg);
+		}
+	}
+
+	private renderSkillFileList(parent: HTMLElement, folder: URI, files: readonly ISkillFileEntry[]): void {
+		if (files.length === 0) {
+			append(parent, h('.clawdius-control-skill-emptyfiles')).textContent = localize('clawdius.control.skills.noFiles', "No files.");
+			return;
+		}
+		const list = append(parent, h('.clawdius-control-skill-filelist'));
+		for (const f of files) {
+			const row = append(list, h('.clawdius-control-skill-file'));
+			if (f.isDirectory) { row.classList.add('dir'); }
+			append(row, h('span.clawdius-control-skill-file-ico')).classList.add(...ThemeIcon.asClassNameArray(f.isDirectory ? Codicon.folder : Codicon.file));
+			append(row, h('span.clawdius-control-skill-file-name')).textContent = f.relPath;
+			append(row, h('.clawdius-control-spacer'));
+			if (!f.isDirectory) {
+				const acts = append(row, h('.clawdius-control-cap-acts'));
+				this.iconButton(acts, Codicon.goToFile, localize('clawdius.control.skills.openFile', "Open"), () => void this.editorService.openEditor({ resource: f.resource, options: { pinned: true } }));
+				if (!f.isSkillMd) {
+					this.iconButton(acts, Codicon.trash, localize('clawdius.control.skills.deleteFile', "Delete file"), () => void this.deleteSkillFile(folder, f), true);
+				}
+			}
+		}
+	}
+
+	private renderNewFileForm(parent: HTMLElement, folder: URI): void {
+		const form = this.skillFileForm;
+		if (!form || form.folderPath !== folder.fsPath) { return; }
+		const wrap = append(parent, h('.clawdius-control-skill-newfile'));
+		const row = append(wrap, h('.clawdius-control-addrow'));
+
+		const targetSel = append(row, h('select.clawdius-control-select')) as HTMLSelectElement;
+		targetSel.setAttribute('aria-label', localize('clawdius.control.skills.targetDir', "Target folder"));
+		for (const t of [
+			{ value: '', label: localize('clawdius.control.skills.targetRoot', "(skill root)") },
+			{ value: 'scripts', label: 'scripts/' },
+			{ value: 'references', label: 'references/' },
+			{ value: 'assets', label: 'assets/' },
+		]) {
+			const o = append(targetSel, h('option')) as HTMLOptionElement;
+			o.value = t.value; o.textContent = t.label;
+			if (t.value === form.target) { o.selected = true; }
+		}
+		this.renderStore.add(addDisposableListener(targetSel, EventType.CHANGE, () => { form.target = targetSel.value; }));
+
+		const input = append(row, h('input.clawdius-control-input')) as HTMLInputElement;
+		input.type = 'text';
+		input.value = form.name;
+		input.placeholder = localize('clawdius.control.skills.fileNamePh', "filename, e.g. REFERENCE.md");
+		input.setAttribute('aria-label', localize('clawdius.control.skills.fileName', "New file name"));
+		this.renderStore.add(addDisposableListener(input, EventType.INPUT, () => { form.name = input.value; }));
+		this.renderStore.add(addDisposableListener(input, EventType.KEY_DOWN, (e: KeyboardEvent) => {
+			if (e.key === 'Enter') { e.preventDefault(); void this.createSkillFile(folder); }
+			else if (e.key === 'Escape') { e.preventDefault(); this.skillFileForm = undefined; this.render(); }
+		}));
+
+		this.button(row, localize('clawdius.control.skills.createFile', "Create"), () => void this.createSkillFile(folder), 'primary');
+		this.button(row, localize('clawdius.control.cancel', "Cancel"), () => { this.skillFileForm = undefined; this.render(); }, 'ghost');
+		this.renderStore.add(disposableTimeout(() => input.focus(), 0));
+	}
+
+	/** A minimal starter body for a new supporting file (a heading for markdown, else empty). */
+	private newSkillFileTemplate(name: string): string {
+		return /\.md$/i.test(name) ? `# ${name.replace(/\.md$/i, '')}\n\n` : '';
+	}
+
+	private async createSkillFile(folder: URI): Promise<void> {
+		const form = this.skillFileForm;
+		if (!form) { return; }
+		const name = form.name.trim();
+		// Guardrails: a simple name only - no separators, no traversal, not the manifest.
+		if (!name || name.includes('/') || name.includes('\\') || name.includes('..') || name === '.') {
+			this.toast(localize('clawdius.control.skills.badFileName', "Enter a simple file name (no slashes or '..')."));
+			return;
+		}
+		if (form.target === '' && name.toLowerCase() === 'skill.md') {
+			this.toast(localize('clawdius.control.skills.skillMdReserved', "SKILL.md already exists - open it from the file list."));
+			return;
+		}
+		const targetDir = form.target ? URI.joinPath(folder, form.target) : folder;
+		const resource = URI.joinPath(targetDir, name);
+		if (await this.fileService.exists(resource)) {
+			this.toast(localize('clawdius.control.skills.fileExists', "That file already exists."));
+			return;
+		}
+		try {
+			await this.fileService.createFile(resource, VSBuffer.fromString(this.newSkillFileTemplate(name)), { overwrite: false });
+		} catch (err) {
+			this.notificationService.error(localize('clawdius.control.skills.createFileFailed', "Could not create the file: {0}", err instanceof Error ? err.message : String(err)));
+			return;
+		}
+		this.skillFileForm = undefined;
+		this.skillFiles.delete(folder.fsPath);
+		void this.configService.refresh(true);
+		await this.editorService.openEditor({ resource, options: { pinned: true } });
+		void this.ensureSkillFiles(folder);
+		this.render();
+	}
+
+	private async deleteSkillFile(folder: URI, file: ISkillFileEntry): Promise<void> {
+		// Guardrails: files only, never the manifest, and the file must live strictly under the skill folder
+		// (URI-aware containment so a sibling-prefix path like `skills/foo-bar` is never treated as inside `foo`).
+		if (file.isDirectory || file.isSkillMd || !isEqualOrParent(file.resource, folder) || isEqual(file.resource, folder)) { return; }
+		const confirmed = await this.dialogService.confirm({
+			type: 'warning',
+			message: localize('clawdius.control.skills.confirmDeleteFile', "Delete '{0}'?", file.relPath),
+			detail: localize('clawdius.control.skills.confirmDeleteFileDetail', "The file is moved to the trash."),
+			primaryButton: localize('clawdius.control.skills.deleteFileBtn', "Delete"),
+		});
+		if (!confirmed.confirmed) { return; }
+		try {
+			await this.fileService.del(file.resource, { useTrash: true, recursive: false });
+		} catch (err) {
+			this.notificationService.error(localize('clawdius.control.skills.deleteFileFailed', "Could not delete the file: {0}", err instanceof Error ? err.message : String(err)));
+			return;
+		}
+		this.skillFiles.delete(folder.fsPath);
+		void this.configService.refresh(true);
+		void this.ensureSkillFiles(folder);
+		this.render();
+	}
+
+	/** List a skill package's files: SKILL.md first, then other root files, then one level into each subdir. The
+	 *  loading-set guard prevents duplicate loads across re-renders; the generation guard drops stale results. */
+	private async ensureSkillFiles(folder: URI): Promise<void> {
+		const key = folder.fsPath;
+		if (this.skillFiles.has(key) || this.skillFilesLoading.has(key)) { return; }
+		const gen = this.skillsGeneration;
+		this.skillFilesLoading.add(key);
+		const files = await this.loadSkillFiles(folder);
+		this.skillFilesLoading.delete(key);
+		if (this.isPaneDisposed || gen !== this.skillsGeneration) { return; }
+		this.skillFiles.set(key, files);
+		if (this.tab === 'skills' && this.expandedSkill === key) { this.render(); }
+	}
+
+	private async loadSkillFiles(folder: URI): Promise<ISkillFileEntry[]> {
+		const out: ISkillFileEntry[] = [];
+		let root;
+		try { root = await this.fileService.resolve(folder); } catch { return out; }
+		const children = root.children ?? [];
+		const skillMd = children.find(c => !c.isDirectory && c.name === 'SKILL.md');
+		if (skillMd) { out.push({ name: 'SKILL.md', resource: skillMd.resource, isDirectory: false, relPath: 'SKILL.md', isSkillMd: true }); }
+		for (const c of children) {
+			if (!c.isDirectory && c.name !== 'SKILL.md') { out.push({ name: c.name, resource: c.resource, isDirectory: false, relPath: c.name, isSkillMd: false }); }
+		}
+		for (const c of children) {
+			if (!c.isDirectory) { continue; }
+			out.push({ name: c.name, resource: c.resource, isDirectory: true, relPath: c.name, isSkillMd: false });
+			let sub;
+			try { sub = await this.fileService.resolve(c.resource); } catch { continue; }
+			for (const f of (sub.children ?? [])) {
+				if (!f.isDirectory) { out.push({ name: f.name, resource: f.resource, isDirectory: false, relPath: `${c.name}/${f.name}`, isSkillMd: false }); }
+			}
+		}
+		return out;
 	}
 
 	/** Scaffold a new skill (reuses the Config tree's create command: prompts scope + name, opens SKILL.md). */

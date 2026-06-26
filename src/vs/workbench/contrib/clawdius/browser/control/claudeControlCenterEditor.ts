@@ -52,7 +52,8 @@ import { CONFIG_DELETE_COMMAND_ID, configCreateCommandId } from '../clawdiusConf
 import {
 	ALLOW_BYPASS_KEY, INITIAL_PERMISSION_MODE_KEY, PermissionMode, parsePermissionMode, permissionModeWrites, permissionModes,
 } from '../clawdiusPermissionModeStatusEntry.js';
-import { ClaudeControlCenterInput } from './claudeControlCenterInput.js';
+import { ClaudeControlCenterInput, ControlTab } from './claudeControlCenterInput.js';
+import { ClaudeUsageDashboardView } from '../usage/claudeUsageDashboardView.js';
 import { BUILTIN_TOOLS, IJsonWrite, IPermissionsState, PERMISSION_BUCKETS, PermissionBucket, builtinRule, mcpToolRule, parsePermissions, parseRule } from './claudePermissionsModel.js';
 import {
 	ControlScope, PermissionIntent, classifySettings, invertIntent, planPermissionIntent, resolvePermissionsSettingsUri,
@@ -60,9 +61,6 @@ import {
 import {
 	ISkillsState, SkillOverride, disableBundledSkillsWrite, parseSkills, skillOverrideWrite,
 } from './claudeControlTabsModel.js';
-
-/** The Control Center tabs. Each is a scope-aware view over the same settings.json the scope selector picks. */
-type ControlTab = 'permissions' | 'mcp' | 'skills' | 'plugins' | 'hooks';
 
 type Snapshot =
 	| { readonly kind: 'ok'; readonly uri: URI; readonly settings: Record<string, unknown> }
@@ -89,6 +87,8 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	private scope: ControlScope = 'global';
 	private tab: ControlTab = 'permissions';
 	private snapshot: Snapshot | undefined;
+	/** The Usage tab hosts the shared usage dashboard view; kept alive only while that tab is showing. */
+	private readonly usageView = this._register(new MutableDisposable<ClaudeUsageDashboardView>());
 	/**
 	 * An open inline add-rule editor. Three modes (codex classification): 'builtin' = a Claude built-in tool
 	 * (dropdown + optional specifier); 'mcp' = an MCP server tool (server dropdown + (All tools) / specific
@@ -301,10 +301,24 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const inner = this.content;
 
 		this.renderTabs(inner);
+		// The Usage tab owns a live dashboard view; free it whenever another tab is showing.
+		if (this.tab !== 'usage') { this.usageView.clear(); }
 		switch (this.tab) {
+			case 'usage': this.renderUsageTab(inner); break;
 			case 'permissions': this.renderPermissionsTab(inner); break;
 			case 'skills': this.renderSkillsTab(inner); break;
 			default: this.renderPermissionsTab(inner); break;
+		}
+	}
+
+	/** Switch to a tab (used by the open command so account/usage entry points can land on Usage). Usage always
+	 *  re-renders - it reloads from the capacity cache, which the open action may have just refreshed - so an
+	 *  already-open Usage tab still picks up fresh limits; other tabs only re-render on an actual change. */
+	showTab(tab: ControlTab): void {
+		if (this.tab !== tab || tab === 'usage') {
+			this.tab = tab;
+			this.adding = undefined;
+			this.render();
 		}
 	}
 
@@ -312,6 +326,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const strip = append(parent, h('.clawdius-control-tabs'));
 		strip.setAttribute('role', 'tablist');
 		const tabs: { readonly tab: ControlTab; readonly label: string; readonly ready: boolean }[] = [
+			{ tab: 'usage', label: localize('clawdius.control.tab.usage', "Usage"), ready: true },
 			{ tab: 'permissions', label: localize('clawdius.control.tab.permissions', "Permissions"), ready: true },
 			{ tab: 'mcp', label: localize('clawdius.control.tab.mcp', "MCP"), ready: false },
 			{ tab: 'skills', label: localize('clawdius.control.tab.skills', "Skills"), ready: true },
@@ -345,6 +360,18 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const text = append(hero, h('.clawdius-control-hero-text'));
 		append(text, h('.clawdius-control-hero-title')).textContent = title;
 		append(text, h('.clawdius-control-hero-sub')).textContent = sub;
+	}
+
+	// --- Usage tab ---
+
+	private renderUsageTab(parent: HTMLElement): void {
+		// Host the shared usage dashboard view (the same one the standalone Usage editor renders). It draws
+		// .clawdius-usage-dashboard-inner into this host and owns its own range tabs + Refresh; we keep it alive
+		// while this tab shows and dispose it on tab switch. load() reads only local files (no startup egress).
+		const host = append(parent, h('.clawdius-control-usage'));
+		const view = new ClaudeUsageDashboardView(host, this.fileService, this.pathService, this.commandService);
+		this.usageView.value = view;
+		void view.load(CancellationToken.None);
 	}
 
 	// --- Permissions tab ---

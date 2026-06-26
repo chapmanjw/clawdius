@@ -4,17 +4,17 @@
  *--------------------------------------------------------------------------------------------*/
 
 // CLAWDIUS-BEGIN claude usage status-bar indicator + hover popup
-// A bottom-right status-bar entry that shows the Claude wordmark (inheriting the status-bar text color) and a
-// single inline horizontal bar visualizing the current session's subscription usage. Hovering opens a popup
-// with the account identity and a simple set of horizontal Session / Weekly bars. Clicking
-// opens the full usage dashboard. The session bar is hidden when the engine provider has no subscription
-// windows (Bedrock/Vertex/custom). All data is local; opening the hover is the sole, user-initiated trigger
-// for the one allowed /api/oauth/usage refresh.
+// A bottom-right status-bar entry that shows the Claude wordmark (inheriting the status-bar text color) and two
+// inline horizontal bars - "S:" (session) and "W:" (week) - visualizing the current subscription usage.
+// Hovering opens a popup with the account identity and the same Session / Weekly bars. Clicking opens the
+// Control Center on its Usage tab. The bars are hidden when the engine provider has no subscription windows
+// (Bedrock/Vertex/custom). All data is local; opening the hover is the sole, user-initiated trigger for the one
+// allowed /api/oauth/usage refresh.
 
 import './media/claudeUsage.css';
-import { $ as h, addDisposableListener, append, clearNode, disposableWindowInterval, EventType } from '../../../../../base/browser/dom.js';
+import { $ as h, append, clearNode, disposableWindowInterval } from '../../../../../base/browser/dom.js';
 import { mainWindow } from '../../../../../base/browser/window.js';
-import { Disposable, DisposableStore, MutableDisposable } from '../../../../../base/common/lifecycle.js';
+import { Disposable, MutableDisposable } from '../../../../../base/common/lifecycle.js';
 import { blockBar } from './claudeUsageCharts.js';
 import { localize } from '../../../../../nls.js';
 import { ICommandService } from '../../../../../platform/commands/common/commands.js';
@@ -26,9 +26,10 @@ import { IStatusbarEntry, IStatusbarEntryAccessor, IStatusbarService, StatusbarA
 import { URI } from '../../../../../base/common/uri.js';
 import {
 	appendClaudeLogo, capacityWindows, compact, IClaudeAccount, IClaudeCapacity, IClaudeStats, IUsageWindow,
-	OPEN_USAGE_DASHBOARD_COMMAND_ID, providerHasLimits, providerLabel, readAccount, readCapacity, readStats,
+	providerHasLimits, providerLabel, readAccount, readCapacity, readStats,
 	REFRESH_CAPACITY_COMMAND_ID, resetLabel,
 } from './claudeUsageData.js';
+import { OPEN_CONTROL_CENTER_COMMAND_ID } from '../control/claudeControlCenterInput.js';
 
 /** Middle-dot separator, built via char code to keep the source ASCII-only. */
 const SEP = String.fromCharCode(0xB7);
@@ -37,8 +38,8 @@ const SEP = String.fromCharCode(0xB7);
  * effort meter). The "usage" class keeps the cells in the entry's own colour. */
 const NUL = String.fromCharCode(0);
 
-/** Width (in block characters) of the inline session bar in the status-bar label. */
-const STATUS_BAR_CELLS = 10;
+/** Width (in block characters) of each inline bar in the status-bar label (two bars share the row, so narrow). */
+const STATUS_BAR_CELLS = 6;
 
 /** Utilization thresholds for the bar color state. */
 function utilState(util: number): 'ok' | 'warn' | 'crit' {
@@ -61,7 +62,6 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 	static readonly ID = 'workbench.contrib.clawdiusUsageStatusEntry';
 
 	private readonly entry = this._register(new MutableDisposable<IStatusbarEntryAccessor>());
-	private readonly hoverStore = this._register(new DisposableStore());
 	private currentTooltip: HTMLElement | undefined;
 	private stats: IClaudeStats | undefined;
 	private capacity: IClaudeCapacity | undefined;
@@ -126,9 +126,14 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 		this.update();
 	}
 
-	/** The session (5-hour) window, the one summarized inline in the status bar. */
+	/** The session (5-hour) window, summarized inline as the "S:" bar. */
 	private sessionWindow(): IUsageWindow | undefined {
 		return capacityWindows(this.capacity).find(w => w.key === 'session');
+	}
+
+	/** The 7-day window, summarized inline as the "W:" bar. */
+	private weeklyWindow(): IUsageWindow | undefined {
+		return capacityWindows(this.capacity).find(w => w.key === 'week');
 	}
 
 	private update(): void {
@@ -141,20 +146,30 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 	}
 
 	private getProps(): IStatusbarEntry {
-		// Render the Claude mark + (when a subscription session window applies) a block-character bar as the
-		// entry's LABEL TEXT. The native status-bar item then handles cursor / hover-highlight / click via its
-		// `command`, and updates the label in place - so there is no custom DOM to swap and no hover flicker.
+		// Render the Claude mark + (when subscription windows apply) two labelled block-character bars as the
+		// entry's LABEL TEXT: "S: <bar>  W: <bar>". Each bar is a NUL-delimited meter run the label renderer
+		// splits into per-cell spans (the "usage" class keeps them in the entry's own colour). The native
+		// status-bar item handles cursor / hover-highlight / click via its `command` and updates in place.
 		const hasLimits = this.account ? providerHasLimits(this.account.provider) : true;
 		const session = hasLimits ? this.sessionWindow() : undefined;
-		const text = session ? `$(claude) ${NUL}usage${NUL}${blockBar(session.util / 100, STATUS_BAR_CELLS)}${NUL}` : '$(claude)';
+		const weekly = hasLimits ? this.weeklyWindow() : undefined;
+		const seg = (w: IUsageWindow) => `${NUL}usage${NUL}${blockBar(w.util / 100, STATUS_BAR_CELLS)}${NUL}`;
+		const parts: string[] = [];
+		if (session) { parts.push(`${localize('clawdius.usage.sessionShort', "S:")}${seg(session)}`); }
+		if (weekly) { parts.push(`${localize('clawdius.usage.weekShort', "W:")}${seg(weekly)}`); }
+		const text = parts.length > 0 ? `$(claude) ${parts.join('  ')}` : '$(claude)';
+
+		const ariaParts: string[] = [];
+		if (session) { ariaParts.push(localize('clawdius.usage.ariaSession', "session {0}% used", Math.round(session.util))); }
+		if (weekly) { ariaParts.push(localize('clawdius.usage.ariaWeek', "week {0}% used", Math.round(weekly.util))); }
 
 		return {
 			name: localize('clawdius.usage.name', "Claude Code Usage"),
 			text,
-			ariaLabel: session
-				? localize('clawdius.usage.ariaWithSession', "Claude Code usage: session {0}% used", Math.round(session.util))
+			ariaLabel: ariaParts.length > 0
+				? localize('clawdius.usage.ariaWithUsage', "Claude Code usage: {0}", ariaParts.join(', '))
 				: localize('clawdius.usage.aria', "Claude Code usage"),
-			command: OPEN_USAGE_DASHBOARD_COMMAND_ID,
+			command: { id: OPEN_CONTROL_CENTER_COMMAND_ID, title: localize('clawdius.usage.openControlCenter', "Open Claude Code Control Center"), arguments: ['usage'] },
 			// Opening the popup is the user-initiated signal to refresh live capacity (on-demand egress).
 			tooltip: { element: () => { void this.refreshOnDemand(); return this.buildTooltip(); } },
 		};
@@ -169,7 +184,6 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 
 	/** (Re)render the hover contents into `root`. Called on open and again when an on-demand refresh lands. */
 	private renderTooltipInto(root: HTMLElement): void {
-		this.hoverStore.clear();
 		clearNode(root);
 
 		// Header: brand + account identity row.
@@ -202,18 +216,7 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 			// Anthropic provider but no cached capacity yet (the on-demand fetch is in flight on first open).
 			this.appendLocalSummary(root);
 		}
-
-		// CTA into the full dashboard, with a trailing external-link glyph to read as a link.
-		const cta = append(root, h('a.clawdius-usage-cta'));
-		append(cta, h('span')).textContent = localize('clawdius.usage.openDashboard', "Open Usage Dashboard");
-		append(cta, h('span.codicon.codicon-link-external.clawdius-usage-cta-icon'));
-		cta.setAttribute('role', 'button');
-		cta.setAttribute('tabindex', '0');
-		const open = () => void this.commandService.executeCommand(OPEN_USAGE_DASHBOARD_COMMAND_ID);
-		this.hoverStore.add(addDisposableListener(cta, EventType.CLICK, open));
-		this.hoverStore.add(addDisposableListener(cta, EventType.KEY_DOWN, (e: KeyboardEvent) => {
-			if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
-		}));
+		// No CTA: clicking the status-bar entry itself opens the Control Center (Usage tab).
 	}
 
 	private appendAccountLine(root: HTMLElement): void {

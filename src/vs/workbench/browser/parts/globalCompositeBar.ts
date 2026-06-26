@@ -298,15 +298,16 @@ export class AccountsActivityActionViewItem extends AbstractGlobalActivityAction
 		this.initialize();
 	}
 
-	// CLAWDIUS-BEGIN account button opens the Claude Code usage dashboard
+	// CLAWDIUS-BEGIN account button opens the Claude Code Control Center (Usage tab)
 	// In Clawdius mode (Copilot eliminated => no defaultChatAgent.entitlementUrl) a left-click / Enter on the
-	// bottom-left Account button opens the usage dashboard - which carries the auth/account identity - instead
-	// of the accounts popup menu. Right-click still shows the account menu (sign out / manage). The command id
-	// is referenced by string (not imported) to avoid a browser/parts -> contrib layer violation; the source
-	// of truth is OPEN_USAGE_DASHBOARD_COMMAND_ID in contrib/clawdius/browser/usage/claudeUsageData.ts.
+	// bottom-left Account button opens the Control Center on its Usage tab - which carries the auth/account
+	// identity - instead of the accounts popup menu. Right-click still shows the account menu (sign out /
+	// manage). The command id + tab arg are referenced by string (not imported) to avoid a browser/parts ->
+	// contrib layer violation; the source of truth is OPEN_CONTROL_CENTER_COMMAND_ID in
+	// contrib/clawdius/browser/control/claudeControlCenterInput.ts.
 	protected override async run(): Promise<void> {
 		if (!this.productService.defaultChatAgent?.entitlementUrl) {
-			await this.commandService.executeCommand('clawdius.openUsageDashboard');
+			await this.commandService.executeCommand('clawdius.openControlCenter', 'usage');
 			return;
 		}
 		return super.run();

@@ -4,9 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 // CLAWDIUS-BEGIN Claude Code Control Center editor input
-// A singleton EditorInput for the interactive Control Center (Permissions tab in the MVP; MCP/Skills/Plugins/
-// Hooks tabs land later). The selected tab + scope are in-pane state, so a single input suffices. NOT readonly:
-// the pane writes the user's ~/.claude settings.json. Opened from the config sidebar + command palette.
+// A singleton EditorInput for the interactive Control Center (Usage / Permissions / Skills tabs built; MCP /
+// Plugins / Hooks land later). The selected tab + scope are in-pane state, so a single input suffices. NOT
+// readonly: the pane writes the user's ~/.claude settings.json. Opened from the config sidebar, the bottom-left
+// account button, the usage status-bar widget, and the command palette.
 
 import { localize } from '../../../../../nls.js';
 import { URI } from '../../../../../base/common/uri.js';
@@ -17,6 +18,12 @@ import { EditorInputCapabilities, IUntypedEditorInput } from '../../../../common
 import { EditorInput } from '../../../../common/editor/editorInput.js';
 
 const ClaudeControlCenterIcon = registerIcon('clawdius-control-center-icon', Codicon.claude, localize('clawdius.control.icon', "Icon of the Claude Code Control Center."));
+
+/** The Control Center tabs, in display order (Usage is first / leftmost). */
+export type ControlTab = 'usage' | 'permissions' | 'mcp' | 'skills' | 'plugins' | 'hooks';
+
+/** Command to open the Control Center. Optional first arg: a {@link ControlTab} to land on (default: Permissions). */
+export const OPEN_CONTROL_CENTER_COMMAND_ID = 'clawdius.openControlCenter';
 
 export class ClaudeControlCenterInput extends EditorInput {
 

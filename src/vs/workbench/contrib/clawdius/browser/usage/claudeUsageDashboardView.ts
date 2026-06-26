@@ -201,18 +201,17 @@ export class ClaudeUsageDashboardView extends Disposable {
 		part(localize('clawdius.usage.dash.engine', "Engine"), providerLabel(account.provider), true);
 		part(localize('clawdius.usage.dash.auth', "Auth"), account.signedIn ? localize('clawdius.usage.dash.signedIn', "Signed in") : localize('clawdius.usage.dash.signedOut', "Signed out"));
 
-		// Two distinct data sources, made explicit so the totals are never mistaken for live: the session/token
-		// stats are computed from your raw transcripts (always current, deduped - differs from the engine's
-		// over-counted cache), while the limit bars are a live fetch refreshed on open / Refresh.
+		// A terse state for the session/token stats: 'transcripts' = computed live from your transcripts (current),
+		// 'cli' = the engine's possibly-stale cache (Agent Host off), 'none' = the live compute is still running.
 		const statsMeta = append(text, h('.clawdius-usage-hero-meta'));
 		if (statsSource === 'transcripts') {
-			statsMeta.textContent = localize('clawdius.usage.dash.statsTranscripts', "Session + token stats from your session transcripts (deduped, always current).");
+			statsMeta.textContent = localize('clawdius.usage.dash.statsUpToDate', "Stats: up to date");
 		} else if (statsSource === 'cli') {
 			statsMeta.textContent = statsComputedDate
-				? localize('clawdius.usage.dash.statsCli', "Session + token stats from the Claude CLI cache, computed {0} (the Agent Host is off; transcript stats unavailable).", this.formatDay(statsComputedDate))
-				: localize('clawdius.usage.dash.statsCliNoDate', "Session + token stats from the Claude CLI cache (the Agent Host is off).");
+				? localize('clawdius.usage.dash.statsCached', "Stats: cached ({0})", this.formatDay(statsComputedDate))
+				: localize('clawdius.usage.dash.statsCachedNoDate', "Stats: cached");
 		} else {
-			statsMeta.textContent = localize('clawdius.usage.dash.statsComputing', "Computing session + token stats from your transcripts...");
+			statsMeta.textContent = localize('clawdius.usage.dash.statsUpdating', "Stats: updating...");
 		}
 		append(text, h('.clawdius-usage-hero-meta')).textContent = refreshedAt
 			? localize('clawdius.usage.dash.metaRefreshed', "Live limits last refreshed {0}.", refreshedAt.toLocaleString())

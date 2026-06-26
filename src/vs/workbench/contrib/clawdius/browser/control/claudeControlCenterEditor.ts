@@ -2436,9 +2436,9 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		append(row, h('.clawdius-control-spacer'));
 		if (plugin.homepage) {
 			const homepage = plugin.homepage;
-			this.iconButton(row, Codicon.linkExternal, localize('clawdius.control.plugins.homepage', "Open homepage"), () => void this.openPluginHomepage(homepage));
+			this.button(row, localize('clawdius.control.plugins.homepage', "Homepage"), () => void this.openPluginHomepage(homepage), 'link', Codicon.linkExternal);
 		}
-		this.iconButton(row, Codicon.info, localize('clawdius.control.plugins.details', "Show details in terminal"), () => void this.pluginDetailsInTerminal(plugin.id));
+		this.button(row, localize('clawdius.control.plugins.details', "Details"), () => void this.pluginDetailsInTerminal(plugin.id), 'link', Codicon.info);
 		if (installed) {
 			this.appendToggle(row, status !== 'disabled', plugin.name, next => void this.setPluginEnabled(plugin.id, next));
 		} else {

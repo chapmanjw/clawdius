@@ -19,8 +19,10 @@ import { ILogService } from '../../log/common/log.js';
 import { IClaudeUsageStatsResult, IClaudeUsageStatsService } from '../common/claudeUsageStats.js';
 import { IUsageFilePartial, UsageFileAccumulator, localDateKey, mergePartials } from '../common/claudeUsageStatsModel.js';
 
-/** Bump to invalidate every cached partial (parser-semantics change). */
-const CACHE_VERSION = 1;
+/** Bump to invalidate every cached partial (parser-semantics or partial-schema change). v2 adds the per-day
+ *  token split + per-day hour counts (dailyHourCounts) the windowed dashboard tiles need, so v1 partials are
+ *  stale and must be recomputed from the transcripts. */
+const CACHE_VERSION = 2;
 const CACHE_FILE = '.clawdius-usage-stats.json';
 
 interface ICachedFile { readonly size: number; readonly mtimeMs: number; readonly partial: IUsageFilePartial }

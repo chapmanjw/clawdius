@@ -6,7 +6,8 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import {
-	enableAllProjectMcpServersWrite, mcpApproval, mcpApprovalWrites, mcpEffectiveApproval, parseMcpSettings, summarizeMcpDef,
+	IMcpServerForm, buildMcpDef, emptyMcpForm, enableAllProjectMcpServersWrite, mcpApproval, mcpApprovalWrites, mcpDeleteWrite,
+	mcpEffectiveApproval, mergeMcpDefForSave, parseMcpDefForEdit, parseMcpSettings, sameMcpDefSummary, summarizeMcpDef,
 } from '../../browser/control/claudeMcpModel.js';
 
 suite('claudeMcpModel', () => {
@@ -68,5 +69,84 @@ suite('claudeMcpModel', () => {
 		assert.ok(!creds.detail.includes('pass'), 'userinfo redacted');
 		assert.ok(!creds.detail.includes('abc123'), 'query token redacted');
 		assert.ok(creds.detail.startsWith('https://host.example.com/mcp'), `kept scheme/host/path: ${creds.detail}`);
+	});
+
+	test('summarizeMcpDef surfaces non-secret ws / headersHelper / oauth / timeout / alwaysLoad (never secret values)', () => {
+		const ws = summarizeMcpDef({ type: 'ws', url: 'wss://host/mcp' });
+		assert.strictEqual(ws.transport, 'ws');
+
+		const full = summarizeMcpDef({
+			type: 'http', url: 'https://host/mcp', timeout: 5000, alwaysLoad: true,
+			headers: { Authorization: 'Bearer secret-xyz' }, headersHelper: 'get-token --secret abc',
+			oauth: { clientId: 'cid', clientSecret: 'shhh', callbackPort: 9000 },
+		});
+		assert.deepStrictEqual(
+			{ transport: full.transport, hasHeadersHelper: full.hasHeadersHelper, hasOauth: full.hasOauth, timeout: full.timeout, alwaysLoad: full.alwaysLoad, headerKeys: full.headerKeys },
+			{ transport: 'http', hasHeadersHelper: true, hasOauth: true, timeout: 5000, alwaysLoad: true, headerKeys: ['Authorization'] });
+		assert.ok(!JSON.stringify(full).includes('secret-xyz') && !JSON.stringify(full).includes('shhh') && !JSON.stringify(full).includes('get-token'),
+			'secret header / clientSecret / helper command values are never surfaced');
+	});
+
+	test('buildMcpDef stdio: always emits type, all fields, omits empties, never leaks env values in the add path', () => {
+		const form: IMcpServerForm = {
+			...emptyMcpForm('stdio'), command: 'uvx', args: ['srv', ''], env: [{ key: 'TOKEN', value: 'secret-xyz' }, { key: '', value: 'dropped' }],
+			timeout: '3000', alwaysLoad: true,
+		};
+		assert.deepStrictEqual(buildMcpDef(form), { type: 'stdio', command: 'uvx', args: ['srv'], env: { TOKEN: 'secret-xyz' }, timeout: 3000, alwaysLoad: true });
+		// minimal stdio still emits type + command and omits empty args / env.
+		assert.deepStrictEqual(buildMcpDef({ ...emptyMcpForm('stdio'), command: 'uvx' }), { type: 'stdio', command: 'uvx' });
+	});
+
+	test('buildMcpDef remote: http with headers + oauth (no clientSecret) + headersHelper; ws has no oauth', () => {
+		const http: IMcpServerForm = {
+			...emptyMcpForm('http'), url: 'https://host/mcp', headers: [{ key: 'Authorization', value: 'Bearer abc' }], headersHelper: 'get-token',
+			oauth: { clientId: 'cid', callbackPort: '9000', scopes: 'a b', authServerMetadataUrl: 'https://auth/.well-known' },
+		};
+		assert.deepStrictEqual(buildMcpDef(http), {
+			type: 'http', url: 'https://host/mcp', headers: { Authorization: 'Bearer abc' }, headersHelper: 'get-token',
+			oauth: { clientId: 'cid', callbackPort: 9000, scopes: 'a b', authServerMetadataUrl: 'https://auth/.well-known' },
+		});
+		// ws is remote but never carries an oauth block even when oauth sub-fields are filled in.
+		const ws: IMcpServerForm = { ...emptyMcpForm('ws'), url: 'wss://host/mcp', oauth: { clientId: 'cid', callbackPort: '1', scopes: 's', authServerMetadataUrl: 'u' } };
+		assert.deepStrictEqual(buildMcpDef(ws), { type: 'ws', url: 'wss://host/mcp' });
+	});
+
+	test('parseMcpDefForEdit strips secret values but keeps keys + non-secret fields', () => {
+		const form = parseMcpDefForEdit({
+			type: 'http', url: 'https://host/mcp', timeout: 4000, alwaysLoad: true,
+			headers: { Authorization: 'Bearer secret-xyz', 'X-Trace': 'on' }, headersHelper: 'helper',
+			oauth: { clientId: 'cid', clientSecret: 'shhh', callbackPort: 9000, scopes: 'a', authServerMetadataUrl: 'u' },
+		});
+		assert.deepStrictEqual(form, {
+			transport: 'http', command: '', args: [], env: [], url: 'https://host/mcp',
+			headers: [{ key: 'Authorization', value: '' }, { key: 'X-Trace', value: '' }], headersHelper: 'helper',
+			oauth: { clientId: 'cid', callbackPort: '9000', scopes: 'a', authServerMetadataUrl: 'u' },
+			timeout: '4000', alwaysLoad: true,
+		});
+	});
+
+	test('mergeMcpDefForSave keeps untouched secret values, overwrites typed, drops removed; never touches clientSecret', () => {
+		const fresh = { type: 'stdio', command: 'old', env: { KEPT: 'stored-secret', GONE: 'stored-gone', CHANGED: 'stored-old' } };
+		const form: IMcpServerForm = {
+			...emptyMcpForm('stdio'), command: 'uvx',
+			env: [{ key: 'KEPT', value: '' }, { key: 'CHANGED', value: 'new-value' }, { key: 'ADDED', value: 'fresh' }],
+		};
+		// KEPT blank -> stored value restored; CHANGED typed -> overwritten; GONE absent -> dropped; ADDED -> added.
+		assert.deepStrictEqual(mergeMcpDefForSave(fresh, form), { type: 'stdio', command: 'uvx', env: { KEPT: 'stored-secret', CHANGED: 'new-value', ADDED: 'fresh' } });
+	});
+
+	test('mcpDeleteWrite removes the server entry', () => {
+		assert.deepStrictEqual(mcpDeleteWrite('my-server'), { path: ['mcpServers', 'my-server'], value: undefined });
+	});
+
+	test('sameMcpDefSummary: equal defs match; any meaningful change differs (gates the discovered-tools cache)', () => {
+		const def = { type: 'stdio', command: 'uvx', args: ['srv'], env: { TOKEN: 'x' }, timeout: 5000, alwaysLoad: true };
+		// A benign refresh re-reads an identical def: the cache must survive.
+		assert.strictEqual(sameMcpDefSummary(summarizeMcpDef(def), summarizeMcpDef({ ...def })), true);
+		// Each field that affects how a server connects flips equality (so its loaded tools get dropped).
+		assert.strictEqual(sameMcpDefSummary(summarizeMcpDef(def), summarizeMcpDef({ ...def, command: 'npx' })), false);
+		assert.strictEqual(sameMcpDefSummary(summarizeMcpDef(def), summarizeMcpDef({ ...def, env: { TOKEN: 'x', EXTRA: 'y' } })), false);
+		assert.strictEqual(sameMcpDefSummary(summarizeMcpDef(def), summarizeMcpDef({ ...def, timeout: 6000 })), false);
+		assert.strictEqual(sameMcpDefSummary(summarizeMcpDef({ type: 'http', url: 'https://host/a' }), summarizeMcpDef({ type: 'http', url: 'https://host/b' })), false);
 	});
 });

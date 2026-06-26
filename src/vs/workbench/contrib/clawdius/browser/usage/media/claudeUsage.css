@@ -386,17 +386,53 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 	text-align: right;
 }
 
-/* Contribution heatmap - flex grid of cells that stretch to fill the section width. */
+/* Transcript-retention stat row: value + an inline pencil edit affordance. */
+.clawdius-usage-stat-retention {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.clawdius-usage-stat-edit {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: none;
+	cursor: pointer;
+	padding: 2px;
+	border: none;
+	border-radius: 4px;
+	color: var(--vscode-foreground);
+	background: transparent;
+	opacity: 0.55;
+}
+
+.clawdius-usage-stat-edit:hover {
+	opacity: 1;
+	background: var(--vscode-toolbar-hoverBackground, rgba(167, 139, 250, 0.15));
+}
+
+.clawdius-usage-stat-edit .codicon {
+	font-size: 13px;
+}
+
+/* Contribution heatmap - a responsive CSS grid of square cells that stretch to fill the section width; JS sets grid-template-columns inline to one column per week so they fill the row, with a 4px gap kept in sync across the grid, the weekday gutter, and (visually) the month-label row. */
 .clawdius-usage-heatmap {
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
+	gap: 6px;
 	width: 100%;
 }
 
-.clawdius-usage-heatmap-months,
-.clawdius-usage-heatmap-body {
+.clawdius-usage-heatmap-months {
 	display: flex;
+	width: 100%;
+}
+
+/* Two-track grid (fixed gutter + 1fr) so the day grid deterministically gets the full remaining width and its columns can stretch. Relying on the day grid's flex-basis left it content-sized, so it never filled. */
+.clawdius-usage-heatmap-body {
+	display: grid;
+	grid-template-columns: 30px 1fr;
 	width: 100%;
 }
 
@@ -413,47 +449,47 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 .clawdius-usage-heatmap-mslot {
 	flex: 1 1 0;
 	min-width: 0;
-	font-size: 9px;
+	font-size: 10px;
 	opacity: 0.55;
 	white-space: nowrap;
 	overflow: visible;
 }
 
+/* Weekday gutter: 7 equal rows lined up with the grid's 7 day-rows (same count + gap, stretched to grid height). */
 .clawdius-usage-heatmap-weekdays {
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
+	display: grid;
+	grid-template-rows: repeat(7, 1fr);
+	gap: 4px;
 }
 
 .clawdius-usage-heatmap-wd {
-	height: 13px;
-	font-size: 9px;
+	display: flex;
+	align-items: center;
+	font-size: 10px;
 	opacity: 0.5;
-	line-height: 13px;
 }
 
+/* week-columns x 7 day-rows; columns stretch to fill the width, cells stay square via aspect-ratio. */
 .clawdius-usage-heatmap-grid {
-	display: flex;
-	gap: 2px;
-	flex: 1 1 auto;
-}
-
-.clawdius-usage-heatmap-week {
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-	flex: 1 1 0;
 	min-width: 0;
+	display: grid;
+	/* JS sets grid-template-columns inline (one minmax(16px, 1fr) track per week) so columns fill the width but never get narrower than the row height; each cell is a horizontal rectangle that is square at minimum and expands to fill the space, while fixed-height rows keep the heatmap a sane height instead of a giant square block. */
+	grid-template-rows: repeat(7, 16px);
+	grid-auto-flow: column;
+	gap: 4px;
 }
 
 .clawdius-usage-heatmap-day {
-	height: 13px;
+	/* Explicit 100% is required: under justify-items:normal these block cells do NOT auto-stretch into their grid track (they collapse to ~9px content width), so width/height:100% makes each cell fill its column/row - verified live via the heatmap rendering 9px -> 56px wide. */
+	width: 100%;
+	height: 100%;
 	border-radius: 2px;
-	background-color: transparent;
+	/* Faint filled rectangle for empty days so cells read as cells; active levels override. */
+	background-color: rgba(150, 150, 165, 0.10);
 }
 
 .clawdius-usage-heatmap-day.level-0 {
-	background-image: radial-gradient(circle at center, rgba(150, 150, 165, 0.4) 0 1px, transparent 1.2px);
+	background-color: rgba(150, 150, 165, 0.10);
 }
 
 .clawdius-usage-heatmap-day.level-1 { background-color: rgba(217, 119, 87, 0.30); }
@@ -481,29 +517,7 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 	margin: 0 2px;
 }
 
-/* Range tabs */
-.clawdius-usage-rangetabs {
-	display: flex;
-	gap: 18px;
-	font-size: 12px;
-}
-
-.clawdius-usage-rangetab {
-	cursor: pointer;
-	opacity: 0.55;
-}
-
-.clawdius-usage-rangetab:hover {
-	opacity: 0.85;
-}
-
-.clawdius-usage-rangetab.active {
-	color: #d97757;
-	opacity: 1;
-	font-weight: 600;
-}
-
-/* Tokens-per-day braille line chart */
+/* Tokens-per-day rounded-step line chart (per-model, matches the CLI /usage Stats > Models view) */
 .clawdius-usage-chart {
 	display: flex;
 	gap: 10px;
@@ -525,8 +539,8 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 .clawdius-usage-chart-plot {
 	flex: 1 1 auto;
 	height: 130px;
+	/* y-axis only; the 0 baseline is drawn inside the SVG (orange #d97757) so it lines up with the data's zero. */
 	border-left: 1px solid rgba(127, 127, 127, 0.3);
-	border-bottom: 1px solid rgba(227, 179, 65, 0.5);
 	padding-left: 4px;
 	box-sizing: border-box;
 }

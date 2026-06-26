@@ -32,7 +32,9 @@ import { URI } from '../../../../../base/common/uri.js';
 import { localize } from '../../../../../nls.js';
 import { ConfigurationTarget, IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
+import { IHoverService } from '../../../../../platform/hover/browser/hover.js';
 import { INotificationService } from '../../../../../platform/notification/common/notification.js';
+import { IQuickInputService } from '../../../../../platform/quickinput/common/quickInput.js';
 import { IStorageService } from '../../../../../platform/storage/common/storage.js';
 import { ITelemetryService } from '../../../../../platform/telemetry/common/telemetry.js';
 import { IThemeService } from '../../../../../platform/theme/common/themeService.js';
@@ -64,7 +66,8 @@ import {
 } from './claudeControlTabsModel.js';
 import { ISkillIssue, ISkillValidation, validateSkillPackage } from './claudeSkillValidationModel.js';
 import {
-	IMcpDefSummary, McpApproval, McpTransport, enableAllProjectMcpServersWrite, mcpApproval, mcpApprovalWrites, mcpEffectiveApproval, parseMcpSettings, summarizeMcpDef,
+	IMcpDefSummary, IMcpServerForm, MCP_TRANSPORTS, McpApproval, McpTransport, buildMcpDef, emptyMcpForm, enableAllProjectMcpServersWrite, mcpApproval,
+	mcpApprovalWrites, mcpDeleteWrite, mcpEffectiveApproval, mergeMcpDefForSave, parseMcpDefForEdit, parseMcpSettings, sameMcpDefSummary, summarizeMcpDef, transportSupportsOauth,
 } from './claudeMcpModel.js';
 import { basename, isEqual, isEqualOrParent } from '../../../../../base/common/resources.js';
 import { parse as parseJsonc } from '../../../../../base/common/jsonc.js';
@@ -84,6 +87,12 @@ interface ISkillFileEntry { readonly name: string; readonly resource: URI; reado
 /** A valid `plugin-id@marketplace-id` (no shell metacharacters, so it is safe to put in a terminal command). */
 const PLUGIN_ID_RE = /^[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+$/;
 type BtnVariant = 'primary' | 'ghost' | 'link' | 'danger' | 'add';
+
+/** True when every OAuth sub-field on the form is blank (so the OAuth section starts collapsed on edit). */
+function isOauthFormBlank(oauth: IMcpServerForm['oauth']): boolean {
+	return oauth.clientId.trim().length === 0 && oauth.callbackPort.trim().length === 0
+		&& oauth.scopes.trim().length === 0 && oauth.authServerMetadataUrl.trim().length === 0;
+}
 
 export class ClaudeControlCenterEditor extends EditorPane {
 
@@ -121,8 +130,21 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	private readonly mcpDefs = new Map<string, IMcpDefSummary>();
 	private mcpDefsLoaded = false;
 	private readonly mcpTabTools = new Map<string, { loading: boolean; tools: readonly IClaudeMcpTool[]; message: string }>();
-	/** An open "add MCP server" form (per section). transport drives which fields apply. */
-	private mcpAddForm: { scope: 'global' | 'project'; name: string; transport: McpTransport; command: string; args: string; url: string } | undefined;
+	/** An open add / edit MCP server form. `mode` is 'add' (new server, name editable) or 'edit' (existing server,
+	 *  name locked). `form` holds every applicable def field; `transport` inside it drives which fields apply.
+	 *  `oauthOpen` controls the collapsible OAuth subsection. Secret env / header VALUES are never prefilled. */
+	private mcpForm: { scope: 'global' | 'project'; mode: 'add' | 'edit'; name: string; form: IMcpServerForm; oauthOpen: boolean } | undefined;
+	/** The DOM root of the open add / edit MCP form, and a store for ONLY its listeners. The form re-renders its own
+	 *  subtree in place for routine edits (transport change, add / remove a repeater row, OAuth toggle) instead of
+	 *  re-rendering the whole pane, which would re-scan settings.json and rebuild every tab just to add one input row.
+	 *  The store is cleared on each subtree rebuild (and by the full render, which rebuilds the form too), so its
+	 *  listeners never leak or double-bind. */
+	private mcpFormContainer: HTMLElement | undefined;
+	private readonly mcpFormStore = this._register(new DisposableStore());
+	/** The resolved writable backing JSON for each scope (global = ~/.claude.json, project = <folder>/.mcp.json).
+	 *  Edit / delete are offered only for servers whose backing resource matches the writable file for its scope. */
+	private mcpWritableGlobal: URI | undefined;
+	private mcpWritableProject: URI | undefined;
 	/** An open "add plugin" form on the Plugins tab. */
 	private pluginAddForm: { id: string } | undefined;
 	/**
@@ -163,6 +185,8 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		@IDialogService private readonly dialogService: IDialogService,
 		@ITerminalService private readonly terminalService: ITerminalService,
 		@ITerminalGroupService private readonly terminalGroupService: ITerminalGroupService,
+		@IQuickInputService private readonly quickInputService: IQuickInputService,
+		@IHoverService private readonly hoverService: IHoverService,
 	) {
 		super(ClaudeControlCenterEditor.ID, group, telemetryService, themeService, storageService);
 		// Re-render when the default-mode setting changes anywhere (e.g. the status-bar pill), so the two stay
@@ -188,7 +212,10 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			this.expandedSkillDirs.clear();
 			this.mcpDefs.clear();
 			this.mcpDefsLoaded = false;
-			this.mcpTabTools.clear();
+			// Do NOT clear discovered tools here. Discovery RUNS the server (the spawn touches ~/.claude), which the
+			// config watcher catches and turns into a benign onDidChange - clearing here would make a freshly loaded
+			// tool list vanish a moment after it appears. The cached tools for a server are dropped only when that
+			// server's def actually changes (see ensureMcpDefs, which re-reads defs and prunes the matching tools).
 			if (this.adding?.mode === 'mcp' || this.tab === 'skills' || this.tab === 'plugins' || this.tab === 'mcp' || this.tab === 'hooks') { this.render(); }
 		}));
 	}
@@ -204,6 +231,17 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		// Populate the scanned-config snapshot (MCP server names for the add box). Fire-and-forget: onDidChange
 		// re-renders the add box if it is open. No network - a local ~/.claude scan.
 		void this.configService.refresh();
+		void this.resolveMcpWritableUris();
+	}
+
+	/** Resolve the writable MCP backing files once (they do not change) so rows can gate Edit / Delete on whether a
+	 *  server lives in the writable file for its scope. Re-renders the MCP tab when resolved. */
+	private async resolveMcpWritableUris(): Promise<void> {
+		const [global, project] = await Promise.all([this.mcpBackingFile('global'), this.mcpBackingFile('project')]);
+		if (this.isPaneDisposed) { return; }
+		this.mcpWritableGlobal = global;
+		this.mcpWritableProject = project;
+		if (this.tab === 'mcp') { this.render(); }
 	}
 
 	override focus(): void {
@@ -353,6 +391,11 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	private render(): void {
 		if (!this.container || this.isPaneDisposed) { return; }
 		this.renderStore.clear();
+		// The MCP form owns a separate subtree + listener store for in-place rebuilds. A full render detaches that
+		// subtree, so drop its listeners and the stale container here; renderMcpForm rebuilds both if the form is
+		// still open (otherwise they stay cleared until the next form opens).
+		this.mcpFormStore.clear();
+		this.mcpFormContainer = undefined;
 		if (!this.content) {
 			this.content = append(this.container, h('.clawdius-control-inner'));
 		} else {
@@ -385,10 +428,10 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		}
 	}
 
-	/** Drop any open inline add/edit forms (permission add box, MCP add server, plugin add) on navigation. */
+	/** Drop any open inline add/edit forms (permission add box, MCP add/edit server, plugin add) on navigation. */
 	private clearTransientForms(): void {
 		this.adding = undefined;
-		this.mcpAddForm = undefined;
+		this.mcpForm = undefined;
 		this.pluginAddForm = undefined;
 		this.skillFileForm = undefined;
 	}
@@ -440,7 +483,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		// .clawdius-usage-dashboard-inner into this host and owns its own range tabs + Refresh; we keep it alive
 		// while this tab shows and dispose it on tab switch. load() reads only local files (no startup egress).
 		const host = append(parent, h('.clawdius-control-usage'));
-		const view = new ClaudeUsageDashboardView(host, this.fileService, this.pathService, this.commandService, this.agentHostService);
+		const view = new ClaudeUsageDashboardView(host, this.fileService, this.pathService, this.commandService, this.agentHostService, this.jsonEditing, this.dialogService, this.notificationService, this.quickInputService, this.hoverService);
 		this.usageView.value = view;
 		void view.load(CancellationToken.None);
 	}
@@ -1430,7 +1473,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		append(ghd, h('.clawdius-control-spacer'));
 		this.button(ghd, localize('clawdius.control.mcp.newServer', "New server"), () => this.openMcpAddForm('global'), 'add', Codicon.add);
 		append(gblock, h('.clawdius-control-scope-hint')).textContent = localize('clawdius.control.mcp.globalNote', "Defined in ~/.claude.json. Always available - inspect them and set per-tool permissions.");
-		if (this.mcpAddForm?.scope === 'global') { this.renderMcpAddForm(gblock); }
+		if (this.mcpForm?.scope === 'global' && this.mcpForm.mode === 'add') { this.renderMcpForm(gblock); }
 		if (globalServers.length === 0) {
 			append(gblock, h('.clawdius-control-empty')).textContent = localize('clawdius.control.mcp.noGlobal', "No global MCP servers configured.");
 		} else {
@@ -1450,7 +1493,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 				localize('clawdius.control.mcp.enableAllHint', "Auto-approves every server in .mcp.json (enableAllProjectMcpServers); individual Reject still wins."),
 				mcpState.enableAllProjectServers,
 				next => void this.setEnableAllMcp(next));
-			if (this.mcpAddForm?.scope === 'project') { this.renderMcpAddForm(pblock); }
+			if (this.mcpForm?.scope === 'project' && this.mcpForm.mode === 'add') { this.renderMcpForm(pblock); }
 			if (projectServers.length === 0) {
 				append(pblock, h('.clawdius-control-empty')).textContent = localize('clawdius.control.mcp.noProject', "No project MCP servers in .mcp.json.");
 			} else {
@@ -1460,105 +1503,376 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	}
 
 	private openMcpAddForm(scope: 'global' | 'project'): void {
-		this.mcpAddForm = { scope, name: '', transport: 'stdio', command: '', args: '', url: '' };
+		this.mcpForm = { scope, mode: 'add', name: '', form: emptyMcpForm('stdio'), oauthOpen: false };
 		this.render();
 	}
 
-	/** The backing JSON for new MCP servers: ~/.claude.json (global) or <first folder>/.mcp.json (project). */
+	/** Open the edit form for an existing server. Reads the def FRESH from the backing JSON so the prefill matches
+	 *  what is on disk; secret env / header VALUES are stripped (only keys are prefilled, with blank values). */
+	private async openMcpEditForm(scope: 'global' | 'project', name: string): Promise<void> {
+		const uri = await this.mcpBackingFile(scope);
+		if (!uri) { return; }
+		const def = await this.readMcpServerDef(uri, name);
+		const form = parseMcpDefForEdit(def);
+		this.mcpForm = { scope, mode: 'edit', name, form, oauthOpen: !isOauthFormBlank(form.oauth) };
+		this.render();
+	}
+
+	/** The backing JSON for MCP servers: ~/.claude.json (global) or <first folder>/.mcp.json (project). */
 	private async mcpBackingFile(scope: 'global' | 'project'): Promise<URI | undefined> {
 		if (scope === 'global') { return URI.joinPath(await this.pathService.userHome(), '.claude.json'); }
 		const folder = this.workspaceService.getWorkspace().folders[0]?.uri;
 		return folder ? URI.joinPath(folder, '.mcp.json') : undefined;
 	}
 
-	private renderMcpAddForm(parent: HTMLElement): void {
-		const form = this.mcpAddForm;
-		if (!form) { return; }
-		const wrap = append(parent, h('.clawdius-control-mcp-addform'));
+	/** Read the raw `mcpServers[name]` def from a backing JSON file, or undefined if absent / malformed. */
+	private async readMcpServerDef(uri: URI, name: string): Promise<unknown> {
+		const raw = await this.readRaw(uri);
+		if (raw === undefined) { return undefined; }
+		try {
+			const parsed = parseJsonc<{ mcpServers?: Record<string, unknown> }>(raw);
+			return (parsed?.mcpServers && typeof parsed.mcpServers === 'object') ? parsed.mcpServers[name] : undefined;
+		} catch {
+			return undefined;
+		}
+	}
 
+	/** Render the add / edit MCP form into `parent`. Creates the form's own DOM root + listener store, then builds
+	 *  the rows. Routine edits inside the form rebuild only this subtree (rerenderMcpForm), never the whole pane. */
+	private renderMcpForm(parent: HTMLElement): void {
+		if (!this.mcpForm) { return; }
+		this.mcpFormContainer = append(parent, h('.clawdius-control-mcp-addform'));
+		this.buildMcpForm();
+	}
+
+	/** Rebuild only the open form's subtree in place (no full pane render). Used by every routine form interaction
+	 *  that changes which rows are shown - transport change, add / remove a repeater row, OAuth toggle. */
+	private rerenderMcpForm(): void {
+		if (this.mcpFormContainer && this.mcpForm) { this.buildMcpForm(); }
+	}
+
+	/** Build the form rows into the form container, registering every listener to mcpFormStore (cleared first so a
+	 *  rebuild never double-binds or leaks). Called both by the initial render and by each in-place subtree rebuild;
+	 *  a full pane render goes through renderMcpForm, which makes a fresh container and calls this too. */
+	private buildMcpForm(): void {
+		const state = this.mcpForm;
+		const wrap = this.mcpFormContainer;
+		if (!state || !wrap) { return; }
+		this.mcpFormStore.clear();
+		clearNode(wrap);
+		const form = state.form;
+
+		// Name (locked on edit) + transport.
 		const nameRow = append(wrap, h('.clawdius-control-addrow'));
 		const name = append(nameRow, h('input.clawdius-control-input')) as HTMLInputElement;
-		name.type = 'text'; name.value = form.name;
+		name.type = 'text'; name.value = state.name;
 		name.placeholder = localize('clawdius.control.mcp.namePh', "server name, e.g. my-server");
 		name.setAttribute('aria-label', localize('clawdius.control.mcp.nameLabel', "Server name"));
-		this.renderStore.add(addDisposableListener(name, EventType.INPUT, () => { form.name = name.value; }));
+		if (state.mode === 'edit') {
+			name.readOnly = true;
+			name.classList.add('readonly');
+		} else {
+			this.mcpFormStore.add(addDisposableListener(name, EventType.INPUT, () => { state.name = name.value; }));
+		}
 		const transport = append(nameRow, h('select.clawdius-control-select')) as HTMLSelectElement;
 		transport.setAttribute('aria-label', localize('clawdius.control.mcp.transportLabel', "Transport"));
-		for (const t of ['stdio', 'http', 'sse'] as const) {
+		for (const t of MCP_TRANSPORTS) {
 			const o = append(transport, h('option')) as HTMLOptionElement;
 			o.value = t; o.textContent = t;
 			if (t === form.transport) { o.selected = true; }
 		}
-		this.renderStore.add(addDisposableListener(transport, EventType.CHANGE, () => { form.transport = transport.value as McpTransport; this.render(); }));
+		this.mcpFormStore.add(addDisposableListener(transport, EventType.CHANGE, () => {
+			state.form = { ...state.form, transport: transport.value as McpTransport };
+			this.rerenderMcpForm();
+		}));
 
-		const detailRow = append(wrap, h('.clawdius-control-addrow'));
 		if (form.transport === 'stdio') {
-			const command = append(detailRow, h('input.clawdius-control-input')) as HTMLInputElement;
-			command.type = 'text'; command.value = form.command;
-			command.placeholder = localize('clawdius.control.mcp.commandPh', "command, e.g. uvx or npx");
-			command.setAttribute('aria-label', localize('clawdius.control.mcp.commandLabel', "Command"));
-			this.renderStore.add(addDisposableListener(command, EventType.INPUT, () => { form.command = command.value; }));
-			const args = append(detailRow, h('input.clawdius-control-input')) as HTMLInputElement;
-			args.type = 'text'; args.value = form.args;
-			args.placeholder = localize('clawdius.control.mcp.argsPh', "args (space-separated)");
-			args.setAttribute('aria-label', localize('clawdius.control.mcp.argsLabel', "Arguments"));
-			this.renderStore.add(addDisposableListener(args, EventType.INPUT, () => { form.args = args.value; }));
+			this.renderMcpStdioFields(wrap, state);
 		} else {
-			const url = append(detailRow, h('input.clawdius-control-input')) as HTMLInputElement;
-			url.type = 'text'; url.value = form.url;
-			url.placeholder = localize('clawdius.control.mcp.urlPh', "https://host/mcp");
-			url.setAttribute('aria-label', localize('clawdius.control.mcp.urlLabel', "Server URL"));
-			this.renderStore.add(addDisposableListener(url, EventType.INPUT, () => { form.url = url.value; }));
+			this.renderMcpRemoteFields(wrap, state);
 		}
 
+		this.renderMcpCommonFields(wrap, state);
+
 		const actions = append(wrap, h('.clawdius-control-addrow'));
-		this.button(actions, localize('clawdius.control.mcp.create', "Create"), () => void this.createMcpServer(), 'primary');
-		this.button(actions, localize('clawdius.control.cancel', "Cancel"), () => { this.mcpAddForm = undefined; this.render(); }, 'ghost');
-		append(wrap, h('.clawdius-control-addnote')).textContent = localize('clawdius.control.mcp.addNote', "Writes the server to the backing JSON and opens it - add env / headers there (they hold secrets).");
+		const saveLabel = state.mode === 'edit' ? localize('clawdius.control.mcp.save', "Save") : localize('clawdius.control.mcp.create', "Create");
+		this.button(actions, saveLabel, () => void this.saveMcpServer(), 'primary', undefined, this.mcpFormStore);
+		this.button(actions, localize('clawdius.control.cancel', "Cancel"), () => { this.mcpForm = undefined; this.render(); }, 'ghost', undefined, this.mcpFormStore);
+		if (state.mode === 'edit') {
+			append(wrap, h('.clawdius-control-addnote')).textContent = localize('clawdius.control.mcp.editNote', "Secret env / header values are hidden. Leave a value blank to keep the stored secret; type a new value to replace it.");
+		} else {
+			append(wrap, h('.clawdius-control-addnote')).textContent = localize('clawdius.control.mcp.addNote', "Writes the server to the backing JSON. Secret env / header values are stored as you type them.");
+		}
 	}
 
-	private async createMcpServer(): Promise<void> {
-		const form = this.mcpAddForm;
-		if (!form) { return; }
-		const name = form.name.trim();
+	/** stdio fields: command, an args repeater, and an env key/value (secret) repeater. */
+	private renderMcpStdioFields(wrap: HTMLElement, state: { form: IMcpServerForm }): void {
+		const form = state.form;
+		const cmdRow = append(wrap, h('.clawdius-control-addrow'));
+		const command = append(cmdRow, h('input.clawdius-control-input')) as HTMLInputElement;
+		command.type = 'text'; command.value = form.command;
+		command.placeholder = localize('clawdius.control.mcp.commandPh', "command, e.g. uvx or npx");
+		command.setAttribute('aria-label', localize('clawdius.control.mcp.commandLabel', "Command"));
+		this.mcpFormStore.add(addDisposableListener(command, EventType.INPUT, () => { state.form = { ...state.form, command: command.value }; }));
+
+		this.renderMcpListRepeater(wrap,
+			localize('clawdius.control.mcp.argsTitle', "Arguments"),
+			localize('clawdius.control.mcp.argPh', "argument"),
+			localize('clawdius.control.mcp.argLabel', "Argument"),
+			localize('clawdius.control.mcp.addArg', "Add argument"),
+			form.args,
+			next => { state.form = { ...state.form, args: next }; });
+
+		this.renderMcpKeyValueRepeater(wrap,
+			localize('clawdius.control.mcp.envTitle', "Environment variables"),
+			localize('clawdius.control.mcp.envKeyLabel', "Variable name"),
+			localize('clawdius.control.mcp.envValueLabel', "Variable value"),
+			localize('clawdius.control.mcp.addEnv', "Add variable"),
+			form.env,
+			next => { state.form = { ...state.form, env: next }; });
+	}
+
+	/** Remote (http / sse / ws) fields: url, a headers key/value (secret) repeater, headersHelper, and (http / sse
+	 *  only) a collapsible OAuth subsection. */
+	private renderMcpRemoteFields(wrap: HTMLElement, state: { form: IMcpServerForm; oauthOpen: boolean }): void {
+		const form = state.form;
+		const urlRow = append(wrap, h('.clawdius-control-addrow'));
+		const url = append(urlRow, h('input.clawdius-control-input')) as HTMLInputElement;
+		url.type = 'text'; url.value = form.url;
+		url.placeholder = localize('clawdius.control.mcp.urlPh', "https://host/mcp");
+		url.setAttribute('aria-label', localize('clawdius.control.mcp.urlLabel', "Server URL"));
+		this.mcpFormStore.add(addDisposableListener(url, EventType.INPUT, () => { state.form = { ...state.form, url: url.value }; }));
+
+		this.renderMcpKeyValueRepeater(wrap,
+			localize('clawdius.control.mcp.headersTitle', "Headers"),
+			localize('clawdius.control.mcp.headerKeyLabel', "Header name"),
+			localize('clawdius.control.mcp.headerValueLabel', "Header value"),
+			localize('clawdius.control.mcp.addHeader', "Add header"),
+			form.headers,
+			next => { state.form = { ...state.form, headers: next }; });
+
+		const helperRow = append(wrap, h('.clawdius-control-addrow'));
+		const helper = append(helperRow, h('input.clawdius-control-input')) as HTMLInputElement;
+		helper.type = 'text'; helper.value = form.headersHelper;
+		helper.placeholder = localize('clawdius.control.mcp.headersHelperPh', "headers helper command (optional)");
+		helper.setAttribute('aria-label', localize('clawdius.control.mcp.headersHelperLabel', "Headers helper command"));
+		this.mcpFormStore.add(addDisposableListener(helper, EventType.INPUT, () => { state.form = { ...state.form, headersHelper: helper.value }; }));
+
+		if (transportSupportsOauth(form.transport)) {
+			this.renderMcpOauthSection(wrap, state);
+		}
+	}
+
+	/** The common row shared by all transports: a timeout (ms) number input and an alwaysLoad checkbox. */
+	private renderMcpCommonFields(wrap: HTMLElement, state: { form: IMcpServerForm }): void {
+		const form = state.form;
+		const row = append(wrap, h('.clawdius-control-addrow'));
+		const timeout = append(row, h('input.clawdius-control-input')) as HTMLInputElement;
+		timeout.type = 'number'; timeout.min = '0'; timeout.value = form.timeout;
+		timeout.placeholder = localize('clawdius.control.mcp.timeoutPh', "timeout in ms (optional)");
+		timeout.setAttribute('aria-label', localize('clawdius.control.mcp.timeoutLabel', "Timeout in milliseconds"));
+		this.mcpFormStore.add(addDisposableListener(timeout, EventType.INPUT, () => { state.form = { ...state.form, timeout: timeout.value }; }));
+
+		const checkLabel = append(row, h('label.clawdius-control-mcp-check')) as HTMLLabelElement;
+		const check = append(checkLabel, h('input')) as HTMLInputElement;
+		check.type = 'checkbox'; check.checked = form.alwaysLoad;
+		check.setAttribute('aria-label', localize('clawdius.control.mcp.alwaysLoadLabel', "Always load"));
+		this.mcpFormStore.add(addDisposableListener(check, EventType.CHANGE, () => { state.form = { ...state.form, alwaysLoad: check.checked }; }));
+		append(checkLabel, h('span')).textContent = localize('clawdius.control.mcp.alwaysLoad', "Always load");
+	}
+
+	/** The collapsible OAuth subsection (http / sse only). clientId, callbackPort, scopes, authServerMetadataUrl,
+	 *  plus a note that the client secret is set via the CLI (never written to the JSON file). */
+	private renderMcpOauthSection(wrap: HTMLElement, state: { form: IMcpServerForm; oauthOpen: boolean }): void {
+		const section = append(wrap, h('.clawdius-control-mcp-oauth'));
+		const header = append(section, h('button.clawdius-control-mcp-oauth-toggle')) as HTMLButtonElement;
+		header.setAttribute('aria-expanded', state.oauthOpen ? 'true' : 'false');
+		append(header, h('span')).classList.add(...ThemeIcon.asClassNameArray(state.oauthOpen ? Codicon.chevronDown : Codicon.chevronRight));
+		append(header, h('span')).textContent = localize('clawdius.control.mcp.oauthTitle', "OAuth (optional)");
+		this.mcpFormStore.add(addDisposableListener(header, EventType.CLICK, () => { state.oauthOpen = !state.oauthOpen; this.rerenderMcpForm(); }));
+		if (!state.oauthOpen) { return; }
+
+		const oauth = state.form.oauth;
+		const body = append(section, h('.clawdius-control-mcp-oauth-body'));
+		const set = (patch: Partial<IMcpServerForm['oauth']>): void => { state.form = { ...state.form, oauth: { ...state.form.oauth, ...patch } }; };
+
+		const clientIdRow = append(body, h('.clawdius-control-addrow'));
+		const clientId = append(clientIdRow, h('input.clawdius-control-input')) as HTMLInputElement;
+		clientId.type = 'text'; clientId.value = oauth.clientId;
+		clientId.placeholder = localize('clawdius.control.mcp.clientIdPh', "client id");
+		clientId.setAttribute('aria-label', localize('clawdius.control.mcp.clientIdLabel', "OAuth client id"));
+		this.mcpFormStore.add(addDisposableListener(clientId, EventType.INPUT, () => set({ clientId: clientId.value })));
+		const callbackPort = append(clientIdRow, h('input.clawdius-control-input')) as HTMLInputElement;
+		callbackPort.type = 'number'; callbackPort.min = '0'; callbackPort.value = oauth.callbackPort;
+		callbackPort.placeholder = localize('clawdius.control.mcp.callbackPortPh', "callback port");
+		callbackPort.setAttribute('aria-label', localize('clawdius.control.mcp.callbackPortLabel', "OAuth callback port"));
+		this.mcpFormStore.add(addDisposableListener(callbackPort, EventType.INPUT, () => set({ callbackPort: callbackPort.value })));
+
+		const scopesRow = append(body, h('.clawdius-control-addrow'));
+		const scopes = append(scopesRow, h('input.clawdius-control-input')) as HTMLInputElement;
+		scopes.type = 'text'; scopes.value = oauth.scopes;
+		scopes.placeholder = localize('clawdius.control.mcp.scopesPh', "scopes (space-separated)");
+		scopes.setAttribute('aria-label', localize('clawdius.control.mcp.scopesLabel', "OAuth scopes"));
+		this.mcpFormStore.add(addDisposableListener(scopes, EventType.INPUT, () => set({ scopes: scopes.value })));
+
+		const metadataRow = append(body, h('.clawdius-control-addrow'));
+		const metadata = append(metadataRow, h('input.clawdius-control-input')) as HTMLInputElement;
+		metadata.type = 'text'; metadata.value = oauth.authServerMetadataUrl;
+		metadata.placeholder = localize('clawdius.control.mcp.metadataUrlPh', "authorization server metadata URL");
+		metadata.setAttribute('aria-label', localize('clawdius.control.mcp.metadataUrlLabel', "Authorization server metadata URL"));
+		this.mcpFormStore.add(addDisposableListener(metadata, EventType.INPUT, () => set({ authServerMetadataUrl: metadata.value })));
+
+		append(body, h('.clawdius-control-addnote')).textContent = localize('clawdius.control.mcp.clientSecretNote', "The client secret is never stored in this file. Set it via the CLI: claude mcp add-json <name> ... --client-secret.");
+	}
+
+	/** A repeater of single free-text values (e.g. command args): rows of [value][remove] + an Add button. Editing a
+	 *  field mutates the form in place (no rebuild). Add / remove a row rebuilds only the form subtree (rerenderMcpForm),
+	 *  never the whole pane. Listeners register to mcpFormStore so the rebuild disposes them cleanly. */
+	private renderMcpListRepeater(wrap: HTMLElement, title: string, valuePh: string, valueLabel: string, addLabel: string, values: readonly string[], onChange: (next: string[]) => void): void {
+		const section = append(wrap, h('.clawdius-control-mcp-kv'));
+		append(section, h('.clawdius-control-mcp-kv-title')).textContent = title;
+		values.forEach((value, index) => {
+			const row = append(section, h('.clawdius-control-addrow'));
+			const input = append(row, h('input.clawdius-control-input')) as HTMLInputElement;
+			input.type = 'text'; input.value = value;
+			input.placeholder = valuePh;
+			input.setAttribute('aria-label', localize('clawdius.control.mcp.repeaterValue', "{0} {1}", valueLabel, index + 1));
+			this.mcpFormStore.add(addDisposableListener(input, EventType.INPUT, () => {
+				const next = [...values];
+				next[index] = input.value;
+				onChange(next);
+			}));
+			this.iconButton(row, Codicon.trash, localize('clawdius.control.mcp.remove', "Remove"), () => { onChange(values.filter((_, i) => i !== index)); this.rerenderMcpForm(); }, true, this.mcpFormStore);
+		});
+		this.button(section, addLabel, () => { onChange([...values, '']); this.rerenderMcpForm(); }, 'add', Codicon.add, this.mcpFormStore);
+	}
+
+	/** A repeater of key/value pairs (env / headers). Values are secrets, so the value input is type=password and
+	 *  is never prefilled with a stored secret (the form carries blank values; the merger keeps the stored secret).
+	 *  Rows of [key][value][remove] + an Add button. Editing a field mutates the form in place; add / remove a row
+	 *  rebuilds only the form subtree (rerenderMcpForm), never the whole pane. Listeners register to mcpFormStore so
+	 *  the rebuild disposes them cleanly. */
+	private renderMcpKeyValueRepeater(wrap: HTMLElement, title: string, keyLabel: string, valueLabel: string, addLabel: string, pairs: readonly IMcpServerForm['env'][number][], onChange: (next: IMcpServerForm['env'][number][]) => void): void {
+		const section = append(wrap, h('.clawdius-control-mcp-kv'));
+		append(section, h('.clawdius-control-mcp-kv-title')).textContent = title;
+		pairs.forEach((pair, index) => {
+			const row = append(section, h('.clawdius-control-addrow'));
+			const key = append(row, h('input.clawdius-control-input')) as HTMLInputElement;
+			key.type = 'text'; key.value = pair.key;
+			key.placeholder = keyLabel;
+			key.setAttribute('aria-label', localize('clawdius.control.mcp.repeaterKey', "{0} {1}", keyLabel, index + 1));
+			this.mcpFormStore.add(addDisposableListener(key, EventType.INPUT, () => {
+				const next = [...pairs];
+				next[index] = { key: key.value, value: next[index].value };
+				onChange(next);
+			}));
+			// Secret value: type=password, never prefilled with a stored value (blank => keep on save).
+			const value = append(row, h('input.clawdius-control-input')) as HTMLInputElement;
+			value.type = 'password'; value.value = pair.value;
+			value.placeholder = localize('clawdius.control.mcp.keepBlank', "leave blank to keep");
+			value.setAttribute('aria-label', localize('clawdius.control.mcp.repeaterValue', "{0} {1}", valueLabel, index + 1));
+			value.autocomplete = 'off';
+			this.mcpFormStore.add(addDisposableListener(value, EventType.INPUT, () => {
+				const next = [...pairs];
+				next[index] = { key: next[index].key, value: value.value };
+				onChange(next);
+			}));
+			this.iconButton(row, Codicon.trash, localize('clawdius.control.mcp.remove', "Remove"), () => { onChange(pairs.filter((_, i) => i !== index)); this.rerenderMcpForm(); }, true, this.mcpFormStore);
+		});
+		this.button(section, addLabel, () => { onChange([...pairs, { key: '', value: '' }]); this.rerenderMcpForm(); }, 'add', Codicon.add, this.mcpFormStore);
+	}
+
+	/** Save the open add / edit form. Add: refuse to clobber an existing name, build the def, write it. Edit: read
+	 *  the def FRESH, merge (blank secret values keep the stored ones), write it. Both run race-safe against a read
+	 *  at write time and offer an undo. */
+	private async saveMcpServer(): Promise<void> {
+		const state = this.mcpForm;
+		if (!state) { return; }
+		const name = state.name.trim();
 		if (!name || /[^a-zA-Z0-9_.-]/.test(name)) {
 			this.toast(localize('clawdius.control.mcp.badName', "Enter a simple server name (letters, numbers, '-', '_', '.')."));
 			return;
 		}
-		const uri = await this.mcpBackingFile(form.scope);
-		if (!uri) { return; }
-		let def: Record<string, unknown>;
-		if (form.transport === 'stdio') {
-			const command = form.command.trim();
-			if (!command) { this.toast(localize('clawdius.control.mcp.needCommand', "Enter a command.")); return; }
-			def = { command, args: form.args.trim() ? form.args.trim().split(/\s+/) : [] };
-		} else {
-			const url = form.url.trim();
-			if (!url) { this.toast(localize('clawdius.control.mcp.needUrl', "Enter a URL.")); return; }
-			def = { type: form.transport, url };
+		const form = state.form;
+		if (form.transport === 'stdio' && form.command.trim().length === 0) {
+			this.toast(localize('clawdius.control.mcp.needCommand', "Enter a command."));
+			return;
 		}
-		// Refuse to clobber an existing server.
+		if (form.transport !== 'stdio' && form.url.trim().length === 0) {
+			this.toast(localize('clawdius.control.mcp.needUrl', "Enter a URL."));
+			return;
+		}
+		const uri = await this.mcpBackingFile(state.scope);
+		if (!uri) { return; }
+
+		// Read the backing file FRESH at write time (clobber check on add; secret merge on edit).
 		const raw = await this.readRaw(uri);
+		let servers: Record<string, unknown> = {};
 		if (raw !== undefined) {
 			try {
 				const parsed = parseJsonc<{ mcpServers?: Record<string, unknown> }>(raw);
-				if (parsed?.mcpServers && typeof parsed.mcpServers === 'object' && Object.hasOwn(parsed.mcpServers, name)) {
-					this.toast(localize('clawdius.control.mcp.exists', "A server named \"{0}\" already exists here.", name));
-					return;
-				}
-			} catch { /* malformed file - the write below would surface the error */ }
+				servers = (parsed?.mcpServers && typeof parsed.mcpServers === 'object') ? parsed.mcpServers : {};
+			} catch { /* malformed file - the write below surfaces the error */ }
 		}
+		const exists = Object.hasOwn(servers, name);
+		if (state.mode === 'add' && exists) {
+			this.toast(localize('clawdius.control.mcp.exists', "A server named \"{0}\" already exists here.", name));
+			return;
+		}
+		const def = state.mode === 'edit' ? mergeMcpDefForSave(servers[name], form) : buildMcpDef(form);
 		try {
 			if (raw === undefined || raw.trim().length === 0) { await this.fileService.writeFile(uri, VSBuffer.fromString('{}\n')); }
 			await this.jsonEditing.write(uri, [{ path: ['mcpServers', name], value: def }], true);
 		} catch (err) {
-			this.notificationService.error(localize('clawdius.control.mcp.createFailed', "Could not add the server: {0}", err instanceof Error ? err.message : String(err)));
+			this.notificationService.error(localize('clawdius.control.mcp.createFailed', "Could not save the server: {0}", err instanceof Error ? err.message : String(err)));
 			return;
 		}
-		this.mcpAddForm = undefined;
+		this.mcpForm = undefined;
 		void this.configService.refresh(true);
-		await this.editorService.openEditor({ resource: uri, options: { pinned: true } });
 		this.render();
+		this.toast(state.mode === 'edit'
+			? localize('clawdius.control.mcp.savedToast', "Saved \"{0}\"", name)
+			: localize('clawdius.control.mcp.createdToast', "Added \"{0}\"", name));
+	}
+
+	/** Delete an MCP server from its backing JSON after confirmation, then refresh + offer undo (re-adds the def
+	 *  captured before the delete). */
+	private async deleteMcpServer(scope: 'global' | 'project', name: string): Promise<void> {
+		const uri = await this.mcpBackingFile(scope);
+		if (!uri) { return; }
+		const confirmed = await this.dialogService.confirm({
+			type: 'warning',
+			message: localize('clawdius.control.mcp.confirmDelete', "Delete the MCP server '{0}'?", name),
+			detail: localize('clawdius.control.mcp.confirmDeleteDetail', "Removes it from {0}. You can undo right after.", uri.fsPath),
+			primaryButton: localize('clawdius.control.mcp.deleteBtn', "Delete"),
+		});
+		if (!confirmed.confirmed) { return; }
+		// Capture the def FRESH so Undo can restore exactly what was removed (secrets included - never shown in UI).
+		const prevDef = await this.readMcpServerDef(uri, name);
+		try {
+			await this.jsonEditing.write(uri, [{ path: ['mcpServers', name], value: mcpDeleteWrite(name).value }], true);
+		} catch (err) {
+			this.notificationService.error(localize('clawdius.control.mcp.deleteFailed', "Could not delete the server: {0}", err instanceof Error ? err.message : String(err)));
+			return;
+		}
+		if (this.mcpForm?.name === name && this.mcpForm.scope === scope) { this.mcpForm = undefined; }
+		void this.configService.refresh(true);
+		this.render();
+		this.toast(localize('clawdius.control.mcp.deletedToast', "Deleted \"{0}\"", name),
+			prevDef === undefined ? undefined : () => void this.restoreMcpServer(uri, name, prevDef));
+	}
+
+	/** Undo a delete: re-write the captured def back to the backing JSON. */
+	private async restoreMcpServer(uri: URI, name: string, def: unknown): Promise<void> {
+		try {
+			await this.jsonEditing.write(uri, [{ path: ['mcpServers', name], value: def }], true);
+		} catch (err) {
+			this.notificationService.error(localize('clawdius.control.mcp.restoreFailed', "Could not restore the server: {0}", err instanceof Error ? err.message : String(err)));
+			return;
+		}
+		void this.configService.refresh(true);
+		this.render();
+		this.toast(localize('clawdius.control.mcp.restoredToast', "Restored \"{0}\"", name));
 	}
 
 	// --- MCP tab ---
@@ -1577,13 +1891,17 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		return out.sort((a, b) => a.name.localeCompare(b.name));
 	}
 
-	/** Read each distinct backing JSON file once and summarize every server's def (transport, redacted detail). */
+	/** Read each distinct backing JSON file once and summarize every server's def (transport, redacted detail).
+	 *  After the fresh read, drop the discovered-tools cache only for servers whose def actually CHANGED (or that
+	 *  vanished) - a benign config refresh (e.g. the discovery spawn touching ~/.claude) leaves an unchanged
+	 *  server's loaded tools in place, so the tool list does not flash and disappear. */
 	private async ensureMcpDefs(): Promise<void> {
 		if (this.mcpDefsLoaded) { return; }
 		this.mcpDefsLoaded = true;
 		const gen = this.cacheGeneration;
+		const servers = this.collectMcpServers();
 		const byFile = new Map<string, { resource: URI; items: { id: string; name: string }[] }>();
-		for (const s of this.collectMcpServers()) {
+		for (const s of servers) {
 			const key = s.resource.toString();
 			const entry = byFile.get(key) ?? { resource: s.resource, items: [] };
 			entry.items.push({ id: s.id, name: s.name });
@@ -1592,16 +1910,29 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const defs = new Map<string, IMcpDefSummary>();
 		await Promise.all([...byFile.values()].map(async file => {
 			const raw = await this.readRaw(file.resource);
-			let servers: Record<string, unknown> = {};
+			let mcpServers: Record<string, unknown> = {};
 			if (raw !== undefined) {
 				try {
 					const parsed = parseJsonc<{ mcpServers?: Record<string, unknown> }>(raw);
-					servers = (parsed?.mcpServers && typeof parsed.mcpServers === 'object') ? parsed.mcpServers : {};
-				} catch { servers = {}; }
+					mcpServers = (parsed?.mcpServers && typeof parsed.mcpServers === 'object') ? parsed.mcpServers : {};
+				} catch { mcpServers = {}; }
 			}
-			for (const it of file.items) { defs.set(it.id, summarizeMcpDef(servers[it.name])); }
+			for (const it of file.items) { defs.set(it.id, summarizeMcpDef(mcpServers[it.name])); }
 		}));
 		if (this.isPaneDisposed || gen !== this.cacheGeneration) { return; }
+		// Discovered tools are keyed by server NAME (defs by row id). Prune a server's tools when its def changed.
+		const prevDefs = this.mcpDefs;
+		const changedNames = new Set<string>();
+		for (const s of servers) {
+			const prev = prevDefs.get(s.id);
+			const next = defs.get(s.id);
+			if (prev && next && !sameMcpDefSummary(prev, next)) { changedNames.add(s.name); }
+		}
+		const liveNames = new Set(servers.map(s => s.name));
+		for (const name of [...this.mcpTabTools.keys()]) {
+			if (changedNames.has(name) || !liveNames.has(name)) { this.mcpTabTools.delete(name); }
+		}
+		this.mcpDefs.clear();
 		for (const [k, v] of defs) { this.mcpDefs.set(k, v); }
 		if (this.tab === 'mcp') { this.render(); }
 	}
@@ -1636,6 +1967,19 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			append(row, h('span.clawdius-control-skill-badge.checking')).textContent = localize('clawdius.control.mcp.configured', "configured");
 		}
 
+		// Edit / delete only when this server lives in the writable backing file for its scope. The global tab
+		// also surfaces servers from non-writable files (e.g. enterprise-managed); those get no edit / delete.
+		const formScope: 'global' | 'project' = isProject ? 'project' : 'global';
+		const writable = isProject ? this.mcpWritableProject : this.mcpWritableGlobal;
+		if (writable && isEqual(server.resource, writable)) {
+			this.iconButton(row, Codicon.edit, localize('clawdius.control.mcp.editServer', "Edit server"), () => void this.openMcpEditForm(formScope, server.name));
+			this.iconButton(row, Codicon.trash, localize('clawdius.control.mcp.deleteServer', "Delete server"), () => void this.deleteMcpServer(formScope, server.name), true);
+		}
+
+		// Inline edit form opens directly under the row it edits.
+		if (this.mcpForm?.mode === 'edit' && this.mcpForm.scope === formScope && this.mcpForm.name === server.name) {
+			this.renderMcpForm(parent);
+		}
 		if (expanded) { this.renderMcpServerPanel(parent, server, def); }
 	}
 
@@ -1912,21 +2256,24 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		return block;
 	}
 
-	private button(parent: HTMLElement, label: string, onClick: () => void, variant?: BtnVariant, icon?: ThemeIcon): HTMLButtonElement {
+	/** `store` defaults to the pane-wide renderStore; the MCP form passes its own mcpFormStore so a subtree rebuild
+	 *  disposes the form's button listeners without touching the rest of the pane. */
+	private button(parent: HTMLElement, label: string, onClick: () => void, variant?: BtnVariant, icon?: ThemeIcon, store: DisposableStore = this.renderStore): HTMLButtonElement {
 		const btn = append(parent, h(`button.clawdius-control-btn${variant ? '.' + variant : ''}`)) as HTMLButtonElement;
 		if (icon) { append(btn, h('span.clawdius-control-btn-ico')).classList.add(...ThemeIcon.asClassNameArray(icon)); }
 		append(btn, h('span')).textContent = label;
-		this.renderStore.add(addDisposableListener(btn, EventType.CLICK, () => onClick()));
+		store.add(addDisposableListener(btn, EventType.CLICK, () => onClick()));
 		return btn;
 	}
 
-	/** A compact icon-only button; aria-label + tooltip carry the meaning. */
-	private iconButton(parent: HTMLElement, icon: ThemeIcon, label: string, onClick: () => void, danger?: boolean): HTMLButtonElement {
+	/** A compact icon-only button; aria-label + tooltip carry the meaning. `store` defaults to the pane-wide
+	 *  renderStore; the MCP form passes its own mcpFormStore (see `button`). */
+	private iconButton(parent: HTMLElement, icon: ThemeIcon, label: string, onClick: () => void, danger?: boolean, store: DisposableStore = this.renderStore): HTMLButtonElement {
 		const btn = append(parent, h(`button.clawdius-control-iconbtn${danger ? '.danger' : ''}`)) as HTMLButtonElement;
 		append(btn, h('span')).classList.add(...ThemeIcon.asClassNameArray(icon));
 		btn.title = label;
 		btn.setAttribute('aria-label', label);
-		this.renderStore.add(addDisposableListener(btn, EventType.CLICK, () => onClick()));
+		store.add(addDisposableListener(btn, EventType.CLICK, () => onClick()));
 		return btn;
 	}
 

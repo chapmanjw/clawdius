@@ -36,10 +36,16 @@ export interface IClaudeCapacity {
 // service and the renderer agree). The CLI's ~/.claude/stats-cache.json is parsed into the same shape by
 // readStats below; the accurate, always-current values come from the transcript aggregator. ---
 
-import type {
-	IClaudeModelStat, IClaudeDailyActivity, IClaudeDailyModelTokens, IClaudeLongestSession, IClaudeStats,
+import {
+	windowStats,
+	type IClaudeModelStat, type IClaudeDailyActivity, type IClaudeDailyModelTokens, type IClaudeDailyHourCounts, type IClaudeLongestSession,
+	type IClaudeSessionSummary, type IClaudeStats, type IWindowedStats,
 } from '../../../../../platform/clawdius/common/claudeUsageStatsModel.js';
-export type { IClaudeModelStat, IClaudeDailyActivity, IClaudeDailyModelTokens, IClaudeLongestSession, IClaudeStats };
+export type {
+	IClaudeModelStat, IClaudeDailyActivity, IClaudeDailyModelTokens, IClaudeDailyHourCounts, IClaudeLongestSession,
+	IClaudeSessionSummary, IClaudeStats, IWindowedStats,
+};
+export { windowStats };
 
 /** A model token row resolved for charts: friendly label + family + total tokens (in+out). */
 export interface IModelTokenRow {
@@ -266,6 +272,17 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 	return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+/** Coerce a parsed per-model token object into a safe IClaudeModelStat (every field finite). */
+function coerceModelStat(m: Record<string, unknown>): IClaudeModelStat {
+	return {
+		inputTokens: isFiniteNumber(m.inputTokens),
+		outputTokens: isFiniteNumber(m.outputTokens),
+		cacheReadInputTokens: isFiniteNumber(m.cacheReadInputTokens),
+		cacheCreationInputTokens: isFiniteNumber(m.cacheCreationInputTokens),
+		webSearchRequests: isFiniteNumber(m.webSearchRequests),
+	};
+}
+
 /**
  * Coerce a parsed stats-cache.json into a safe shape. The file is the user's own and the CLI's schema is not
  * guaranteed, so a syntactically valid file with the wrong shape (e.g. `modelUsage: {x: null}` or
@@ -279,13 +296,7 @@ function normalizeStats(raw: unknown): IClaudeStats | undefined {
 	if (isPlainObject(raw.modelUsage)) {
 		for (const [id, m] of Object.entries(raw.modelUsage)) {
 			if (!isPlainObject(m)) { continue; }
-			modelUsage[id] = {
-				inputTokens: isFiniteNumber(m.inputTokens),
-				outputTokens: isFiniteNumber(m.outputTokens),
-				cacheReadInputTokens: isFiniteNumber(m.cacheReadInputTokens),
-				cacheCreationInputTokens: isFiniteNumber(m.cacheCreationInputTokens),
-				webSearchRequests: isFiniteNumber(m.webSearchRequests),
-			};
+			modelUsage[id] = coerceModelStat(m);
 		}
 	}
 
@@ -315,7 +326,11 @@ function normalizeStats(raw: unknown): IClaudeStats | undefined {
 				if (isPlainObject(d.tokensByModel)) {
 					for (const [model, t] of Object.entries(d.tokensByModel)) { tokensByModel[model] = isFiniteNumber(t); }
 				}
-				return { date: typeof d.date === 'string' ? d.date : undefined, tokensByModel };
+				const statsByModel: { [model: string]: IClaudeModelStat } = {};
+				if (isPlainObject(d.statsByModel)) {
+					for (const [model, s] of Object.entries(d.statsByModel)) { if (isPlainObject(s)) { statsByModel[model] = coerceModelStat(s); } }
+				}
+				return { date: typeof d.date === 'string' ? d.date : undefined, tokensByModel, statsByModel };
 			})
 			.filter(d => typeof d.date === 'string')
 			.sort((a, b) => (a.date! < b.date! ? -1 : 1));
@@ -324,11 +339,40 @@ function normalizeStats(raw: unknown): IClaudeStats | undefined {
 		}
 	}
 
-	const hourCounts: { [hour: string]: number } = {};
-	if (isPlainObject(raw.hourCounts)) {
-		for (const [hour, c] of Object.entries(raw.hourCounts)) {
-			const hn = Number(hour);
-			if (Number.isInteger(hn) && hn >= 0 && hn <= 23) { hourCounts[String(hn)] = isFiniteNumber(c); }
+	const coerceHourCounts = (raw0: unknown): { [hour: string]: number } => {
+		const out: { [hour: string]: number } = {};
+		if (isPlainObject(raw0)) {
+			for (const [hour, c] of Object.entries(raw0)) {
+				const hn = Number(hour);
+				if (Number.isInteger(hn) && hn >= 0 && hn <= 23) { out[String(hn)] = isFiniteNumber(c); }
+			}
+		}
+		return out;
+	};
+	const hourCounts = coerceHourCounts(raw.hourCounts);
+
+	let dailyHourCounts: IClaudeDailyHourCounts[] = [];
+	if (Array.isArray(raw.dailyHourCounts)) {
+		dailyHourCounts = raw.dailyHourCounts
+			.filter(isPlainObject)
+			.map(d => ({ date: typeof d.date === 'string' ? d.date : undefined, hourCounts: coerceHourCounts(d.hourCounts) }))
+			.filter(d => typeof d.date === 'string')
+			.sort((a, b) => (a.date! < b.date! ? -1 : 1));
+		if (dailyHourCounts.length > MAX_DAILY_ACTIVITY) {
+			dailyHourCounts = dailyHourCounts.slice(-MAX_DAILY_ACTIVITY);
+		}
+	}
+
+	const sessions: IClaudeSessionSummary[] = [];
+	if (Array.isArray(raw.sessions)) {
+		for (const s of raw.sessions) {
+			if (!isPlainObject(s)) { continue; }
+			sessions.push({
+				sessionId: typeof s.sessionId === 'string' ? s.sessionId : undefined,
+				startDate: typeof s.startDate === 'string' ? s.startDate : undefined,
+				duration: isFiniteNumber(s.duration),
+				messageCount: isFiniteNumber(s.messageCount),
+			});
 		}
 	}
 
@@ -346,6 +390,8 @@ function normalizeStats(raw: unknown): IClaudeStats | undefined {
 		modelUsage,
 		dailyActivity,
 		dailyModelTokens,
+		dailyHourCounts,
+		sessions,
 		hourCounts,
 		longestSession,
 		totalSessions: isFiniteNumber(raw.totalSessions),

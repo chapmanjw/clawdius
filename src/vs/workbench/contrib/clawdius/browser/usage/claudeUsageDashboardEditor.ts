@@ -14,7 +14,11 @@ import { $ as h, append, Dimension, size } from '../../../../../base/browser/dom
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { MutableDisposable } from '../../../../../base/common/lifecycle.js';
 import { ICommandService } from '../../../../../platform/commands/common/commands.js';
+import { IDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
+import { IHoverService } from '../../../../../platform/hover/browser/hover.js';
+import { INotificationService } from '../../../../../platform/notification/common/notification.js';
+import { IQuickInputService } from '../../../../../platform/quickinput/common/quickInput.js';
 import { IAgentHostService } from '../../../../../platform/agentHost/common/agentService.js';
 import { IStorageService } from '../../../../../platform/storage/common/storage.js';
 import { ITelemetryService } from '../../../../../platform/telemetry/common/telemetry.js';
@@ -23,6 +27,7 @@ import { IEditorOptions } from '../../../../../platform/editor/common/editor.js'
 import { EditorPane } from '../../../../browser/parts/editor/editorPane.js';
 import { IEditorOpenContext } from '../../../../common/editor.js';
 import { IEditorGroup } from '../../../../services/editor/common/editorGroupsService.js';
+import { IJSONEditingService } from '../../../../services/configuration/common/jsonEditing.js';
 import { IPathService } from '../../../../services/path/common/pathService.js';
 import { ClaudeUsageDashboardInput } from './claudeUsageDashboardInput.js';
 import { ClaudeUsageDashboardView } from './claudeUsageDashboardView.js';
@@ -43,6 +48,11 @@ export class ClaudeUsageDashboardEditor extends EditorPane {
 		@IPathService private readonly pathService: IPathService,
 		@ICommandService private readonly commandService: ICommandService,
 		@IAgentHostService private readonly agentHostService: IAgentHostService,
+		@IJSONEditingService private readonly jsonEditingService: IJSONEditingService,
+		@IDialogService private readonly dialogService: IDialogService,
+		@INotificationService private readonly notificationService: INotificationService,
+		@IQuickInputService private readonly quickInputService: IQuickInputService,
+		@IHoverService private readonly hoverService: IHoverService,
 	) {
 		super(ClaudeUsageDashboardEditor.ID, group, telemetryService, themeService, storageService);
 	}
@@ -54,7 +64,7 @@ export class ClaudeUsageDashboardEditor extends EditorPane {
 
 	override async setInput(input: ClaudeUsageDashboardInput, options: IEditorOptions | undefined, context: IEditorOpenContext, token: CancellationToken): Promise<void> {
 		await super.setInput(input, options, context, token);
-		const view = new ClaudeUsageDashboardView(this.container, this.fileService, this.pathService, this.commandService, this.agentHostService);
+		const view = new ClaudeUsageDashboardView(this.container, this.fileService, this.pathService, this.commandService, this.agentHostService, this.jsonEditingService, this.dialogService, this.notificationService, this.quickInputService, this.hoverService);
 		this.view.value = view;
 		await view.load(token);
 	}

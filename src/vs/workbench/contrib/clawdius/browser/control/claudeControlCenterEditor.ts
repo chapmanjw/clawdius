@@ -64,6 +64,9 @@ import {
 import {
 	ISkillsState, PluginState, SkillOverride, disableAllHooksWrite, disableBundledSkillsWrite, parseDisableAllHooks, parseSkills, pluginEnabledWrite, skillOverrideWrite,
 } from './claudeControlTabsModel.js';
+import {
+	ICatalogPlugin, IInstalledPlugin, IMarketplace, MARKETPLACE_NAME_RE, parseInstalledPlugins, parseKnownMarketplaces, parseMarketplaceCatalog,
+} from './claudePluginsModel.js';
 import { ISkillIssue, ISkillValidation, validateSkillPackage } from './claudeSkillValidationModel.js';
 import {
 	IMcpDefSummary, IMcpServerForm, MCP_TRANSPORTS, McpApproval, McpTransport, buildMcpDef, emptyMcpForm, enableAllProjectMcpServersWrite, mcpApproval,
@@ -147,6 +150,21 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	private mcpWritableProject: URI | undefined;
 	/** An open "add plugin" form on the Plugins tab. */
 	private pluginAddForm: { id: string } | undefined;
+	/** Plugins-tab local data (marketplaces + merged catalog + installed list), loaded lazily from
+	 *  ~/.claude/plugins. Cleared on a config change; reloads on the next render. */
+	private pluginsData: { marketplaces: IMarketplace[]; catalog: ICatalogPlugin[]; installed: IInstalledPlugin[] } | undefined;
+	private pluginsLoaded = false;
+	/** The Browse-plugins search box (case-insensitive substring over name / description / marketplace). */
+	private pluginFilter = '';
+	/** Live reference to the current Browse search input, re-set on each render so the filter handler can restore
+	 *  focus + caret after the synchronous re-render replaces the element (avoids a fragile querySelector). */
+	private pluginSearchInput: HTMLInputElement | undefined;
+	/** The Add-marketplace input value (a github owner/repo, URL, or local path; not shape-restricted). */
+	private addMarketplaceValue = '';
+	/** Whether the Installed-plugins "Add plugin" panel (add by id + browse marketplaces) is revealed. */
+	private pluginAddOpen = false;
+	/** Whether the Marketplaces "Add marketplace" input is revealed. */
+	private marketplaceAddOpen = false;
 	/**
 	 * An open inline add-rule editor. Three modes (codex classification): 'builtin' = a Claude built-in tool
 	 * (dropdown + optional specifier); 'mcp' = an MCP server tool (server dropdown + (All tools) / specific
@@ -212,6 +230,10 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			this.expandedSkillDirs.clear();
 			this.mcpDefs.clear();
 			this.mcpDefsLoaded = false;
+			// A marketplace add / update / remove or a plugin install lands as new files under ~/.claude/plugins;
+			// drop the cached plugins data so the next render re-reads it.
+			this.pluginsData = undefined;
+			this.pluginsLoaded = false;
 			// Do NOT clear discovered tools here. Discovery RUNS the server (the spawn touches ~/.claude), which the
 			// config watcher catches and turns into a benign onDidChange - clearing here would make a freshly loaded
 			// tool list vanish a moment after it appears. The cached tools for a server are dropped only when that
@@ -433,6 +455,8 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		this.adding = undefined;
 		this.mcpForm = undefined;
 		this.pluginAddForm = undefined;
+		this.pluginAddOpen = false;
+		this.marketplaceAddOpen = false;
 		this.skillFileForm = undefined;
 	}
 
@@ -2131,18 +2155,229 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	private renderPluginsTab(parent: HTMLElement): void {
 		this.renderHero(parent,
 			localize('clawdius.control.plugins.title', "Plugins"),
-			localize('clawdius.control.plugins.sub', "Enable or disable installed Claude Code plugins. Plugins apply globally - writes enabledPlugins to ~/.claude/settings.json."));
+			localize('clawdius.control.plugins.sub', "Browse marketplaces, install plugins, and enable or disable what's installed. Network actions run visibly in a terminal via the Claude Code CLI - the IDE makes no network calls."));
 
-		const addBlock = this.block(parent, localize('clawdius.control.plugins.addTitle', "Add a plugin"));
-		this.renderPluginAdd(addBlock);
+		// The marketplaces + catalog + installed list come from local files under ~/.claude/plugins. Kick the read
+		// off lazily; the sections show a loading note until it lands (loadPluginsData then re-renders).
+		if (!this.pluginsLoaded) { void this.loadPluginsData(); }
 
-		const block = this.block(parent, localize('clawdius.control.plugins.listTitle', "Installed plugins"));
+		// Installed plugins first, then Marketplaces. Each section's header carries an "Add" button that reveals
+		// its add flow inline (plugins: add by id or browse marketplaces; marketplaces: add by source).
+		this.renderInstalledSection(parent);
+		this.renderMarketplacesSection(parent);
+	}
+
+	/** "Installed plugins" section: the enable/disable list, with an "Add plugin" header button that reveals an
+	 *  inline panel offering add-by-id and browse-the-marketplaces. */
+	private renderInstalledSection(parent: HTMLElement): void {
+		const block = append(parent, h('.clawdius-control-block'));
+		const hd = append(block, h('.clawdius-control-bar'));
+		append(hd, h('.clawdius-control-block-title')).textContent = localize('clawdius.control.plugins.listTitle', "Installed plugins");
+		append(hd, h('.clawdius-control-spacer'));
+		this.button(hd, localize('clawdius.control.plugins.addBtn', "Add plugin"), () => { this.pluginAddOpen = !this.pluginAddOpen; this.render(); }, 'add', Codicon.add);
+
+		if (this.pluginAddOpen) { this.renderPluginAddPanel(block); }
+
 		const plugins = this.collectPlugins();
 		if (plugins.length === 0) {
-			append(block, h('.clawdius-control-empty')).textContent = localize('clawdius.control.plugins.none', "No plugins installed yet. Add one above, or install via the Claude Code CLI.");
+			append(block, h('.clawdius-control-empty')).textContent = localize('clawdius.control.plugins.none', "No plugins installed yet. Use Add plugin to install one.");
 			return;
 		}
 		for (const plugin of plugins) { this.renderPluginRow(block, plugin); }
+	}
+
+	/** The revealed "Add plugin" panel: add by id (Enable / Install in terminal) above browse-the-marketplaces. */
+	private renderPluginAddPanel(parent: HTMLElement): void {
+		const panel = append(parent, h('.clawdius-control-skill-panel'));
+		append(panel, h('.clawdius-control-skill-files-title')).textContent = localize('clawdius.control.plugins.byId', "Add by id");
+		this.renderPluginAdd(panel);
+		append(panel, h('.clawdius-control-skill-files-title')).textContent = localize('clawdius.control.plugins.browseTitle', "Browse marketplaces");
+		this.renderBrowseInline(panel);
+	}
+
+	/** Read the local plugin sources under ~/.claude/plugins (known marketplaces, every marketplace catalog, and the
+	 *  installed list) and merge them into pluginsData, then re-render. All reads are local files - no network. A
+	 *  missing / malformed file reads as empty. Guarded by isPaneDisposed + cacheGeneration so a slow read never
+	 *  writes a stale result back over a cache that was cleared meanwhile. */
+	private async loadPluginsData(): Promise<void> {
+		if (this.pluginsLoaded) { return; }
+		this.pluginsLoaded = true;
+		const gen = this.cacheGeneration;
+		const pluginsDir = URI.joinPath(await this.pathService.userHome(), '.claude', 'plugins');
+		const marketplaces = parseKnownMarketplaces(await this.readJson(URI.joinPath(pluginsDir, 'known_marketplaces.json')));
+		const installed = parseInstalledPlugins(await this.readJson(URI.joinPath(pluginsDir, 'installed_plugins.json')));
+		const catalog: ICatalogPlugin[] = [];
+		await Promise.all(marketplaces.map(async m => {
+			const catalogUri = URI.joinPath(pluginsDir, 'marketplaces', m.name, '.claude-plugin', 'marketplace.json');
+			catalog.push(...parseMarketplaceCatalog(await this.readJson(catalogUri), m.name));
+		}));
+		if (this.isPaneDisposed || gen !== this.cacheGeneration) { return; }
+		catalog.sort((a, b) => a.name.localeCompare(b.name));
+		this.pluginsData = { marketplaces, catalog, installed };
+		if (this.tab === 'plugins') { this.render(); }
+	}
+
+	/** Read + JSON.parse a local file, or undefined if it is missing / unreadable / not valid JSON. */
+	private async readJson(uri: URI): Promise<unknown> {
+		const raw = await this.readRaw(uri);
+		if (raw === undefined) { return undefined; }
+		try {
+			return JSON.parse(raw);
+		} catch {
+			return undefined;
+		}
+	}
+
+	/** "Marketplaces" section: an add-marketplace row plus one row per known marketplace (Update / Remove). */
+	private renderMarketplacesSection(parent: HTMLElement): void {
+		const block = append(parent, h('.clawdius-control-block'));
+		const hd = append(block, h('.clawdius-control-bar'));
+		append(hd, h('.clawdius-control-block-title')).textContent = localize('clawdius.control.plugins.marketplacesTitle', "Marketplaces");
+		append(hd, h('.clawdius-control-spacer'));
+		this.button(hd, localize('clawdius.control.plugins.marketplaceAddBtn', "Add marketplace"), () => { this.marketplaceAddOpen = !this.marketplaceAddOpen; this.render(); }, 'add', Codicon.add);
+
+		if (this.marketplaceAddOpen) {
+			const wrap = append(block, h('.clawdius-control-mcp-addform'));
+			const row = append(wrap, h('.clawdius-control-addrow'));
+			const input = append(row, h('input.clawdius-control-input')) as HTMLInputElement;
+			input.type = 'text';
+			input.value = this.addMarketplaceValue;
+			input.placeholder = localize('clawdius.control.plugins.marketplacePh', "github-owner/repo, URL, or path");
+			input.setAttribute('aria-label', localize('clawdius.control.plugins.marketplaceLabel', "Marketplace source"));
+			this.renderStore.add(addDisposableListener(input, EventType.INPUT, () => { this.addMarketplaceValue = input.value; }));
+			this.button(row, localize('clawdius.control.plugins.marketplaceAdd', "Add"), () => void this.marketplaceAddInTerminal(this.addMarketplaceValue), 'add', Codicon.add);
+			append(wrap, h('.clawdius-control-addnote')).textContent = localize('clawdius.control.plugins.marketplaceAddNote', "Opens a terminal with `claude plugin marketplace add` ready to run. The IDE makes no network calls.");
+		}
+
+		if (!this.pluginsData) {
+			append(block, h('.clawdius-control-empty')).textContent = localize('clawdius.control.plugins.loading', "Loading...");
+			return;
+		}
+		if (this.pluginsData.marketplaces.length === 0) {
+			append(block, h('.clawdius-control-empty')).textContent = localize('clawdius.control.plugins.noMarketplaces', "No marketplaces yet. Use Add marketplace to add one.");
+			return;
+		}
+		for (const marketplace of this.pluginsData.marketplaces) { this.renderMarketplaceRow(block, marketplace); }
+	}
+
+	private renderMarketplaceRow(parent: HTMLElement, marketplace: IMarketplace): void {
+		const row = append(parent, h('.clawdius-control-caprow'));
+		const info = append(row, h('.clawdius-control-cap-info'));
+		const nameEl = append(info, h('.clawdius-control-cap-name'));
+		append(nameEl, h('span')).textContent = marketplace.name;
+		if (marketplace.autoUpdate) {
+			append(nameEl, h('span.clawdius-control-cap-origin.muted')).textContent = localize('clawdius.control.plugins.autoUpdate', "auto-update");
+		}
+		// Date is shown as a raw YYYY-MM-DD slice (no locale formatting) to stay stable + ASCII.
+		const updated = marketplace.lastUpdated ? marketplace.lastUpdated.slice(0, 10) : undefined;
+		let desc: string | undefined;
+		if (marketplace.sourceLabel && updated) {
+			desc = localize('clawdius.control.plugins.sourceUpdated', "{0} - updated {1}", marketplace.sourceLabel, updated);
+		} else if (marketplace.sourceLabel) {
+			desc = marketplace.sourceLabel;
+		} else if (updated) {
+			desc = localize('clawdius.control.plugins.updatedOnly', "updated {0}", updated);
+		}
+		if (desc) { append(info, h('.clawdius-control-cap-desc')).textContent = desc; }
+		append(row, h('.clawdius-control-spacer'));
+		this.button(row, localize('clawdius.control.plugins.update', "Update"), () => void this.marketplaceCmdInTerminal('update', marketplace.name), 'ghost');
+		this.button(row, localize('clawdius.control.plugins.remove', "Remove"), () => void this.marketplaceCmdInTerminal('remove', marketplace.name), 'danger');
+	}
+
+	/** Browse-the-marketplaces list (rendered inline inside the Add-plugin panel): a search box over every marketplace
+	 *  catalog, with Install (or an enable/disable toggle when already installed). The catalog can be large, so the
+	 *  unfiltered view is capped. */
+	private renderBrowseInline(parent: HTMLElement): void {
+		const block = parent;
+
+		if (!this.pluginsData) {
+			append(block, h('.clawdius-control-empty')).textContent = localize('clawdius.control.plugins.loading', "Loading...");
+			return;
+		}
+		const data = this.pluginsData;
+		if (data.catalog.length === 0) {
+			append(block, h('.clawdius-control-empty')).textContent = localize('clawdius.control.plugins.noCatalog', "No plugins to browse yet. Add a marketplace above, then run Update on it.");
+			return;
+		}
+
+		const searchRow = append(block, h('.clawdius-control-addrow'));
+		const input = append(searchRow, h('input.clawdius-control-input.clawdius-control-plugin-search')) as HTMLInputElement;
+		input.type = 'text';
+		input.value = this.pluginFilter;
+		input.placeholder = localize('clawdius.control.plugins.searchPh', "Search plugins...");
+		input.setAttribute('aria-label', localize('clawdius.control.plugins.searchLabel', "Search plugins"));
+		this.pluginSearchInput = input;
+		// Filtering re-renders the whole tab, which replaces this input element. render() is synchronous and re-runs
+		// this method, re-setting pluginSearchInput to the fresh input - re-focus it and restore the caret so typing
+		// is not interrupted.
+		this.renderStore.add(addDisposableListener(input, EventType.INPUT, () => {
+			this.pluginFilter = input.value;
+			const caret = input.selectionStart ?? input.value.length;
+			this.render();
+			this.pluginSearchInput?.focus();
+			this.pluginSearchInput?.setSelectionRange(caret, caret);
+		}));
+
+		const installedIds = new Set(data.installed.map(p => p.id));
+		const statusById = new Map<string, string>(this.collectPlugins().map(p => [p.id, p.status] as const));
+		const filter = this.pluginFilter.trim().toLowerCase();
+		const matches = filter.length === 0
+			? data.catalog
+			: data.catalog.filter(p => p.name.toLowerCase().includes(filter)
+				|| (p.description ? p.description.toLowerCase().includes(filter) : false)
+				|| p.marketplace.toLowerCase().includes(filter));
+
+		if (matches.length === 0) {
+			append(block, h('.clawdius-control-empty')).textContent = localize('clawdius.control.plugins.noMatches', "No plugins match \"{0}\".", this.pluginFilter.trim());
+			return;
+		}
+
+		// The official catalog is large; cap the unfiltered list so the pane stays responsive.
+		const cap = 60;
+		const capped = filter.length === 0 && matches.length > cap;
+		const shown = capped ? matches.slice(0, cap) : matches;
+		for (const plugin of shown) {
+			this.renderCatalogRow(block, plugin, installedIds.has(plugin.id), statusById.get(plugin.id));
+		}
+		if (capped) {
+			append(block, h('.clawdius-control-addnote')).textContent = localize('clawdius.control.plugins.capped', "Showing first {0} of {1} - search to narrow.", cap, matches.length);
+		}
+	}
+
+	/** A single catalog plugin. Installed plugins reuse the enable/disable toggle (on = installed and not explicitly
+	 *  disabled in enabledPlugins); not-installed plugins get an Install button that hands off to a terminal. */
+	private renderCatalogRow(parent: HTMLElement, plugin: ICatalogPlugin, installed: boolean, status: string | undefined): void {
+		if (installed) {
+			this.renderToggleRow(parent, plugin.name, this.catalogHint(plugin), status !== 'disabled', next => void this.setPluginEnabled(plugin.id, next));
+			return;
+		}
+		const row = append(parent, h('.clawdius-control-caprow'));
+		const info = append(row, h('.clawdius-control-cap-info'));
+		const nameEl = append(info, h('.clawdius-control-cap-name'));
+		append(nameEl, h('span')).textContent = plugin.name;
+		append(nameEl, h('span.clawdius-control-cap-origin')).textContent = plugin.marketplace;
+		if (plugin.category) { append(nameEl, h('span.clawdius-control-cap-origin.muted')).textContent = plugin.category; }
+		const desc = this.truncate(plugin.description, 140);
+		if (desc) { append(info, h('.clawdius-control-cap-desc')).textContent = desc; }
+		append(row, h('.clawdius-control-spacer'));
+		this.button(row, localize('clawdius.control.plugins.installBtn', "Install"), () => void this.installCatalogPlugin(plugin.id), 'primary', Codicon.cloudDownload);
+	}
+
+	/** The one-line hint for an installed catalog plugin's toggle row: marketplace, optional category, optional
+	 *  truncated description. */
+	private catalogHint(plugin: ICatalogPlugin): string {
+		const meta = plugin.category
+			? localize('clawdius.control.plugins.metaCat', "{0} - {1}", plugin.marketplace, plugin.category)
+			: plugin.marketplace;
+		const desc = this.truncate(plugin.description, 120);
+		return desc ? localize('clawdius.control.plugins.metaDesc', "{0} - {1}", meta, desc) : meta;
+	}
+
+	/** Trim + cap free text for display, appending an ellipsis when cut. Empty / missing text returns undefined. */
+	private truncate(text: string | undefined, max: number): string | undefined {
+		const trimmed = (text ?? '').trim();
+		if (trimmed.length === 0) { return undefined; }
+		return trimmed.length > max ? `${trimmed.slice(0, max).trimEnd()}...` : trimmed;
 	}
 
 	/** Enable a plugin by id (writes enabledPlugins) and/or install it via the CLI in an integrated terminal. */
@@ -2182,12 +2417,51 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			this.toast(localize('clawdius.control.plugins.badIdInstall', "That isn't a valid plugin-id@marketplace-id."));
 			return;
 		}
+		// Pre-fill the install command (not auto-run) so the user reviews + handles any marketplace prompts.
+		await this.sendClaudeCommandToTerminal(id ? `claude plugin install ${id}` : 'claude plugin install ');
+	}
+
+	/** Hand a `claude ...` command to a fresh integrated terminal WITHOUT auto-running it (sendText `false`), so the
+	 *  user reviews + runs it themselves. This is the ONLY way the Plugins tab touches the network: the IDE never
+	 *  makes the call - the user's `claude` CLI does, visibly. cwd is the first workspace folder, else the home dir. */
+	private async sendClaudeCommandToTerminal(command: string): Promise<void> {
 		const cwd = this.workspaceService.getWorkspace().folders[0]?.uri ?? await this.pathService.userHome();
 		const instance = await this.terminalService.createTerminal({ cwd });
 		this.terminalService.setActiveInstance(instance);
 		this.terminalGroupService.showPanel(true);
-		// Pre-fill the install command (not auto-run) so the user reviews + handles any marketplace prompts.
-		instance.sendText(id ? `claude plugin install ${id}` : 'claude plugin install ', false);
+		instance.sendText(command, false);
+	}
+
+	/** Add a marketplace via the CLI in a terminal. The source can be a github owner/repo, a URL, or a local path,
+	 *  so it is NOT shape-restricted; we reject only an empty value or one with a newline, and never auto-run it
+	 *  (sendText `false`) so the user reviews the command. */
+	private async marketplaceAddInTerminal(source: string): Promise<void> {
+		const trimmed = source.trim();
+		if (trimmed.length === 0 || /[\r\n]/.test(trimmed)) {
+			this.toast(localize('clawdius.control.plugins.badMarketplace', "Enter a marketplace as a github owner/repo, URL, or local path."));
+			return;
+		}
+		this.addMarketplaceValue = '';
+		await this.sendClaudeCommandToTerminal(`claude plugin marketplace add ${trimmed}`);
+	}
+
+	/** Update or remove a known marketplace by name. The name comes from a parsed local file, but it is still gated
+	 *  on MARKETPLACE_NAME_RE so nothing shell-unsafe can reach the command. */
+	private async marketplaceCmdInTerminal(sub: 'update' | 'remove', name: string): Promise<void> {
+		if (!MARKETPLACE_NAME_RE.test(name)) {
+			this.toast(localize('clawdius.control.plugins.badMarketplaceName', "That marketplace name isn't valid."));
+			return;
+		}
+		await this.sendClaudeCommandToTerminal(`claude plugin marketplace ${sub} ${name}`);
+	}
+
+	/** Install a catalog plugin by `plugin-id@marketplace-id` via the CLI in a terminal (gated on PLUGIN_ID_RE). */
+	private async installCatalogPlugin(id: string): Promise<void> {
+		if (!PLUGIN_ID_RE.test(id)) {
+			this.toast(localize('clawdius.control.plugins.badId', "Enter a plugin id as plugin-id@marketplace-id."));
+			return;
+		}
+		await this.sendClaudeCommandToTerminal(`claude plugin install ${id}`);
 	}
 
 	/** Installed + configured plugins from the scanned config (global; the CLI scopes plugins globally). */

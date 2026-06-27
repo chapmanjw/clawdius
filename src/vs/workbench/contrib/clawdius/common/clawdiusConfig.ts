@@ -178,6 +178,15 @@ export interface IClawdiusConfigSnapshot {
 	readonly scopes: ReadonlyArray<IConfigScopeGroup>;
 }
 
+/** The MEASURED always-on cached prefix from a real session transcript (system prompt + tool schemas + memory +
+ *  menus), as ground truth next to the inspector's estimate. Read locally; no network. */
+export interface IMeasuredPrefix {
+	/** cache_read + cache_creation input tokens on the session's last assistant turn (the whole cached prefix). */
+	readonly tokens: number;
+	/** The turn's ISO timestamp, when available (for "measured ... at HH:MM"). */
+	readonly atIso?: string;
+}
+
 /** Shared, container-wide config service: one scan + watcher set produces the snapshot the Control Center reads. */
 export const IClawdiusConfigService = createDecorator<IClawdiusConfigService>('clawdiusConfigService');
 
@@ -192,6 +201,9 @@ export interface IClawdiusConfigService {
 	readonly hasResolved: boolean;
 	/** Re-scan both scopes from disk. Pass `force` after a write to guarantee a scan that starts after it. */
 	refresh(force?: boolean): Promise<void>;
+	/** The measured always-on cached prefix from the workspace folder's most recent session transcript, as
+	 *  ground truth next to the estimate. Local read; undefined when there is no transcript yet. */
+	readMeasuredPrefix(folder: URI): Promise<IMeasuredPrefix | undefined>;
 }
 
 /** Codicon id used for a section row. */

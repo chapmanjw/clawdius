@@ -32,7 +32,7 @@ import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPan
 import { EditorResourceAccessor, SideBySideEditor } from '../../../common/editor.js';
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
-import { IClawdiusConfigService } from '../common/clawdiusConfig.js';
+import { IClawdiusConfigService, IMeasuredPrefix } from '../common/clawdiusConfig.js';
 import { BudgetTier, formatApproxTokens, IBudgetHeading, IBudgetSource, IContextBudget, resolveContextBudget } from '../common/clawdiusContextBudget.js';
 
 export const CONTEXT_BUDGET_VIEW_CONTAINER_ID = 'workbench.view.clawdiusContextBudget';
@@ -57,6 +57,9 @@ export class ClawdiusContextBudgetView extends ViewPane {
 	private readonly renderStore = this._register(new DisposableStore());
 	private readonly renderScheduler = this._register(new RunOnceScheduler(() => this.renderBudget(), 60));
 	private didRefresh = false;
+	/** Measured prefix per workspace folder (null = fetched, none found), so the async read happens once. */
+	private readonly measuredCache = new Map<string, IMeasuredPrefix | null>();
+	private readonly measuredPending = new Set<string>();
 
 	constructor(
 		options: IViewPaneOptions,
@@ -141,6 +144,34 @@ export class ClawdiusContextBudgetView extends ViewPane {
 
 		const foot = append(this.bodyEl, $('.ctxb-foot'));
 		foot.textContent = localize('clawdius.ctxb.foot', "Estimated; counts memory, rules + the skill menu. Excludes the system prompt, MCP tool schemas, and agent/command menus that also load every turn. \"Loaded\" is predicted from your config, not confirmed.");
+
+		this.renderMeasured(folders);
+	}
+
+	/** The measured cached-prefix from the project's most recent session transcript (system + tools + MCP +
+	 *  memory) - real ground truth next to the estimate. Fetched once per folder, async, zero-egress. */
+	private renderMeasured(folders: readonly URI[]): void {
+		if (folders.length === 0) {
+			return;
+		}
+		const folder = folders[0];
+		const key = folder.toString();
+		const cached = this.measuredCache.get(key);
+		if (cached === undefined) {
+			if (!this.measuredPending.has(key)) {
+				this.measuredPending.add(key);
+				this.configService.readMeasuredPrefix(folder).then(res => {
+					this.measuredCache.set(key, res ?? null);
+					this.measuredPending.delete(key);
+					this.renderScheduler.schedule();
+				}, () => this.measuredPending.delete(key));
+			}
+			return;
+		}
+		if (cached) {
+			const el = append(this.bodyEl, $('.ctxb-measured'));
+			el.textContent = localize('clawdius.ctxb.measured', "Measured last session: {0} cached prefix (system + tools + MCP + memory) — your estimate above is the memory & rules slice of it.", formatApproxTokens(cached.tokens));
+		}
 	}
 
 	private renderHead(activeFile: URI | undefined, budget: IContextBudget): void {

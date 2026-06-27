@@ -133,4 +133,14 @@
 	color: var(--vscode-descriptionForeground);
 	padding: 6px 0;
 }
+
+.clawdius-ctxbudget .ctxb-measured {
+	color: var(--vscode-foreground);
+	font-size: 11px;
+	margin-top: 6px;
+	padding: 4px 6px;
+	border-radius: 4px;
+	background: var(--vscode-textBlockQuote-background, rgba(127, 127, 127, 0.1));
+	border-left: 2px solid var(--vscode-textLink-foreground);
+}
 /* CLAWDIUS-END */

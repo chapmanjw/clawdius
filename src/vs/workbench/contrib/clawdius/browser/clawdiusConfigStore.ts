@@ -23,6 +23,7 @@ import { IPathService } from '../../../services/path/common/pathService.js';
 import {
 	ConfigBacking, ConfigScope, ConfigSection, CONFIG_SECTIONS, ContextInclusion, IClawdiusConfigService,
 	IClawdiusConfigSnapshot, IConfigBudgetImport, IConfigBudgetMeta, IConfigItem, IConfigScopeGroup, IConfigSectionGroup,
+	IMeasuredPrefix,
 } from '../common/clawdiusConfig.js';
 import { estimateTokens } from '../common/clawdiusContextBudget.js';
 
@@ -174,6 +175,28 @@ function encodeProjectDir(folder: URI): string {
 /** Claude Code loads only the first ~200 lines / 25KB of MEMORY.md, so estimate from that slice. */
 function capAutoMemory(content: string): string {
 	return content.split(/\r?\n/).slice(0, 200).join('\n').slice(0, 25 * 1024);
+}
+
+/** Scan a session transcript (JSONL) from the end for the last assistant turn with usage, returning its full
+ *  cached prefix (cache_read + cache_creation input tokens) - the MEASURED always-on size for that session.
+ *  Exported for unit tests. */
+export function parseMeasuredPrefix(text: string): IMeasuredPrefix | undefined {
+	const lines = text.split(/\r?\n/);
+	for (let i = lines.length - 1; i >= 0; i--) {
+		const line = lines[i].trim();
+		if (!line || line[0] !== '{') { continue; }
+		try {
+			const obj = JSON.parse(line);
+			const usage = obj?.message?.usage;
+			if (obj?.type === 'assistant' && usage && typeof usage === 'object') {
+				const cached = (typeof usage.cache_read_input_tokens === 'number' ? usage.cache_read_input_tokens : 0)
+					+ (typeof usage.cache_creation_input_tokens === 'number' ? usage.cache_creation_input_tokens : 0);
+				const tokens = cached > 0 ? cached : (typeof usage.input_tokens === 'number' ? usage.input_tokens : 0);
+				if (tokens > 0) { return { tokens, atIso: typeof obj.timestamp === 'string' ? obj.timestamp : undefined }; }
+			}
+		} catch { /* skip a non-JSON line */ }
+	}
+	return undefined;
 }
 
 /** Markdown ATX headings (`#`..`######`) with 1-based line numbers. */
@@ -546,6 +569,22 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 
 	private async readText(uri: URI): Promise<string | undefined> {
 		try { return (await this.fileService.readFile(uri)).value.toString(); } catch { return undefined; }
+	}
+
+	async readMeasuredPrefix(folder: URI): Promise<IMeasuredPrefix | undefined> {
+		try {
+			const home = await this.pathService.userHome();
+			const dir = URI.joinPath(home, '.claude', 'projects', encodeProjectDir(folder));
+			const stat = await this.fileService.resolve(dir, { resolveMetadata: true });
+			const files = (stat.children ?? []).filter(c => !c.isDirectory && c.name.endsWith('.jsonl'));
+			if (files.length === 0) { return undefined; }
+			let latest = files[0];
+			for (const f of files) { if (f.mtime > latest.mtime) { latest = f; } }
+			const text = await this.readText(latest.resource);
+			return text === undefined ? undefined : parseMeasuredPrefix(text);
+		} catch {
+			return undefined;
+		}
 	}
 
 	/** readText() memoized for the current refresh (see `_readCache`). */

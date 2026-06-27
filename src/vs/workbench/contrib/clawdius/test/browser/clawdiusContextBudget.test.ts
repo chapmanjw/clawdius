@@ -10,7 +10,7 @@ import {
 	ConfigScope, ConfigSection, ContextInclusion, IClawdiusConfigSnapshot, IConfigBudgetMeta, IConfigItem,
 } from '../../common/clawdiusConfig.js';
 import { BudgetTier, estimateTokens, formatApproxTokens, resolveContextBudget } from '../../common/clawdiusContextBudget.js';
-import { extractPaths, parseImportTargets } from '../../browser/clawdiusConfigStore.js';
+import { extractPaths, parseImportTargets, parseMeasuredPrefix } from '../../browser/clawdiusConfigStore.js';
 
 function memoriesScope(scope: ConfigScope, key: string, root: URI, items: IConfigItem[], folderName?: string) {
 	return { scope, key, root, folderName, exists: true, sections: [{ section: ConfigSection.Memories, items }] };
@@ -269,6 +269,21 @@ suite('clawdiusContextBudget', () => {
 		assert.strictEqual(menu?.approxTokens, 20); // 12 + 8 menu tokens
 		assert.strictEqual(budget.alwaysOnTokens, 20);
 		assert.strictEqual(budget.onInvoke.length, 2); // the skill bodies are still on-invoke
+	});
+
+	test('parseMeasuredPrefix reads the last assistant turn\'s cached prefix from a JSONL transcript', () => {
+		const jsonl = [
+			JSON.stringify({ type: 'user', message: { content: 'hi' } }),
+			JSON.stringify({ type: 'assistant', timestamp: '2026-06-27T10:00:00Z', message: { usage: { cache_creation_input_tokens: 17000, input_tokens: 12000 } } }),
+			JSON.stringify({ type: 'user', message: { content: 'more' } }),
+			JSON.stringify({ type: 'assistant', timestamp: '2026-06-27T10:05:00Z', message: { usage: { cache_read_input_tokens: 34000, cache_creation_input_tokens: 500, input_tokens: 80 } } }),
+			'', // trailing blank line
+		].join('\n');
+		const m = parseMeasuredPrefix(jsonl);
+		assert.strictEqual(m?.tokens, 34500); // last turn: cache_read 34000 + cache_creation 500
+		assert.strictEqual(m?.atIso, '2026-06-27T10:05:00Z');
+		assert.strictEqual(parseMeasuredPrefix('not json\n{bad'), undefined);
+		assert.strictEqual(parseMeasuredPrefix(''), undefined);
 	});
 
 	test('formatApproxTokens', () => {

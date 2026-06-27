@@ -3,25 +3,13 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as path from 'path';
-
-/**
- * The platforms that @github/copilot ships platform-specific packages for.
- * These are the `@github/copilot-{platform}` optional dependency packages.
- */
-export const copilotPlatforms = [
-	'darwin-arm64', 'darwin-x64',
-	'linux-arm64', 'linux-x64',
-	'win32-arm64', 'win32-x64',
-];
-
 /**
  * Converts VS Code build platform/arch to the values that Node.js reports
  * at runtime via `process.platform` and `process.arch`.
  *
- * The copilot SDK's `loadNativeModule` looks up native binaries under
- * `prebuilds/${process.platform}-${process.arch}/`, so the directory names
- * must match these runtime values exactly.
+ * @vscode/ripgrep-universal ships native binaries under
+ * `bin/${process.platform}-${process.arch}/`, so the directory names must
+ * match these runtime values exactly.
  */
 function toNodePlatformArch(platform: string, arch: string): { nodePlatform: string; nodeArch: string } {
 	// alpine is musl-linux; Node still reports process.platform === 'linux'
@@ -53,25 +41,6 @@ const ripgrepUniversalPlatforms = [
 	'win32-arm64', 'win32-ia32', 'win32-x64',
 ];
 
-const copilotTgrepPlatforms = [
-	'darwin-arm64', 'darwin-x64',
-	'linux-arm64', 'linux-x64',
-	'linuxmusl-arm64', 'linuxmusl-x64',
-	'win32-arm64', 'win32-x64',
-];
-
-function toCopilotTgrepPlatformArch(platform: string, arch: string): string {
-	if (platform === 'alpine') {
-		return `linuxmusl-${arch}`;
-	}
-	if (arch === 'alpine') {
-		return 'linuxmusl-x64';
-	}
-
-	const { nodePlatform, nodeArch } = toNodePlatformArch(platform, arch);
-	return `${nodePlatform}-${nodeArch}`;
-}
-
 /**
  * Returns a glob filter that strips @vscode/ripgrep-universal bin directories
  * for architectures other than the build target.
@@ -85,82 +54,3 @@ export function getRipgrepExcludeFilter(platform: string, arch: string): string[
 
 	return ['**', ...excludes];
 }
-
-export function getCopilotTgrepExcludeFilter(platform: string, arch: string): string[] {
-	const target = toCopilotTgrepPlatformArch(platform, arch);
-	const nonTargetPlatforms = copilotTgrepPlatforms.filter(p => p !== target);
-
-	return [
-		'**',
-		...nonTargetPlatforms.map(p => `!**/node_modules/@github/copilot/tgrep/bin/${p}/**`),
-		...nonTargetPlatforms.map(p => `!**/node_modules/@github/copilot/sdk/tgrep/bin/${p}/**`),
-	];
-}
-
-/**
- * Returns a glob filter that strips @github/copilot platform packages
- * for architectures other than the build target.
- *
- * For platforms the copilot SDK doesn't natively support (e.g. alpine, armhf),
- * ALL platform packages are stripped - that's fine because the copilot CLI SDK
- * resolves `node-pty` from the embedder (VS Code) first via `hostRequire`,
- * falling back to its bundled copy only if the embedder can't provide it.
- */
-export function getCopilotExcludeFilter(platform: string, arch: string): string[] {
-	const { nodePlatform, nodeArch } = toNodePlatformArch(platform, arch);
-	const targetPlatformArch = `${nodePlatform}-${nodeArch}`;
-	const nonTargetPlatforms = copilotPlatforms.filter(p => p !== targetPlatformArch);
-
-	// Strip wrong-architecture @github/copilot-{platform} packages.
-	const excludes = nonTargetPlatforms.map(p => `!**/node_modules/@github/copilot-${p}/**`);
-
-	return ['**', ...excludes];
-}
-
-/**
- * Returns the public @github/copilot-sdk runtime native addon files that must
- * survive app/remote packaging for the target platform.
- *
- * .moduleignore strips @github/copilot/prebuilds/** globally because the
- * internal extension SDK uses a copied sdk/prebuilds layout. Agent Host uses
- * the public SDK, whose runtime addon loader expects runtime.node in the root
- * prebuilds layout. The SDK's built-in shell tool additionally spawns commands
- * through node-pty, whose native binaries live in the same root prebuilds
- * layout, so those must be preserved too (otherwise the sandboxed shell fails
- * with `Cannot find module './prebuilds/<platform>/pty.node'` — or conpty.node
- * on Windows).
- */
-export function getCopilotRuntimePrebuildFiles(platform: string, arch: string, nodeModulesRoot = 'node_modules'): string[] {
-	const { nodePlatform, nodeArch } = toNodePlatformArch(platform, arch);
-	const targetPlatformArch = `${nodePlatform}-${nodeArch}`;
-	const prebuildDir = path.posix.join(nodeModulesRoot, '@github', 'copilot', 'prebuilds', targetPlatformArch);
-
-	const files = [
-		path.posix.join(prebuildDir, 'runtime.node'),
-	];
-
-	// node-pty native binaries for the SDK's built-in shell tool. Windows uses
-	// ConPTY (conpty.node plus the conpty/ helpers); darwin/linux use pty.node,
-	// and darwin additionally ships the spawn-helper executable.
-	if (nodePlatform === 'win32') {
-		files.push(
-			path.posix.join(prebuildDir, 'conpty.node'),
-			path.posix.join(prebuildDir, 'conpty_console_list.node'),
-			path.posix.join(prebuildDir, 'conpty', 'OpenConsole.exe'),
-			path.posix.join(prebuildDir, 'conpty', 'conpty.dll'),
-		);
-	} else {
-		files.push(path.posix.join(prebuildDir, 'pty.node'));
-		if (nodePlatform === 'darwin') {
-			files.push(path.posix.join(prebuildDir, 'spawn-helper'));
-		}
-	}
-
-	return files;
-}
-
-// CLAWDIUS-BEGIN The built-in Copilot chat extension is removed in Clawdius (extensions/copilot is gone), so the
-// shim that materialized its ripgrep (prepareBuiltInCopilotRipgrepShim + pruneNonTargetCopilotSdkPrebuilds) was
-// deleted - it threw 'Copilot SDK directory not found' on every package build. The agent host puts VS Code's own
-// ripgrep on PATH for its CLI subprocess, so it never needed this shim.
-// CLAWDIUS-END

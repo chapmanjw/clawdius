@@ -19,7 +19,6 @@ import { ILogService, NullLogService } from '../../../log/common/log.js';
 import { IAgentPluginManager } from '../../common/agentPluginManager.js';
 import { DiscoveredType, SessionCustomizationDiscovery } from '../../node/copilot/sessionCustomizationDiscovery.js';
 import { SessionPluginBundler } from '../../node/shared/sessionPluginBundler.js';
-import { mapToParsedPlugin, toDiscoveredDirectoryCustomizations } from '../../node/copilot/copilotAgent.js';
 
 suite('SessionCustomizationDiscovery', () => {
 
@@ -418,67 +417,6 @@ suite('SessionCustomizationDiscovery', () => {
 		const directories = await discovery.scan(CancellationToken.None);
 		const result = await bundler.bundle(directories);
 		assert.strictEqual(result, undefined);
-	});
-
-	test('maps discovered files to parsed plugin preserving source URIs', async () => {
-		const agent = await seed('/workspace/.github/agents/foo.agent.md', '---\nname: Workspace Agent\ndescription: Agent description\n---\nbody');
-		const skill = await seed('/workspace/.github/skills/bar/SKILL.md', '---\nname: Workspace Skill\ndescription: Skill description\n---\nbody');
-		const instruction = await seed('/workspace/.github/instructions/baz.instructions.md', '---\nname: Workspace Rule\ndescription: Rule description\nglobs:\n  - src/**\n---\nbody');
-
-		const discovery = disposables.add(instantiationService.createInstance(SessionCustomizationDiscovery, workspace, userHome));
-		const customizations = await toDiscoveredDirectoryCustomizations(await discovery.scan(CancellationToken.None), fileService);
-
-		const plugin = mapToParsedPlugin(customizations);
-
-		assert.ok(plugin);
-		assert.strictEqual(plugin.agents.length, 1);
-		assert.strictEqual(plugin.skills.length, 1);
-		assert.strictEqual(plugin.instructions.length, 1);
-		assert.deepStrictEqual(
-			{
-				agentUri: plugin.agents[0].uri.toString(),
-				agentDescription: plugin.agents[0].description,
-				skillUri: plugin.skills[0].uri.toString(),
-				skillDescription: plugin.skills[0].description,
-				ruleUri: plugin.instructions[0].uri.toString(),
-				ruleDescription: plugin.instructions[0].description,
-			},
-			{
-				agentUri: agent.toString(),
-				agentDescription: 'Agent description',
-				skillUri: skill.toString(),
-				skillDescription: 'Skill description',
-				ruleUri: instruction.toString(),
-				ruleDescription: 'Rule description',
-			}
-		);
-	});
-
-	test('does not include parsed agent-instruction rules in mapToParsedPlugin output', async () => {
-		await seed('/workspace/.github/copilot-instructions.md', 'workspace instructions');
-		await seed('/workspace/.agents/skills/bar/SKILL.md', '---\nname: bar\ndescription: Skill description\n---\nbody');
-
-		const discovery = disposables.add(instantiationService.createInstance(SessionCustomizationDiscovery, workspace, userHome));
-		const customizations = await toDiscoveredDirectoryCustomizations(await discovery.scan(CancellationToken.None), fileService);
-
-		const plugin = mapToParsedPlugin(customizations);
-
-		assert.ok(plugin);
-		assert.strictEqual(plugin.skills.length, 1);
-		assert.strictEqual(plugin.instructions.length, 0);
-	});
-
-	test('returns undefined from mapToParsedPlugin when all customizations are agent-instruction files', async () => {
-		// Only agent instruction files are discovered — these are excluded from the parsed plugin output.
-		await seed('/workspace/.github/copilot-instructions.md', 'workspace instructions');
-		await seed('/home/.copilot/copilot-instructions.md', 'user instructions');
-
-		const discovery = disposables.add(instantiationService.createInstance(SessionCustomizationDiscovery, workspace, userHome));
-		const customizations = await toDiscoveredDirectoryCustomizations(await discovery.scan(CancellationToken.None), fileService);
-
-		const plugin = mapToParsedPlugin(customizations);
-
-		assert.strictEqual(plugin, undefined);
 	});
 });
 

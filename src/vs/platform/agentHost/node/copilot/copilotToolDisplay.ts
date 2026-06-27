@@ -3,7 +3,6 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { PermissionRequest } from '@github/copilot-sdk';
 import { hasKey } from '../../../../base/common/types.js';
 import { URI } from '../../../../base/common/uri.js';
 import { appendEscapedMarkdownInlineCode, escapeMarkdownLinkLabel, MarkdownString } from '../../../../base/common/htmlContent.js';
@@ -915,7 +914,17 @@ export function tryStringify(value: unknown): string | undefined {
 }
 
 /**
- * Loose, optional-field projection of the SDK's {@link PermissionRequest}
+ * Inlined `kind` discriminator for the permission-request union that was
+ * formerly imported from the removed agent SDK package. Kept structurally
+ * identical to that union's set of permission kinds; Clawdius carries no
+ * dependency on the package.
+ */
+type SdkPermissionRequestKind =
+	| 'shell' | 'write' | 'read' | 'mcp' | 'url' | 'memory'
+	| 'custom-tool' | 'hook' | 'extension-management' | 'extension-permission-access';
+
+/**
+ * Loose, optional-field projection of the SDK's `PermissionRequest`
  * discriminated union. Lets the rest of the agent host read the well-known
  * fields without `switch (request.kind)` narrowing at every access site.
  *
@@ -927,7 +936,7 @@ export function tryStringify(value: unknown): string | undefined {
  */
 export interface ITypedPermissionRequest {
 	/** Permission kind discriminator from the SDK. */
-	kind: PermissionRequest['kind'];
+	kind: SdkPermissionRequestKind;
 	/** Tool call ID that triggered this permission request, when available. */
 	toolCallId?: string;
 	/** File path — set for `read` permission requests. */

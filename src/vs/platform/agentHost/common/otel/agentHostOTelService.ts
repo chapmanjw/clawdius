@@ -3,9 +3,27 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { TelemetryConfig } from '@github/copilot-sdk';
 import type { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../instantiation/common/instantiation.js';
+
+/**
+ * Minimal local projection of the telemetry-config shape the agent SDK expects
+ * (formerly imported from the removed agent SDK package). Inlined so Clawdius
+ * carries no dependency on that package; it must stay structurally compatible
+ * with the SDK's telemetry config. All fields are optional pass-throughs.
+ */
+interface TelemetryConfig {
+	/** OTLP HTTP endpoint URL for trace/metric export. */
+	otlpEndpoint?: string;
+	/** File path for JSON-lines trace output. */
+	filePath?: string;
+	/** Exporter backend type (e.g. "otlp-http", "file"). */
+	exporterType?: string;
+	/** Instrumentation scope name. */
+	sourceName?: string;
+	/** Whether to capture message content (prompts, responses). */
+	captureContent?: boolean;
+}
 
 
 /**

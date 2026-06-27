@@ -5,7 +5,6 @@
 
 import { mkdir } from 'fs/promises';
 import { dirname, join } from '../../../../base/common/path.js';
-import type { TelemetryConfig } from '@github/copilot-sdk';
 import { Disposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { INativeEnvironmentService } from '../../../environment/common/environment.js';
@@ -21,6 +20,25 @@ import {
 import { OTelSqliteStore } from '../../../otel/node/sqlite/otelSqliteStore.js';
 import { AgentHostOTelSpansDbSubPath } from '../../common/agentService.js';
 import { IAgentHostOTelService } from '../../common/otel/agentHostOTelService.js';
+
+/**
+ * Minimal local projection of the telemetry-config shape the agent SDK expects
+ * (formerly imported from the removed agent SDK package). Inlined so Clawdius
+ * carries no dependency on that package; it must stay structurally compatible
+ * with the SDK's telemetry config. All fields are optional pass-throughs.
+ */
+interface TelemetryConfig {
+	/** OTLP HTTP endpoint URL for trace/metric export. */
+	otlpEndpoint?: string;
+	/** File path for JSON-lines trace output. */
+	filePath?: string;
+	/** Exporter backend type (e.g. "otlp-http", "file"). */
+	exporterType?: string;
+	/** Instrumentation scope name. */
+	sourceName?: string;
+	/** Whether to capture message content (prompts, responses). */
+	captureContent?: boolean;
+}
 
 /** Sub-path under the user data directory where the span DB lives. */
 const SPANS_DB_SUBPATH = AgentHostOTelSpansDbSubPath;

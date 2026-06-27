@@ -3,7 +3,6 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { MessageOptions } from '@github/copilot-sdk';
 import { decodeBase64 } from '../../../../base/common/buffer.js';
 import { basename } from '../../../../base/common/path.js';
 import { isString } from '../../../../base/common/types.js';
@@ -87,7 +86,26 @@ export interface ISessionEventMessage {
 	};
 }
 
-type ISdkUserMessageAttachment = Required<MessageOptions>['attachments'][number];
+/**
+ * Inlined projection of the user-message attachment element type that was
+ * formerly imported from the removed agent SDK package. Kept structurally
+ * identical so persisted session attachments still map correctly; Clawdius
+ * carries no dependency on that package.
+ */
+type ISdkUserMessageAttachment =
+	| { type: 'file'; path: string; displayName?: string }
+	| { type: 'directory'; path: string; displayName?: string }
+	| {
+		type: 'selection';
+		filePath: string;
+		displayName: string;
+		selection?: {
+			start: { line: number; character: number };
+			end: { line: number; character: number };
+		};
+		text?: string;
+	}
+	| { type: 'blob'; data: string; mimeType: string; displayName?: string };
 
 /** Minimal event shape for `skill.invoked`, used to synthesize a tool-style render. */
 export interface ISessionEventSkillInvoked {

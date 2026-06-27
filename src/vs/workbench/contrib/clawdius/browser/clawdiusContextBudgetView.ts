@@ -40,6 +40,7 @@ export const CONTEXT_BUDGET_VIEW_ID = 'clawdius.contextBudget';
 /** Short letter shown in the scope badge for a precedence tier. */
 function tierBadge(tier: BudgetTier): { letter: string; cls: string } {
 	switch (tier) {
+		case BudgetTier.Managed: return { letter: 'm', cls: 'm' };
 		case BudgetTier.User: return { letter: 'u', cls: 'u' };
 		case BudgetTier.Project: return { letter: 'p', cls: 'p' };
 		case BudgetTier.Local: return { letter: 'l', cls: 'l' };
@@ -106,6 +107,12 @@ export class ClawdiusContextBudgetView extends ViewPane {
 		this.renderStore.clear();
 		clearNode(this.bodyEl);
 
+		// Until the first scan resolves, the snapshot is empty - show "scanning" rather than a definitive ~0.
+		if (!this.configService.hasResolved) {
+			append(this.bodyEl, $('.ctxb-empty', undefined, localize('clawdius.ctxb.scanning', "Scanning Claude memory & rules…")));
+			return;
+		}
+
 		const activeFile = this.activeFile();
 		const folders = this.workspaceService.getWorkspace().folders.map(f => f.uri);
 		const budget = resolveContextBudget(this.configService.snapshot, activeFile, folders);
@@ -124,7 +131,7 @@ export class ClawdiusContextBudgetView extends ViewPane {
 		}
 
 		const foot = append(this.bodyEl, $('.ctxb-foot'));
-		foot.textContent = localize('clawdius.ctxb.foot', "Token counts are estimated (chars / 4). \"Loaded\" is predicted from your config, not confirmed for a specific turn.");
+		foot.textContent = localize('clawdius.ctxb.foot', "Estimated (chars / 4); memory & rules only — excludes the system prompt, the skill/agent menu, and MCP tool schemas that also load every turn. \"Loaded\" is predicted from your config, not confirmed.");
 	}
 
 	private renderHead(activeFile: URI | undefined, budget: IContextBudget): void {
@@ -134,7 +141,7 @@ export class ClawdiusContextBudgetView extends ViewPane {
 			? localize('clawdius.ctxb.for', "Context for: {0}", this.displayPath(activeFile))
 			: localize('clawdius.ctxb.noFile', "No file open — showing always-on memory");
 		const total = append(head, $('.ctxb-total'));
-		total.textContent = localize('clawdius.ctxb.total', "{0} tokens (estimated)", formatApproxTokens(budget.alwaysOnTokens));
+		total.textContent = localize('clawdius.ctxb.total', "memory & rules: {0} (estimated)", formatApproxTokens(budget.alwaysOnTokens));
 	}
 
 	private displayPath(uri: URI): string {
@@ -167,9 +174,15 @@ export class ClawdiusContextBudgetView extends ViewPane {
 		name.textContent = src.label;
 		name.title = src.label;
 
-		if (src.globs && src.globs.length) {
+		if (src.kind === 'import') {
+			append(row, $('.ctxb-glob', undefined, localize('clawdius.ctxb.viaImport', "via @import")));
+		} else if (src.kind === 'automem') {
+			append(row, $('.ctxb-glob', undefined, localize('clawdius.ctxb.autoMem', "auto memory")));
+		}
+
+		if (src.paths && src.paths.length) {
 			const glob = append(row, $('.ctxb-glob'));
-			glob.textContent = localize('clawdius.ctxb.globs', "globs {0}", src.globs.join(', '));
+			glob.textContent = localize('clawdius.ctxb.paths', "paths {0}", src.paths.join(', '));
 			if (src.matched !== undefined) {
 				append(row, $(src.matched ? '.ctxb-match' : '.ctxb-nomatch', undefined, src.matched ? localize('clawdius.ctxb.match', "match") : localize('clawdius.ctxb.nomatch', "no match")));
 			}

@@ -5,56 +5,69 @@
 
 // CLAWDIUS-BEGIN Context Budget Inspector - resolver
 // Pure logic for "what does Claude see for THIS file?": given the config snapshot + the active file, sort the
-// memory / rule / skill sources into ALWAYS-ON (loaded every turn), ON-INVOKE (skills), and NOT-APPLIED (glob
-// rules whose patterns the active file does not match), with an estimated token total. No I/O, no services -
-// every input is already in the snapshot (the store read the files during its scan), so this is unit-testable.
+// memory / rule / skill sources into ALWAYS-ON (loaded every turn), ON-INVOKE (skills), and NOT-APPLIED (path-
+// scoped rules whose `paths` the active file does not match), with an estimated token total. No I/O, no
+// services - every input is already in the snapshot (the store read the files during its scan), so this is
+// unit-testable.
 //
-// Honesty: token counts are estimates (chars / 4), never exact - there is no in-process tokenizer, and the
-// only signal of what *actually* loaded for a turn (an InstructionsLoaded-style hook) does not exist yet, so
-// every source here is PREDICTED, not confirmed. The UI labels it as such.
+// Matches Claude Code's real model (verified against the bundled engine): memory loads concatenated as
+// Managed -> User -> Project(root..cwd) -> Local + per-project AutoMem; .claude/rules/*.md auto-load always-on
+// unless they declare a `paths:` frontmatter (then they are conditional); CLAUDE.md/rules `@`-import other
+// files (resolved by the store) which load always-on too. A file that is both auto-scanned AND @-imported is
+// counted ONCE (deduped by path here).
+//
+// Honesty: token counts are estimates (chars / 4), never exact - there is no in-process tokenizer. Every source
+// is PREDICTED from config, not confirmed for a specific turn (a real InstructionsLoaded hook exists in the CLI
+// and could later confirm loads, but is not wired yet). The headline counts memory + rules only - NOT the
+// system prompt, the skill/agent menu, or MCP tool schemas, which dominate the true always-on prefix.
 
 import { match as globMatch } from '../../../../base/common/glob.js';
 import { basename, extUriIgnorePathCase } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
-import { ConfigScope, ConfigSection, ContextInclusion, IClawdiusConfigSnapshot, IConfigItem } from './clawdiusConfig.js';
+import { ConfigScope, ConfigSection, ContextInclusion, IClawdiusConfigSnapshot, IConfigBudgetMeta, IConfigItem } from './clawdiusConfig.js';
 
-/** The precedence tier a source belongs to. Derived from scope + filename; managed/enterprise is not scanned
- *  (no managed path exists), so it is never produced - the UI shows it as "not detected" if it surfaces that. */
+/** The precedence tier a source belongs to (broad -> specific). Managed is org-policy memory (highest). */
 export const enum BudgetTier {
+	Managed = 'managed',
 	User = 'user',
 	Project = 'project',
 	Local = 'local',
 }
 
-/** One context source (a memory file, a rule, or a skill) as resolved for the active file. */
+/** What kind of context source a row is. `import` is a file pulled in via `@`-import; `automem` is MEMORY.md. */
+export type BudgetSourceKind = 'memory' | 'rule' | 'skill' | 'automem' | 'import';
+
+/** One context source (a memory file, a rule, a skill, an import) as resolved for the active file. */
 export interface IBudgetSource {
 	readonly label: string;
 	readonly scope: ConfigScope;
 	readonly tier: BudgetTier;
-	readonly kind: 'memory' | 'rule' | 'skill';
+	readonly kind: BudgetSourceKind;
 	readonly approxTokens: number;
 	readonly resource?: URI;
-	/** For a glob rule: its frontmatter glob patterns (so the UI can show which patterns scope it). */
-	readonly globs?: readonly string[];
-	/** For a glob rule: whether the active file matched (true -> always-on, false -> not-applied). */
+	/** For a path-scoped rule: its frontmatter `paths` patterns (so the UI can show what scopes it). */
+	readonly paths?: readonly string[];
+	/** For a path-scoped rule: whether the active file matched (true -> always-on, false -> not-applied). */
 	readonly matched?: boolean;
 }
 
 /** The resolved context budget for one active file. */
 export interface IContextBudget {
 	readonly activeFile?: URI;
-	/** Sources loaded every turn for this file: memories + always-rules + matching glob-rules. */
+	/** Sources loaded every turn for this file: memories + always-rules + matching path-rules + imports + automem.
+	 *  Deduped by path (an auto-scanned file that is also @-imported appears once). */
 	readonly alwaysOn: readonly IBudgetSource[];
 	/** Skills - loaded on demand, not every turn. */
 	readonly onInvoke: readonly IBudgetSource[];
-	/** Glob rules whose patterns the active file did not match. */
+	/** Path-scoped rules whose `paths` the active file did not match. */
 	readonly notApplied: readonly IBudgetSource[];
-	/** Sum of `approxTokens` across `alwaysOn` (the every-turn cost). Estimated. */
+	/** Sum of `approxTokens` across `alwaysOn` (the every-turn cost). Estimated; memory + rules only. */
 	readonly alwaysOnTokens: number;
 }
 
 /** Derive the precedence tier from scope + the memory file's label. */
 function tierOf(scope: ConfigScope, label: string): BudgetTier {
+	if (scope === ConfigScope.Managed) { return BudgetTier.Managed; }
 	if (scope === ConfigScope.Global) { return BudgetTier.User; }
 	return label === 'CLAUDE.local.md' ? BudgetTier.Local : BudgetTier.Project;
 }
@@ -70,20 +83,26 @@ function containingFolderOf(activeFile: URI | undefined, folders: readonly URI[]
 	return folders.length === 1 ? folders[0] : undefined;
 }
 
-/** Does a rule glob apply to the active file? A bare pattern (`*.ts`, no slash) applies to that file type at
- *  any depth (matched on the basename + as `**`-prefixed); a rooted pattern (`src/**`) matches the relative
- *  path. Mirrors how path-scoped rules are commonly authored. */
+/** Does a rule `paths` glob apply to the active file? A bare pattern (`*.ts`, no slash) applies to that file
+ *  type at any depth; a rooted pattern (`src/**`) matches the relative path. Approximates Claude Code's
+ *  gitignore-style matching for the common authored patterns. */
 function globApplies(glob: string, relPath: string): boolean {
-	const basename = relPath.split('/').pop() ?? relPath;
+	// Directory-scoped forms (`src/**`, `src/`) match any file under that directory - VS Code's `match` does not
+	// treat `src/**` the gitignore way, so handle the prefix explicitly.
+	const dir = glob.endsWith('/**') ? glob.slice(0, -3) : (glob.endsWith('/') ? glob.slice(0, -1) : undefined);
+	if (dir !== undefined && dir.length > 0 && !dir.includes('*') && (relPath === dir || relPath.startsWith(dir + '/'))) {
+		return true;
+	}
+	const base = relPath.split('/').pop() ?? relPath;
 	if (!glob.includes('/')) {
-		return globMatch(glob, basename) || globMatch('**/' + glob, relPath);
+		return globMatch(glob, base) || globMatch('**/' + glob, relPath);
 	}
 	return globMatch(glob, relPath);
 }
 
-function anyGlobApplies(globs: readonly string[] | undefined, relPath: string | undefined): boolean {
-	if (!globs || globs.length === 0 || relPath === undefined) { return false; }
-	return globs.some(g => globApplies(g, relPath));
+function anyGlobApplies(paths: readonly string[] | undefined, relPath: string | undefined): boolean {
+	if (!paths || paths.length === 0 || relPath === undefined) { return false; }
+	return paths.some(g => globApplies(g, relPath));
 }
 
 function toSource(item: IConfigItem, scope: ConfigScope, matched?: boolean): IBudgetSource {
@@ -95,14 +114,35 @@ function toSource(item: IConfigItem, scope: ConfigScope, matched?: boolean): IBu
 		kind: b.kind,
 		approxTokens: b.approxTokens,
 		resource: item.resource,
-		globs: b.globs,
+		paths: b.paths,
 		matched,
 	};
 }
 
+/** Dedup key for an always-on source: scheme + authority + the path lowercased. Preserving scheme/authority
+ *  avoids merging same-path files from different providers; case-folding the path keeps a Windows drive-letter
+ *  case difference (rules auto-scan vs an `@`-import of the same file) deduped. Falls back to the label. (On a
+ *  case-sensitive FS this can over-merge files differing only by case - an accepted edge for memory files.) */
+function dedupKey(resource: URI | undefined, label: string): string {
+	return resource ? `${resource.scheme}://${resource.authority}${resource.path.toLowerCase()}` : `label:${label}`;
+}
+
+/** Build the always-on import sources for one memory/rule file (its transitively-resolved `@`-imports), tagged
+ *  with the importer's tier/scope. Added after the primaries so an auto-scanned file wins over its import dup. */
+function importSources(meta: IConfigBudgetMeta, scope: ConfigScope, tier: BudgetTier): IBudgetSource[] {
+	return (meta.imports ?? []).map(imp => ({
+		label: imp.label,
+		scope,
+		tier,
+		kind: 'import' as const,
+		approxTokens: imp.approxTokens,
+		resource: URI.parse(imp.uri),
+	}));
+}
+
 /**
  * Resolve the context budget for the active file from the config snapshot. Pure: pass the active file URI and
- * the workspace folder URIs (to compute the relative path that rule globs match against).
+ * the workspace folder URIs (to compute the relative path that rule `paths` match against).
  */
 export function resolveContextBudget(
 	snapshot: IClawdiusConfigSnapshot,
@@ -110,17 +150,26 @@ export function resolveContextBudget(
 	workspaceFolders: readonly URI[],
 ): IContextBudget {
 	const folder = containingFolderOf(activeFile, workspaceFolders);
-	// The active file's path relative to its own project folder (so a rule's globs match within that project),
+	// The active file's path relative to its own project folder (so a rule's `paths` match within that project),
 	// or its basename when it is outside every folder.
 	const relPath = activeFile ? (folder ? extUriIgnorePathCase.relativePath(folder, activeFile) : undefined) ?? basename(activeFile) : undefined;
-	const alwaysOn: IBudgetSource[] = [];
+
+	// Always-on sources deduped by path: primaries (memories, always-rules, matched path-rules, automem) win
+	// over @-import duplicates of the same file. Insertion order preserved by Map.
+	const alwaysOn = new Map<string, IBudgetSource>();
+	const deferredImports: IBudgetSource[] = [];
 	const onInvoke: IBudgetSource[] = [];
 	const notApplied: IBudgetSource[] = [];
 
+	const addPrimary = (src: IBudgetSource, meta: IConfigBudgetMeta) => {
+		const key = dedupKey(src.resource, src.label);
+		if (!alwaysOn.has(key)) { alwaysOn.set(key, src); }
+		deferredImports.push(...importSources(meta, src.scope, src.tier));
+	};
+
 	for (const scopeGroup of snapshot.scopes) {
 		// A Project scope applies only when the active file lives in THAT project's folder (its `key` is the
-		// folder URI string); the Global (user) scope always applies. This keeps an unrelated multi-root
-		// project's memories and rules out of the active file's budget. Compare case-insensitively so a
+		// folder URI string). Managed + Global (user) scopes always apply. Compare case-insensitively so a
 		// drive-letter case difference can't drop the project scope.
 		if (scopeGroup.scope === ConfigScope.Project && (!folder || !extUriIgnorePathCase.isEqual(URI.parse(scopeGroup.key), folder))) {
 			continue;
@@ -131,10 +180,13 @@ export function resolveContextBudget(
 					const b = item.budget;
 					if (!b) { continue; }
 					if (b.inclusion === ContextInclusion.Always) {
-						alwaysOn.push(toSource(item, scopeGroup.scope));
+						addPrimary(toSource(item, scopeGroup.scope), b);
 					} else if (b.inclusion === ContextInclusion.Glob) {
-						const matched = anyGlobApplies(b.globs, relPath);
-						(matched ? alwaysOn : notApplied).push(toSource(item, scopeGroup.scope, matched));
+						if (anyGlobApplies(b.paths, relPath)) {
+							addPrimary(toSource(item, scopeGroup.scope, true), b);
+						} else {
+							notApplied.push(toSource(item, scopeGroup.scope, false));
+						}
 					}
 				}
 			} else if (section.section === ConfigSection.Skills) {
@@ -145,8 +197,15 @@ export function resolveContextBudget(
 		}
 	}
 
-	const alwaysOnTokens = alwaysOn.reduce((sum, s) => sum + s.approxTokens, 0);
-	return { activeFile, alwaysOn, onInvoke, notApplied, alwaysOnTokens };
+	// Fold in imports after all primaries, so a file that is both auto-scanned and @-imported counts once.
+	for (const imp of deferredImports) {
+		const key = dedupKey(imp.resource, imp.label);
+		if (!alwaysOn.has(key)) { alwaysOn.set(key, imp); }
+	}
+
+	const sources = [...alwaysOn.values()];
+	const alwaysOnTokens = sources.reduce((sum, s) => sum + s.approxTokens, 0);
+	return { activeFile, alwaysOn: sources, onInvoke, notApplied, alwaysOnTokens };
 }
 
 /** Compact, honest token label: "~420", "~1.2k". Always carries the leading "~" (these are estimates). */

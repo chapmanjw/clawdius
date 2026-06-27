@@ -84,9 +84,23 @@ export class ClawdiusContextBudgetStatusEntry extends Disposable implements IWor
 	}
 
 	private update(): void {
+		// Until the first scan resolves, show a neutral "scanning" pill rather than a definitive ~0.
+		if (!this.configService.hasResolved) {
+			this.set({
+				name: localize('clawdius.ctxb.statusName', "Claude Context Budget"),
+				text: '$(book) $(loading~spin)',
+				ariaLabel: localize('clawdius.ctxb.statusScanning', "Scanning Claude memory & rules"),
+				tooltip: localize('clawdius.ctxb.scanning', "Scanning Claude memory & rules…"),
+				command: OPEN_CONTEXT_BUDGET_COMMAND_ID,
+			});
+			return;
+		}
 		const folders = this.workspaceService.getWorkspace().folders.map(f => f.uri);
 		const budget = resolveContextBudget(this.configService.snapshot, this.activeFile(), folders);
-		const props = this.getProps(budget);
+		this.set(this.getProps(budget));
+	}
+
+	private set(props: IStatusbarEntry): void {
 		if (this.entry.value) {
 			this.entry.value.update(props);
 		} else {
@@ -100,7 +114,7 @@ export class ClawdiusContextBudgetStatusEntry extends Disposable implements IWor
 		return {
 			name: localize('clawdius.ctxb.statusName', "Claude Context Budget"),
 			text: `$(book) ${label}`,
-			ariaLabel: localize('clawdius.ctxb.statusAria', "Claude context budget: {0} tokens always-on (estimated)", label),
+			ariaLabel: localize('clawdius.ctxb.statusAria', "Claude memory & rules budget: {0} tokens always-on (estimated)", label),
 			tooltip: new MarkdownString(this.tooltip(budget)),
 			command: OPEN_CONTEXT_BUDGET_COMMAND_ID,
 		};
@@ -108,22 +122,29 @@ export class ClawdiusContextBudgetStatusEntry extends Disposable implements IWor
 
 	private tooltip(budget: IContextBudget): string {
 		const lines: string[] = [];
-		lines.push(localize('clawdius.ctxb.tipTitle', "**Context budget** — what Claude loads for the active file"));
+		lines.push(localize('clawdius.ctxb.tipTitle', "**Claude memory & rules** for the active file"));
 		lines.push('');
 		lines.push(localize('clawdius.ctxb.tipAlways', "Always-on (~every turn): **{0} tokens**", formatApproxTokens(budget.alwaysOnTokens).replace('~', '')));
-		for (const s of budget.alwaysOn) {
-			lines.push(this.tipRow(s));
-		}
+		lines.push(...this.tipList(budget.alwaysOn));
 		if (budget.onInvoke.length) {
 			lines.push('');
 			lines.push(localize('clawdius.ctxb.tipOnInvoke', "On-invoke (skills)"));
-			for (const s of budget.onInvoke) {
-				lines.push(this.tipRow(s));
-			}
+			lines.push(...this.tipList(budget.onInvoke));
 		}
 		lines.push('');
+		lines.push(localize('clawdius.ctxb.tipExcludes', "_Memory & rules only - excludes the system prompt, skill/agent menu, and MCP tool schemas._"));
 		lines.push(localize('clawdius.ctxb.tipFoot', "_Estimated (chars/4). Click to open the full panel._"));
 		return lines.join('\n');
+	}
+
+	/** Render up to 12 rows, then a "+N more" line, so a large skills/rules set can't make an unusable tooltip. */
+	private tipList(sources: readonly IBudgetSource[]): string[] {
+		const CAP = 12;
+		const rows = sources.slice(0, CAP).map(s => this.tipRow(s));
+		if (sources.length > CAP) {
+			rows.push(localize('clawdius.ctxb.tipMore', "- _+{0} more_", sources.length - CAP));
+		}
+		return rows;
 	}
 
 	private tipRow(s: IBudgetSource): string {

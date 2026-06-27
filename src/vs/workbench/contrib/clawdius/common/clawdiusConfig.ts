@@ -12,10 +12,13 @@ import { Event } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 
-/** Where a configuration item lives. */
+/** Where a configuration item lives. `Managed` is the org-policy scope (a system path, highest precedence,
+ *  read-only); it is scanned for MEMORIES only and is invisible to the Control Center (which has no Memories
+ *  tab and filters its other tabs to Global/Project). */
 export const enum ConfigScope {
 	Global = 'global',
 	Project = 'project',
+	Managed = 'managed',
 }
 
 /** A section of Claude Code configuration. */
@@ -74,27 +77,42 @@ export interface IConfigReveal {
 
 /** How a memory / rule / skill source enters Claude's context for a turn. */
 export const enum ContextInclusion {
-	/** Loaded every turn (root CLAUDE.md / CLAUDE.local.md, or a rule with no globs). */
+	/** Loaded every turn (CLAUDE.md / CLAUDE.local.md / MEMORY.md, or a rule with no `paths`). */
 	Always = 'always',
-	/** A rule loaded only when the active file matches its frontmatter `globs`. */
+	/** A path-scoped rule loaded only when Claude touches a file matching its frontmatter `paths`. */
 	Glob = 'glob',
 	/** Loaded on demand (a skill - on-invoke, not every turn). */
 	Manual = 'manual',
 }
 
+/** A transitively-resolved `@`-import from a memory/rule file (Claude Code expands these into context). */
+export interface IConfigBudgetImport {
+	/** The imported file's URI as a string. The resolver dedupes always-on sources by this, so an imported
+	 *  file that is also auto-scanned (e.g. a `rules/` file) is counted once. */
+	readonly uri: string;
+	/** A short display label (workspace- or home-relative). */
+	readonly label: string;
+	/** Estimated tokens (chars / 4) for the imported file body. */
+	readonly approxTokens: number;
+}
+
 /** Context-budget metadata computed during the scan (the file's content is already read there) and consumed by
  *  the Context Budget Inspector. `approxTokens` is an estimate (chars/4), never an exact count. */
 export interface IConfigBudgetMeta {
-	/** What kind of context source this is. */
-	readonly kind: 'memory' | 'rule' | 'skill';
+	/** What kind of context source this is. `automem` is Claude Code's per-project auto memory (MEMORY.md). */
+	readonly kind: 'memory' | 'rule' | 'skill' | 'automem';
 	/** Estimated tokens for the file body (chars / 4). Marked "estimated" in the UI - never exact. */
 	readonly approxTokens: number;
 	/** Character count the estimate was derived from (so a real tokenizer can replace the heuristic later). */
 	readonly chars: number;
 	/** How this source enters context. */
 	readonly inclusion: ContextInclusion;
-	/** For a `Glob` rule: the frontmatter `globs` patterns (forward-slash, workspace-relative). */
-	readonly globs?: readonly string[];
+	/** For a path-scoped rule: the frontmatter `paths` glob patterns (Claude Code's `paths:` key - NOT
+	 *  Cursor's `globs:`). The rule loads only when Claude touches a file matching one of these. */
+	readonly paths?: readonly string[];
+	/** Files this source `@`-imports (transitively resolved). They load always-on with their importer; the
+	 *  resolver folds their tokens into the always-on total, deduped by uri against other sources. */
+	readonly imports?: readonly IConfigBudgetImport[];
 }
 
 /** A single configuration item (an agent, a skill, a slash command, a hook event, a permission rule, ...). */
@@ -166,6 +184,9 @@ export interface IClawdiusConfigService {
 	readonly onDidChange: Event<void>;
 	/** The most recent snapshot. Empty until the first `refresh()` resolves. */
 	readonly snapshot: IClawdiusConfigSnapshot;
+	/** False until the first scan completes, so surfaces can show a "scanning..." state instead of rendering
+	 *  the empty initial snapshot as a definitive "nothing found" / zero. */
+	readonly hasResolved: boolean;
 	/** Re-scan both scopes from disk. Pass `force` after a write to guarantee a scan that starts after it. */
 	refresh(force?: boolean): Promise<void>;
 }

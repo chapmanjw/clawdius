@@ -11,6 +11,7 @@
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
 import { ResourceMap } from '../../../../base/common/map.js';
+import { isMacintosh, isWindows } from '../../../../base/common/platform.js';
 import { URI } from '../../../../base/common/uri.js';
 import { parse as parseJsonc } from '../../../../base/common/jsonc.js';
 import { splitGlobAware } from '../../../../base/common/glob.js';
@@ -21,7 +22,7 @@ import { IWorkspaceContextService } from '../../../../platform/workspace/common/
 import { IPathService } from '../../../services/path/common/pathService.js';
 import {
 	ConfigBacking, ConfigScope, ConfigSection, CONFIG_SECTIONS, ContextInclusion, IClawdiusConfigService,
-	IClawdiusConfigSnapshot, IConfigBudgetMeta, IConfigItem, IConfigScopeGroup, IConfigSectionGroup,
+	IClawdiusConfigSnapshot, IConfigBudgetImport, IConfigBudgetMeta, IConfigItem, IConfigScopeGroup, IConfigSectionGroup,
 } from '../common/clawdiusConfig.js';
 
 interface IScopeRoots {
@@ -48,7 +49,7 @@ function frontMatter(content: string): { readonly fields: Record<string, string>
 	return { fields, bodyLine };
 }
 
-/** Parse an inline frontmatter `globs` value into a list of patterns: a scalar (`*.ts`), an inline array
+/** Parse an inline frontmatter `paths` value into a list of glob patterns: a scalar (`*.ts`), an inline array
  *  (`["*.ts","*.tsx"]`), or a comma list (`*.ts, *.tsx`). Uses splitGlobAware so a `,` inside a `{...}` brace
  *  group (e.g. `*.{ts,tsx}`) is NOT split. */
 function parseGlobList(raw: string | undefined): string[] | undefined {
@@ -59,43 +60,106 @@ function parseGlobList(raw: string | undefined): string[] | undefined {
 	return parts.length ? parts : undefined;
 }
 
-/** Extract a rule's `globs` patterns from its frontmatter block: an inline scalar/array/comma-list on the
- *  `globs:` line, OR a shallow YAML block list (`globs:` followed by indented `- pattern` lines). Returns
- *  undefined when there is no `globs:` key (an unconditional, always-on rule). Exported for unit tests. */
-export function extractGlobs(content: string): string[] | undefined {
+/** Extract a rule's `paths` patterns from its frontmatter block - Claude Code's path-scoping key (NOT Cursor's
+ *  `globs:`/`alwaysApply:`). Accepts an inline scalar/array/comma-list on the `paths:` line OR a shallow YAML
+ *  block list. Returns undefined when there is no `paths:` key, or when it is just `**` - both mean the rule is
+ *  unconditional / always-on. A trailing `/**` is stripped (matching the engine). Exported for unit tests. */
+export function extractPaths(content: string): string[] | undefined {
 	const m = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*\r?\n?/.exec(content);
 	if (!m) { return undefined; }
 	const lines = m[1].split(/\r?\n/);
 	for (let i = 0; i < lines.length; i++) {
-		const kv = /^globs[ \t]*:[ \t]*(.*)$/i.exec(lines[i]);
+		const kv = /^paths[ \t]*:[ \t]*(.*)$/i.exec(lines[i]);
 		if (!kv) { continue; }
-		if (kv[1].trim()) { return parseGlobList(kv[1]); }
-		// Block list: collect subsequent indented `- pattern` lines until the indentation ends.
-		const items: string[] = [];
-		for (let j = i + 1; j < lines.length; j++) {
-			const li = /^[ \t]+-[ \t]*(.+?)[ \t]*$/.exec(lines[j]);
-			if (!li) { break; }
-			items.push(li[1].replace(/^["']|["']$/g, '').trim().replace(/\\/g, '/'));
+		let patterns: string[] | undefined;
+		if (kv[1].trim()) {
+			patterns = parseGlobList(kv[1]);
+		} else {
+			const items: string[] = [];
+			for (let j = i + 1; j < lines.length; j++) {
+				const li = /^[ \t]+-[ \t]*(.+?)[ \t]*$/.exec(lines[j]);
+				if (!li) { break; }
+				items.push(li[1].replace(/^["']|["']$/g, '').trim().replace(/\\/g, '/'));
+			}
+			patterns = items.length ? items : undefined;
 		}
-		return items.length ? items : undefined;
+		// Keep patterns as authored (the resolver's matcher handles `src/**` directory forms directly); only a
+		// bare `**` (or empty) means the rule is unconditional / always-on.
+		const cleaned = patterns?.map(p => p.trim()).filter(p => p.length > 0);
+		if (!cleaned || cleaned.length === 0 || cleaned.every(p => p === '**')) { return undefined; }
+		return cleaned;
 	}
 	return undefined;
 }
 
-/** Context-budget metadata for a memory/rule file (token estimate + rule glob applicability). The content is
- *  already read by the caller, so this is free. Root CLAUDE.md/CLAUDE.local.md are always-on memory; a rule is
- *  glob-scoped when it declares `globs` (and not `alwaysApply`), else always-on (the Claude Code default). */
+/** Context-budget metadata for a memory/rule file (own-file token estimate + rule path-scoping; the caller adds
+ *  `@`-imports). Content is already read by the caller, so this is free. CLAUDE.md / CLAUDE.local.md are always-on
+ *  memory; a rule is path-scoped (conditional) when it declares a real `paths:` frontmatter, else always-on (the
+ *  Claude Code default - rules WITHOUT `paths` load every session alongside CLAUDE.md). */
 function memoryBudget(isRule: boolean, content: string): IConfigBudgetMeta {
 	const chars = content.length;
 	const approxTokens = Math.ceil(chars / 4);
 	if (!isRule) {
 		return { kind: 'memory', approxTokens, chars, inclusion: ContextInclusion.Always };
 	}
-	const alwaysApply = /^(true|yes)$/i.test(frontMatter(content).fields['alwaysapply'] ?? '');
-	const globs = extractGlobs(content);
-	return globs && !alwaysApply
-		? { kind: 'rule', approxTokens, chars, inclusion: ContextInclusion.Glob, globs }
+	const paths = extractPaths(content);
+	return paths
+		? { kind: 'rule', approxTokens, chars, inclusion: ContextInclusion.Glob, paths }
 		: { kind: 'rule', approxTokens, chars, inclusion: ContextInclusion.Always };
+}
+
+/** Strip fenced code blocks + inline code spans so `@`-imports inside them are NOT parsed (Claude Code skips
+ *  code spans and fenced blocks). */
+function stripCode(content: string): string {
+	return content.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
+}
+
+/** Parse `@`-import target strings from a memory file body. Mirrors the engine: the target follows
+ *  start-of-line / whitespace; `./`, `../`, `~/`, absolute `/`, or a bare `[A-Za-z0-9._-]` name; escaped spaces
+ *  (`\ `) are allowed; a trailing `#anchor` is stripped; code spans / fences are skipped. */
+function parseImportTargets(content: string): string[] {
+	const out: string[] = [];
+	const body = stripCode(content);
+	const re = /(?:^|\s)@((?:[^\s\\]|\\ )+)/g;
+	let m: RegExpExecArray | null;
+	while ((m = re.exec(body)) !== null) {
+		let p = m[1];
+		const hash = p.indexOf('#');
+		if (hash !== -1) { p = p.slice(0, hash); }
+		p = p.replace(/\\ /g, ' ').trim();
+		if (!p) { continue; }
+		if (p.startsWith('./') || p.startsWith('../') || p.startsWith('~/') || (p.startsWith('/') && p !== '/') || /^[A-Za-z0-9._-]/.test(p)) {
+			out.push(p);
+		}
+	}
+	return out;
+}
+
+/** Resolve an `@`-import target to a URI: `~/` from home, absolute from the filesystem, otherwise relative to
+ *  the importing file's directory. */
+function resolveImportUri(target: string, importerDir: URI, home: URI): URI | undefined {
+	try {
+		if (target.startsWith('~/')) { return URI.joinPath(home, target.slice(2)); }
+		// Absolute (POSIX `/abs` or Windows `C:\abs` / `C:/abs`): resolve on the IMPORTER's own provider, so an
+		// absolute import in a remote workspace stays remote rather than becoming a local file: URI.
+		if ((target.startsWith('/') && target !== '/') || /^[A-Za-z]:[\\/]/.test(target)) {
+			return importerDir.with({ path: URI.file(target).path });
+		}
+		return URI.joinPath(importerDir, target);
+	} catch {
+		return undefined;
+	}
+}
+
+/** Claude Code's per-project auto-memory dir key: the project path with separators / colon flattened to '-'
+ *  (e.g. C:\Users\x\proj -> C--Users-x-proj). Best-effort; if it does not match, MEMORY.md just isn't found. */
+function encodeProjectDir(folder: URI): string {
+	return folder.fsPath.replace(/[\\/:]/g, '-');
+}
+
+/** Claude Code loads only the first ~200 lines / 25KB of MEMORY.md, so estimate from that slice. */
+function capAutoMemory(content: string): string {
+	return content.split(/\r?\n/).slice(0, 200).join('\n').slice(0, 25 * 1024);
 }
 
 /** Markdown ATX headings (`#`..`######`) with 1-based line numbers. */
@@ -119,6 +183,9 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 	private _snapshot: IClawdiusConfigSnapshot = { scopes: [] };
 	get snapshot(): IClawdiusConfigSnapshot { return this._snapshot; }
 
+	private _hasResolved = false;
+	get hasResolved(): boolean { return this._hasResolved; }
+
 	private readonly _watchers = this._register(new DisposableStore());
 	private readonly _refreshScheduler = this._register(new RunOnceScheduler(() => void this.refresh(), 250));
 	/** Coalesces concurrent refreshes: all eight section views call refresh() on first render. */
@@ -138,7 +205,14 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 
 	private async scopeRoots(): Promise<IScopeRoots[]> {
 		const home = await this.pathService.userHome();
-		const roots: IScopeRoots[] = [{ scope: ConfigScope.Global, key: 'global', claudeDir: URI.joinPath(home, '.claude'), baseDir: home }];
+		// Managed/enterprise policy memory: a system path, highest precedence, scanned for memories only.
+		const managedDir = isWindows ? URI.file('C:\\Program Files\\ClaudeCode')
+			: isMacintosh ? URI.file('/Library/Application Support/ClaudeCode')
+				: URI.file('/etc/claude-code');
+		const roots: IScopeRoots[] = [
+			{ scope: ConfigScope.Managed, key: 'managed', claudeDir: URI.joinPath(managedDir, '.claude'), baseDir: managedDir },
+			{ scope: ConfigScope.Global, key: 'global', claudeDir: URI.joinPath(home, '.claude'), baseDir: home },
+		];
 		for (const folder of this.workspaceService.getWorkspace().folders) {
 			roots.push({ scope: ConfigScope.Project, key: folder.uri.toString(), claudeDir: URI.joinPath(folder.uri, '.claude'), baseDir: folder.uri, folderName: folder.name });
 		}
@@ -171,9 +245,13 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 			const scopes = await Promise.all(roots.map(r => this.scanScope(r)));
 			this._snapshot = { scopes };
 			this.updateWatchers(roots);
-			this._onDidChange.fire();
 		} catch (err) {
 			this.logService.warn('[Clawdius] config refresh failed', err);
+		} finally {
+			// Mark resolved even on error so surfaces stop showing "scanning..." (they render whatever
+			// snapshot exists), and always fire so they re-render.
+			this._hasResolved = true;
+			this._onDidChange.fire();
 		}
 	}
 
@@ -182,7 +260,10 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 	private async scanScope(r: IScopeRoots): Promise<IConfigScopeGroup> {
 		const exists = await this.exists(r.claudeDir);
 		const sections: IConfigSectionGroup[] = [];
-		for (const section of CONFIG_SECTIONS) {
+		// The Managed (org-policy) scope contributes only memories - it has no editable settings surface in
+		// Clawdius, and scanning its other sections would leak policy config into the Control Center.
+		const toScan = r.scope === ConfigScope.Managed ? [ConfigSection.Memories] : CONFIG_SECTIONS;
+		for (const section of toScan) {
 			const items = await this.scanSection(r, section);
 			sections.push({ section, items });
 		}
@@ -207,36 +288,94 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 	}
 
 	private async scanMemories(r: IScopeRoots): Promise<IConfigItem[]> {
-		// Claude Code reads memory from several places. Global: ~/.claude/CLAUDE.md (+ rules). Project: the
-		// folder-root CLAUDE.md / CLAUDE.local.md, the .claude/CLAUDE.md, and .claude/rules/**.
-		const candidates: { label: string; uri: URI }[] = r.scope === ConfigScope.Global
-			? [{ label: 'CLAUDE.md', uri: URI.joinPath(r.claudeDir, 'CLAUDE.md') }]
-			: [
-				{ label: 'CLAUDE.md', uri: URI.joinPath(r.baseDir, 'CLAUDE.md') },
-				{ label: 'CLAUDE.local.md', uri: URI.joinPath(r.baseDir, 'CLAUDE.local.md') },
-				{ label: '.claude/CLAUDE.md', uri: URI.joinPath(r.claudeDir, 'CLAUDE.md') },
-			];
-		const rulesDir = URI.joinPath(r.claudeDir, 'rules');
-		for (const rf of await this.walkMarkdown(rulesDir, rulesDir, 0)) {
-			candidates.push({ label: `rules/${rf.rel.replace(/\\/g, '/')}`, uri: rf.resource });
+		// Claude Code reads memory from several places. Managed: <policyDir>/CLAUDE.md (+ rules). Global:
+		// ~/.claude/CLAUDE.md (+ rules). Project: folder-root CLAUDE.md / CLAUDE.local.md, .claude/CLAUDE.md,
+		// .claude/rules/**, and per-project auto memory ~/.claude/projects/<enc>/memory/MEMORY.md.
+		const home = await this.pathService.userHome();
+		const items: IConfigItem[] = [];
+
+		const memoryCandidates: { label: string; uri: URI }[] =
+			r.scope === ConfigScope.Global ? [{ label: 'CLAUDE.md', uri: URI.joinPath(r.claudeDir, 'CLAUDE.md') }]
+				: r.scope === ConfigScope.Managed ? [{ label: 'CLAUDE.md', uri: URI.joinPath(r.baseDir, 'CLAUDE.md') }]
+					: [
+						{ label: 'CLAUDE.md', uri: URI.joinPath(r.baseDir, 'CLAUDE.md') },
+						{ label: 'CLAUDE.local.md', uri: URI.joinPath(r.baseDir, 'CLAUDE.local.md') },
+						{ label: '.claude/CLAUDE.md', uri: URI.joinPath(r.claudeDir, 'CLAUDE.md') },
+					];
+		for (const c of memoryCandidates) {
+			const item = await this.memoryItem(r, c.label, c.uri, false, home);
+			if (item) { items.push(item); }
 		}
 
-		const items: IConfigItem[] = [];
-		for (const c of candidates) {
-			const content = await this.readText(c.uri);
-			if (content === undefined) { continue; }
-			items.push({
-				id: this.id(r.key, ConfigSection.Memories, c.label),
-				scope: r.scope, section: ConfigSection.Memories, label: c.label, resource: c.uri,
-				backing: ConfigBacking.File, canDelete: true, canMove: false,
-				budget: memoryBudget(c.label.startsWith('rules/'), content),
-				children: headings(content).map((hd, i) => ({
-					id: this.id(r.key, ConfigSection.Memories, `${c.label}:h${i}`),
-					scope: r.scope, section: ConfigSection.Memories, label: hd.text.trim(), resource: c.uri, reveal: { lineNumber: hd.line },
-				})),
-			});
+		// Auto memory (project only): the first ~200 lines / 25KB of MEMORY.md load every session.
+		if (r.scope === ConfigScope.Project) {
+			const autoUri = URI.joinPath(home, '.claude', 'projects', encodeProjectDir(r.baseDir), 'memory', 'MEMORY.md');
+			const raw = await this.readText(autoUri);
+			if (raw !== undefined) {
+				const chars = capAutoMemory(raw).length;
+				items.push({
+					id: this.id(r.key, ConfigSection.Memories, 'MEMORY.md'),
+					scope: r.scope, section: ConfigSection.Memories, label: 'memory/MEMORY.md', resource: autoUri,
+					backing: ConfigBacking.File, canDelete: false, canMove: false,
+					budget: { kind: 'automem', approxTokens: Math.ceil(chars / 4), chars, inclusion: ContextInclusion.Always },
+				});
+			}
 		}
+
+		// Rules (.claude/rules/**/*.md): auto-loaded always-on unless they declare a `paths:` frontmatter.
+		const rulesDir = URI.joinPath(r.claudeDir, 'rules');
+		for (const rf of await this.walkMarkdown(rulesDir, rulesDir, 0)) {
+			const item = await this.memoryItem(r, `rules/${rf.rel.replace(/\\/g, '/')}`, rf.resource, true, home);
+			if (item) { items.push(item); }
+		}
+
 		return items;
+	}
+
+	/** Build a memory/rule item: own-file budget + transitively-resolved `@`-imports + heading children.
+	 *  Returns undefined when the file does not exist. */
+	private async memoryItem(r: IScopeRoots, label: string, uri: URI, isRule: boolean, home: URI): Promise<IConfigItem | undefined> {
+		const content = await this.readText(uri);
+		if (content === undefined) { return undefined; }
+		const visited = new ResourceMap<boolean>();
+		visited.set(uri, true);
+		const imports = await this.expandImports(content, uri, home, 0, visited);
+		const base = memoryBudget(isRule, content);
+		return {
+			id: this.id(r.key, ConfigSection.Memories, label),
+			scope: r.scope, section: ConfigSection.Memories, label, resource: uri,
+			backing: ConfigBacking.File, canDelete: r.scope !== ConfigScope.Managed, canMove: false,
+			budget: imports.length ? { ...base, imports } : base,
+			children: headings(content).map((hd, i) => ({
+				id: this.id(r.key, ConfigSection.Memories, `${label}:h${i}`),
+				scope: r.scope, section: ConfigSection.Memories, label: hd.text.trim(), resource: uri, reveal: { lineNumber: hd.line },
+			})),
+		};
+	}
+
+	/** Transitively resolve `@`-imports from a memory/rule body into flat budget entries. Bounded to 4 hops
+	 *  (Claude Code's max) and de-duped via `visited` (which the caller seeds with the importing file, so a file
+	 *  never imports itself). The resolver dedupes again across all sources by uri. */
+	private async expandImports(content: string, importerUri: URI, home: URI, depth: number, visited: ResourceMap<boolean>): Promise<IConfigBudgetImport[]> {
+		if (depth >= 4) { return []; }
+		const importerDir = URI.joinPath(importerUri, '..');
+		const out: IConfigBudgetImport[] = [];
+		for (const target of parseImportTargets(content)) {
+			const uri = resolveImportUri(target, importerDir, home);
+			if (!uri || visited.has(uri)) { continue; }
+			visited.set(uri, true);
+			const imported = await this.readText(uri);
+			if (imported === undefined) { continue; }
+			out.push({ uri: uri.toString(), label: this.importLabel(uri, home), approxTokens: Math.ceil(imported.length / 4) });
+			out.push(...await this.expandImports(imported, uri, home, depth + 1, visited));
+		}
+		return out;
+	}
+
+	/** Short display label for an imported file: home-relative (`~/...`) when under home, else its basename. */
+	private importLabel(uri: URI, home: URI): string {
+		const base = home.path.endsWith('/') ? home.path : home.path + '/';
+		return uri.path.startsWith(base) ? '~/' + uri.path.slice(base.length) : (uri.path.split('/').pop() ?? uri.path);
 	}
 
 	private async scanAgents(r: IScopeRoots): Promise<IConfigItem[]> {

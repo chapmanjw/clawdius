@@ -65,6 +65,7 @@
 	flex: 0 0 auto;
 }
 
+.clawdius-ctxbudget .ctxb-scope.m { background: #f48771; }
 .clawdius-ctxbudget .ctxb-scope.u { background: #9cdcfe; }
 .clawdius-ctxbudget .ctxb-scope.p { background: #b5cea8; }
 .clawdius-ctxbudget .ctxb-scope.l { background: #d7ba7d; }

@@ -737,50 +737,6 @@
 		"fullLicenseTextUri": "https://raw.githubusercontent.com/jridgewell/sourcemaps/refs/heads/main/packages/trace-mapping/LICENSE"
 	},
 	{
-		// Reason: License text from https://github.com/github/copilot-cli/blob/master/LICENSE.md
-		// does not include a copyright statement.
-		"name": "@github/copilot",
-		"prependLicenseText": [
-			"Copyright (c) GitHub, Inc."
-		]
-	},
-	{
-		"name": "@github/copilot-darwin-arm64",
-		"prependLicenseText": [
-			"Copyright (c) GitHub, Inc."
-		]
-	},
-	{
-		"name": "@github/copilot-darwin-x64",
-		"prependLicenseText": [
-			"Copyright (c) GitHub, Inc."
-		]
-	},
-	{
-		"name": "@github/copilot-linux-arm64",
-		"prependLicenseText": [
-			"Copyright (c) GitHub, Inc."
-		]
-	},
-	{
-		"name": "@github/copilot-linux-x64",
-		"prependLicenseText": [
-			"Copyright (c) GitHub, Inc."
-		]
-	},
-	{
-		"name": "@github/copilot-win32-arm64",
-		"prependLicenseText": [
-			"Copyright (c) GitHub, Inc."
-		]
-	},
-	{
-		"name": "@github/copilot-win32-x64",
-		"prependLicenseText": [
-			"Copyright (c) GitHub, Inc."
-		]
-	},
-	{
 		// Reason: Unlicense. Does not include a clear Copyright statement.
 		// The Unlicense is a public domain dedication with no copyright holder.
 		// Copyright attributed to the primary author per the npm package.json and repository commits.
@@ -1093,22 +1049,6 @@
 		// Reason: npm repositoryUrl points to a subdirectory; license is at the root of nodelib/nodelib.
 		"name": "@nodelib/fs.scandir",
 		"fullLicenseTextUri": "https://raw.githubusercontent.com/nodelib/nodelib/ba122bd81aadd0a4fa7340ef2cfaabf62984bf1d/LICENSE"
-	},
-	{
-		// Reason: LICENSE.md at github/copilot-cli does not contain a copyright statement.
-		// Copyright holder sourced from the GitHub organization (github = GitHub, Inc.).
-		"name": "@github/copilot-linuxmusl-arm64",
-		"prependLicenseText": [
-			"Copyright (c) GitHub, Inc. All rights reserved."
-		]
-	},
-	{
-		// Reason: LICENSE.md at github/copilot-cli does not contain a copyright statement.
-		// Copyright holder sourced from the GitHub organization (github = GitHub, Inc.).
-		"name": "@github/copilot-linuxmusl-x64",
-		"prependLicenseText": [
-			"Copyright (c) GitHub, Inc. All rights reserved."
-		]
 	},
 	{
 		// Reason: NPM package does not include a repository URL, so the OSS tool cannot

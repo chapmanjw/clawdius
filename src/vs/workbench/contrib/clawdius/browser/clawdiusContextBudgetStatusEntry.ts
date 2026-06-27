@@ -26,7 +26,7 @@ import { EditorResourceAccessor, SideBySideEditor } from '../../../common/editor
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IViewsService } from '../../../services/views/common/viewsService.js';
 import { IStatusbarEntry, IStatusbarEntryAccessor, IStatusbarService, StatusbarAlignment } from '../../../services/statusbar/browser/statusbar.js';
-import { IClawdiusConfigService } from '../common/clawdiusConfig.js';
+import { IClawdiusConfigService, IConfigItem } from '../common/clawdiusConfig.js';
 import { formatApproxTokens, IBudgetSource, IContextBudget, resolveContextBudget } from '../common/clawdiusContextBudget.js';
 import { CONTEXT_BUDGET_VIEW_ID } from './clawdiusContextBudgetView.js';
 
@@ -61,6 +61,10 @@ export class ClawdiusContextBudgetStatusEntry extends Disposable implements IWor
 	static readonly ID = 'workbench.contrib.clawdiusContextBudgetStatusEntry';
 
 	private readonly entry = this._register(new MutableDisposable<IStatusbarEntryAccessor>());
+	/** Nested/subtree CLAUDE.md per active file (async disk walk, cached) so the pill total matches the panel. */
+	private readonly nestedCache = new Map<string, IConfigItem[]>();
+	private readonly nestedPending = new Set<string>();
+	private disposed = false;
 
 	constructor(
 		@IStatusbarService private readonly statusbarService: IStatusbarService,
@@ -79,7 +83,7 @@ export class ClawdiusContextBudgetStatusEntry extends Disposable implements IWor
 		// Re-resolve when the active file changes (different rules apply), config is edited, or the warn
 		// threshold setting changes.
 		this._register(this.editorService.onDidActiveEditorChange(() => this.update()));
-		this._register(this.configService.onDidChange(() => this.update()));
+		this._register(this.configService.onDidChange(() => { this.nestedCache.clear(); this.update(); }));
 		this._register(this.configurationService.onDidChangeConfiguration(e => {
 			if (e.affectsConfiguration(CONTEXT_BUDGET_WARN_TOKENS_SETTING)) { this.update(); }
 		}));
@@ -102,6 +106,29 @@ export class ClawdiusContextBudgetStatusEntry extends Disposable implements IWor
 		});
 	}
 
+	/** Cached nested/subtree CLAUDE.md for the active file; kicks the async walk on a miss, then re-renders. */
+	private nestedFor(activeFile: URI | undefined, folders: readonly URI[]): IConfigItem[] {
+		if (!activeFile) { return []; }
+		const key = activeFile.toString();
+		const cached = this.nestedCache.get(key);
+		if (cached) { return cached; }
+		if (!this.nestedPending.has(key)) {
+			this.nestedPending.add(key);
+			this.configService.nestedMemoriesFor(activeFile, folders).then(items => {
+				this.nestedPending.delete(key);
+				if (this.disposed) { return; }
+				this.nestedCache.set(key, items);
+				if (items.length) { this.update(); }
+			}, () => this.nestedPending.delete(key));
+		}
+		return [];
+	}
+
+	override dispose(): void {
+		this.disposed = true;
+		super.dispose();
+	}
+
 	private update(): void {
 		// Until the first scan resolves, show a neutral "scanning" pill rather than a definitive ~0.
 		if (!this.configService.hasResolved) {
@@ -114,8 +141,9 @@ export class ClawdiusContextBudgetStatusEntry extends Disposable implements IWor
 			});
 			return;
 		}
+		const activeFile = this.activeFile();
 		const folders = this.workspaceService.getWorkspace().folders.map(f => f.uri);
-		const budget = resolveContextBudget(this.configService.snapshot, this.activeFile(), folders);
+		const budget = resolveContextBudget(this.configService.snapshot, activeFile, folders, this.nestedFor(activeFile, folders));
 		// Distinguish "no Claude config at all" (em-dash) from a real ~0 budget, so an empty repo's pill does not
 		// read as a confident zero.
 		if (budget.alwaysOn.length === 0 && budget.onInvoke.length === 0 && budget.notApplied.length === 0) {

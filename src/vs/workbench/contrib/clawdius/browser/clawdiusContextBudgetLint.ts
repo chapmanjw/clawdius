@@ -59,7 +59,9 @@ export class LintContextAction extends Action2 {
 			supportSideBySide: SideBySideEditor.PRIMARY,
 			filterByScheme: [Schemas.file, Schemas.vscodeRemote, Schemas.vscodeUserData],
 		});
-		const budget = resolveContextBudget(configService.snapshot, activeFile, folders);
+		// Include nested/subtree CLAUDE.md for the active file so the lint covers what the panel shows.
+		const nested = activeFile ? await configService.nestedMemoriesFor(activeFile, folders) : [];
+		const budget = resolveContextBudget(configService.snapshot, activeFile, folders, nested);
 
 		const byResource = new ResourceMap<IMarkerData[]>();
 		const add = (uri: URI, marker: IMarkerData) => {

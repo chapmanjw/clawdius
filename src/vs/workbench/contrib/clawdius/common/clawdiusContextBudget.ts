@@ -88,7 +88,7 @@ function tierOf(scope: ConfigScope, label: string): BudgetTier {
 
 /** The workspace folder that contains the active file. Project scopes apply only to their own folder; with no
  *  active file we can disambiguate only a single-root workspace. Uses URI identity (authority + path casing). */
-function containingFolderOf(activeFile: URI | undefined, folders: readonly URI[]): URI | undefined {
+export function containingFolderOf(activeFile: URI | undefined, folders: readonly URI[]): URI | undefined {
 	if (activeFile) {
 		// The MOST-specific (longest-path) containing folder, so a file in a nested workspace root resolves to
 		// the inner root, not an outer one. Ignore path casing: on Windows the folder + the active file can

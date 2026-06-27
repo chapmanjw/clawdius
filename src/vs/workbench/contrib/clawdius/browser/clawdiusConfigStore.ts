@@ -14,7 +14,7 @@ import { ResourceMap } from '../../../../base/common/map.js';
 import { isMacintosh, isWindows } from '../../../../base/common/platform.js';
 import { URI } from '../../../../base/common/uri.js';
 import { parse as parseJsonc } from '../../../../base/common/jsonc.js';
-import { splitGlobAware } from '../../../../base/common/glob.js';
+import { match as globMatch, splitGlobAware } from '../../../../base/common/glob.js';
 import { RunOnceScheduler } from '../../../../base/common/async.js';
 import { FileChangesEvent, IFileService } from '../../../../platform/files/common/files.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
@@ -177,6 +177,26 @@ function capAutoMemory(content: string): string {
 	return content.split(/\r?\n/).slice(0, 200).join('\n').slice(0, 25 * 1024);
 }
 
+/**
+ * Does the `claudeMdExcludes` setting suppress this CLAUDE.md file? Each pattern is an absolute path (exact
+ * match) or a glob applied to the absolute path - both forms verified live against claude.exe. Comparison is
+ * case-insensitive on Windows. Excludes apply to CLAUDE.md-family memory files, not the org-managed policy file.
+ */
+export function isClaudeMdExcluded(fsPath: string, patterns: readonly string[], caseInsensitive: boolean = isWindows): boolean {
+	if (patterns.length === 0) { return false; }
+	const norm = (s: string): string => { const f = s.replace(/\\/g, '/'); return caseInsensitive ? f.toLowerCase() : f; };
+	const path = norm(fsPath);
+	for (const raw of patterns) {
+		const pat = norm(raw);
+		if (/[*?[\]{}]/.test(pat)) {
+			if (globMatch(pat, path)) { return true; }
+		} else if (pat === path) {
+			return true;
+		}
+	}
+	return false;
+}
+
 /** Scan a session transcript (JSONL) from the end for the last assistant turn with usage, returning its full
  *  cached prefix (cache_read + cache_creation input tokens) - the MEASURED always-on size for that session.
  *  Exported for unit tests. */
@@ -226,6 +246,10 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 	/** Per-refresh memo of readText() so a file imported by several memories (or both auto-scanned and imported)
 	 *  is read once. Cleared at the start of every scan. */
 	private readonly _readCache = new Map<string, Promise<string | undefined>>();
+
+	/** `claudeMdExcludes` patterns gathered from settings.json at the start of each refresh; a CLAUDE.md file
+	 *  matching one is suppressed (Claude Code won't load it) so the inspector doesn't show it as loaded. */
+	private _claudeMdExcludes: string[] = [];
 
 	private readonly _watchers = this._register(new DisposableStore());
 	private readonly _refreshScheduler = this._register(new RunOnceScheduler(() => void this.refresh(), 250));
@@ -284,6 +308,7 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 		try {
 			this._readCache.clear();
 			const roots = await this.scopeRoots();
+			this._claudeMdExcludes = await this.gatherClaudeMdExcludes(roots);
 			const scopes = await Promise.all(roots.map(r => this.scanScope(r)));
 			this._snapshot = { scopes };
 			this.updateWatchers(roots);
@@ -329,6 +354,26 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 		return `${scopeKey}:${section}:${name}`;
 	}
 
+	/** Union the `claudeMdExcludes` arrays from every scope's settings.json (+ project settings.local.json). */
+	private async gatherClaudeMdExcludes(roots: IScopeRoots[]): Promise<string[]> {
+		const out: string[] = [];
+		for (const r of roots) {
+			const files = r.scope === ConfigScope.Project ? ['settings.json', 'settings.local.json'] : ['settings.json'];
+			for (const file of files) {
+				const json = await this.readJsonc<{ claudeMdExcludes?: unknown }>(URI.joinPath(r.claudeDir, file));
+				if (Array.isArray(json?.claudeMdExcludes)) {
+					out.push(...json.claudeMdExcludes.filter((x: unknown): x is string => typeof x === 'string'));
+				}
+			}
+		}
+		return out;
+	}
+
+	/** A CLAUDE.md-family file the `claudeMdExcludes` setting suppresses (never the org-managed policy file). */
+	private excludedClaudeMd(uri: URI, scope: ConfigScope): boolean {
+		return scope !== ConfigScope.Managed && isClaudeMdExcluded(uri.fsPath, this._claudeMdExcludes);
+	}
+
 	private async scanMemories(r: IScopeRoots): Promise<IConfigItem[]> {
 		// Claude Code reads memory from several places. Managed: <policyDir>/CLAUDE.md (+ rules). Global:
 		// ~/.claude/CLAUDE.md (+ rules). Project: folder-root CLAUDE.md / CLAUDE.local.md, .claude/CLAUDE.md,
@@ -345,6 +390,7 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 						{ label: '.claude/CLAUDE.md', uri: URI.joinPath(r.claudeDir, 'CLAUDE.md') },
 					];
 		for (const c of memoryCandidates) {
+			if (this.excludedClaudeMd(c.uri, r.scope)) { continue; }
 			const item = await this.memoryItem(r, c.label, c.uri, false, home);
 			if (item) { items.push(item); }
 		}

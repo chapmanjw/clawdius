@@ -10,7 +10,7 @@ import {
 	ConfigScope, ConfigSection, ContextInclusion, IClawdiusConfigSnapshot, IConfigBudgetMeta, IConfigItem,
 } from '../../common/clawdiusConfig.js';
 import { BudgetTier, estimateTokens, formatApproxTokens, resolveContextBudget } from '../../common/clawdiusContextBudget.js';
-import { extractPaths, parseImportTargets, parseMeasuredPrefix } from '../../browser/clawdiusConfigStore.js';
+import { extractPaths, isClaudeMdExcluded, parseImportTargets, parseMeasuredPrefix } from '../../browser/clawdiusConfigStore.js';
 
 function memoriesScope(scope: ConfigScope, key: string, root: URI, items: IConfigItem[], folderName?: string) {
 	return { scope, key, root, folderName, exists: true, sections: [{ section: ConfigSection.Memories, items }] };
@@ -242,6 +242,21 @@ suite('clawdiusContextBudget', () => {
 		// Cursor's globs:/alwaysApply: keys are NOT Claude Code keys => ignored.
 		assert.strictEqual(extractPaths('---\nglobs: *.ts\nalwaysApply: false\n---\nbody'), undefined);
 		assert.strictEqual(extractPaths('no frontmatter here'), undefined);
+	});
+
+	test('isClaudeMdExcluded matches an absolute path or a glob, case-insensitively when asked', () => {
+		const p = '/proj/src/CLAUDE.md';
+		assert.deepStrictEqual(
+			[
+				isClaudeMdExcluded(p, [], false),
+				isClaudeMdExcluded(p, ['/proj/src/CLAUDE.md'], false),     // exact absolute path
+				isClaudeMdExcluded(p, ['**/src/CLAUDE.md'], false),        // glob (both forms verified live)
+				isClaudeMdExcluded(p, ['/proj/other/CLAUDE.md'], false),   // unrelated path
+				isClaudeMdExcluded(p, ['**/test/CLAUDE.md'], false),       // unrelated glob
+				isClaudeMdExcluded('C:\\Proj\\Src\\CLAUDE.md', ['c:/proj/src/claude.md'], true), // win case-insensitive
+			],
+			[false, true, true, false, false, true],
+		);
 	});
 
 	test('estimateTokens weights CJK ~1/char and prose ~1/4 chars', () => {

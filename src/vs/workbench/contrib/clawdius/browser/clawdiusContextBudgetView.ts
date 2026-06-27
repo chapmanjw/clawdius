@@ -33,7 +33,7 @@ import { EditorResourceAccessor, SideBySideEditor } from '../../../common/editor
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IClawdiusConfigService, IMeasuredPrefix } from '../common/clawdiusConfig.js';
-import { BudgetTier, formatApproxTokens, IBudgetHeading, IBudgetSource, IContextBudget, normalizeConfirmedPath, resolveContextBudget } from '../common/clawdiusContextBudget.js';
+import { BudgetTier, containingFolderOf, formatApproxTokens, IBudgetHeading, IBudgetSource, IContextBudget, normalizeConfirmedPath, resolveContextBudget } from '../common/clawdiusContextBudget.js';
 
 export const CONTEXT_BUDGET_VIEW_CONTAINER_ID = 'workbench.view.clawdiusContextBudget';
 export const CONTEXT_BUDGET_VIEW_ID = 'clawdius.contextBudget';
@@ -166,16 +166,17 @@ export class ClawdiusContextBudgetView extends ViewPane {
 		const foot = append(this.bodyEl, $('.ctxb-foot'));
 		foot.textContent = localize('clawdius.ctxb.foot', "Estimated; counts memory, rules + the skill menu. Excludes the system prompt, MCP tool schemas, and agent/command menus that also load every turn. \"Loaded\" is predicted from your config, not confirmed.");
 
-		this.renderMeasured(folders);
+		this.renderMeasured(folders, activeFile);
 	}
 
 	/** The measured cached-prefix from the project's most recent session transcript (system + tools + MCP +
-	 *  memory) - real ground truth next to the estimate. Fetched once per folder, async, zero-egress. */
-	private renderMeasured(folders: readonly URI[]): void {
-		if (folders.length === 0) {
+	 *  memory) - real ground truth next to the estimate. Fetched once per folder, async, zero-egress. Uses the
+	 *  folder that contains the active file, so a multi-root workspace shows THIS file's project, not folder[0]. */
+	private renderMeasured(folders: readonly URI[], activeFile: URI | undefined): void {
+		const folder = containingFolderOf(activeFile, folders) ?? folders[0];
+		if (!folder) {
 			return;
 		}
-		const folder = folders[0];
 		const key = folder.toString();
 		const cached = this.measuredCache.get(key);
 		if (cached === undefined) {

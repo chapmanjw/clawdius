@@ -2015,6 +2015,15 @@ export abstract class AbstractExtensionGalleryService implements IExtensionGalle
 			}
 		};
 
+		// CLAWDIUS-BEGIN refuse install of conflicting extensions (e.g. GitHub Copilot - this fork ships its own
+		// Claude chat and the Copilot extensions would compete for the chat surfaces). disallowInstall blocks the
+		// install at canInstall()/checkAndGetCompatibleVersion(); it is intentionally NOT the `malicious` list, to
+		// avoid labelling a legitimate extension as malicious.
+		for (const blockedId of this.productService.clawdiusBlockedExtensions ?? []) {
+			deprecated[blockedId.toLowerCase()] = { disallowInstall: true };
+		}
+		// CLAWDIUS-END
+
 		return { malicious, deprecated, search, autoUpdate };
 	}
 

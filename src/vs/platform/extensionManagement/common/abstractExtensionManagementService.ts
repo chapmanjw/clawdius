@@ -217,7 +217,10 @@ export abstract class AbstractExtensionManagementService extends CommontExtensio
 	}
 
 	async toggleApplicationScope(extension: ILocalExtension, fromProfileLocation: URI): Promise<ILocalExtension> {
-		if (isApplicationScopedExtension(extension.manifest) || extension.isBuiltin) {
+		// CLAWDIUS: an uninstall-protected extension (the Claude Code plugin) must not be toggled out of its scope -
+		// that can drop it from other profiles outside the uninstall funnel. Leave it unchanged.
+		const clawdiusProtected = (this.productService.clawdiusUninstallProtectedExtensions ?? []).some(id => areSameExtensions({ id }, extension.identifier));
+		if (isApplicationScopedExtension(extension.manifest) || extension.isBuiltin || clawdiusProtected) {
 			return extension;
 		}
 
@@ -284,6 +287,20 @@ export abstract class AbstractExtensionManagementService extends CommontExtensio
 	}
 
 	protected async installExtensions(extensions: InstallableExtension[]): Promise<InstallExtensionResult[]> {
+		// CLAWDIUS-BEGIN refuse install of policy-blocked extensions (conflicting AI assistants, e.g. GitHub Copilot)
+		// at the common task-creation chokepoint - covers gallery installs, VSIX (install(vsix)), and local
+		// (installFromLocation) installs alike, since they all funnel here. The id is the gallery identifier or, for a
+		// VSIX/local resource, derived from the parsed manifest.
+		const clawdiusBlocked = this.productService.clawdiusBlockedExtensions ?? [];
+		if (clawdiusBlocked.length) {
+			for (const { manifest, extension } of extensions) {
+				const id = URI.isUri(extension) ? getGalleryExtensionId(manifest.publisher, manifest.name) : extension.identifier.id;
+				if (clawdiusBlocked.some(blockedId => areSameExtensions({ id: blockedId }, { id }))) {
+					throw new ExtensionManagementError(nls.localize('clawdius.blockedInstall', "'{0}' can't be installed in {1}.", id, this.productService.nameLong), ExtensionManagementErrorCode.Unsupported);
+				}
+			}
+		}
+		// CLAWDIUS-END
 		const installExtensionResultsMap = new Map<string, InstallExtensionResult & { profileLocation: URI }>();
 		const installingExtensionsMap = new Map<string, { task: IInstallExtensionTask; root: IInstallExtensionTask | undefined; uninstallTaskToWaitFor?: IUninstallExtensionTask }>();
 		const alreadyRequestedInstallations: Promise<ILocalExtension>[] = [];
@@ -781,9 +798,20 @@ export abstract class AbstractExtensionManagementService extends CommontExtensio
 
 	async uninstallExtensions(extensions: UninstallExtensionInfo[]): Promise<void> {
 
+		// CLAWDIUS-BEGIN refuse to uninstall a protected extension (the Claude Code plugin Clawdius depends on). The
+		// guard lives in createUninstallExtensionTask below so it also catches extension-pack members, which are
+		// appended after the initial batch. uninstall() funnels into here, covering UI / CLI / IPC / remote.
+		const clawdiusProtected = this.productService.clawdiusUninstallProtectedExtensions ?? [];
+		// CLAWDIUS-END
+
 		const getUninstallExtensionTaskKey = (extension: ILocalExtension, uninstallOptions: UninstallExtensionTaskOptions) => this.getUninstallExtensionTaskKey(extension.identifier, uninstallOptions.profileLocation, uninstallOptions.versionOnly ? extension.manifest.version : undefined);
 
 		const createUninstallExtensionTask = (extension: ILocalExtension, uninstallOptions: UninstallExtensionTaskOptions): void => {
+			// CLAWDIUS-BEGIN every uninstall task (initial batch + pack-expanded members) must spare the protected extension
+			if (clawdiusProtected.some(id => areSameExtensions({ id }, extension.identifier))) {
+				throw new ExtensionManagementError(nls.localize('clawdius.cannotUninstall', "'{0}' is required by {1} and cannot be uninstalled.", extension.identifier.id, this.productService.nameLong), ExtensionManagementErrorCode.Unsupported);
+			}
+			// CLAWDIUS-END
 			let installTaskToWaitFor: IInstallExtensionTask | undefined;
 			for (const { task } of this.installingExtensions.values()) {
 				if (!(task.source instanceof URI) && areSameExtensions(task.identifier, extension.identifier) && this.uriIdentityService.extUri.isEqual(task.options.profileLocation, uninstallOptions.profileLocation)) {

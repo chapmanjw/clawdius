@@ -152,6 +152,18 @@ export interface IProductConfiguration {
 	readonly extensionPublisherOrgs?: readonly string[];
 	readonly trustedExtensionPublishers?: readonly string[];
 
+	// CLAWDIUS-BEGIN extension-management policy lists
+	/** Extension ids Clawdius refuses to install (conflicting AI assistants we ship a replacement for, e.g. GitHub
+	 *  Copilot). Hard-enforced at the platform install chokepoint (checkAndGetCompatibleVersion) so CLI / sync /
+	 *  gallery installs are blocked, and surfaced in the UI via the extensions-control manifest's `deprecated` map
+	 *  with `disallowInstall`. */
+	readonly clawdiusBlockedExtensions?: readonly string[];
+	/** Extension ids the user is not allowed to uninstall (the Claude Code plugin Clawdius depends on). Hard-enforced
+	 *  at the platform uninstall funnel (uninstallExtensions - covers UI / CLI / IPC / pack expansion); the workbench
+	 *  Uninstall action is also disabled for them. */
+	readonly clawdiusUninstallProtectedExtensions?: readonly string[];
+	// CLAWDIUS-END
+
 	readonly extensionRecommendations?: IStringDictionary<IExtensionRecommendations>;
 	readonly configBasedExtensionTips?: IStringDictionary<IConfigBasedExtensionTip>;
 	readonly exeBasedExtensionTips?: IStringDictionary<IExeBasedExtensionTip>;

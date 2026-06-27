@@ -226,6 +226,13 @@
 		"anthropic",
 		"jeanp413"
 	],
+	"clawdiusBlockedExtensions": [
+		"github.copilot",
+		"github.copilot-chat"
+	],
+	"clawdiusUninstallProtectedExtensions": [
+		"anthropic.claude-code"
+	],
 	"extensionsGallery": {
 		"serviceUrl": "https://open-vsx.org/vscode/gallery",
 		"itemUrl": "https://open-vsx.org/vscode/item",

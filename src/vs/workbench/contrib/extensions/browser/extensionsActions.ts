@@ -894,7 +894,8 @@ export class UninstallAction extends ExtensionAction {
 	constructor(
 		@IExtensionsWorkbenchService private readonly extensionsWorkbenchService: IExtensionsWorkbenchService,
 		@IUserDataProfilesService private readonly userDataProfilesService: IUserDataProfilesService,
-		@IDialogService private readonly dialogService: IDialogService
+		@IDialogService private readonly dialogService: IDialogService,
+		@IProductService private readonly productService: IProductService
 	) {
 		super('extensions.uninstall', UninstallAction.UninstallLabel, UninstallAction.UninstallClass, false);
 		this.update();
@@ -928,6 +929,13 @@ export class UninstallAction extends ExtensionAction {
 			this.enabled = false;
 			return;
 		}
+
+		// CLAWDIUS-BEGIN protected extensions (the Claude Code plugin Clawdius depends on) cannot be uninstalled
+		if ((this.productService.clawdiusUninstallProtectedExtensions ?? []).some(id => areSameExtensions({ id }, this.extension!.identifier))) {
+			this.enabled = false;
+			return;
+		}
+		// CLAWDIUS-END
 
 		this.enabled = true;
 	}

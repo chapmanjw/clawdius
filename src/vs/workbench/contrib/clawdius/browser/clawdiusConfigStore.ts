@@ -13,14 +13,15 @@ import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.j
 import { ResourceMap } from '../../../../base/common/map.js';
 import { URI } from '../../../../base/common/uri.js';
 import { parse as parseJsonc } from '../../../../base/common/jsonc.js';
+import { splitGlobAware } from '../../../../base/common/glob.js';
 import { RunOnceScheduler } from '../../../../base/common/async.js';
 import { FileChangesEvent, IFileService } from '../../../../platform/files/common/files.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IPathService } from '../../../services/path/common/pathService.js';
 import {
-	ConfigBacking, ConfigScope, ConfigSection, CONFIG_SECTIONS, IClawdiusConfigService, IClawdiusConfigSnapshot,
-	IConfigItem, IConfigScopeGroup, IConfigSectionGroup,
+	ConfigBacking, ConfigScope, ConfigSection, CONFIG_SECTIONS, ContextInclusion, IClawdiusConfigService,
+	IClawdiusConfigSnapshot, IConfigBudgetMeta, IConfigItem, IConfigScopeGroup, IConfigSectionGroup,
 } from '../common/clawdiusConfig.js';
 
 interface IScopeRoots {
@@ -45,6 +46,56 @@ function frontMatter(content: string): { readonly fields: Record<string, string>
 	}
 	const bodyLine = m[0].split(/\r?\n/).length;
 	return { fields, bodyLine };
+}
+
+/** Parse an inline frontmatter `globs` value into a list of patterns: a scalar (`*.ts`), an inline array
+ *  (`["*.ts","*.tsx"]`), or a comma list (`*.ts, *.tsx`). Uses splitGlobAware so a `,` inside a `{...}` brace
+ *  group (e.g. `*.{ts,tsx}`) is NOT split. */
+function parseGlobList(raw: string | undefined): string[] | undefined {
+	let s = (raw ?? '').trim();
+	if (!s) { return undefined; }
+	if (s.startsWith('[') && s.endsWith(']')) { s = s.slice(1, -1); }
+	const parts = splitGlobAware(s, ',').map(p => p.trim().replace(/^["']|["']$/g, '').trim().replace(/\\/g, '/')).filter(Boolean);
+	return parts.length ? parts : undefined;
+}
+
+/** Extract a rule's `globs` patterns from its frontmatter block: an inline scalar/array/comma-list on the
+ *  `globs:` line, OR a shallow YAML block list (`globs:` followed by indented `- pattern` lines). Returns
+ *  undefined when there is no `globs:` key (an unconditional, always-on rule). Exported for unit tests. */
+export function extractGlobs(content: string): string[] | undefined {
+	const m = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*\r?\n?/.exec(content);
+	if (!m) { return undefined; }
+	const lines = m[1].split(/\r?\n/);
+	for (let i = 0; i < lines.length; i++) {
+		const kv = /^globs[ \t]*:[ \t]*(.*)$/i.exec(lines[i]);
+		if (!kv) { continue; }
+		if (kv[1].trim()) { return parseGlobList(kv[1]); }
+		// Block list: collect subsequent indented `- pattern` lines until the indentation ends.
+		const items: string[] = [];
+		for (let j = i + 1; j < lines.length; j++) {
+			const li = /^[ \t]+-[ \t]*(.+?)[ \t]*$/.exec(lines[j]);
+			if (!li) { break; }
+			items.push(li[1].replace(/^["']|["']$/g, '').trim().replace(/\\/g, '/'));
+		}
+		return items.length ? items : undefined;
+	}
+	return undefined;
+}
+
+/** Context-budget metadata for a memory/rule file (token estimate + rule glob applicability). The content is
+ *  already read by the caller, so this is free. Root CLAUDE.md/CLAUDE.local.md are always-on memory; a rule is
+ *  glob-scoped when it declares `globs` (and not `alwaysApply`), else always-on (the Claude Code default). */
+function memoryBudget(isRule: boolean, content: string): IConfigBudgetMeta {
+	const chars = content.length;
+	const approxTokens = Math.ceil(chars / 4);
+	if (!isRule) {
+		return { kind: 'memory', approxTokens, chars, inclusion: ContextInclusion.Always };
+	}
+	const alwaysApply = /^(true|yes)$/i.test(frontMatter(content).fields['alwaysapply'] ?? '');
+	const globs = extractGlobs(content);
+	return globs && !alwaysApply
+		? { kind: 'rule', approxTokens, chars, inclusion: ContextInclusion.Glob, globs }
+		: { kind: 'rule', approxTokens, chars, inclusion: ContextInclusion.Always };
 }
 
 /** Markdown ATX headings (`#`..`######`) with 1-based line numbers. */
@@ -178,6 +229,7 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 				id: this.id(r.key, ConfigSection.Memories, c.label),
 				scope: r.scope, section: ConfigSection.Memories, label: c.label, resource: c.uri,
 				backing: ConfigBacking.File, canDelete: true, canMove: false,
+				budget: memoryBudget(c.label.startsWith('rules/'), content),
 				children: headings(content).map((hd, i) => ({
 					id: this.id(r.key, ConfigSection.Memories, `${c.label}:h${i}`),
 					scope: r.scope, section: ConfigSection.Memories, label: hd.text.trim(), resource: c.uri, reveal: { lineNumber: hd.line },
@@ -218,6 +270,8 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 				label: fm.fields['name'] || folder.name, description: fm.fields['description'],
 				resource: content !== undefined ? skillMd : folder.resource,
 				backing: ConfigBacking.Folder, targetResource: folder.resource, canDelete: true, canMove: true,
+				// Skills are on-invoke (loaded when triggered), not part of every-turn context.
+				budget: { kind: 'skill', approxTokens: Math.ceil((content?.length ?? 0) / 4), chars: content?.length ?? 0, inclusion: ContextInclusion.Manual },
 			});
 		}
 		return items.sort((a, b) => a.label.localeCompare(b.label));

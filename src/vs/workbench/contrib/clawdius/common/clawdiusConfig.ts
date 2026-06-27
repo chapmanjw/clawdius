@@ -72,6 +72,31 @@ export interface IConfigReveal {
 	readonly column?: number;
 }
 
+/** How a memory / rule / skill source enters Claude's context for a turn. */
+export const enum ContextInclusion {
+	/** Loaded every turn (root CLAUDE.md / CLAUDE.local.md, or a rule with no globs). */
+	Always = 'always',
+	/** A rule loaded only when the active file matches its frontmatter `globs`. */
+	Glob = 'glob',
+	/** Loaded on demand (a skill - on-invoke, not every turn). */
+	Manual = 'manual',
+}
+
+/** Context-budget metadata computed during the scan (the file's content is already read there) and consumed by
+ *  the Context Budget Inspector. `approxTokens` is an estimate (chars/4), never an exact count. */
+export interface IConfigBudgetMeta {
+	/** What kind of context source this is. */
+	readonly kind: 'memory' | 'rule' | 'skill';
+	/** Estimated tokens for the file body (chars / 4). Marked "estimated" in the UI - never exact. */
+	readonly approxTokens: number;
+	/** Character count the estimate was derived from (so a real tokenizer can replace the heuristic later). */
+	readonly chars: number;
+	/** How this source enters context. */
+	readonly inclusion: ContextInclusion;
+	/** For a `Glob` rule: the frontmatter `globs` patterns (forward-slash, workspace-relative). */
+	readonly globs?: readonly string[];
+}
+
 /** A single configuration item (an agent, a skill, a slash command, a hook event, a permission rule, ...). */
 export interface IConfigItem {
 	/** Stable identity, e.g. `global:agents:reviewer`. */
@@ -101,6 +126,9 @@ export interface IConfigItem {
 	readonly canMove?: boolean;
 	/** Nested items (markdown headings, hook commands, permission rules, ...). */
 	readonly children?: ReadonlyArray<IConfigItem>;
+	/** Context-budget metadata for memory / rule / skill items (used by the Context Budget Inspector); absent
+	 *  for sections that never enter Claude's context (settings, mcp, plugins, hooks, permissions). */
+	readonly budget?: IConfigBudgetMeta;
 }
 
 /** All items in one section of one scope. */

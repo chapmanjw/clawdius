@@ -1,0 +1,108 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/* CLAWDIUS-BEGIN Context Budget Inspector view */
+.clawdius-ctxbudget {
+	padding: 8px 14px;
+	font-size: 12px;
+	line-height: 1.5;
+	height: 100%;
+	overflow: auto;
+	user-select: text;
+}
+
+.clawdius-ctxbudget .ctxb-head {
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	gap: 14px;
+	margin-bottom: 4px;
+	color: var(--vscode-foreground);
+}
+
+.clawdius-ctxbudget .ctxb-file {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.clawdius-ctxbudget .ctxb-total {
+	color: var(--vscode-textLink-foreground);
+	white-space: nowrap;
+}
+
+.clawdius-ctxbudget .ctxb-sec {
+	color: var(--vscode-textLink-foreground);
+	letter-spacing: 1px;
+	font-size: 10px;
+	text-transform: uppercase;
+	margin: 11px 0 3px;
+}
+
+.clawdius-ctxbudget .ctxb-row {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	padding: 1px 0;
+}
+
+.clawdius-ctxbudget .ctxb-row.clickable {
+	cursor: pointer;
+}
+
+.clawdius-ctxbudget .ctxb-row.clickable:hover .ctxb-name {
+	text-decoration: underline;
+}
+
+.clawdius-ctxbudget .ctxb-scope {
+	font-size: 9px;
+	padding: 0 4px;
+	border-radius: 3px;
+	color: #1b1b1b;
+	font-weight: 600;
+	flex: 0 0 auto;
+}
+
+.clawdius-ctxbudget .ctxb-scope.u { background: #9cdcfe; }
+.clawdius-ctxbudget .ctxb-scope.p { background: #b5cea8; }
+.clawdius-ctxbudget .ctxb-scope.l { background: #d7ba7d; }
+
+.clawdius-ctxbudget .ctxb-name {
+	flex: 1 1 auto;
+	color: var(--vscode-foreground);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.clawdius-ctxbudget .ctxb-glob {
+	color: var(--vscode-descriptionForeground);
+	font-size: 11px;
+}
+
+.clawdius-ctxbudget .ctxb-match { color: var(--vscode-charts-green, #89d185); font-size: 10px; }
+.clawdius-ctxbudget .ctxb-nomatch { color: var(--vscode-descriptionForeground); font-size: 10px; }
+
+.clawdius-ctxbudget .ctxb-tok {
+	color: var(--vscode-foreground);
+	white-space: nowrap;
+	flex: 0 0 auto;
+}
+
+.clawdius-ctxbudget .ctxb-tok.dim { color: var(--vscode-descriptionForeground); }
+
+.clawdius-ctxbudget .ctxb-foot {
+	color: var(--vscode-descriptionForeground);
+	font-size: 10px;
+	margin-top: 10px;
+	border-top: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.25));
+	padding-top: 6px;
+}
+
+.clawdius-ctxbudget .ctxb-empty {
+	color: var(--vscode-descriptionForeground);
+	padding: 6px 0;
+}
+/* CLAWDIUS-END */

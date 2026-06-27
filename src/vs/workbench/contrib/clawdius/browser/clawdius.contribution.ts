@@ -39,6 +39,10 @@ import { OPEN_USAGE_DASHBOARD_COMMAND_ID, REFRESH_CAPACITY_COMMAND_ID } from './
 import { ClaudeControlCenterEditor } from './control/claudeControlCenterEditor.js';
 import { ClaudeControlCenterInput, ControlTab, OPEN_CONTROL_CENTER_COMMAND_ID } from './control/claudeControlCenterInput.js';
 import { Codicon } from '../../../../base/common/codicons.js';
+import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContainer.js';
+import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainerLocation } from '../../../common/views.js';
+import { ClawdiusContextBudgetView, CONTEXT_BUDGET_VIEW_CONTAINER_ID, CONTEXT_BUDGET_VIEW_ID } from './clawdiusContextBudgetView.js';
+import { ClawdiusContextBudgetStatusEntry, OpenContextBudgetAction } from './clawdiusContextBudgetStatusEntry.js';
 
 // Singleton dashboard input round-trips with no state (everything is read live from local files on open).
 class ClaudeUsageDashboardInputSerializer implements IEditorSerializer {
@@ -190,6 +194,30 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	);
 	Registry.as<IEditorFactoryRegistry>(EditorExtensions.EditorFactory).registerEditorSerializer(ClaudeControlCenterInput.ID, ClaudeControlCenterInputSerializer);
 	registerAction2(OpenClaudeControlCenterAction);
+
+	// Context Budget Inspector (N2 2a): a bottom-Panel view answering "what does Claude see for THIS file?"
+	// (memories + path-scoped rules + skills, split always-on / on-invoke / not-applied, each with an estimated
+	// token cost), plus a status-bar pill showing the always-on total that opens the panel. Reads the shared
+	// config snapshot through a pure resolver; no I/O of its own. Token numbers are estimates (chars/4).
+	const contextBudgetContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
+		id: CONTEXT_BUDGET_VIEW_CONTAINER_ID,
+		title: localize2('clawdius.ctxb.container', "Claude Code Context Budget"),
+		ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [CONTEXT_BUDGET_VIEW_CONTAINER_ID, { mergeViewWithContainerWhenSingleView: true }]),
+		hideIfEmpty: false,
+		icon: Codicon.book,
+		order: 6,
+	}, ViewContainerLocation.Panel);
+	const contextBudgetViews: IViewDescriptor[] = [{
+		id: CONTEXT_BUDGET_VIEW_ID,
+		name: localize2('clawdius.ctxb.view', "Claude Code Context Budget"),
+		ctorDescriptor: new SyncDescriptor(ClawdiusContextBudgetView),
+		containerIcon: Codicon.book,
+		canToggleVisibility: true,
+		canMoveView: true,
+	}];
+	Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews(contextBudgetViews, contextBudgetContainer);
+	registerWorkbenchContribution2(ClawdiusContextBudgetStatusEntry.ID, ClawdiusContextBudgetStatusEntry, WorkbenchPhase.BlockRestore);
+	registerAction2(OpenContextBudgetAction);
 
 	// Manage-gear "Check for Updates..." -> opens the Clawdius releases page (no auto-update server yet).
 	registerAction2(ClawdiusCheckForUpdatesAction);

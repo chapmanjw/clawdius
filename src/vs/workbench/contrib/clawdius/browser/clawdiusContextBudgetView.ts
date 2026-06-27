@@ -142,7 +142,7 @@ export class ClawdiusContextBudgetView extends ViewPane {
 		// One-time fetch of the opt-in confirmed-loaded set; rows get a badge once it resolves.
 		if (this.confirmedLoads === undefined && !this.confirmedPending) {
 			this.confirmedPending = true;
-			this.configService.readConfirmedLoads().then(set => {
+			this.configService.readConfirmedLoads(folders).then(set => {
 				this.confirmedPending = false;
 				if (this.disposed) { return; }
 				this.confirmedLoads = set;

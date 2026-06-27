@@ -35,8 +35,10 @@ export function instructionsLogUri(home: URI): URI {
 	return URI.joinPath(home, '.claude', LOG_FILE_NAME);
 }
 
-function scriptUri(home: URI): URI {
-	return URI.joinPath(home, '.claude', '.clawdius', isWindows ? 'log-instructions.ps1' : 'log-instructions.sh');
+// The platform is an optional param (defaulting to the real value) so the script/command builders can be
+// unit-tested for both Windows and POSIX without stubbing the global - per the repo's testability guideline.
+export function scriptUri(home: URI, win: boolean = isWindows): URI {
+	return URI.joinPath(home, '.claude', '.clawdius', win ? 'log-instructions.ps1' : 'log-instructions.sh');
 }
 
 const SQ = String.fromCharCode(39); // single quote, built from its code point to keep the lint happy
@@ -47,13 +49,13 @@ function psLiteral(s: string): string { return SQ + s.split(SQ).join(SQ + SQ) + 
 function shLiteral(s: string): string { return SQ + s.split(SQ).join(SQ + '\\' + SQ + SQ) + SQ; }
 
 /** The script body that appends the hook payload as one JSONL line, in the platform's native interpreter. */
-function scriptContent(home: URI): string {
+export function scriptContent(home: URI, win: boolean = isWindows): string {
 	const log = instructionsLogUri(home).fsPath;
 	// Claude Code can fire InstructionsLoaded for several files near-simultaneously, each invoking this script
 	// as its own process. Serialize the append so concurrent invocations neither drop nor interleave lines:
 	// a named mutex on Windows, and a single atomic write (one append, <= PIPE_BUF) on POSIX. On Windows,
 	// Add-Content with no -Encoding also avoids the per-append UTF-8 BOM that PowerShell 5.1 would inject.
-	if (isWindows) {
+	if (win) {
 		return [
 			`$m = New-Object System.Threading.Mutex($false, 'ClawdiusInstructionsLog')`,
 			`try { [void]$m.WaitOne(5000) } catch { }`,
@@ -65,16 +67,20 @@ function scriptContent(home: URI): string {
 	return `printf '%s\\n' "$(cat)" >> ${shLiteral(log)}\n`;
 }
 
-/** The hook command: just invoke the script. Only the script path is on the command line, double-quoted. */
-function hookCommand(home: URI): string {
-	const script = scriptUri(home).fsPath;
-	return isWindows
+/**
+ * The hook command: just invoke the script. On POSIX the script path is single-quoted with shLiteral so a
+ * `$`, backtick, or quote in the home path can't be interpreted by the shell. On Windows it is double-quoted;
+ * Windows path syntax forbids the shell-dangerous characters, so only spaces need handling there.
+ */
+export function hookCommand(home: URI, win: boolean = isWindows): string {
+	const script = scriptUri(home, win).fsPath;
+	return win
 		? `powershell -NoProfile -ExecutionPolicy Bypass -File "${script}"`
-		: `sh "${script}"`;
+		: `sh ${shLiteral(script)}`;
 }
 
 interface IHookEntry {
-	readonly hooks?: ReadonlyArray<{ readonly command?: string }>;
+	readonly hooks?: ReadonlyArray<{ readonly type?: string; readonly command?: string }>;
 }
 
 /** Read settings.json; returns raw text, or undefined when missing/empty. Throws on invalid JSON. */
@@ -86,16 +92,36 @@ async function readSettings(fileService: IFileService, uri: URI): Promise<string
 	return raw;
 }
 
-function existingInstructionsHooks(raw: string | undefined): IHookEntry[] {
+export function existingInstructionsHooks(raw: string | undefined): IHookEntry[] {
 	if (raw === undefined) { return []; }
 	const arr = (JSON.parse(raw) as { hooks?: { InstructionsLoaded?: unknown } })?.hooks?.InstructionsLoaded;
 	return Array.isArray(arr) ? arr as IHookEntry[] : [];
 }
 
-/** True if a hook entry is the Clawdius logging hook (any of its commands invokes our log script). */
-function isClawdiusEntry(entry: IHookEntry, home: URI): boolean {
-	const cmd = hookCommand(home);
-	return (entry.hooks ?? []).some(h => h.command === cmd || (h.command?.includes(LOG_FILE_NAME) ?? false) || (h.command?.includes('log-instructions') ?? false));
+/**
+ * True only if a hook entry is OUR logging hook: a command that exactly equals the current hookCommand, or
+ * that references our specific script path (`<home>/.claude/.clawdius/log-instructions.*`). That path is
+ * unique to Clawdius, so this can't match an unrelated user hook the way a generic filename substring would.
+ */
+export function isClawdiusEntry(entry: IHookEntry, home: URI, win: boolean = isWindows): boolean {
+	const cmd = hookCommand(home, win);
+	const script = scriptUri(home, win).fsPath;
+	return (entry.hooks ?? []).some(h => h.command === cmd || (h.command?.includes(script) ?? false));
+}
+
+/** The Clawdius InstructionsLoaded hook entry. */
+export function buildClawdiusEntry(home: URI, win: boolean = isWindows): IHookEntry {
+	return { hooks: [{ type: 'command', command: hookCommand(home, win) }] };
+}
+
+/** Enable: preserve every non-Clawdius InstructionsLoaded hook, replace/append exactly our entry (idempotent). */
+export function mergeEnableHooks(existing: readonly IHookEntry[], home: URI, win: boolean = isWindows): IHookEntry[] {
+	return [...existing.filter(e => !isClawdiusEntry(e, home, win)), buildClawdiusEntry(home, win)];
+}
+
+/** Disable: drop only our entry, keep every other InstructionsLoaded hook untouched. */
+export function filterDisableHooks(existing: readonly IHookEntry[], home: URI, win: boolean = isWindows): IHookEntry[] {
+	return existing.filter(e => !isClawdiusEntry(e, home, win));
 }
 
 /** Installs the InstructionsLoaded logging hook after an explicit consent dialog (preserving existing hooks). */
@@ -144,10 +170,7 @@ export class EnableConfirmedLoadsAction extends Action2 {
 		// Write the logging script (creates the parent dir).
 		await fileService.writeFile(scriptUri(home), VSBuffer.fromString(scriptContent(home)));
 		// Preserve any existing InstructionsLoaded hooks; replace only our entry.
-		const merged = [
-			...existingInstructionsHooks(raw).filter(e => !isClawdiusEntry(e, home)),
-			{ hooks: [{ type: 'command', command: hookCommand(home) }] },
-		];
+		const merged = mergeEnableHooks(existingInstructionsHooks(raw), home);
 		await jsonEditing.write(settingsUri, [{ path: ['hooks', 'InstructionsLoaded'], value: merged }], true);
 		notificationService.info(localize('clawdius.confirm.enabled', "Confirmed context-load tracking enabled. After your next Claude turn, open the Context Budget panel to see which sources actually loaded."));
 	}
@@ -184,7 +207,7 @@ export class DisableConfirmedLoadsAction extends Action2 {
 			return;
 		}
 		const all = existingInstructionsHooks(raw);
-		const kept = all.filter(e => !isClawdiusEntry(e, home));
+		const kept = filterDisableHooks(all, home);
 		if (kept.length === all.length) {
 			notificationService.info(localize('clawdius.confirm.notEnabled', "Confirmed context-load tracking is not enabled."));
 			return;

@@ -587,19 +587,28 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 		}
 	}
 
-	async readConfirmedLoads(): Promise<ReadonlySet<string>> {
+	async readConfirmedLoads(workspaceFolders: readonly URI[]): Promise<ReadonlySet<string>> {
 		const out = new Set<string>();
 		try {
 			const home = await this.pathService.userHome();
 			const text = await this.readText(URI.joinPath(home, '.claude', '.clawdius-instructions.jsonl'));
 			if (text === undefined) { return out; }
+			// A record counts only when its session cwd is inside one of the open workspace folders, so a
+			// different project's Claude session does not light up badges here. Empty folders = no scoping.
+			const scopes = workspaceFolders.map(f => normalizeConfirmedPath(f.fsPath));
+			const inScope = (cwd: unknown): boolean => {
+				if (scopes.length === 0) { return true; }
+				if (typeof cwd !== 'string') { return false; }
+				const c = normalizeConfirmedPath(cwd);
+				return scopes.some(s => c === s || c.startsWith(s + '/'));
+			};
 			// Recent tail only, so the set reflects recent sessions rather than the whole history.
 			for (const line of text.split(/\r?\n/).slice(-1000)) {
 				const t = line.trim();
 				if (!t || t[0] !== '{') { continue; }
 				try {
 					const obj = JSON.parse(t);
-					if (typeof obj?.file_path === 'string') { out.add(normalizeConfirmedPath(obj.file_path)); }
+					if (typeof obj?.file_path === 'string' && inScope(obj?.cwd)) { out.add(normalizeConfirmedPath(obj.file_path)); }
 				} catch { /* skip a non-JSON line */ }
 			}
 		} catch { /* best-effort */ }

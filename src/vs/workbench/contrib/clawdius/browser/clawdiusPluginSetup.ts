@@ -81,13 +81,30 @@ function installFromGallery(extensionsWorkbenchService: IExtensionsWorkbenchServ
 	);
 }
 
+/** Installs in flight keyed by extension id, so concurrent callers (the first-run setup flow and the manual
+ *  install command behind the status pill / Control Center banner / palette) coalesce onto a single gallery
+ *  request instead of racing two parallel downloads of the same extension. Cleared when the install settles. */
+const inFlightGalleryInstalls = new Map<string, Promise<void>>();
+
 /**
  * Install one extension from the configured gallery (Open VSX). Verify signatures normally (they ARE enforced in
  * built builds); only on a signature-specific failure retry once without verification - a known-id bootstrap from
  * a gallery Clawdius already trusts (Open VSX), which does not sign extensions the MS-marketplace way, not an
- * arbitrary install, so the scoped fallback is acceptable. Shared by the first-run flow and the install command.
+ * arbitrary install, so the scoped fallback is acceptable. Shared by the first-run flow and the install command;
+ * concurrent callers for the same id share one in-flight install (no double download).
  */
-export async function installClaudeGalleryExtension(extensionsWorkbenchService: IExtensionsWorkbenchService, logService: ILogService, id: string): Promise<void> {
+export function installClaudeGalleryExtension(extensionsWorkbenchService: IExtensionsWorkbenchService, logService: ILogService, id: string): Promise<void> {
+	const existing = inFlightGalleryInstalls.get(id);
+	if (existing) {
+		return existing;
+	}
+	const install = doInstallClaudeGalleryExtension(extensionsWorkbenchService, logService, id)
+		.finally(() => inFlightGalleryInstalls.delete(id));
+	inFlightGalleryInstalls.set(id, install);
+	return install;
+}
+
+async function doInstallClaudeGalleryExtension(extensionsWorkbenchService: IExtensionsWorkbenchService, logService: ILogService, id: string): Promise<void> {
 	try {
 		await installFromGallery(extensionsWorkbenchService, id, false);
 	} catch (err) {

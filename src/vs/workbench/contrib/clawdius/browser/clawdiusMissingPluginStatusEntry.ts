@@ -38,6 +38,14 @@ export class ClawdiusMissingPluginStatusEntry extends Disposable implements IWor
 			return;
 		}
 
+		void this._init();
+	}
+
+	/** Populate the installed-on-disk list before the first render, then track changes. `.local` is filled
+	 *  lazily, so reading it synchronously at construction would briefly look like the plugin is absent and
+	 *  flash a "missing" pill on a clean startup; awaiting `queryLocal()` first avoids that false negative. */
+	private async _init(): Promise<void> {
+		await this.extensionsWorkbenchService.queryLocal();
 		this.update();
 		// Appear / disappear as the plugin is installed or removed.
 		this._register(this.extensionsWorkbenchService.onChange(() => this.update()));

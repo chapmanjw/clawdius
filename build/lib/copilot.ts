@@ -3,7 +3,6 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as fs from 'fs';
 import * as path from 'path';
 
 /**
@@ -160,74 +159,8 @@ export function getCopilotRuntimePrebuildFiles(platform: string, arch: string, n
 	return files;
 }
 
-/**
- * Materializes the copilot CLI ripgrep shim directly inside the built-in copilot extension.
- *
- * This is used when copilot is shipped as a built-in extension so startup does
- * not need to create the shim at runtime. The destination layout matches the
- * runtime shim logic in the copilot extension:
- * - ripgrep:  node_modules/@github/copilot/sdk/ripgrep/bin/{platform-arch}
- * - marker:   node_modules/@github/copilot/shims.txt
- *
- * Note: `node-pty` is no longer shimmed. The copilot CLI SDK resolves
- * `node-pty` from the embedder (VS Code) via `hostRequire` and falls back to
- * its bundled copy only if that fails.
- *
- * Failures throw to fail the build because built-in packaging must guarantee
- * this artifact is present.
- */
-export function prepareBuiltInCopilotRipgrepShim(platform: string, arch: string, builtInCopilotExtensionDir: string, appNodeModulesDir: string): void {
-	const { nodePlatform, nodeArch } = toNodePlatformArch(platform, arch);
-	const platformArch = `${nodePlatform}-${nodeArch}`;
-	const tgrepPlatformArch = toCopilotTgrepPlatformArch(platform, arch);
-
-	const extensionNodeModules = path.join(builtInCopilotExtensionDir, 'node_modules');
-	const copilotBase = path.join(extensionNodeModules, '@github', 'copilot');
-	const copilotSdkBase = path.join(copilotBase, 'sdk');
-	if (!fs.existsSync(copilotSdkBase)) {
-		throw new Error(`[prepareBuiltInCopilotRipgrepShim] Copilot SDK directory not found at ${copilotSdkBase}`);
-	}
-	pruneNonTargetCopilotSdkPrebuilds(platformArch, path.join(copilotSdkBase, 'prebuilds'), copilotPlatforms);
-	pruneNonTargetCopilotSdkPrebuilds(tgrepPlatformArch, path.join(copilotSdkBase, path.join('tgrep', 'bin')), copilotTgrepPlatforms);
-	pruneNonTargetCopilotSdkPrebuilds(tgrepPlatformArch, path.join(copilotBase, path.join('tgrep', 'bin')), copilotTgrepPlatforms);
-
-	const ripgrepSource = path.join(appNodeModulesDir, '@vscode', 'ripgrep-universal', 'bin', platformArch);
-	if (!fs.existsSync(ripgrepSource)) {
-		const binDir = path.join(appNodeModulesDir, '@vscode', 'ripgrep-universal', 'bin');
-		let diagnostics: string;
-		try {
-			diagnostics = fs.existsSync(binDir)
-				? `Available bin entries: ${JSON.stringify(fs.readdirSync(binDir))}`
-				: `bin directory does not exist at ${binDir}`;
-		} catch (err) {
-			diagnostics = `Failed to enumerate bin directory: ${err}`;
-		}
-		throw new Error(`[prepareBuiltInCopilotRipgrepShim] ripgrep source not found at ${ripgrepSource} (build platform=${platform}, arch=${arch}, computed platformArch=${platformArch}). ${diagnostics}`);
-	}
-
-	const ripgrepDest = path.join(copilotSdkBase, 'ripgrep', 'bin', platformArch);
-	const shimMarkerPath = path.join(copilotBase, 'shims.txt');
-
-	try {
-		fs.mkdirSync(ripgrepDest, { recursive: true });
-		fs.cpSync(ripgrepSource, ripgrepDest, { recursive: true });
-
-		fs.writeFileSync(shimMarkerPath, 'Shims created successfully');
-		console.log(`[prepareBuiltInCopilotRipgrepShim] Materialized ripgrep shim for ${platformArch} in ${builtInCopilotExtensionDir}`);
-	} catch (err) {
-		throw new Error(`[prepareBuiltInCopilotRipgrepShim] Failed to materialize ripgrep shim for ${platformArch}: ${err}`);
-	}
-}
-
-function pruneNonTargetCopilotSdkPrebuilds(targetPlatformArch: string, prebuildsDir: string, platformArchs: string[]): void {
-	if (!fs.existsSync(prebuildsDir)) {
-		return;
-	}
-
-	for (const platformArch of platformArchs) {
-		if (platformArch === targetPlatformArch) {
-			continue;
-		}
-		fs.rmSync(path.join(prebuildsDir, platformArch), { recursive: true, force: true });
-	}
-}
+// CLAWDIUS-BEGIN The built-in Copilot chat extension is removed in Clawdius (extensions/copilot is gone), so the
+// shim that materialized its ripgrep (prepareBuiltInCopilotRipgrepShim + pruneNonTargetCopilotSdkPrebuilds) was
+// deleted - it threw 'Copilot SDK directory not found' on every package build. The agent host puts VS Code's own
+// ripgrep on PATH for its CLI subprocess, so it never needed this shim.
+// CLAWDIUS-END

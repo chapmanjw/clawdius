@@ -13,6 +13,7 @@
 
 import './media/clawdiusContextBudget.css';
 import { $, addDisposableListener, append, clearNode, EventType } from '../../../../base/browser/dom.js';
+import { RunOnceScheduler } from '../../../../base/common/async.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { basename, extUriIgnorePathCase } from '../../../../base/common/resources.js';
@@ -54,6 +55,7 @@ export class ClawdiusContextBudgetView extends ViewPane {
 
 	private bodyEl!: HTMLElement;
 	private readonly renderStore = this._register(new DisposableStore());
+	private readonly renderScheduler = this._register(new RunOnceScheduler(() => this.renderBudget(), 60));
 	private didRefresh = false;
 
 	constructor(
@@ -77,9 +79,10 @@ export class ClawdiusContextBudgetView extends ViewPane {
 	protected override renderBody(container: HTMLElement): void {
 		super.renderBody(container);
 		this.bodyEl = append(container, $('.clawdius-ctxbudget'));
-		// Re-resolve when the active file changes (different glob rules apply) or config is edited.
-		this._register(this.editorService.onDidActiveEditorChange(() => this.renderBudget()));
-		this._register(this.configService.onDidChange(() => this.renderBudget()));
+		// Re-resolve when the active file changes (different rules apply) or config is edited - debounced so rapid
+		// Ctrl+Tab does not thrash the DOM rebuild.
+		this._register(this.editorService.onDidActiveEditorChange(() => this.renderScheduler.schedule()));
+		this._register(this.configService.onDidChange(() => this.renderScheduler.schedule()));
 		this.renderBudget();
 		// The snapshot is empty until the first refresh; trigger one (idempotent / coalesced in the store).
 		if (!this.didRefresh) {
@@ -98,6 +101,12 @@ export class ClawdiusContextBudgetView extends ViewPane {
 			supportSideBySide: SideBySideEditor.PRIMARY,
 			filterByScheme: [Schemas.file, Schemas.vscodeRemote, Schemas.vscodeUserData],
 		});
+	}
+
+	/** The active editor's resource regardless of scheme - to tell "no file open" from "a file in an editor we
+	 *  cannot evaluate path rules against" (notebook cells, github.dev virtual FS, the Control Center pane). */
+	private activeEditorHasFile(): boolean {
+		return !!EditorResourceAccessor.getOriginalUri(this.editorService.activeEditor, { supportSideBySide: SideBySideEditor.PRIMARY });
 	}
 
 	private renderBudget(): void {
@@ -139,7 +148,9 @@ export class ClawdiusContextBudgetView extends ViewPane {
 		const fileEl = append(head, $('.ctxb-file'));
 		fileEl.textContent = activeFile
 			? localize('clawdius.ctxb.for', "Context for: {0}", this.displayPath(activeFile))
-			: localize('clawdius.ctxb.noFile', "No file open — showing always-on memory");
+			: this.activeEditorHasFile()
+				? localize('clawdius.ctxb.unsupported', "Path-scoped rules can't be evaluated for this editor — showing always-on memory")
+				: localize('clawdius.ctxb.noFile', "No file open — showing always-on memory");
 		const total = append(head, $('.ctxb-total'));
 		total.textContent = localize('clawdius.ctxb.total', "memory & rules: {0} (estimated)", formatApproxTokens(budget.alwaysOnTokens));
 	}

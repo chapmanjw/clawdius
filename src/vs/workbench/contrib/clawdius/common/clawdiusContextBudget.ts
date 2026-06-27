@@ -76,9 +76,16 @@ function tierOf(scope: ConfigScope, label: string): BudgetTier {
  *  active file we can disambiguate only a single-root workspace. Uses URI identity (authority + path casing). */
 function containingFolderOf(activeFile: URI | undefined, folders: readonly URI[]): URI | undefined {
 	if (activeFile) {
-		// Ignore path casing: on Windows the workspace folder + the active file can differ only by drive-letter
-		// case (`/C:/...` vs `/c:/...`), which a case-sensitive compare would wrongly treat as unrelated.
-		return folders.find(folder => extUriIgnorePathCase.isEqualOrParent(activeFile, folder));
+		// The MOST-specific (longest-path) containing folder, so a file in a nested workspace root resolves to
+		// the inner root, not an outer one. Ignore path casing: on Windows the folder + the active file can
+		// differ only by drive-letter case (`/C:/...` vs `/c:/...`), which a case-sensitive compare would miss.
+		let best: URI | undefined;
+		for (const folder of folders) {
+			if (extUriIgnorePathCase.isEqualOrParent(activeFile, folder) && (!best || folder.path.length > best.path.length)) {
+				best = folder;
+			}
+		}
+		return best;
 	}
 	return folders.length === 1 ? folders[0] : undefined;
 }
@@ -87,6 +94,8 @@ function containingFolderOf(activeFile: URI | undefined, folders: readonly URI[]
  *  type at any depth; a rooted pattern (`src/**`) matches the relative path. Approximates Claude Code's
  *  gitignore-style matching for the common authored patterns. */
 function globApplies(glob: string, relPath: string): boolean {
+	// A leading `/` anchors a gitignore pattern to the project root; our relPath is already root-relative.
+	if (glob.startsWith('/')) { glob = glob.slice(1); }
 	// Directory-scoped forms (`src/**`, `src/`) match any file under that directory - VS Code's `match` does not
 	// treat `src/**` the gitignore way, so handle the prefix explicitly.
 	const dir = glob.endsWith('/**') ? glob.slice(0, -3) : (glob.endsWith('/') ? glob.slice(0, -1) : undefined);

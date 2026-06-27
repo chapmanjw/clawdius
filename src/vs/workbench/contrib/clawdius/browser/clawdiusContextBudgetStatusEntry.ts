@@ -97,6 +97,18 @@ export class ClawdiusContextBudgetStatusEntry extends Disposable implements IWor
 		}
 		const folders = this.workspaceService.getWorkspace().folders.map(f => f.uri);
 		const budget = resolveContextBudget(this.configService.snapshot, this.activeFile(), folders);
+		// Distinguish "no Claude config at all" (em-dash) from a real ~0 budget, so an empty repo's pill does not
+		// read as a confident zero.
+		if (budget.alwaysOn.length === 0 && budget.onInvoke.length === 0 && budget.notApplied.length === 0) {
+			this.set({
+				name: localize('clawdius.ctxb.statusName', "Claude Context Budget"),
+				text: '$(book) —',
+				ariaLabel: localize('clawdius.ctxb.statusEmpty', "No Claude memory or rules found"),
+				tooltip: localize('clawdius.ctxb.emptyTip', "No Claude memory or rules found in this workspace or ~/.claude. Click to open the Context Budget panel."),
+				command: OPEN_CONTEXT_BUDGET_COMMAND_ID,
+			});
+			return;
+		}
 		this.set(this.getProps(budget));
 	}
 

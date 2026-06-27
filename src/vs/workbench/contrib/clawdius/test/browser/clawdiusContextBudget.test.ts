@@ -10,7 +10,7 @@ import {
 	ConfigScope, ConfigSection, ContextInclusion, IClawdiusConfigSnapshot, IConfigBudgetMeta, IConfigItem,
 } from '../../common/clawdiusConfig.js';
 import { BudgetTier, formatApproxTokens, resolveContextBudget } from '../../common/clawdiusContextBudget.js';
-import { extractPaths } from '../../browser/clawdiusConfigStore.js';
+import { extractPaths, parseImportTargets } from '../../browser/clawdiusConfigStore.js';
 
 function memoriesScope(scope: ConfigScope, key: string, root: URI, items: IConfigItem[], folderName?: string) {
 	return { scope, key, root, folderName, exists: true, sections: [{ section: ConfigSection.Memories, items }] };
@@ -171,6 +171,37 @@ suite('clawdiusContextBudget', () => {
 		const managed = budget.alwaysOn.find(s => s.scope === ConfigScope.Managed);
 		assert.strictEqual(managed?.tier, BudgetTier.Managed);
 		assert.strictEqual(budget.alwaysOnTokens, 100); // 60 managed + 40 project
+	});
+
+	test('nested multi-root resolves to the most-specific (inner) folder', () => {
+		const snap: IClawdiusConfigSnapshot = {
+			scopes: [
+				memoriesScope(ConfigScope.Project, URI.file('/work').toString(), URI.file('/work/.claude'), [
+					item(ConfigScope.Project, ConfigSection.Memories, 'CLAUDE.md', { kind: 'memory', approxTokens: 200, chars: 800, inclusion: ContextInclusion.Always }),
+				], 'work'),
+				memoriesScope(ConfigScope.Project, URI.file('/work/inner').toString(), URI.file('/work/inner/.claude'), [
+					item(ConfigScope.Project, ConfigSection.Memories, 'CLAUDE.md', { kind: 'memory', approxTokens: 50, chars: 200, inclusion: ContextInclusion.Always }),
+				], 'inner'),
+			],
+		};
+		// A file in the inner root resolves to inner only (not the outer root).
+		const budget = resolveContextBudget(snap, URI.file('/work/inner/src/x.ts'), [URI.file('/work'), URI.file('/work/inner')]);
+		assert.strictEqual(budget.alwaysOnTokens, 50);
+	});
+
+	test('an anchored path (/src/**) matches files under the root src directory', () => {
+		const snap: IClawdiusConfigSnapshot = {
+			scopes: [memoriesScope(ConfigScope.Project, 'file:///work', URI.file('/work/.claude'), [
+				item(ConfigScope.Project, ConfigSection.Memories, 'rules/api.md', { kind: 'rule', approxTokens: 30, chars: 120, inclusion: ContextInclusion.Glob, paths: ['/src/**'] }),
+			], 'work')],
+		};
+		assert.ok(resolveContextBudget(snap, URI.file('/work/src/x.ts'), folders).alwaysOn.some(s => s.label === 'rules/api.md'));
+		assert.deepStrictEqual(resolveContextBudget(snap, URI.file('/work/lib/x.ts'), folders).notApplied.map(s => s.label), ['rules/api.md']);
+	});
+
+	test('parseImportTargets skips code fences/spans and reads ~/, relative, bare forms', () => {
+		const md = ['@~/.claude/rules/a.md', '`@not-an-import`', '```', '@inside-fence.md', '```', '~~~', '@inside-tilde.md', '~~~', 'see @./rel.md here'].join('\n');
+		assert.deepStrictEqual(parseImportTargets(md), ['~/.claude/rules/a.md', './rel.md']);
 	});
 
 	test('extractPaths parses inline array, comma list, brace group, block list; ** is treated as always-on', () => {

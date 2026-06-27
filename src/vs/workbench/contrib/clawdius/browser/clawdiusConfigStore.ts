@@ -108,16 +108,29 @@ function memoryBudget(isRule: boolean, content: string): IConfigBudgetMeta {
 		: { kind: 'rule', approxTokens, chars, inclusion: ContextInclusion.Always };
 }
 
-/** Strip fenced code blocks + inline code spans so `@`-imports inside them are NOT parsed (Claude Code skips
- *  code spans and fenced blocks). */
+/** Blank out fenced code blocks + inline code spans so `@`-imports inside them are NOT parsed (Claude Code skips
+ *  code spans and fenced blocks). Line-based so it handles >=3 backtick OR tilde fences (closing fence same char,
+ *  >= length) and single- or multi-backtick inline spans, and an unterminated fence swallows to end-of-file. */
 function stripCode(content: string): string {
-	return content.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
+	const out: string[] = [];
+	let fence: string | undefined;
+	for (const line of content.split(/\r?\n/)) {
+		const m = /^\s*(`{3,}|~{3,})/.exec(line);
+		if (fence !== undefined) {
+			if (m && m[1][0] === fence[0] && m[1].length >= fence.length) { fence = undefined; }
+			out.push('');
+			continue;
+		}
+		if (m) { fence = m[1]; out.push(''); continue; }
+		out.push(line.replace(/(`+)[^`]*?\1/g, ''));
+	}
+	return out.join('\n');
 }
 
 /** Parse `@`-import target strings from a memory file body. Mirrors the engine: the target follows
  *  start-of-line / whitespace; `./`, `../`, `~/`, absolute `/`, or a bare `[A-Za-z0-9._-]` name; escaped spaces
- *  (`\ `) are allowed; a trailing `#anchor` is stripped; code spans / fences are skipped. */
-function parseImportTargets(content: string): string[] {
+ *  (`\ `) are allowed; a trailing `#anchor` is stripped; code spans / fences are skipped. Exported for tests. */
+export function parseImportTargets(content: string): string[] {
 	const out: string[] = [];
 	const body = stripCode(content);
 	const re = /(?:^|\s)@((?:[^\s\\]|\\ )+)/g;
@@ -186,6 +199,10 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 	private _hasResolved = false;
 	get hasResolved(): boolean { return this._hasResolved; }
 
+	/** Per-refresh memo of readText() so a file imported by several memories (or both auto-scanned and imported)
+	 *  is read once. Cleared at the start of every scan. */
+	private readonly _readCache = new Map<string, Promise<string | undefined>>();
+
 	private readonly _watchers = this._register(new DisposableStore());
 	private readonly _refreshScheduler = this._register(new RunOnceScheduler(() => void this.refresh(), 250));
 	/** Coalesces concurrent refreshes: all eight section views call refresh() on first render. */
@@ -241,6 +258,7 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 
 	private async _doRefresh(): Promise<void> {
 		try {
+			this._readCache.clear();
 			const roots = await this.scopeRoots();
 			const scopes = await Promise.all(roots.map(r => this.scanScope(r)));
 			this._snapshot = { scopes };
@@ -364,7 +382,7 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 			const uri = resolveImportUri(target, importerDir, home);
 			if (!uri || visited.has(uri)) { continue; }
 			visited.set(uri, true);
-			const imported = await this.readText(uri);
+			const imported = await this.readTextCached(uri);
 			if (imported === undefined) { continue; }
 			out.push({ uri: uri.toString(), label: this.importLabel(uri, home), approxTokens: Math.ceil(imported.length / 4) });
 			out.push(...await this.expandImports(imported, uri, home, depth + 1, visited));
@@ -513,6 +531,14 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 
 	private async readText(uri: URI): Promise<string | undefined> {
 		try { return (await this.fileService.readFile(uri)).value.toString(); } catch { return undefined; }
+	}
+
+	/** readText() memoized for the current refresh (see `_readCache`). */
+	private readTextCached(uri: URI): Promise<string | undefined> {
+		const key = uri.toString();
+		let p = this._readCache.get(key);
+		if (!p) { p = this.readText(uri); this._readCache.set(key, p); }
+		return p;
 	}
 
 	private async readJsonc<T>(uri: URI): Promise<T | undefined> {

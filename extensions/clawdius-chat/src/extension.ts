@@ -329,7 +329,10 @@ function engineIsAnthropic(): boolean {
 	}
 }
 
-async function fetchUsageCapacity(): Promise<void> {
+/** Minimum age of the cached limits before an automatic (non-forced) refresh re-hits the network. */
+const USAGE_CAPACITY_TTL_MS = 60_000;
+
+async function fetchUsageCapacity(force = false): Promise<void> {
 	try {
 		const claudeDir = path.join(os.homedir(), '.claude');
 		// Provider gate: only Anthropic's own API exposes /api/oauth/usage. If the engine is pointed at Bedrock /
@@ -338,15 +341,18 @@ async function fetchUsageCapacity(): Promise<void> {
 			return;
 		}
 		const cachePath = path.join(claudeDir, '.clawdius-usage-cache.json');
-		// Freshness guard: a hover/open within the TTL of the last successful fetch reuses the cached limits
-		// instead of re-hitting the network on every glance.
-		try {
-			const ageMs = Date.now() - fs.statSync(cachePath).mtimeMs;
-			if (ageMs >= 0 && ageMs < 60_000) {
-				return;
+		// Freshness guard: an automatic refresh (opening a usage surface / hovering the status bar) reuses a cache
+		// younger than the TTL instead of re-hitting the network on every glance. The explicit Refresh button
+		// passes force=true to bypass this and always pull the latest subscription limits.
+		if (!force) {
+			try {
+				const ageMs = Date.now() - fs.statSync(cachePath).mtimeMs;
+				if (ageMs >= 0 && ageMs < USAGE_CAPACITY_TTL_MS) {
+					return;
+				}
+			} catch {
+				// no cache yet - fetch
 			}
-		} catch {
-			// no cache yet - fetch
 		}
 		const token = JSON.parse(fs.readFileSync(path.join(claudeDir, '.credentials.json'), 'utf8'))?.claudeAiOauth?.accessToken;
 		if (!token) {
@@ -368,7 +374,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	// Refresh the Claude capacity cache ON DEMAND only: the core usage status entry executes this command
 	// when the user opens/hovers the usage UI. No startup fetch, no background poll - the zero-uninitiated-
 	// network-egress guarantee (the fetch is api.anthropic.com egress with the user's CLI OAuth token).
-	context.subscriptions.push(vscode.commands.registerCommand('clawdius.refreshUsageCapacity', () => fetchUsageCapacity()));
+	context.subscriptions.push(vscode.commands.registerCommand('clawdius.refreshUsageCapacity', (force?: unknown) => fetchUsageCapacity(force === true)));
 
 	// Register Claude as a language model (the model picker + any model-using flow can now select it).
 	const claudeProvider = new ClaudeLanguageModelProvider();

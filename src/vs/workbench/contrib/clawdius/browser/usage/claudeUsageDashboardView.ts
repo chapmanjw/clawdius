@@ -246,7 +246,9 @@ export class ClaudeUsageDashboardView extends Disposable {
 		const cts = new CancellationTokenSource();
 		this.refreshCts.value = cts;
 		try {
-			await this.commandService.executeCommand(REFRESH_CAPACITY_COMMAND_ID);
+			// force=true: the explicit Refresh button always pulls fresh limits, bypassing the freshness TTL that
+			// throttles the automatic open/hover refreshes.
+			await this.commandService.executeCommand(REFRESH_CAPACITY_COMMAND_ID, true);
 			if (cts.token.isCancellationRequested) { return; }
 			await this.load(cts.token);
 		} catch {

@@ -305,9 +305,49 @@ function buildMessages(history: ReadonlyArray<vscode.ChatRequestTurn | vscode.Ch
  * the usage UI. There is deliberately no startup fetch and no background timer, so a Clawdius install makes
  * zero uninitiated network egress (the zero-egress guarantee); the bars populate when the user looks at them.
  */
+/**
+ * Whether ~/.claude/settings.json points the engine at Anthropic's own API (vs Bedrock / Vertex / a custom base
+ * URL). Only Anthropic exposes /api/oauth/usage, so the capacity fetch is skipped for any other provider - the IDE
+ * never reaches api.anthropic.com when the user's engine is elsewhere. Mirrors detectProvider() in
+ * claudeUsageData.ts. Defaults to Anthropic when settings are absent / unreadable.
+ */
+function engineIsAnthropic(): boolean {
+	try {
+		const settings = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'settings.json'), 'utf8'));
+		const env = (settings && settings.env) || {};
+		const truthy = (v: unknown) => v === true || v === 1 || v === '1' || v === 'true';
+		if (truthy(env.CLAUDE_CODE_USE_BEDROCK) || truthy(env.CLAUDE_CODE_USE_VERTEX)) {
+			return false;
+		}
+		const baseUrl = env.ANTHROPIC_BASE_URL;
+		if (typeof baseUrl === 'string' && baseUrl.length > 0 && !/api\.anthropic\.com/i.test(baseUrl)) {
+			return false;
+		}
+		return true;
+	} catch {
+		return true;
+	}
+}
+
 async function fetchUsageCapacity(): Promise<void> {
 	try {
 		const claudeDir = path.join(os.homedir(), '.claude');
+		// Provider gate: only Anthropic's own API exposes /api/oauth/usage. If the engine is pointed at Bedrock /
+		// Vertex / a custom base URL, do NOT reach api.anthropic.com - the subscription limits don't apply there.
+		if (!engineIsAnthropic()) {
+			return;
+		}
+		const cachePath = path.join(claudeDir, '.clawdius-usage-cache.json');
+		// Freshness guard: a hover/open within the TTL of the last successful fetch reuses the cached limits
+		// instead of re-hitting the network on every glance.
+		try {
+			const ageMs = Date.now() - fs.statSync(cachePath).mtimeMs;
+			if (ageMs >= 0 && ageMs < 60_000) {
+				return;
+			}
+		} catch {
+			// no cache yet - fetch
+		}
 		const token = JSON.parse(fs.readFileSync(path.join(claudeDir, '.credentials.json'), 'utf8'))?.claudeAiOauth?.accessToken;
 		if (!token) {
 			return;
@@ -318,7 +358,7 @@ async function fetchUsageCapacity(): Promise<void> {
 		if (!res.ok) {
 			return;
 		}
-		fs.writeFileSync(path.join(claudeDir, '.clawdius-usage-cache.json'), await res.text());
+		fs.writeFileSync(cachePath, await res.text());
 	} catch {
 		// offline / expired token - leave any existing cache in place
 	}

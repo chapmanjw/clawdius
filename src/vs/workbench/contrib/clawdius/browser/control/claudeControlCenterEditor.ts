@@ -1503,7 +1503,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			localize('clawdius.control.mcp.title', "MCP Servers"),
 			localize('clawdius.control.mcp.sub', "Inspect MCP servers, approve project servers, and set per-tool permissions. Edits your own ~/.claude configuration."));
 
-		const scopeBlock = this.block(parent, localize('clawdius.control.mcp.scopeTitle', "Where approvals + permissions apply"));
+		const scopeBlock = this.block(parent, localize('clawdius.control.mcp.scopeTitle', "Where these changes apply"));
 		this.renderScopeBar(scopeBlock);
 		if (this.snapshot?.kind === 'malformed') { this.renderMalformed(scopeBlock); return; }
 

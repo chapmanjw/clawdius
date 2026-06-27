@@ -948,8 +948,11 @@ export class GettingStartedPage extends EditorPane {
 
 		const header = $('.header', {},
 			$('h1.product-name.caption', {}, this.productService.nameLong),
-			// CLAWDIUS-BEGIN claude branding (welcome subtitle)
-			$('p.subtitle.description', {}, localize({ key: 'gettingStarted.editingEvolved', comment: ['Shown as subtitle on the Welcome page.'] }, "Build with Claude Code"))
+			// CLAWDIUS-BEGIN claude branding (welcome subtitle): gate on Clawdius mode, upstream keeps "Editing evolved"
+			$('p.subtitle.description', {},
+				!this.productService.defaultChatAgent?.entitlementUrl
+					? localize({ key: 'gettingStarted.clawdiusSubtitle', comment: ['Shown as subtitle on the Welcome page.'] }, "Build with Claude Code")
+					: localize({ key: 'gettingStarted.editingEvolved', comment: ['Shown as subtitle on the Welcome page.'] }, "Editing evolved"))
 			// CLAWDIUS-END
 		);
 
@@ -992,17 +995,32 @@ export class GettingStartedPage extends EditorPane {
 		};
 
 		const layoutRecentList = () => {
-			// CLAWDIUS: the left column is always Start, then Control Center
-			reset(leftColumn, startList.getDomElement(), ...controlCenterEls);
-			if (this.container.classList.contains('noWalkthroughs')) {
-				recentList.setLimit(10);
-				// CLAWDIUS: with no walkthroughs, Recent fills the right column
-				reset(rightColumn, recentList.getDomElement());
+			// CLAWDIUS-BEGIN gate the Recent-under-Walkthroughs reordering on Clawdius mode
+			if (!this.productService.defaultChatAgent?.entitlementUrl) {
+				// CLAWDIUS: the left column is always Start, then Control Center
+				reset(leftColumn, startList.getDomElement(), ...controlCenterEls);
+				if (this.container.classList.contains('noWalkthroughs')) {
+					recentList.setLimit(10);
+					// CLAWDIUS: with no walkthroughs, Recent fills the right column
+					reset(rightColumn, recentList.getDomElement());
+				} else {
+					recentList.setLimit(5);
+					// CLAWDIUS: Walkthroughs, then Recent beneath them in the right column
+					reset(rightColumn, gettingStartedList.getDomElement(), recentList.getDomElement());
+				}
 			} else {
-				recentList.setLimit(5);
-				// CLAWDIUS: Walkthroughs, then Recent beneath them in the right column
-				reset(rightColumn, gettingStartedList.getDomElement(), recentList.getDomElement());
+				// Upstream: Recent sits beneath Start in the left column; Walkthroughs fill the right column
+				if (this.container.classList.contains('noWalkthroughs')) {
+					recentList.setLimit(10);
+					reset(leftColumn, startList.getDomElement());
+					reset(rightColumn, recentList.getDomElement());
+				} else {
+					recentList.setLimit(5);
+					reset(leftColumn, startList.getDomElement(), recentList.getDomElement());
+					reset(rightColumn, gettingStartedList.getDomElement());
+				}
 			}
+			// CLAWDIUS-END
 		};
 
 		gettingStartedList.onDidChange(layoutLists);

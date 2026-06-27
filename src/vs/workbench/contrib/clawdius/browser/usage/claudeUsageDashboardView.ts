@@ -316,7 +316,7 @@ export class ClaudeUsageDashboardView extends Disposable {
 
 		// Honest scope statement: the lifetime tiles summarize only the sessions still within the retention window.
 		// Computation is live from local transcripts - there is no "as of" / cached freshness to report.
-		append(text, h('.clawdius-usage-hero-meta')).textContent = localize('clawdius.usage.dash.scope', "Summary of your local Claude Code sessions (last {0} days).", this.horizonDays);
+		append(text, h('.clawdius-usage-hero-meta')).textContent = localize('clawdius.usage.dash.scope', "Summarizes your local Claude Code sessions from the last {0} days, alongside your live subscription limits.", this.horizonDays);
 		append(text, h('.clawdius-usage-hero-meta')).textContent = refreshedAt
 			? localize('clawdius.usage.dash.metaRefreshed', "Live limits last refreshed {0}.", refreshedAt.toLocaleString())
 			: localize('clawdius.usage.dash.metaLocal', "Live limits refresh when you open this view or click Refresh.");

@@ -24,6 +24,7 @@ import {
 	ConfigBacking, ConfigScope, ConfigSection, CONFIG_SECTIONS, ContextInclusion, IClawdiusConfigService,
 	IClawdiusConfigSnapshot, IConfigBudgetImport, IConfigBudgetMeta, IConfigItem, IConfigScopeGroup, IConfigSectionGroup,
 } from '../common/clawdiusConfig.js';
+import { estimateTokens } from '../common/clawdiusContextBudget.js';
 
 interface IScopeRoots {
 	readonly scope: ConfigScope;
@@ -98,7 +99,7 @@ export function extractPaths(content: string): string[] | undefined {
  *  Claude Code default - rules WITHOUT `paths` load every session alongside CLAUDE.md). */
 function memoryBudget(isRule: boolean, content: string): IConfigBudgetMeta {
 	const chars = content.length;
-	const approxTokens = Math.ceil(chars / 4);
+	const approxTokens = estimateTokens(content);
 	if (!isRule) {
 		return { kind: 'memory', approxTokens, chars, inclusion: ContextInclusion.Always };
 	}
@@ -330,12 +331,12 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 			const autoUri = URI.joinPath(home, '.claude', 'projects', encodeProjectDir(r.baseDir), 'memory', 'MEMORY.md');
 			const raw = await this.readText(autoUri);
 			if (raw !== undefined) {
-				const chars = capAutoMemory(raw).length;
+				const capped = capAutoMemory(raw);
 				items.push({
 					id: this.id(r.key, ConfigSection.Memories, 'MEMORY.md'),
 					scope: r.scope, section: ConfigSection.Memories, label: 'memory/MEMORY.md', resource: autoUri,
 					backing: ConfigBacking.File, canDelete: false, canMove: false,
-					budget: { kind: 'automem', approxTokens: Math.ceil(chars / 4), chars, inclusion: ContextInclusion.Always },
+					budget: { kind: 'automem', approxTokens: estimateTokens(capped), chars: capped.length, inclusion: ContextInclusion.Always },
 				});
 			}
 		}
@@ -384,7 +385,7 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 			visited.set(uri, true);
 			const imported = await this.readTextCached(uri);
 			if (imported === undefined) { continue; }
-			out.push({ uri: uri.toString(), label: this.importLabel(uri, home), approxTokens: Math.ceil(imported.length / 4) });
+			out.push({ uri: uri.toString(), label: this.importLabel(uri, home), approxTokens: estimateTokens(imported) });
 			out.push(...await this.expandImports(imported, uri, home, depth + 1, visited));
 		}
 		return out;
@@ -427,8 +428,12 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 				label: fm.fields['name'] || folder.name, description: fm.fields['description'],
 				resource: content !== undefined ? skillMd : folder.resource,
 				backing: ConfigBacking.Folder, targetResource: folder.resource, canDelete: true, canMove: true,
-				// Skills are on-invoke (loaded when triggered), not part of every-turn context.
-				budget: { kind: 'skill', approxTokens: Math.ceil((content?.length ?? 0) / 4), chars: content?.length ?? 0, inclusion: ContextInclusion.Manual },
+				// Skill BODY is on-invoke; the name+description "menu" line is injected always-on so the model
+				// knows the skill exists (menuTokens).
+				budget: {
+					kind: 'skill', approxTokens: estimateTokens(content ?? ''), chars: content?.length ?? 0, inclusion: ContextInclusion.Manual,
+					menuTokens: estimateTokens(`${fm.fields['name'] || folder.name}: ${fm.fields['description'] ?? ''}`),
+				},
 			});
 		}
 		return items.sort((a, b) => a.label.localeCompare(b.label));

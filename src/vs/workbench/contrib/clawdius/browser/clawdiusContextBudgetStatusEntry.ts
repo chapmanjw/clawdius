@@ -144,7 +144,7 @@ export class ClawdiusContextBudgetStatusEntry extends Disposable implements IWor
 			lines.push(...this.tipList(budget.onInvoke));
 		}
 		lines.push('');
-		lines.push(localize('clawdius.ctxb.tipExcludes', "_Memory & rules only - excludes the system prompt, skill/agent menu, and MCP tool schemas._"));
+		lines.push(localize('clawdius.ctxb.tipExcludes', "_Memory, rules + skill menu. Excludes the system prompt, MCP schemas, and agent/command menus._"));
 		lines.push(localize('clawdius.ctxb.tipFoot', "_Estimated (chars/4). Click to open the full panel._"));
 		return lines.join('\n');
 	}

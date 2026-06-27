@@ -34,8 +34,9 @@ export const enum BudgetTier {
 	Local = 'local',
 }
 
-/** What kind of context source a row is. `import` is a file pulled in via `@`-import; `automem` is MEMORY.md. */
-export type BudgetSourceKind = 'memory' | 'rule' | 'skill' | 'automem' | 'import';
+/** What kind of context source a row is. `import` is a file pulled in via `@`-import; `automem` is MEMORY.md;
+ *  `menu` is the aggregated always-on skill/agent menu (names + descriptions injected every turn). */
+export type BudgetSourceKind = 'memory' | 'rule' | 'skill' | 'automem' | 'import' | 'menu';
 
 /** One context source (a memory file, a rule, a skill, an import) as resolved for the active file. */
 export interface IBudgetSource {
@@ -49,6 +50,8 @@ export interface IBudgetSource {
 	readonly paths?: readonly string[];
 	/** For a path-scoped rule: whether the active file matched (true -> always-on, false -> not-applied). */
 	readonly matched?: boolean;
+	/** For a skill/agent: its always-on menu cost (name + description); aggregated into the synthetic menu row. */
+	readonly menuTokens?: number;
 }
 
 /** The resolved context budget for one active file. */
@@ -125,6 +128,7 @@ function toSource(item: IConfigItem, scope: ConfigScope, matched?: boolean): IBu
 		resource: item.resource,
 		paths: b.paths,
 		matched,
+		menuTokens: b.menuTokens,
 	};
 }
 
@@ -212,9 +216,37 @@ export function resolveContextBudget(
 		if (!alwaysOn.has(key)) { alwaysOn.set(key, imp); }
 	}
 
+	// The skill "menu" (each skill's name + description) is injected into the system prompt every turn so the
+	// model can decide what to invoke - an always-on cost that grows with skill count. Aggregate it into one row.
+	const menuTokens = onInvoke.reduce((sum, s) => sum + (s.menuTokens ?? 0), 0);
+	if (menuTokens > 0) {
+		alwaysOn.set('synthetic:skillMenu', {
+			label: 'skill menu (names + descriptions)',
+			scope: ConfigScope.Global,
+			tier: BudgetTier.User,
+			kind: 'menu',
+			approxTokens: menuTokens,
+		});
+	}
+
 	const sources = [...alwaysOn.values()];
 	const alwaysOnTokens = sources.reduce((sum, s) => sum + s.approxTokens, 0);
 	return { activeFile, alwaysOn: sources, onInvoke, notApplied, alwaysOnTokens };
+}
+
+/** Estimate tokens for text without a real tokenizer. Weights by character class: CJK / full-width / Hangul
+ *  count ~1 token each (chars/4 badly under-counts them), everything else ~4 chars/token (English prose). An
+ *  estimate, never exact - the UI always labels it. Keep the raw char count alongside so a real tokenizer can
+ *  replace this later. */
+export function estimateTokens(text: string): number {
+	let cjk = 0;
+	for (let i = 0; i < text.length; i++) {
+		const c = text.charCodeAt(i);
+		if ((c >= 0x3000 && c <= 0x9fff) || (c >= 0xac00 && c <= 0xd7af) || (c >= 0xff00 && c <= 0xffef)) {
+			cjk++;
+		}
+	}
+	return Math.ceil(cjk + (text.length - cjk) / 4);
 }
 
 /** Compact, honest token label: "~420", "~1.2k". Always carries the leading "~" (these are estimates). */

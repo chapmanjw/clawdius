@@ -140,7 +140,7 @@ export class ClawdiusContextBudgetView extends ViewPane {
 		}
 
 		const foot = append(this.bodyEl, $('.ctxb-foot'));
-		foot.textContent = localize('clawdius.ctxb.foot', "Estimated (chars / 4); memory & rules only — excludes the system prompt, the skill/agent menu, and MCP tool schemas that also load every turn. \"Loaded\" is predicted from your config, not confirmed.");
+		foot.textContent = localize('clawdius.ctxb.foot', "Estimated; counts memory, rules + the skill menu. Excludes the system prompt, MCP tool schemas, and agent/command menus that also load every turn. \"Loaded\" is predicted from your config, not confirmed.");
 	}
 
 	private renderHead(activeFile: URI | undefined, budget: IContextBudget): void {

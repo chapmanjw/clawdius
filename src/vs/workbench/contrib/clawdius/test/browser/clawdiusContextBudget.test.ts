@@ -9,7 +9,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/tes
 import {
 	ConfigScope, ConfigSection, ContextInclusion, IClawdiusConfigSnapshot, IConfigBudgetMeta, IConfigItem,
 } from '../../common/clawdiusConfig.js';
-import { BudgetTier, formatApproxTokens, resolveContextBudget } from '../../common/clawdiusContextBudget.js';
+import { BudgetTier, estimateTokens, formatApproxTokens, resolveContextBudget } from '../../common/clawdiusContextBudget.js';
 import { extractPaths, parseImportTargets } from '../../browser/clawdiusConfigStore.js';
 
 function memoriesScope(scope: ConfigScope, key: string, root: URI, items: IConfigItem[], folderName?: string) {
@@ -215,6 +215,33 @@ suite('clawdiusContextBudget', () => {
 		// Cursor's globs:/alwaysApply: keys are NOT Claude Code keys => ignored.
 		assert.strictEqual(extractPaths('---\nglobs: *.ts\nalwaysApply: false\n---\nbody'), undefined);
 		assert.strictEqual(extractPaths('no frontmatter here'), undefined);
+	});
+
+	test('estimateTokens weights CJK ~1/char and prose ~1/4 chars', () => {
+		assert.strictEqual(estimateTokens(''), 0);
+		assert.strictEqual(estimateTokens('abcd'), 1);
+		assert.strictEqual(estimateTokens('a'.repeat(400)), 100);
+		assert.strictEqual(estimateTokens('你好世界'), 4); // 4 CJK chars -> ~4 tokens
+		assert.ok(estimateTokens('中'.repeat(100)) >= 100);
+	});
+
+	test('the skill menu (names + descriptions) is aggregated into one always-on row', () => {
+		const snap: IClawdiusConfigSnapshot = {
+			scopes: [{
+				scope: ConfigScope.Global, key: 'global', root: URI.file('/home/.claude'), exists: true,
+				sections: [{
+					section: ConfigSection.Skills, items: [
+						item(ConfigScope.Global, ConfigSection.Skills, 'a', { kind: 'skill', approxTokens: 500, chars: 2000, inclusion: ContextInclusion.Manual, menuTokens: 12 }),
+						item(ConfigScope.Global, ConfigSection.Skills, 'b', { kind: 'skill', approxTokens: 300, chars: 1200, inclusion: ContextInclusion.Manual, menuTokens: 8 }),
+					],
+				}],
+			}],
+		};
+		const budget = resolveContextBudget(snap, undefined, []);
+		const menu = budget.alwaysOn.find(s => s.kind === 'menu');
+		assert.strictEqual(menu?.approxTokens, 20); // 12 + 8 menu tokens
+		assert.strictEqual(budget.alwaysOnTokens, 20);
+		assert.strictEqual(budget.onInvoke.length, 2); // the skill bodies are still on-invoke
 	});
 
 	test('formatApproxTokens', () => {

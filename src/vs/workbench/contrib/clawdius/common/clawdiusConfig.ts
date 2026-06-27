@@ -113,6 +113,9 @@ export interface IConfigBudgetMeta {
 	/** Files this source `@`-imports (transitively resolved). They load always-on with their importer; the
 	 *  resolver folds their tokens into the always-on total, deduped by uri against other sources. */
 	readonly imports?: readonly IConfigBudgetImport[];
+	/** For a skill / agent: the always-on "menu" cost - the name + description that Claude Code injects into the
+	 *  system prompt every turn so the model can decide to invoke it (the body is the on-invoke `approxTokens`). */
+	readonly menuTokens?: number;
 }
 
 /** A single configuration item (an agent, a skill, a slash command, a hook event, a permission rule, ...). */

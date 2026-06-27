@@ -42,10 +42,35 @@ const NUL = String.fromCharCode(0);
 const STATUS_BAR_CELLS = 6;
 
 /** Utilization thresholds for the bar color state. */
-function utilState(util: number): 'ok' | 'warn' | 'crit' {
+export function utilState(util: number): 'ok' | 'warn' | 'crit' {
 	if (util >= 90) { return 'crit'; }
 	if (util >= 70) { return 'warn'; }
 	return 'ok';
+}
+
+/**
+ * The status-bar entry's label text + aria label for an account + capacity snapshot. Pure (no DOM, no IO): the
+ * Claude mark, plus "S:" (session) and "W:" (week) NUL-delimited block-bar runs when the provider has
+ * subscription windows; just the bare mark otherwise (non-subscription providers, or a cold capacity cache).
+ */
+export function usageStatusText(account: IClaudeAccount | undefined, capacity: IClaudeCapacity | undefined): { text: string; ariaLabel: string } {
+	const hasLimits = account ? providerHasLimits(account.provider) : true;
+	const windows = hasLimits ? capacityWindows(capacity) : [];
+	const session = windows.find(w => w.key === 'session');
+	const weekly = windows.find(w => w.key === 'week');
+	const seg = (w: IUsageWindow) => `${NUL}usage${NUL}${blockBar(w.util / 100, STATUS_BAR_CELLS)}${NUL}`;
+	const parts: string[] = [];
+	if (session) { parts.push(`${localize('clawdius.usage.sessionShort', "S:")}${seg(session)}`); }
+	if (weekly) { parts.push(`${localize('clawdius.usage.weekShort', "W:")}${seg(weekly)}`); }
+	const text = parts.length > 0 ? `$(claude) ${parts.join('  ')}` : '$(claude)';
+
+	const ariaParts: string[] = [];
+	if (session) { ariaParts.push(localize('clawdius.usage.ariaSession', "session {0}% used", Math.round(session.util))); }
+	if (weekly) { ariaParts.push(localize('clawdius.usage.ariaWeek', "week {0}% used", Math.round(weekly.util))); }
+	const ariaLabel = ariaParts.length > 0
+		? localize('clawdius.usage.ariaWithUsage', "Claude Code usage: {0}", ariaParts.join(', '))
+		: localize('clawdius.usage.aria', "Claude Code usage");
+	return { text, ariaLabel };
 }
 
 /** Append a CSS track + fill bar for the hover popup capacity bars. */
@@ -126,16 +151,6 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 		this.update();
 	}
 
-	/** The session (5-hour) window, summarized inline as the "S:" bar. */
-	private sessionWindow(): IUsageWindow | undefined {
-		return capacityWindows(this.capacity).find(w => w.key === 'session');
-	}
-
-	/** The 7-day window, summarized inline as the "W:" bar. */
-	private weeklyWindow(): IUsageWindow | undefined {
-		return capacityWindows(this.capacity).find(w => w.key === 'week');
-	}
-
 	private update(): void {
 		const props = this.getProps();
 		if (this.entry.value) {
@@ -150,25 +165,11 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 		// entry's LABEL TEXT: "S: <bar>  W: <bar>". Each bar is a NUL-delimited meter run the label renderer
 		// splits into per-cell spans (the "usage" class keeps them in the entry's own colour). The native
 		// status-bar item handles cursor / hover-highlight / click via its `command` and updates in place.
-		const hasLimits = this.account ? providerHasLimits(this.account.provider) : true;
-		const session = hasLimits ? this.sessionWindow() : undefined;
-		const weekly = hasLimits ? this.weeklyWindow() : undefined;
-		const seg = (w: IUsageWindow) => `${NUL}usage${NUL}${blockBar(w.util / 100, STATUS_BAR_CELLS)}${NUL}`;
-		const parts: string[] = [];
-		if (session) { parts.push(`${localize('clawdius.usage.sessionShort', "S:")}${seg(session)}`); }
-		if (weekly) { parts.push(`${localize('clawdius.usage.weekShort', "W:")}${seg(weekly)}`); }
-		const text = parts.length > 0 ? `$(claude) ${parts.join('  ')}` : '$(claude)';
-
-		const ariaParts: string[] = [];
-		if (session) { ariaParts.push(localize('clawdius.usage.ariaSession', "session {0}% used", Math.round(session.util))); }
-		if (weekly) { ariaParts.push(localize('clawdius.usage.ariaWeek', "week {0}% used", Math.round(weekly.util))); }
-
+		const { text, ariaLabel } = usageStatusText(this.account, this.capacity);
 		return {
 			name: localize('clawdius.usage.name', "Claude Code Usage"),
 			text,
-			ariaLabel: ariaParts.length > 0
-				? localize('clawdius.usage.ariaWithUsage', "Claude Code usage: {0}", ariaParts.join(', '))
-				: localize('clawdius.usage.aria', "Claude Code usage"),
+			ariaLabel,
 			command: { id: OPEN_CONTROL_CENTER_COMMAND_ID, title: localize('clawdius.usage.openControlCenter', "Open Claude Code Control Center"), arguments: ['usage'] },
 			// Opening the popup is the user-initiated signal to refresh live capacity (on-demand egress).
 			tooltip: { element: () => { void this.refreshOnDemand(); return this.buildTooltip(); } },

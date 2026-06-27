@@ -149,4 +149,37 @@ suite('claudeMcpModel', () => {
 		assert.strictEqual(sameMcpDefSummary(summarizeMcpDef(def), summarizeMcpDef({ ...def, timeout: 6000 })), false);
 		assert.strictEqual(sameMcpDefSummary(summarizeMcpDef({ type: 'http', url: 'https://host/a' }), summarizeMcpDef({ type: 'http', url: 'https://host/b' })), false);
 	});
+
+	test('toFiniteInt via buildMcpDef: non-numeric omitted, decimals truncated, negatives kept; oauth callbackPort too', () => {
+		const stdio = (timeout: string) => buildMcpDef({ ...emptyMcpForm('stdio'), command: 'x', timeout });
+		assert.deepStrictEqual([stdio('abc'), stdio('3.9'), stdio('-5')], [
+			{ type: 'stdio', command: 'x' },             // 'abc' -> NaN -> omitted
+			{ type: 'stdio', command: 'x', timeout: 3 },  // '3.9' -> truncated
+			{ type: 'stdio', command: 'x', timeout: -5 }, // '-5' -> kept (not clamped)
+		]);
+		assert.deepStrictEqual(
+			buildMcpDef({ ...emptyMcpForm('http'), url: 'https://h/mcp', oauth: { clientId: '', callbackPort: '80.5', scopes: '', authServerMetadataUrl: '' } }),
+			{ type: 'http', url: 'https://h/mcp', oauth: { callbackPort: 80 } });
+	});
+
+	test('summarizeMcpDef of {} / null is unknown transport; parseMcpDefForEdit({}) round-trips to an empty stdio form', () => {
+		assert.deepStrictEqual([summarizeMcpDef({}).transport, summarizeMcpDef(null).transport], ['unknown', 'unknown']);
+		assert.deepStrictEqual(parseMcpDefForEdit({}), emptyMcpForm('stdio'));
+	});
+
+	test('summarizeMcpDef falls back to the raw string when the url cannot be parsed (redactUrl catch)', () => {
+		assert.deepStrictEqual(summarizeMcpDef({ url: 'not a url' }), {
+			transport: 'http', detail: 'not a url', envKeys: [], headerKeys: [],
+			hasHeadersHelper: false, hasOauth: false, timeout: undefined, alwaysLoad: undefined,
+		});
+	});
+
+	test('mcpApprovalWrites approving an already-enabled server: no-op when last, reorder when not', () => {
+		// Already enabled and last in the array: filter-then-push leaves the order unchanged -> no write at all.
+		assert.deepStrictEqual(mcpApprovalWrites(parseMcpSettings({ enabledMcpjsonServers: ['srv'] }), 'srv', 'approved'), []);
+		// Enabled but not last: it is pulled and re-appended, so the array reorders -> a whole-array write.
+		assert.deepStrictEqual(
+			mcpApprovalWrites(parseMcpSettings({ enabledMcpjsonServers: ['a', 'srv', 'b'] }), 'srv', 'approved'),
+			[{ path: ['enabledMcpjsonServers'], value: ['a', 'b', 'srv'] }]);
+	});
 });

@@ -183,5 +183,13 @@ suite('Clawdius permissions model', () => {
 		assert.strictEqual(classifyRule('SomeCustomTool(x)'), 'raw'); // not in the curated list -> raw
 		assert.strictEqual(classifyRule('//weird-syntax'), 'raw');
 	});
+
+	test('parseRule: an mcp rule with extra separators keeps the remainder as the secondary (first __ splits)', () => {
+		assert.deepStrictEqual(parseRule('mcp__a__b__c'), { raw: 'mcp__a__b__c', kind: 'mcp', primary: 'a', secondary: 'b__c' });
+	});
+
+	test('moveRule with from === to removes everywhere then re-appends (reorders the rule to the end)', () => {
+		assert.deepStrictEqual(moveRule(state({ allow: ['a', 'b'] }), 'allow', 'allow', 'a'), { allow: ['b', 'a'], ask: [], deny: [] });
+	});
 });
 // CLAWDIUS-END

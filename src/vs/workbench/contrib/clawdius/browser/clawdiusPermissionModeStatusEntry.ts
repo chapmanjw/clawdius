@@ -187,6 +187,17 @@ export function permissionModeWrites(mode: PermissionMode): IPermissionModeWrite
 }
 
 /**
+ * Whether to restart the extension host after a permission-mode pick. True when the EFFECTIVE configuration
+ * changed: either the mode string changed, OR Bypass was chosen while its gate was previously off (which flips
+ * the gate to true without changing the mode string, yet the behavior does change). restartExtensionHost
+ * restarts ALL extensions, so we only do it when something actually changed. Pure + testable.
+ */
+export function shouldRestartAfterPermissionChange(current: PermissionMode, wasBypassAllowed: boolean, chosenMode: PermissionMode): boolean {
+	const modeChanged = chosenMode !== current;
+	return modeChanged || (chosenMode === 'bypassPermissions' && !wasBypassAllowed);
+}
+
+/**
  * Opens a quick pick to set the default permission mode for new Claude conversations, then writes the choice to
  * `claudeCode.initialPermissionMode` (USER scope), enabling the bypass gate when Bypass is chosen.
  */
@@ -236,9 +247,7 @@ export class SetPermissionModeAction extends Action2 {
 		// when the EFFECTIVE configuration changed, since restartExtensionHost restarts all extensions. That is
 		// either a mode change OR newly enabling the bypass gate (picking Bypass when it was configured-but-gated-
 		// off flips the gate to true without changing the mode string, yet the behavior does change).
-		const modeChanged = chosen.mode !== current;
-		const bypassGateEnabled = chosen.mode === 'bypassPermissions' && !wasBypassAllowed;
-		if (modeChanged || bypassGateEnabled) {
+		if (shouldRestartAfterPermissionChange(current, wasBypassAllowed, chosen.mode)) {
 			await commandService.executeCommand('workbench.action.restartExtensionHost');
 		}
 	}

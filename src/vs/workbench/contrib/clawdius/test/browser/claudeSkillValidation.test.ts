@@ -78,4 +78,21 @@ suite('claudeSkillValidationModel', () => {
 		assert.strictEqual(p.bodyLineCount, 2);
 		assert.strictEqual(p.hasFrontmatter, true);
 	});
+
+	test('unquote: single quotes are stripped; a mismatched quote pair is left verbatim', () => {
+		// outer literal is single-quoted (lint forbids double-quoted literals); embedded ' is escaped, " is literal.
+		const p = parseSkillMd('---\nname: \'single\'\ndescription: "mismatch\'\n---\nbody\n');
+		assert.deepStrictEqual({ name: p.fields['name'], description: p.fields['description'] }, { name: 'single', description: '"mismatch\'' });
+	});
+
+	test('countLines via parseSkillMd: CRLF body lines counted, ignoring the trailing newline', () => {
+		const p = parseSkillMd('---\r\nname: ok\r\n---\r\nline one\r\nline two\r\n');
+		assert.strictEqual(p.bodyLineCount, 2);
+	});
+
+	test('parseSkillMd tolerates a leading UTF-8 BOM before the frontmatter', () => {
+		const BOM = String.fromCharCode(0xFEFF);
+		const p = parseSkillMd(`${BOM}---\nname: ok\ndescription: A reasonably long description here.\n---\nbody\n`);
+		assert.deepStrictEqual({ hasFrontmatter: p.hasFrontmatter, name: p.fields['name'] }, { hasFrontmatter: true, name: 'ok' });
+	});
 });

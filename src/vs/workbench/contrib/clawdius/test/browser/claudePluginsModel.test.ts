@@ -75,4 +75,23 @@ suite('claudePluginsModel', () => {
 		assert.ok(!MARKETPLACE_NAME_RE.test('a/b'));
 		assert.ok(!MARKETPLACE_NAME_RE.test(''));
 	});
+
+	test('parseMarketplaceCatalog: http:// homepage accepted (not only https); an authorless object -> undefined', () => {
+		assert.deepStrictEqual(parseMarketplaceCatalog({
+			plugins: [
+				{ name: 'webhttp', homepage: 'http://x.example' },
+				{ name: 'noauthor', author: { url: 'http://a' } },
+			],
+		}, 'mp'), [
+			{ id: 'webhttp@mp', name: 'webhttp', marketplace: 'mp', description: undefined, author: undefined, category: undefined, homepage: 'http://x.example' },
+			{ id: 'noauthor@mp', name: 'noauthor', marketplace: 'mp', description: undefined, author: undefined, category: undefined, homepage: undefined },
+		]);
+	});
+
+	test('parseInstalledPlugins: a non-record first install record yields an undefined version', () => {
+		assert.deepStrictEqual(parseInstalledPlugins({ plugins: { 'x@mp': ['not-a-record'], 'y@mp': [42] } }), [
+			{ id: 'x@mp', version: undefined },
+			{ id: 'y@mp', version: undefined },
+		]);
+	});
 });

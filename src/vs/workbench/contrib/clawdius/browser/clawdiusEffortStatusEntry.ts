@@ -60,7 +60,7 @@ const NUL = String.fromCharCode(0);
 
 /** Wrap the meter so each glyph is its own cell (animated for Max/Ultracode, static otherwise) - lets the CSS
  * size + vertically nudge every effort bar consistently. */
-function meterMarkup(display: IEffortDisplay): string {
+export function meterMarkup(display: IEffortDisplay): string {
 	const state = display.animate === 'rainbow' ? 'state-max' : display.animate === 'ultra' ? 'state-ultra' : 'state-plain';
 	return `${NUL}${state}${NUL}${display.meter}${NUL}`;
 }
@@ -268,6 +268,41 @@ function currentSelection(settings: IEffortSettings): EffortSelection | 'auto' {
 	return parseEffortLevel(settings.effortLevel) ?? 'auto';
 }
 
+/** The action SetEffortLevelAction.run() should take, plus whether to seed the file and the settings.json edits. */
+export interface IEffortEditPlan {
+	readonly action: 'invalid' | 'noop' | 'write';
+	/** True when the (re-read) settings file is missing/empty and must be seeded as `{}` before the JSON edit. */
+	readonly seed: boolean;
+	readonly writes: readonly IEffortWrite[];
+}
+
+/**
+ * Decide what SetEffortLevelAction.run() should do, mirroring its exact branch order:
+ *  1. initial read invalid               -> 'invalid' (never write a file that is not parseable JSON)
+ *  2. nothing chosen / chose the current -> 'noop'
+ *  3. re-read invalid (changed mid-pick) -> 'invalid'
+ *  4. otherwise                          -> 'write' (seed when the re-read needs it)
+ * `writeState` is the re-read classification, supplied only when a real change was chosen (undefined for a noop,
+ * so it is never consulted in that case). Pure + testable; run() keeps the notify / dialog / IO and acts on this.
+ */
+export function planEffortEdit(
+	initialState: SettingsReadState,
+	chosen: { readonly selection: EffortSelection } | undefined,
+	current: EffortSelection | 'auto',
+	writeState: SettingsReadState | undefined,
+): IEffortEditPlan {
+	if (initialState.kind === 'invalid') {
+		return { action: 'invalid', seed: false, writes: [] };
+	}
+	if (!chosen || chosen.selection === current) {
+		return { action: 'noop', seed: false, writes: [] };
+	}
+	if (!writeState || writeState.kind === 'invalid') {
+		return { action: 'invalid', seed: false, writes: [] };
+	}
+	return { action: 'write', seed: writeState.needsSeed, writes: effortWrites(chosen.selection) };
+}
+
 /**
  * Opens a quick pick to set the default effort for new Claude conversations and writes it to
  * ~/.claude/settings.json (creating the file if absent).
@@ -295,11 +330,15 @@ export class SetEffortLevelAction extends Action2 {
 		const notificationService = accessor.get(INotificationService);
 
 		const settingsUri = URI.joinPath(await pathService.userHome(), '.claude', 'settings.json');
+		const notifyInvalid = () => notificationService.error(localize('clawdius.effort.invalidSettings', "Can't update the default effort: {0} is not valid JSON. Fix the file and try again.", settingsUri.fsPath));
+
 		const state = await readSettingsState(fileService, settingsUri);
 		// A malformed settings.json reads as empty but IJSONEditingService refuses to edit it. Don't offer to
 		// change a file we cannot safely write, and never clobber a hand-edited file - tell the user to fix it.
+		// (This mirrors planEffortEdit's initial-invalid branch, but must short-circuit BEFORE the pick so we never
+		// prompt to change a file we cannot write.)
 		if (state.kind === 'invalid') {
-			notificationService.error(localize('clawdius.effort.invalidSettings', "Can't update the default effort: {0} is not valid JSON. Fix the file and try again.", settingsUri.fsPath));
+			notifyInvalid();
 			return;
 		}
 		const current = currentSelection(state.settings);
@@ -317,26 +356,29 @@ export class SetEffortLevelAction extends Action2 {
 			matchOnDetail: true,
 			activeItem,
 		});
-		if (!chosen || chosen.selection === current) {
-			return;
+		// Re-classify right before writing: the file may have appeared or changed during the pick. Only re-read
+		// when a real change was chosen - an unchanged pick is a no-op and must not trigger extra IO or a restart.
+		const writeState = (chosen && chosen.selection !== current) ? await readSettingsState(fileService, settingsUri) : undefined;
+		const plan = planEffortEdit(state, chosen, current, writeState);
+		switch (plan.action) {
+			case 'invalid':
+				// The file changed mid-pick to something not parseable - never feed a malformed file to the editor.
+				notifyInvalid();
+				return;
+			case 'noop':
+				return;
+			case 'write':
+				if (plan.seed) {
+					await fileService.writeFile(settingsUri, VSBuffer.fromString('{}\n'));
+				}
+				await jsonEditing.write(settingsUri, plan.writes.map(w => ({ path: [...w.path], value: w.value })), true);
+				// Restart the extension host so the Claude plugin re-activates and its CLI re-reads
+				// ~/.claude/settings.json fresh - the only reliable way to apply the new effort to open chats. A
+				// plain webview reload is page-only and reads the plugin's STALE cached config (it lands one
+				// selection behind), so it cannot be used here. Note: this restarts ALL extensions, not just Claude.
+				await commandService.executeCommand('workbench.action.restartExtensionHost');
+				return;
 		}
-		// Re-classify right before writing: the file may have appeared or changed during the pick. Re-check the
-		// invalid case (so we still never feed a malformed file to the editor) and only seed when missing/empty.
-		const writeState = await readSettingsState(fileService, settingsUri);
-		if (writeState.kind === 'invalid') {
-			notificationService.error(localize('clawdius.effort.invalidSettings', "Can't update the default effort: {0} is not valid JSON. Fix the file and try again.", settingsUri.fsPath));
-			return;
-		}
-		if (writeState.needsSeed) {
-			await fileService.writeFile(settingsUri, VSBuffer.fromString('{}\n'));
-		}
-		await jsonEditing.write(settingsUri, effortWrites(chosen.selection).map(w => ({ path: [...w.path], value: w.value })), true);
-
-		// Restart the extension host so the Claude plugin re-activates and its CLI re-reads ~/.claude/settings.json
-		// fresh - the only reliable way to apply the new effort to open chats. A plain webview reload is page-only
-		// and reads the plugin's STALE cached config (it lands one selection behind), so it cannot be used here.
-		// Note: this restarts ALL extensions, not just Claude.
-		await commandService.executeCommand('workbench.action.restartExtensionHost');
 	}
 }
 

@@ -17,6 +17,7 @@ import {
 	permissionModeDisplay,
 	permissionModePicks,
 	permissionModeWrites,
+	shouldRestartAfterPermissionChange,
 } from '../../browser/clawdiusPermissionModeStatusEntry.js';
 
 suite('Clawdius permission-mode pill', () => {
@@ -117,6 +118,15 @@ suite('Clawdius permission-mode pill', () => {
 			{ key: ALLOW_BYPASS_KEY, value: true },
 		]);
 		assert.ok(!writes.some(w => w.value === false), 'must never set the bypass gate to false');
+	});
+
+	test('shouldRestartAfterPermissionChange: restart only when the effective config changed', () => {
+		assert.deepStrictEqual([
+			shouldRestartAfterPermissionChange('plan', false, 'plan'),                          // same non-bypass reselected
+			shouldRestartAfterPermissionChange('plan', false, 'default'),                       // any mode change
+			shouldRestartAfterPermissionChange('bypassPermissions', true, 'bypassPermissions'),  // reselect Bypass, gate already on
+			shouldRestartAfterPermissionChange('bypassPermissions', false, 'bypassPermissions'), // reselect Bypass, gate off (mode unchanged)
+		], [false, true, false, true]);
 	});
 });
 // CLAWDIUS-END

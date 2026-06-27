@@ -17,8 +17,10 @@ import {
 	effortDisplay,
 	effortPicks,
 	effortWrites,
+	meterMarkup,
 	parseEffortLevel,
 	parseSettingsState,
+	planEffortEdit,
 } from '../../browser/clawdiusEffortStatusEntry.js';
 
 /** U+2588 FULL BLOCK, referenced by code point to keep this source ASCII-only. */
@@ -188,6 +190,67 @@ suite('Clawdius effort pill', () => {
 		assert.deepStrictEqual(applyWrites(before, effortWrites('ultracode')), {
 			model: 'claude', effortLevel: 'xhigh', theme: 'dark', ultracode: true,
 		});
+	});
+
+	test('meterMarkup frames the meter in NUL sentinels and maps the animation to a state class', () => {
+		const NUL = String.fromCharCode(0);
+		const max = effortDisplay('max', false);     // animate: rainbow -> state-max
+		const ultra = effortDisplay('xhigh', true);   // animate: ultra   -> state-ultra
+		const plain = effortDisplay('low', false);    // animate: none    -> state-plain
+		assert.deepStrictEqual([meterMarkup(max), meterMarkup(ultra), meterMarkup(plain)], [
+			`${NUL}state-max${NUL}${max.meter}${NUL}`,
+			`${NUL}state-ultra${NUL}${ultra.meter}${NUL}`,
+			`${NUL}state-plain${NUL}${plain.meter}${NUL}`,
+		]);
+	});
+
+	test('effortDisplay tooltip + ariaLabel: ultracode / auto / a normal level', () => {
+		const ultra = effortDisplay('xhigh', true);
+		const auto = effortDisplay(undefined, false);
+		const high = effortDisplay('high', false);
+		assert.deepStrictEqual({
+			ultraTooltip: ultra.tooltip.includes('standing dynamic-workflow orchestration'),
+			ultraAria: ultra.ariaLabel,
+			autoTooltip: auto.tooltip.includes('Claude picks per task'),
+			autoAria: auto.ariaLabel,
+			highTooltip: high.tooltip.includes('effort for new Claude conversations'),
+			highAria: high.ariaLabel,
+		}, {
+			ultraTooltip: true,
+			ultraAria: 'Claude default effort: Ultracode',
+			autoTooltip: true,
+			autoAria: 'Claude default effort: Auto',
+			highTooltip: true,
+			highAria: 'Claude default effort: High',
+		});
+	});
+
+	test('effortPicks marks Ultracode as current when chosen; auto marks nothing', () => {
+		const ultraCurrent = effortPicks('ultracode').filter(p => p.description === 'Current').map(p => p.selection);
+		const autoCurrent = effortPicks('auto').filter(p => p.description === 'Current').map(p => p.selection);
+		assert.deepStrictEqual({ ultraCurrent, autoCurrent }, { ultraCurrent: ['ultracode'], autoCurrent: [] });
+	});
+
+	test('planEffortEdit mirrors the full run() branch matrix', () => {
+		const ok = parseSettingsState('{}');           // ok, needsSeed false
+		const seed = parseSettingsState(undefined);     // ok, needsSeed true
+		const invalid = parseSettingsState('{ bad');    // invalid
+		const chosen = { selection: 'high' as const };
+		assert.deepStrictEqual([
+			planEffortEdit(invalid, chosen, 'low', ok),                        // 1: initial read invalid
+			planEffortEdit(ok, undefined, 'low', undefined),                   // 2a: nothing chosen
+			planEffortEdit(ok, { selection: 'low' as const }, 'low', undefined), // 2b: chose the current
+			planEffortEdit(ok, chosen, 'low', invalid),                        // 3: re-read invalid mid-pick
+			planEffortEdit(ok, chosen, 'low', seed),                           // 4a: write + seed
+			planEffortEdit(ok, chosen, 'low', ok),                             // 4b: write, no seed
+		], [
+			{ action: 'invalid', seed: false, writes: [] },
+			{ action: 'noop', seed: false, writes: [] },
+			{ action: 'noop', seed: false, writes: [] },
+			{ action: 'invalid', seed: false, writes: [] },
+			{ action: 'write', seed: true, writes: effortWrites('high') },
+			{ action: 'write', seed: false, writes: effortWrites('high') },
+		]);
 	});
 });
 // CLAWDIUS-END

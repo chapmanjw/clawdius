@@ -2240,7 +2240,11 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		this.pluginsLoaded = true;
 		const gen = this.cacheGeneration;
 		const pluginsDir = URI.joinPath(await this.pathService.userHome(), '.claude', 'plugins');
-		const marketplaces = parseKnownMarketplaces(await this.readJson(URI.joinPath(pluginsDir, 'known_marketplaces.json')));
+		// Only keep marketplaces whose name is shell/path-safe: the name is used both in the catalog file path
+		// below and in the Update/Remove terminal commands, so an unsafe name would read an unintended path or
+		// render rows whose actions can never run. Real `claude plugin marketplace add` names are slugs.
+		const marketplaces = parseKnownMarketplaces(await this.readJson(URI.joinPath(pluginsDir, 'known_marketplaces.json')))
+			.filter(m => MARKETPLACE_NAME_RE.test(m.name));
 		const installed = parseInstalledPlugins(await this.readJson(URI.joinPath(pluginsDir, 'installed_plugins.json')));
 		const catalog: ICatalogPlugin[] = [];
 		await Promise.all(marketplaces.map(async m => {
@@ -2256,6 +2260,9 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	/** Re-read the local plugin sources (e.g. after a `claude plugin marketplace update` in the terminal). Keeps the
 	 *  current data visible until the fresh read lands (no Loading flash). */
 	private refreshPluginsData(): void {
+		// Bump the generation so any load still in flight (e.g. from a config-change refresh) is invalidated and
+		// cannot finish out of order and overwrite this fresh read with stale data.
+		this.cacheGeneration++;
 		this.pluginsLoaded = false;
 		void this.loadPluginsData();
 	}
@@ -2528,8 +2535,12 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	 *  (sendText `false`) so the user reviews the command. */
 	private async marketplaceAddInTerminal(source: string): Promise<void> {
 		const trimmed = source.trim();
-		if (trimmed.length === 0 || /[\r\n]/.test(trimmed)) {
-			this.toast(localize('clawdius.control.plugins.badMarketplace', "Enter a marketplace as a github owner/repo, URL, or local path."));
+		// The source is interpolated into a terminal command staged via sendText(.., false) - one Enter from
+		// running. Reject command-injection metacharacters (chaining ; & |, substitution ` $ ( ), redirection
+		// < >, quotes) so a pasted/odd value can't stage an injection. A github owner/repo, an https/git URL,
+		// or a filesystem path (incl. Windows backslashes + spaces) uses none of these.
+		if (trimmed.length === 0 || /[;&|`$()<>"'\r\n]/.test(trimmed)) {
+			this.toast(localize('clawdius.control.plugins.badMarketplace', "Enter a marketplace as a github owner/repo, URL, or local path (no shell metacharacters)."));
 			return;
 		}
 		this.addMarketplaceValue = '';

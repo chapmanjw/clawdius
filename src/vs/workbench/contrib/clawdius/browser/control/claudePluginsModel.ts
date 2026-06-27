@@ -96,10 +96,14 @@ export function parseKnownMarketplaces(json: unknown): IMarketplace[] {
 export function parseMarketplaceCatalog(json: unknown, marketplaceName: string): ICatalogPlugin[] {
 	if (!isRecord(json) || !Array.isArray(json['plugins'])) { return []; }
 	const out: ICatalogPlugin[] = [];
+	const seen = new Set<string>();
 	for (const raw of json['plugins']) {
 		if (!isRecord(raw)) { continue; }
 		const name = nonEmptyString(raw['name']);
-		if (!name) { continue; }
+		// Skip nameless entries and de-duplicate by name within a marketplace, so a malformed catalog never
+		// renders two rows for the same id (which would share installed/enabled state).
+		if (!name || seen.has(name)) { continue; }
+		seen.add(name);
 		out.push({
 			id: `${name}@${marketplaceName}`,
 			name,

@@ -32,11 +32,12 @@ suite('claudePluginsModel', () => {
 		assert.deepStrictEqual(parseKnownMarketplaces([1, 2]), []);
 	});
 
-	test('parseMarketplaceCatalog: id composition, author object vs string, homepage http(s)-only, skip nameless + junk', () => {
+	test('parseMarketplaceCatalog: id composition, author object vs string, homepage http(s)-only, dedup by name, skip nameless + junk', () => {
 		const result = parseMarketplaceCatalog({
 			name: 'mp', plugins: [
 				{ name: 'fmt', description: 'Formatter', author: { name: 'Ada' }, category: 'tools', homepage: 'https://fmt.example' },
 				{ name: 'lint', author: 'Grace', homepage: 'ftp://nope' },
+				{ name: 'fmt', description: 'duplicate - skipped' },
 				{ description: 'no name - skipped' },
 				'not-an-object',
 			],

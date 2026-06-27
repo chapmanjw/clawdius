@@ -66,28 +66,29 @@ jobs:
           echo "Clawdius fork scaffolding intact; pinned upstream $(cat UPSTREAM_VERSION)"
       - name: Branding guard (Clawdius branding, Open VSX, no telemetry, Clawdius theme)
         run: node script/clawdius/branding-guard.ts
-      - name: Brand ratchet (Copilot icon/string/asset may only shrink) + falsifiability
+      - name: Brand ratchet (Copilot icon/string/asset may only shrink) + per-probe falsifiability
         shell: bash
         run: |
           set -e
-          # Probe all three tracked surfaces: a .ts icon, a non-.ts text string under src/, an extensions/ string,
-          # and a Copilot-named asset file - each must trip the ratchet (proves it is not .ts-or-src-only).
-          ts=src/__brand_ratchet_selftest__.ts
-          md=src/__brand_ratchet_selftest__.md
-          ext=extensions/__brand_ratchet_selftest__.json
-          svg=src/__brand_ratchet-copilot-selftest__.svg
-          rs=cli/__brand_ratchet_selftest__.rs
-          printf 'export const x = Codicon.copilot;\n' > "$ts"
-          printf 'See GitHub Copilot docs.\n' > "$md"
-          printf '{ "x": "a Copilot label" }\n' > "$ext"
-          printf '<svg></svg>\n' > "$svg"
-          printf '// mentions GitHub Copilot\n' > "$rs"
-          if node script/clawdius/brand-ratchet.ts; then
-            echo "FAIL: brand ratchet did not flag the planted Copilot surfaces"; rm -f "$ts" "$md" "$ext" "$svg" "$rs"; exit 1
-          fi
-          rm -f "$ts" "$md" "$ext" "$svg" "$rs"
+          # The clean tree must pass first.
           node script/clawdius/brand-ratchet.ts
-          echo "brand ratchet is falsifiable (src icon + non-.ts text, extensions, cli/.rs, asset name) and clean against baseline"
+          # Each probe must trip the ratchet ON ITS OWN. A single batched run would only prove the UNION trips,
+          # so a scope-narrowing regression (e.g. dropping 'cli' from ROOTS or '.rs' from TEXT_EXT) could leave
+          # the other probes tripping and the self-test silently green. Probe each surface independently.
+          probe_one() {
+            printf '%s\n' "$2" > "$1"
+            if node script/clawdius/brand-ratchet.ts >/dev/null; then
+              echo "::error::brand-ratchet probe did not trip for $1 (a tracked Copilot surface is no longer guarded)"; rm -f "$1"; exit 1
+            fi
+            rm -f "$1"
+          }
+          probe_one src/__brand_ratchet_selftest__.ts 'export const x = Codicon.copilot;'
+          probe_one src/__brand_ratchet_selftest__.md 'See GitHub Copilot docs.'
+          probe_one extensions/__brand_ratchet_selftest__.json '{ "x": "a Copilot label" }'
+          probe_one src/__brand_ratchet-copilot-selftest__.svg '<svg></svg>'
+          probe_one cli/__brand_ratchet_selftest__.rs '// mentions GitHub Copilot'
+          node script/clawdius/brand-ratchet.ts
+          echo "brand ratchet is falsifiable PER PROBE (src icon, src non-.ts text, extensions, cli/.rs, asset name) and clean against baseline"
 
   # Type-checks the sources and runs the Clawdius unit tests in the browser mocha harness: the
   # no-default-account egress regression plus the workflow-store/transcript and Claude-CLI-plugin-discovery

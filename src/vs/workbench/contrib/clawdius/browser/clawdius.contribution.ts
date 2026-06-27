@@ -44,6 +44,7 @@ import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor,
 import { ClawdiusContextBudgetView, CONTEXT_BUDGET_VIEW_CONTAINER_ID, CONTEXT_BUDGET_VIEW_ID } from './clawdiusContextBudgetView.js';
 import { ClawdiusContextBudgetStatusEntry, CONTEXT_BUDGET_WARN_TOKENS_SETTING, OpenContextBudgetAction } from './clawdiusContextBudgetStatusEntry.js';
 import { LintContextAction } from './clawdiusContextBudgetLint.js';
+import { DisableConfirmedLoadsAction, EnableConfirmedLoadsAction } from './clawdiusContextBudgetConfirm.js';
 import { ConfigurationScope, Extensions as ConfigExtensions, IConfigurationRegistry } from '../../../../platform/configuration/common/configurationRegistry.js';
 
 // Singleton dashboard input round-trips with no state (everything is read live from local files on open).
@@ -221,6 +222,8 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	registerWorkbenchContribution2(ClawdiusContextBudgetStatusEntry.ID, ClawdiusContextBudgetStatusEntry, WorkbenchPhase.BlockRestore);
 	registerAction2(OpenContextBudgetAction);
 	registerAction2(LintContextAction);
+	registerAction2(EnableConfirmedLoadsAction);
+	registerAction2(DisableConfirmedLoadsAction);
 	Registry.as<IConfigurationRegistry>(ConfigExtensions.Configuration).registerConfiguration({
 		id: 'clawdius',
 		order: 100,

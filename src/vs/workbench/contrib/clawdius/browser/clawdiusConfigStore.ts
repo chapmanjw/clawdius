@@ -587,6 +587,25 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 		}
 	}
 
+	async readConfirmedLoads(): Promise<ReadonlySet<string>> {
+		const out = new Set<string>();
+		try {
+			const home = await this.pathService.userHome();
+			const text = await this.readText(URI.joinPath(home, '.claude', '.clawdius-instructions.jsonl'));
+			if (text === undefined) { return out; }
+			// Recent tail only, so the set reflects recent sessions rather than the whole history.
+			for (const line of text.split(/\r?\n/).slice(-1000)) {
+				const t = line.trim();
+				if (!t || t[0] !== '{') { continue; }
+				try {
+					const obj = JSON.parse(t);
+					if (typeof obj?.file_path === 'string') { out.add(obj.file_path.toLowerCase()); }
+				} catch { /* skip a non-JSON line */ }
+			}
+		} catch { /* best-effort */ }
+		return out;
+	}
+
 	/** readText() memoized for the current refresh (see `_readCache`). */
 	private readTextCached(uri: URI): Promise<string | undefined> {
 		const key = uri.toString();

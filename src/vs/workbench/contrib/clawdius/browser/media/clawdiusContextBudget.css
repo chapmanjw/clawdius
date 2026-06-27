@@ -110,6 +110,7 @@
 	font-size: 11px;
 }
 
+.clawdius-ctxbudget .ctxb-confirmed { color: var(--vscode-charts-green, #89d185); font-size: 12px; flex: 0 0 auto; }
 .clawdius-ctxbudget .ctxb-match { color: var(--vscode-charts-green, #89d185); font-size: 10px; }
 .clawdius-ctxbudget .ctxb-nomatch { color: var(--vscode-descriptionForeground); font-size: 10px; }
 

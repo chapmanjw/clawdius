@@ -204,6 +204,9 @@ export interface IClawdiusConfigService {
 	/** The measured always-on cached prefix from the workspace folder's most recent session transcript, as
 	 *  ground truth next to the estimate. Local read; undefined when there is no transcript yet. */
 	readMeasuredPrefix(folder: URI): Promise<IMeasuredPrefix | undefined>;
+	/** Lower-cased fs paths of the instruction files an opt-in InstructionsLoaded hook recorded as actually
+	 *  loaded (empty when the hook is not enabled or nothing logged yet). Used for "confirmed loaded" badges. */
+	readConfirmedLoads(): Promise<ReadonlySet<string>>;
 }
 
 /** Codicon id used for a section row. */

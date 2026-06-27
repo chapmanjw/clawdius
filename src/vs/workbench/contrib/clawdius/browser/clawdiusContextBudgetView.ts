@@ -60,6 +60,9 @@ export class ClawdiusContextBudgetView extends ViewPane {
 	/** Measured prefix per workspace folder (null = fetched, none found), so the async read happens once. */
 	private readonly measuredCache = new Map<string, IMeasuredPrefix | null>();
 	private readonly measuredPending = new Set<string>();
+	/** Confirmed-loaded fs paths (lower-cased) from the opt-in hook log; undefined until fetched once. */
+	private confirmedLoads: ReadonlySet<string> | undefined;
+	private confirmedPending = false;
 
 	constructor(
 		options: IViewPaneOptions,
@@ -128,6 +131,16 @@ export class ClawdiusContextBudgetView extends ViewPane {
 		const activeFile = this.activeFile();
 		const folders = this.workspaceService.getWorkspace().folders.map(f => f.uri);
 		const budget = resolveContextBudget(this.configService.snapshot, activeFile, folders);
+
+		// One-time fetch of the opt-in confirmed-loaded set; rows get a badge once it resolves.
+		if (this.confirmedLoads === undefined && !this.confirmedPending) {
+			this.confirmedPending = true;
+			this.configService.readConfirmedLoads().then(set => {
+				this.confirmedLoads = set;
+				this.confirmedPending = false;
+				if (set.size) { this.renderScheduler.schedule(); }
+			}, () => { this.confirmedPending = false; });
+		}
 
 		this.renderHead(activeFile, budget);
 
@@ -220,6 +233,11 @@ export class ClawdiusContextBudgetView extends ViewPane {
 		const name = append(row, $('.ctxb-name'));
 		name.textContent = src.label;
 		name.title = src.label;
+
+		if (src.resource && this.confirmedLoads?.has(src.resource.fsPath.toLowerCase())) {
+			const c = append(row, $('.ctxb-confirmed.codicon.codicon-pass'));
+			c.title = localize('clawdius.ctxb.confirmedTip', "Confirmed loaded in a recent Claude session");
+		}
 
 		if (src.kind === 'import') {
 			append(row, $('.ctxb-glob', undefined, localize('clawdius.ctxb.viaImport', "via @import")));

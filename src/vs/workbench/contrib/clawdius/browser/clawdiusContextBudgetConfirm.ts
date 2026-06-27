@@ -195,6 +195,7 @@ export class DisableConfirmedLoadsAction extends Action2 {
 		const pathService = accessor.get(IPathService);
 		const jsonEditing = accessor.get(IJSONEditingService);
 		const notificationService = accessor.get(INotificationService);
+		const dialogService = accessor.get(IDialogService);
 
 		const home = await pathService.userHome();
 		const settingsUri = URI.joinPath(home, '.claude', 'settings.json');
@@ -214,6 +215,18 @@ export class DisableConfirmedLoadsAction extends Action2 {
 		}
 		await jsonEditing.write(settingsUri, [{ path: ['hooks', 'InstructionsLoaded'], value: kept.length ? kept : undefined }], true);
 		notificationService.info(localize('clawdius.confirm.disabled', "Confirmed context-load tracking disabled."));
+
+		// Offer to also remove the on-disk artifacts. Default to keeping them (the log is a local audit trail).
+		const { confirmed } = await dialogService.confirm({
+			message: localize('clawdius.confirm.cleanupTitle', "Also remove the logging script and recorded log?"),
+			detail: localize('clawdius.confirm.cleanupDetail', "The hook is gone. You can also delete the logging script (~/.claude/.clawdius/) and the recorded log (~/.claude/{0}), or keep them as a local history of what loaded.", LOG_FILE_NAME),
+			primaryButton: localize('clawdius.confirm.cleanupRemove', "Remove"),
+			cancelButton: localize('clawdius.confirm.cleanupKeep', "Keep"),
+		});
+		if (confirmed) {
+			try { await fileService.del(URI.joinPath(home, '.claude', '.clawdius'), { recursive: true, useTrash: false }); } catch { /* best-effort */ }
+			try { await fileService.del(instructionsLogUri(home), { useTrash: false }); } catch { /* best-effort */ }
+		}
 	}
 }
 // CLAWDIUS-END

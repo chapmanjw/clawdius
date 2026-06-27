@@ -619,6 +619,19 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 		try { return (await this.fileService.readFile(uri)).value.toString(); } catch { return undefined; }
 	}
 
+	/** Read only the last `maxBytes` of a file, dropping the partial leading line. Bounds the read cost of an
+	 *  append-only log that grows without limit (the hook log), so a big file doesn't slow the panel. */
+	private async readTextTail(uri: URI, maxBytes: number): Promise<string | undefined> {
+		try {
+			const size = (await this.fileService.stat(uri)).size ?? 0;
+			if (size <= maxBytes) { return (await this.fileService.readFile(uri)).value.toString(); }
+			const buf = await this.fileService.readFile(uri, { position: size - maxBytes, length: maxBytes });
+			const text = buf.value.toString();
+			const nl = text.indexOf('\n');
+			return nl >= 0 ? text.slice(nl + 1) : text;
+		} catch { return undefined; }
+	}
+
 	async nestedMemoriesFor(activeFile: URI, workspaceFolders: readonly URI[]): Promise<IConfigItem[]> {
 		const folder = containingFolderOf(activeFile, workspaceFolders);
 		if (!folder) { return []; }
@@ -667,7 +680,8 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 		const out = new Map<string, IConfirmedLoad>();
 		try {
 			const home = await this.pathService.userHome();
-			const text = await this.readText(URI.joinPath(home, '.claude', '.clawdius-instructions.jsonl'));
+			// Tail-read so the panel stays fast even if the append-only log has grown large over time.
+			const text = await this.readTextTail(URI.joinPath(home, '.claude', '.clawdius-instructions.jsonl'), 512 * 1024);
 			if (text === undefined) { return out; }
 			// A record counts only when its session cwd is inside one of the open workspace folders, so a
 			// different project's Claude session does not light up badges here. Empty folders = no scoping.

@@ -167,10 +167,12 @@ function resolveImportUri(target: string, importerDir: URI, home: URI): URI | un
 	}
 }
 
-/** Claude Code's per-project auto-memory dir key: the project path with separators / colon flattened to '-'
- *  (e.g. C:\Users\x\proj -> C--Users-x-proj). Best-effort; if it does not match, MEMORY.md just isn't found. */
-function encodeProjectDir(folder: URI): string {
-	return folder.fsPath.replace(/[\\/:]/g, '-');
+/** Claude Code's per-project key for ~/.claude/projects/<enc>: EVERY non-alphanumeric in the absolute path is
+ *  replaced with '-' (verified against real dirs, e.g. C:\Users\x\.ai -> C--Users-x--ai - the dot also flips).
+ *  Replacing only separators silently mismatched any path containing a '.', dropping MEMORY.md auto-memory and
+ *  the measured-prefix overlay for dotted project paths. Exported for direct testing. */
+export function encodeProjectDir(folder: URI): string {
+	return folder.fsPath.replace(/[^a-zA-Z0-9]/g, '-');
 }
 
 /** Claude Code loads only the first ~200 lines / 25KB of MEMORY.md, so estimate from that slice. */

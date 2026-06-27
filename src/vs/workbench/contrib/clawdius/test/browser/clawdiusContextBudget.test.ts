@@ -10,7 +10,7 @@ import {
 	ConfigScope, ConfigSection, ContextInclusion, IClawdiusConfigSnapshot, IConfigBudgetMeta, IConfigItem,
 } from '../../common/clawdiusConfig.js';
 import { BudgetTier, estimateTokens, formatApproxTokens, resolveContextBudget } from '../../common/clawdiusContextBudget.js';
-import { extractPaths, isClaudeMdExcluded, parseImportTargets, parseMeasuredPrefix } from '../../browser/clawdiusConfigStore.js';
+import { encodeProjectDir, extractPaths, isClaudeMdExcluded, parseImportTargets, parseMeasuredPrefix } from '../../browser/clawdiusConfigStore.js';
 
 function memoriesScope(scope: ConfigScope, key: string, root: URI, items: IConfigItem[], folderName?: string) {
 	return { scope, key, root, folderName, exists: true, sections: [{ section: ConfigSection.Memories, items }] };
@@ -255,6 +255,15 @@ suite('clawdiusContextBudget', () => {
 		// Cursor's globs:/alwaysApply: keys are NOT Claude Code keys => ignored.
 		assert.strictEqual(extractPaths('---\nglobs: *.ts\nalwaysApply: false\n---\nbody'), undefined);
 		assert.strictEqual(extractPaths('no frontmatter here'), undefined);
+	});
+
+	test('encodeProjectDir replaces every non-alphanumeric (matching Claude Code projects/<enc>)', () => {
+		// Verified against real ~/.claude/projects names: a dot flips to '-' too, not just separators (the bug
+		// was replacing only [\\/:], which left '.' intact and mismatched the real dir for any dotted path).
+		// Drive-letter paths make fsPath platform-dependent, so pin the behavior with separator-only paths whose
+		// fsPath is identical on Windows and POSIX.
+		assert.strictEqual(encodeProjectDir(URI.file('/Users/x/my.app')), '-Users-x-my-app');
+		assert.strictEqual(encodeProjectDir(URI.file('/x/.config')), '-x--config'); // separator + dot => two dashes
 	});
 
 	test('isClaudeMdExcluded matches an absolute path or a glob, case-insensitively when asked', () => {

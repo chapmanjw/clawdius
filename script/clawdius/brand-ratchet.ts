@@ -10,23 +10,30 @@
 // non-.ts file (css/json/md/svg/png/...) unscanned - and Copilot text lives in those surfaces today
 // (e.g. extensions/terminal-suggest/.../copilot.ts ships "GitHub Copilot CLI ...").
 //
-// This walks src/ and extensions/ (minus Clawdius-owned trees and build/dependency dirs), counts each tracked
-// pattern per file over text-bearing files, AND tracks any Copilot-named file (so a bundled copilot.svg / .png
-// icon asset is caught without needing a code change). It FAILS if any file rises above its committed baseline
-// or a file not in the baseline introduces the pattern. The baseline is the upstream residue tolerated today;
-// it can only get smaller. Clawdius-owned trees are excluded here because scan-forbidden already scans them in
-// full; together the two guards leave no unscanned source/resource surface.
+// This walks src/, extensions/ and cli/ (minus Clawdius-owned trees and build/dependency dirs), counts each
+// tracked pattern per file over text-bearing files, AND tracks any Copilot-named file (so a bundled copilot.svg
+// / .png icon asset is caught without needing a code change). It FAILS if any file rises above its committed
+// baseline or a file not in the baseline introduces the pattern. The baseline is the upstream residue tolerated
+// today; it can only get smaller. Clawdius-owned trees are excluded here because scan-forbidden already scans
+// them in full.
+//
+// SCOPE (deliberately stated, not overclaimed): this ratchet + scan-forbidden (owned/marked) + branding-guard
+// (product.json) cover the SHIPPED SOURCE brand surface - src/, extensions/, cli/, and product.json. They do
+// NOT cover: (a) the build/ PACKAGING pipeline, which still bundles the upstream Copilot extension + @github/
+// copilot prebuilds - a tracked Phase-6 built-product item, separate from a source brand leak; (b) non-shipped
+// test fixtures. A new user-visible Copilot string in src/extensions/cli is caught; the build de-Copilot is its
+// own follow-up.
 //
 // Usage:
 //   node script/clawdius/brand-ratchet.ts            check against the committed baseline (CI mode)
 //   node script/clawdius/brand-ratchet.ts --update   regenerate the baseline (only when you intentionally reduce)
 import fs from 'node:fs'
 
-const ROOTS = ['src', 'extensions']
+const ROOTS = ['src', 'extensions', 'cli']
 const BASELINE_PATH = 'script/clawdius/brand-ratchet-baseline.json'
 // Text-bearing extensions whose contents are scanned for the text patterns. Binary assets (svg counts as text
 // but png/ico do not) are covered by the filename pattern instead.
-const TEXT_EXT = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json', '.jsonc', '.md', '.css', '.html', '.svg', '.txt', '.yml', '.yaml'])
+const TEXT_EXT = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json', '.jsonc', '.md', '.css', '.html', '.svg', '.txt', '.yml', '.yaml', '.rs', '.toml'])
 // Content patterns (scanned inside text files) + a filename pattern (matches the file's own name, any extension,
 // so a Copilot icon asset like copilot.svg / copilot-dark.png is tracked even though its bytes are binary).
 const CONTENT_PATTERNS: Record<string, RegExp> = {
@@ -36,7 +43,7 @@ const CONTENT_PATTERNS: Record<string, RegExp> = {
 const FILENAME_PATTERN = /copilot/i
 const FILENAME_KEY = 'copilot-filename'
 // Directories never descended into (Clawdius-owned -> governed by scan-forbidden; build output + deps -> noise).
-const SKIP_DIRS = new Set(['node_modules', 'out', 'out-build', 'dist', '.git', '.build'])
+const SKIP_DIRS = new Set(['node_modules', 'out', 'out-build', 'dist', '.git', '.build', 'target'])
 const SKIP_PATHS = [
 	/^src\/vs\/workbench\/contrib\/clawdius\//, /^src\/vs\/platform\/clawdius\//, /^extensions\/clawdius-/,
 ]

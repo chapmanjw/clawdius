@@ -18,6 +18,7 @@
 		"src/vs/workbench/services/userDataProfile/common/userDataProfileIcons.ts": 1
 	},
 	"copilot-text": {
+		"cli/src/commands/args.rs": 2,
 		"extensions/git/src/repository.ts": 3,
 		"extensions/git/src/test/git.test.ts": 5,
 		"extensions/git/src/util.ts": 1,

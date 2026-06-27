@@ -42,7 +42,8 @@ import { Codicon } from '../../../../base/common/codicons.js';
 import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContainer.js';
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainerLocation } from '../../../common/views.js';
 import { ClawdiusContextBudgetView, CONTEXT_BUDGET_VIEW_CONTAINER_ID, CONTEXT_BUDGET_VIEW_ID } from './clawdiusContextBudgetView.js';
-import { ClawdiusContextBudgetStatusEntry, OpenContextBudgetAction } from './clawdiusContextBudgetStatusEntry.js';
+import { ClawdiusContextBudgetStatusEntry, CONTEXT_BUDGET_WARN_TOKENS_SETTING, OpenContextBudgetAction } from './clawdiusContextBudgetStatusEntry.js';
+import { ConfigurationScope, Extensions as ConfigExtensions, IConfigurationRegistry } from '../../../../platform/configuration/common/configurationRegistry.js';
 
 // Singleton dashboard input round-trips with no state (everything is read live from local files on open).
 class ClaudeUsageDashboardInputSerializer implements IEditorSerializer {
@@ -218,6 +219,21 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews(contextBudgetViews, contextBudgetContainer);
 	registerWorkbenchContribution2(ClawdiusContextBudgetStatusEntry.ID, ClawdiusContextBudgetStatusEntry, WorkbenchPhase.BlockRestore);
 	registerAction2(OpenContextBudgetAction);
+	Registry.as<IConfigurationRegistry>(ConfigExtensions.Configuration).registerConfiguration({
+		id: 'clawdius',
+		order: 100,
+		title: localize('clawdius.configTitle', "Clawdius"),
+		type: 'object',
+		properties: {
+			[CONTEXT_BUDGET_WARN_TOKENS_SETTING]: {
+				type: 'number',
+				default: 8000,
+				minimum: 0,
+				scope: ConfigurationScope.RESOURCE,
+				description: localize('clawdius.warnTokens.desc', "The estimated always-on token total (memory + rules + skill menu) above which the Claude Context Budget status item turns a warning color. Set to 0 to disable."),
+			},
+		},
+	});
 
 	// Manage-gear "Check for Updates..." -> opens the Clawdius releases page (no auto-update server yet).
 	registerAction2(ClawdiusCheckForUpdatesAction);

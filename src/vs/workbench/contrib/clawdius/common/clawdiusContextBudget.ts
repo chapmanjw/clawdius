@@ -46,6 +46,8 @@ export interface IBudgetSource {
 	readonly kind: BudgetSourceKind;
 	readonly approxTokens: number;
 	readonly resource?: URI;
+	/** For a skill: its description - the "when" the model uses to decide to invoke it. */
+	readonly description?: string;
 	/** For a path-scoped rule: its frontmatter `paths` patterns (so the UI can show what scopes it). */
 	readonly paths?: readonly string[];
 	/** For a path-scoped rule: whether the active file matched (true -> always-on, false -> not-applied). */
@@ -126,6 +128,7 @@ function toSource(item: IConfigItem, scope: ConfigScope, matched?: boolean): IBu
 		kind: b.kind,
 		approxTokens: b.approxTokens,
 		resource: item.resource,
+		description: item.description,
 		paths: b.paths,
 		matched,
 		menuTokens: b.menuTokens,

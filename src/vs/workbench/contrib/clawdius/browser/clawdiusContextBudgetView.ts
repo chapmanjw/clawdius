@@ -189,6 +189,11 @@ export class ClawdiusContextBudgetView extends ViewPane {
 			append(row, $('.ctxb-glob', undefined, localize('clawdius.ctxb.viaImport', "via @import")));
 		} else if (src.kind === 'automem') {
 			append(row, $('.ctxb-glob', undefined, localize('clawdius.ctxb.autoMem', "auto memory")));
+		} else if (src.kind === 'skill' && src.description) {
+			// The skill's description is the "when" the model uses to decide to invoke it.
+			const d = append(row, $('.ctxb-glob'));
+			d.textContent = src.description.length > 64 ? src.description.slice(0, 61) + '…' : src.description;
+			d.title = src.description;
 		}
 
 		if (src.paths && src.paths.length) {

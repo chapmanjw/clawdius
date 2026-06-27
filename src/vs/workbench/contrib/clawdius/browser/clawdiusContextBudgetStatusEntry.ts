@@ -16,8 +16,11 @@ import { URI } from '../../../../base/common/uri.js';
 import { localize, localize2 } from '../../../../nls.js';
 import product from '../../../../platform/product/common/product.js';
 import { Action2 } from '../../../../platform/actions/common/actions.js';
+import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
+import { themeColorFromId } from '../../../../platform/theme/common/themeService.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+import { STATUS_BAR_WARNING_ITEM_BACKGROUND, STATUS_BAR_WARNING_ITEM_FOREGROUND } from '../../../common/theme.js';
 import { IWorkbenchContribution } from '../../../common/contributions.js';
 import { EditorResourceAccessor, SideBySideEditor } from '../../../common/editor.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
@@ -28,6 +31,10 @@ import { formatApproxTokens, IBudgetSource, IContextBudget, resolveContextBudget
 import { CONTEXT_BUDGET_VIEW_ID } from './clawdiusContextBudgetView.js';
 
 export const OPEN_CONTEXT_BUDGET_COMMAND_ID = 'clawdius.openContextBudget';
+
+/** Setting: the always-on token total above which the pill turns a warning color (0 disables). */
+export const CONTEXT_BUDGET_WARN_TOKENS_SETTING = 'clawdius.contextBudget.warnTokens';
+const DEFAULT_WARN_TOKENS = 8000;
 
 /** Opens (and focuses) the Context Budget Inspector panel. Wired to the status pill and the command palette. */
 export class OpenContextBudgetAction extends Action2 {
@@ -60,6 +67,7 @@ export class ClawdiusContextBudgetStatusEntry extends Disposable implements IWor
 		@IEditorService private readonly editorService: IEditorService,
 		@IClawdiusConfigService private readonly configService: IClawdiusConfigService,
 		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService,
+		@IConfigurationService private readonly configurationService: IConfigurationService,
 	) {
 		super();
 
@@ -68,12 +76,21 @@ export class ClawdiusContextBudgetStatusEntry extends Disposable implements IWor
 			return;
 		}
 
-		// Re-resolve when the active file changes (different glob rules apply) or config is edited.
+		// Re-resolve when the active file changes (different rules apply), config is edited, or the warn
+		// threshold setting changes.
 		this._register(this.editorService.onDidActiveEditorChange(() => this.update()));
 		this._register(this.configService.onDidChange(() => this.update()));
+		this._register(this.configurationService.onDidChangeConfiguration(e => {
+			if (e.affectsConfiguration(CONTEXT_BUDGET_WARN_TOKENS_SETTING)) { this.update(); }
+		}));
 		this.update();
 		// The snapshot is empty until the first refresh (coalesced in the store).
 		void this.configService.refresh();
+	}
+
+	private warnThreshold(): number {
+		const v = this.configurationService.getValue(CONTEXT_BUDGET_WARN_TOKENS_SETTING);
+		return typeof v === 'number' && v > 0 ? v : DEFAULT_WARN_TOKENS;
 	}
 
 	private activeFile(): URI | undefined {
@@ -123,12 +140,16 @@ export class ClawdiusContextBudgetStatusEntry extends Disposable implements IWor
 
 	private getProps(budget: IContextBudget): IStatusbarEntry {
 		const label = formatApproxTokens(budget.alwaysOnTokens);
+		const over = budget.alwaysOnTokens >= this.warnThreshold();
 		return {
 			name: localize('clawdius.ctxb.statusName', "Claude Context Budget"),
 			text: `$(book) ${label}`,
 			ariaLabel: localize('clawdius.ctxb.statusAria', "Claude memory & rules budget: {0} tokens always-on (estimated)", label),
 			tooltip: new MarkdownString(this.tooltip(budget)),
 			command: OPEN_CONTEXT_BUDGET_COMMAND_ID,
+			// Warn color once the always-on estimate crosses the configurable budget.
+			backgroundColor: over ? themeColorFromId(STATUS_BAR_WARNING_ITEM_BACKGROUND) : undefined,
+			color: over ? themeColorFromId(STATUS_BAR_WARNING_ITEM_FOREGROUND) : undefined,
 		};
 	}
 

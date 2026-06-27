@@ -54,14 +54,14 @@ const MODEL_COLORS = ['#a78bfa', '#7bc96f', '#e3b341', '#38bdf8', '#f472b6', '#9
 const CHART_STROKE_WIDTH = 1.75;
 const CHART_CORNER_RADIUS = 7;
 
-function utilStateOf(util: number): 'warn' | 'crit' | undefined {
+export function utilStateOf(util: number): 'warn' | 'crit' | undefined {
 	if (util >= 90) { return 'crit'; }
 	if (util >= 70) { return 'warn'; }
 	return undefined;
 }
 
 /** Read `cleanupPeriodDays` from a parsed settings object; default + validate (integer >= 1). */
-function effectiveCleanupPeriodDays(settings: Record<string, unknown>): number {
+export function effectiveCleanupPeriodDays(settings: Record<string, unknown>): number {
 	const v = settings['cleanupPeriodDays'];
 	return typeof v === 'number' && Number.isInteger(v) && v >= 1 ? v : DEFAULT_CLEANUP_PERIOD_DAYS;
 }
@@ -75,8 +75,18 @@ interface ILoaded {
 	readonly loading: boolean;
 }
 
-function dateKey(day: Date): string {
+export function dateKey(day: Date): string {
 	return `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * Local YYYY-MM-DD of the first day of the inclusive `horizonDays`-day window ending on `today` (today - (N - 1)).
+ * Pure core of {@link ClaudeUsageDashboardView.windowStartKey}; the clock is passed in so the off-by-one is testable.
+ */
+export function windowStartKey(today: Date, horizonDays: number): string {
+	const d = new Date(today);
+	d.setDate(d.getDate() - (horizonDays - 1));
+	return dateKey(d);
 }
 
 /** Format a px coordinate for an SVG path/attribute (2 dp keeps the path compact with no visible quantization). */
@@ -93,7 +103,7 @@ function coord(value: number): string {
  * under a small base radius. Zero-value days rest on the 0 baseline, so an isolated big day reads as a
  * rounded-top spike and clusters read as rounded humps.
  */
-function roundedStepPath(values: number[], max: number, width: number, height: number): string {
+export function roundedStepPath(values: number[], max: number, width: number, height: number): string {
 	const n = values.length;
 	if (n === 0 || width <= 0 || height <= 0) { return ''; }
 	const bandWidth = width / n;
@@ -149,6 +159,86 @@ function roundedStepPath(values: number[], max: number, width: number, height: n
 }
 
 /**
+ * Build per-model value series over an inclusive [cutoffKey .. todayKey] window, aligned to a shared, contiguous
+ * (zero-filled) calendar date axis, keeping the top `maxModels` models by total tokens. Pure core of
+ * {@link ClaudeUsageDashboardView.windowedModelTokens}; the clock + horizon are passed in so it is unit-testable.
+ */
+export function buildModelSeries(daily: ReadonlyArray<IClaudeDailyModelTokens>, cutoffKey: string, todayKey: string, maxModels: number): { dates: string[]; max: number; models: { id: string; label: string; values: number[] }[] } {
+	const inRange = daily.filter(d => d.date && d.date.slice(0, 10) >= cutoffKey && d.date.slice(0, 10) <= todayKey);
+	if (inRange.length === 0) { return { dates: [], max: 1, models: [] }; }
+
+	// Walk a CONTIGUOUS calendar from the first to the last day that has data, zero-filling the gaps. This makes
+	// the x-axis true calendar time: the line drops to zero on days with no tokens instead of evenly spacing the
+	// data points by index (which compresses gaps and makes the line appear to have values on empty dates).
+	const byDate = new Map<string, { readonly [model: string]: number }>();
+	for (const d of inRange) { byDate.set(d.date!.slice(0, 10), d.tokensByModel ?? {}); }
+	const sortedKeys = [...byDate.keys()].sort();
+	const dates: string[] = [];
+	for (let cur = new Date(`${sortedKeys[0]}T00:00:00`), end = new Date(`${sortedKeys[sortedKeys.length - 1]}T00:00:00`); cur <= end; cur.setDate(cur.getDate() + 1)) {
+		dates.push(dateKey(cur));
+	}
+
+	// Rank models by total tokens over the days with data; keep the top N.
+	const totals = new Map<string, number>();
+	for (const tokens of byDate.values()) {
+		for (const [model, t] of Object.entries(tokens)) { totals.set(model, (totals.get(model) ?? 0) + t); }
+	}
+	const topModels = [...totals.entries()].filter(([, t]) => t > 0).sort((a, b) => b[1] - a[1]).slice(0, maxModels).map(([id]) => id);
+
+	let max = 1;
+	const models = topModels.map(id => {
+		const values = dates.map(dt => byDate.get(dt)?.[id] ?? 0);
+		for (const v of values) { max = Math.max(max, v); }
+		return { id, label: modelLabel(id), values };
+	});
+	return { dates, max, models };
+}
+
+/**
+ * Pure core of {@link ClaudeUsageDashboardView.renderHeatmap}: reduce the in-window daily activity to a
+ * column-major grid model for the contribution heatmap. `today` + `horizonDays` are passed in so the window math
+ * is unit-testable. The grid starts on the Sunday on/before the window start (so weekday rows line up) and spans
+ * `weeks` full week-columns; each cell carries its date `key`, message `count`, intensity `level` (0..4, scaled
+ * against the in-window `max`), and a `visible` flag (false for future days or days older than the window). Cells
+ * are ordered column-major (each week top-to-bottom), matching the grid's DOM append order.
+ */
+export function buildHeatmapModel(activity: ReadonlyArray<IClaudeDailyActivity>, today: Date, horizonDays: number): { weeks: number; cells: { key: string; count: number; level: number; visible: boolean }[] } {
+	// `activity` is the in-window slice ([windowStart .. today], both bounds applied upstream), so the intensity
+	// `max` is taken from the VISIBLE cells only - a hidden future/old day can never distort the color scale.
+	const byDate = new Map<string, number>();
+	let max = 1;
+	for (const a of activity) {
+		if (a.date) { const c = a.messageCount ?? 0; byDate.set(a.date.slice(0, 10), c); max = Math.max(max, c); }
+	}
+
+	const windowStart = new Date(today);
+	windowStart.setDate(today.getDate() - (horizonDays - 1));
+	const windowStartKeyValue = dateKey(windowStart);
+	// Align the grid start to the previous Sunday so weekday rows line up; days before the window read as gaps.
+	const gridStart = new Date(windowStart);
+	gridStart.setDate(windowStart.getDate() - windowStart.getDay());
+	const startMid = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate()).getTime();
+	const todayMid = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+	const weeks = Math.max(1, Math.ceil((Math.round((todayMid - startMid) / 86400000) + 1) / 7));
+
+	// Column-major (each week top-to-bottom) to match grid-auto-flow: column in the DOM.
+	const cells: { key: string; count: number; level: number; visible: boolean }[] = [];
+	for (let col = 0; col < weeks; col++) {
+		for (let row = 0; row < 7; row++) {
+			const day = new Date(gridStart);
+			day.setDate(gridStart.getDate() + col * 7 + row);
+			const key = dateKey(day);
+			// Hide the future and anything older than the retention window (we never render past the horizon).
+			const visible = !(day > today || key < windowStartKeyValue);
+			const count = byDate.get(key) ?? 0;
+			const level = count === 0 ? 0 : Math.min(4, Math.ceil((count / max) * 4));
+			cells.push({ key, count, level, visible });
+		}
+	}
+	return { weeks, cells };
+}
+
+/**
  * Renders the usage dashboard into a caller-owned container. Construct it, call {@link load}, dispose when the
  * host goes away. Self-contained: owns its render store, refresh token, retention horizon, and loaded data, so
  * its Refresh + retention control re-render only itself, independent of any host.
@@ -192,9 +282,7 @@ export class ClaudeUsageDashboardView extends Disposable {
 
 	/** Local YYYY-MM-DD of the first day in the retention window (today - (horizon - 1)). */
 	private windowStartKey(): string {
-		const d = new Date();
-		d.setDate(d.getDate() - (this.horizonDays - 1));
-		return dateKey(d);
+		return windowStartKey(new Date(), this.horizonDays);
 	}
 
 	/** Transcript-only load (all local reads; zero egress). Reads the retention horizon, oauth capacity, and
@@ -481,24 +569,14 @@ export class ClaudeUsageDashboardView extends Disposable {
 	/** Contribution heatmap spanning exactly the retention window: every day in [today-(N-1) .. today] is a cell
 	 *  (no-activity days are empty/no-data cells); days older than the window or in the future are not rendered. */
 	private renderHeatmap(parent: HTMLElement, activity: ReadonlyArray<IClaudeDailyActivity>): void {
-		// `activity` is the in-window slice ([windowStart .. today], both bounds applied upstream), so the intensity
-		// `max` is taken from the VISIBLE cells only - a hidden future/old day can never distort the color scale.
-		const byDate = new Map<string, number>();
-		let max = 1;
-		for (const a of activity) {
-			if (a.date) { const c = a.messageCount ?? 0; byDate.set(a.date.slice(0, 10), c); max = Math.max(max, c); }
-		}
-
 		const today = new Date();
+		// Pure window + intensity math (week count, per-cell level/visibility); the DOM build stays here.
+		const { weeks, cells } = buildHeatmapModel(activity, today, this.horizonDays);
+		// gridStart (the Sunday on/before the window start) is still needed to label the month columns below.
 		const windowStart = new Date(today);
 		windowStart.setDate(today.getDate() - (this.horizonDays - 1));
-		const windowStartKey = dateKey(windowStart);
-		// Align the grid start to the previous Sunday so weekday rows line up; days before the window read as gaps.
 		const gridStart = new Date(windowStart);
 		gridStart.setDate(windowStart.getDate() - windowStart.getDay());
-		const startMid = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate()).getTime();
-		const todayMid = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
-		const weeks = Math.max(1, Math.ceil((Math.round((todayMid - startMid) / 86400000) + 1) / 7));
 
 		// Contribution heatmap: a responsive CSS grid of cells that stretch to fill the section width (kept square via
 		// aspect-ratio, so the whole grid grows with the pane). Month labels track the week columns, a weekday gutter
@@ -527,19 +605,12 @@ export class ClaudeUsageDashboardView extends Disposable {
 		// column-major (each week top-to-bottom) to match grid-auto-flow: column, so the grid stays responsive on resize.
 		const grid = append(body, h('.clawdius-usage-heatmap-grid'));
 		grid.style.gridTemplateColumns = `repeat(${weeks}, minmax(16px, 1fr))`;
-		for (let col = 0; col < weeks; col++) {
-			for (let row = 0; row < 7; row++) {
-				const day = new Date(gridStart);
-				day.setDate(gridStart.getDate() + col * 7 + row);
-				const cell = append(grid, h('.clawdius-usage-heatmap-day'));
-				const key = dateKey(day);
-				// Hide the future and anything older than the retention window (we never render past the horizon).
-				if (day > today || key < windowStartKey) { cell.style.visibility = 'hidden'; continue; }
-				const count = byDate.get(key) ?? 0;
-				const level = count === 0 ? 0 : Math.min(4, Math.ceil((count / max) * 4));
-				cell.classList.add(`level-${level}`);
-				cell.title = `${key}: ${count}`;
-			}
+		for (const c of cells) {
+			const cell = append(grid, h('.clawdius-usage-heatmap-day'));
+			// Hide the future and anything older than the retention window (we never render past the horizon).
+			if (!c.visible) { cell.style.visibility = 'hidden'; continue; }
+			cell.classList.add(`level-${c.level}`);
+			cell.title = `${c.key}: ${c.count}`;
 		}
 
 		const legend = append(wrap, h('.clawdius-usage-heatmap-legend'));
@@ -678,38 +749,9 @@ export class ClaudeUsageDashboardView extends Disposable {
 	}
 
 	/** Build per-model value series over the full retention window (the in-window per-day slice), aligned to a
-	 *  shared date axis. */
+	 *  shared date axis. Delegates to {@link buildModelSeries} with the current clock + retention horizon. */
 	private windowedModelTokens(daily: ReadonlyArray<IClaudeDailyModelTokens>): { dates: string[]; max: number; models: { id: string; label: string; values: number[] }[] } {
-		const cutoff = this.windowStartKey();
-		const todayKey = dateKey(new Date());
-		const inRange = daily.filter(d => d.date && d.date.slice(0, 10) >= cutoff && d.date.slice(0, 10) <= todayKey);
-		if (inRange.length === 0) { return { dates: [], max: 1, models: [] }; }
-
-		// Walk a CONTIGUOUS calendar from the first to the last day that has data, zero-filling the gaps. This makes
-		// the x-axis true calendar time: the line drops to zero on days with no tokens instead of evenly spacing the
-		// data points by index (which compresses gaps and makes the line appear to have values on empty dates).
-		const byDate = new Map<string, { readonly [model: string]: number }>();
-		for (const d of inRange) { byDate.set(d.date!.slice(0, 10), d.tokensByModel ?? {}); }
-		const sortedKeys = [...byDate.keys()].sort();
-		const dates: string[] = [];
-		for (let cur = new Date(`${sortedKeys[0]}T00:00:00`), end = new Date(`${sortedKeys[sortedKeys.length - 1]}T00:00:00`); cur <= end; cur.setDate(cur.getDate() + 1)) {
-			dates.push(dateKey(cur));
-		}
-
-		// Rank models by total tokens over the days with data; keep the top N.
-		const totals = new Map<string, number>();
-		for (const tokens of byDate.values()) {
-			for (const [model, t] of Object.entries(tokens)) { totals.set(model, (totals.get(model) ?? 0) + t); }
-		}
-		const topModels = [...totals.entries()].filter(([, t]) => t > 0).sort((a, b) => b[1] - a[1]).slice(0, MAX_CHART_MODELS).map(([id]) => id);
-
-		let max = 1;
-		const models = topModels.map(id => {
-			const values = dates.map(dt => byDate.get(dt)?.[id] ?? 0);
-			for (const v of values) { max = Math.max(max, v); }
-			return { id, label: modelLabel(id), values };
-		});
-		return { dates, max, models };
+		return buildModelSeries(daily, this.windowStartKey(), dateKey(new Date()), MAX_CHART_MODELS);
 	}
 }
 // CLAWDIUS-END

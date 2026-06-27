@@ -48,6 +48,33 @@
 	padding: 1px 0;
 }
 
+.clawdius-ctxbudget .ctxb-expand {
+	flex: 0 0 auto;
+	width: 14px;
+	font-size: 13px;
+	cursor: pointer;
+	color: var(--vscode-descriptionForeground);
+	align-self: center;
+}
+
+.clawdius-ctxbudget .ctxb-sub {
+	margin: 1px 0 3px 22px;
+	border-left: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.25));
+	padding-left: 8px;
+}
+
+.clawdius-ctxbudget .ctxb-subrow {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	padding: 1px 0;
+	cursor: pointer;
+}
+
+.clawdius-ctxbudget .ctxb-subrow:hover .ctxb-name {
+	text-decoration: underline;
+}
+
 .clawdius-ctxbudget .ctxb-row.clickable {
 	cursor: pointer;
 }

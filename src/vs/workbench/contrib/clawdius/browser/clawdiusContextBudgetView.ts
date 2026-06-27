@@ -33,7 +33,7 @@ import { EditorResourceAccessor, SideBySideEditor } from '../../../common/editor
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IClawdiusConfigService } from '../common/clawdiusConfig.js';
-import { BudgetTier, formatApproxTokens, IBudgetSource, IContextBudget, resolveContextBudget } from '../common/clawdiusContextBudget.js';
+import { BudgetTier, formatApproxTokens, IBudgetHeading, IBudgetSource, IContextBudget, resolveContextBudget } from '../common/clawdiusContextBudget.js';
 
 export const CONTEXT_BUDGET_VIEW_CONTAINER_ID = 'workbench.view.clawdiusContextBudget';
 export const CONTEXT_BUDGET_VIEW_ID = 'clawdius.contextBudget';
@@ -176,7 +176,12 @@ export class ClawdiusContextBudgetView extends ViewPane {
 
 	private renderRow(src: IBudgetSource, softTokens: boolean): void {
 		const clickable = !!src.resource;
-		const row = append(this.bodyEl, $(`.ctxb-row${clickable ? '.clickable' : ''}`));
+		const wrap = append(this.bodyEl, $('.ctxb-rowwrap'));
+		const row = append(wrap, $(`.ctxb-row${clickable ? '.clickable' : ''}`));
+
+		// A file with multiple headings gets an expand chevron showing its per-section token breakdown.
+		const expandable = !!(src.resource && src.headings && src.headings.length > 1);
+		const toggle = append(row, $(expandable ? '.ctxb-expand.codicon.codicon-chevron-right' : '.ctxb-expand'));
 
 		const badge = tierBadge(src.tier);
 		append(row, $(`.ctxb-scope.${badge.cls}`, undefined, badge.letter));
@@ -213,6 +218,36 @@ export class ClawdiusContextBudgetView extends ViewPane {
 			const resource = src.resource;
 			this.renderStore.add(addDisposableListener(row, EventType.CLICK, () => {
 				void this.editorService.openEditor({ resource, options: { pinned: false } });
+			}));
+		}
+
+		if (expandable && src.resource && src.headings) {
+			const resource = src.resource;
+			const headings = src.headings;
+			const sub = append(wrap, $('.ctxb-sub'));
+			sub.style.display = 'none';
+			this.renderStore.add(addDisposableListener(toggle, EventType.CLICK, e => {
+				e.stopPropagation(); // don't also open the file
+				const show = sub.style.display === 'none';
+				sub.style.display = show ? 'block' : 'none';
+				toggle.classList.toggle('codicon-chevron-right', !show);
+				toggle.classList.toggle('codicon-chevron-down', show);
+				if (show && !sub.hasChildNodes()) { this.renderHeadings(sub, resource, headings); }
+			}));
+		}
+	}
+
+	/** Render a file's per-heading breakdown, heaviest section first; each row jumps to that heading's line. */
+	private renderHeadings(container: HTMLElement, resource: URI, headings: readonly IBudgetHeading[]): void {
+		for (const h of [...headings].sort((a, b) => b.approxTokens - a.approxTokens)) {
+			const hr = append(container, $('.ctxb-subrow.clickable'));
+			const nm = append(hr, $('.ctxb-name'));
+			nm.textContent = h.label;
+			nm.title = h.label;
+			append(hr, $('.ctxb-tok.dim', undefined, formatApproxTokens(h.approxTokens)));
+			const line = h.lineNumber;
+			this.renderStore.add(addDisposableListener(hr, EventType.CLICK, () => {
+				void this.editorService.openEditor({ resource, options: { selection: { startLineNumber: line, startColumn: 1 } } });
 			}));
 		}
 	}

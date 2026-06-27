@@ -90,7 +90,9 @@ export class ClawdiusContextBudgetStatusEntry extends Disposable implements IWor
 
 	private warnThreshold(): number {
 		const v = this.configurationService.getValue(CONTEXT_BUDGET_WARN_TOKENS_SETTING);
-		return typeof v === 'number' && v > 0 ? v : DEFAULT_WARN_TOKENS;
+		// A configured 0 (or negative) disables the warning; only an unset / non-number falls back to the default.
+		if (typeof v === 'number') { return v <= 0 ? Number.POSITIVE_INFINITY : v; }
+		return DEFAULT_WARN_TOKENS;
 	}
 
 	private activeFile(): URI | undefined {
@@ -166,7 +168,7 @@ export class ClawdiusContextBudgetStatusEntry extends Disposable implements IWor
 		}
 		lines.push('');
 		lines.push(localize('clawdius.ctxb.tipExcludes', "_Memory, rules + skill menu. Excludes the system prompt, MCP schemas, and agent/command menus._"));
-		lines.push(localize('clawdius.ctxb.tipFoot', "_Estimated (chars/4). Click to open the full panel._"));
+		lines.push(localize('clawdius.ctxb.tipFoot', "_Estimated. Click to open the full panel._"));
 		return lines.join('\n');
 	}
 

@@ -116,7 +116,7 @@ function stripCode(content: string): string {
 	const out: string[] = [];
 	let fence: string | undefined;
 	for (const line of content.split(/\r?\n/)) {
-		const m = /^\s*(`{3,}|~{3,})/.exec(line);
+		const m = /^ {0,3}(`{3,}|~{3,})/.exec(line);
 		if (fence !== undefined) {
 			if (m && m[1][0] === fence[0] && m[1].length >= fence.length) { fence = undefined; }
 			out.push('');
@@ -360,15 +360,25 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 		visited.set(uri, true);
 		const imports = await this.expandImports(content, uri, home, 0, visited);
 		const base = memoryBudget(isRule, content);
+		// Per-heading token spans (this heading's line up to the next), so the inspector can break a big file down
+		// by section and jump to the heaviest. The body before the first heading is not attributed (intentional).
+		const hs = headings(content);
+		const lines = content.split(/\r?\n/);
+		const children = hs.map((hd, i) => {
+			const endLine = i + 1 < hs.length ? hs[i + 1].line : lines.length + 1;
+			const spanText = lines.slice(hd.line - 1, endLine - 1).join('\n');
+			return {
+				id: this.id(r.key, ConfigSection.Memories, `${label}:h${i}`),
+				scope: r.scope, section: ConfigSection.Memories, label: hd.text.trim(), resource: uri, reveal: { lineNumber: hd.line },
+				budget: { kind: 'memory' as const, approxTokens: estimateTokens(spanText), chars: spanText.length, inclusion: ContextInclusion.Always },
+			};
+		});
 		return {
 			id: this.id(r.key, ConfigSection.Memories, label),
 			scope: r.scope, section: ConfigSection.Memories, label, resource: uri,
 			backing: ConfigBacking.File, canDelete: r.scope !== ConfigScope.Managed, canMove: false,
 			budget: imports.length ? { ...base, imports } : base,
-			children: headings(content).map((hd, i) => ({
-				id: this.id(r.key, ConfigSection.Memories, `${label}:h${i}`),
-				scope: r.scope, section: ConfigSection.Memories, label: hd.text.trim(), resource: uri, reveal: { lineNumber: hd.line },
-			})),
+			children,
 		};
 	}
 

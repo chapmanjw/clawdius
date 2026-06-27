@@ -199,6 +199,33 @@ suite('clawdiusContextBudget', () => {
 		assert.deepStrictEqual(resolveContextBudget(snap, URI.file('/work/lib/x.ts'), folders).notApplied.map(s => s.label), ['rules/api.md']);
 	});
 
+	test('an anchored basename path (/*.ts) matches only root-level files, not nested', () => {
+		const snap: IClawdiusConfigSnapshot = {
+			scopes: [memoriesScope(ConfigScope.Project, 'file:///work', URI.file('/work/.claude'), [
+				item(ConfigScope.Project, ConfigSection.Memories, 'rules/root.md', { kind: 'rule', approxTokens: 10, chars: 40, inclusion: ContextInclusion.Glob, paths: ['/*.ts'] }),
+			], 'work')],
+		};
+		assert.ok(resolveContextBudget(snap, URI.file('/work/index.ts'), folders).alwaysOn.some(s => s.label === 'rules/root.md'));
+		assert.deepStrictEqual(resolveContextBudget(snap, URI.file('/work/src/deep.ts'), folders).notApplied.map(s => s.label), ['rules/root.md']);
+	});
+
+	test('a memory file exposes its per-heading token breakdown (heaviest resolvable)', () => {
+		const here = URI.file('/work/CLAUDE.md');
+		const child = (label: string, line: number, tokens: number): IConfigItem => ({
+			id: `h:${label}`, scope: ConfigScope.Project, section: ConfigSection.Memories, label, resource: here,
+			reveal: { lineNumber: line }, budget: { kind: 'memory', approxTokens: tokens, chars: tokens * 4, inclusion: ContextInclusion.Always },
+		});
+		const mem: IConfigItem = {
+			id: 'p:memories:CLAUDE.md', scope: ConfigScope.Project, section: ConfigSection.Memories, label: 'CLAUDE.md', resource: here,
+			budget: { kind: 'memory', approxTokens: 100, chars: 400, inclusion: ContextInclusion.Always },
+			children: [child('Intro', 1, 30), child('Rules', 10, 70)],
+		};
+		const snap: IClawdiusConfigSnapshot = { scopes: [memoriesScope(ConfigScope.Project, 'file:///work', URI.file('/work/.claude'), [mem], 'work')] };
+		const src = resolveContextBudget(snap, URI.file('/work/x.ts'), folders).alwaysOn.find(s => s.label === 'CLAUDE.md');
+		assert.strictEqual(src?.headings?.length, 2);
+		assert.strictEqual(src?.headings?.find(h => h.label === 'Rules')?.approxTokens, 70);
+	});
+
 	test('parseImportTargets skips code fences/spans and reads ~/, relative, bare forms', () => {
 		const md = ['@~/.claude/rules/a.md', '`@not-an-import`', '```', '@inside-fence.md', '```', '~~~', '@inside-tilde.md', '~~~', 'see @./rel.md here'].join('\n');
 		assert.deepStrictEqual(parseImportTargets(md), ['~/.claude/rules/a.md', './rel.md']);

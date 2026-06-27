@@ -54,6 +54,15 @@ export interface IBudgetSource {
 	readonly matched?: boolean;
 	/** For a skill/agent: its always-on menu cost (name + description); aggregated into the synthetic menu row. */
 	readonly menuTokens?: number;
+	/** Per-heading token breakdown of a memory/rule file (heaviest-first in the UI; click to open at the line). */
+	readonly headings?: readonly IBudgetHeading[];
+}
+
+/** A markdown heading's section within a memory/rule file, with its estimated token span. */
+export interface IBudgetHeading {
+	readonly label: string;
+	readonly approxTokens: number;
+	readonly lineNumber: number;
 }
 
 /** The resolved context budget for one active file. */
@@ -99,16 +108,20 @@ function containingFolderOf(activeFile: URI | undefined, folders: readonly URI[]
  *  type at any depth; a rooted pattern (`src/**`) matches the relative path. Approximates Claude Code's
  *  gitignore-style matching for the common authored patterns. */
 function globApplies(glob: string, relPath: string): boolean {
-	// A leading `/` anchors a gitignore pattern to the project root; our relPath is already root-relative.
-	if (glob.startsWith('/')) { glob = glob.slice(1); }
+	// A leading `/` anchors a gitignore pattern to the project root; our relPath is already root-relative. An
+	// anchored pattern (e.g. `/*.ts`) must NOT use the bare-pattern "any depth" expansion below.
+	const anchored = glob.startsWith('/');
+	if (anchored) { glob = glob.slice(1); }
 	// Directory-scoped forms (`src/**`, `src/`) match any file under that directory - VS Code's `match` does not
 	// treat `src/**` the gitignore way, so handle the prefix explicitly.
 	const dir = glob.endsWith('/**') ? glob.slice(0, -3) : (glob.endsWith('/') ? glob.slice(0, -1) : undefined);
 	if (dir !== undefined && dir.length > 0 && !dir.includes('*') && (relPath === dir || relPath.startsWith(dir + '/'))) {
 		return true;
 	}
-	const base = relPath.split('/').pop() ?? relPath;
-	if (!glob.includes('/')) {
+	// A bare pattern (no slash, not anchored) applies at any depth; an anchored or rooted pattern is matched
+	// against the root-relative path directly.
+	if (!anchored && !glob.includes('/')) {
+		const base = relPath.split('/').pop() ?? relPath;
 		return globMatch(glob, base) || globMatch('**/' + glob, relPath);
 	}
 	return globMatch(glob, relPath);
@@ -121,6 +134,9 @@ function anyGlobApplies(paths: readonly string[] | undefined, relPath: string | 
 
 function toSource(item: IConfigItem, scope: ConfigScope, matched?: boolean): IBudgetSource {
 	const b = item.budget!;
+	const headings: IBudgetHeading[] = (item.children ?? [])
+		.filter(c => c.budget !== undefined && c.reveal !== undefined)
+		.map(c => ({ label: c.label, approxTokens: c.budget!.approxTokens, lineNumber: c.reveal!.lineNumber }));
 	return {
 		label: item.label,
 		scope,
@@ -132,6 +148,7 @@ function toSource(item: IConfigItem, scope: ConfigScope, matched?: boolean): IBu
 		paths: b.paths,
 		matched,
 		menuTokens: b.menuTokens,
+		headings: headings.length ? headings : undefined,
 	};
 }
 

@@ -66,6 +66,10 @@ import { RestoreWalkthroughsConfigurationValue, restoreWalkthroughsConfiguration
 import { startEntries } from '../common/gettingStartedContent.js';
 import { GroupsOrder, IEditorGroup, IEditorGroupsService, preferredSideBySideGroupDirection } from '../../../services/editor/common/editorGroupsService.js';
 import { IExtensionService } from '../../../services/extensions/common/extensions.js';
+// CLAWDIUS-BEGIN read Claude Code plugin presence (installed-on-disk) to gate the injected New-Session start entry
+import { IExtensionsWorkbenchService } from '../../extensions/common/extensions.js';
+import { isClaudeCodePluginInstalled } from '../../clawdius/browser/clawdiusPluginSetup.js';
+// CLAWDIUS-END
 import { IHostService } from '../../../services/host/browser/host.js';
 import { IWorkbenchThemeService } from '../../../services/themes/common/workbenchThemeService.js';
 import { GettingStartedIndexList } from './gettingStartedList.js';
@@ -201,6 +205,9 @@ export class GettingStartedPage extends EditorPane {
 		@IAccessibilityService private readonly accessibilityService: IAccessibilityService,
 		@IMarkdownRendererService private readonly markdownRendererService: IMarkdownRendererService,
 		@IChatEntitlementService private readonly chatEntitlementService: IChatEntitlementService,
+		// CLAWDIUS-BEGIN authoritative installed-on-disk list, to gate the injected New-Session start entry
+		@IExtensionsWorkbenchService private readonly extensionsWorkbenchService: IExtensionsWorkbenchService,
+		// CLAWDIUS-END
 	) {
 
 		super(GettingStartedPage.ID, group, telemetryService, themeService, storageService);
@@ -1191,7 +1198,10 @@ export class GettingStartedPage extends EditorPane {
 
 		// CLAWDIUS-BEGIN prepend "New Claude Code Session..." in Clawdius mode (opens the official plugin in an editor tab)
 		const entries = [...parsedStartEntries];
-		if (!this.productService.defaultChatAgent?.entitlementUrl) {
+		// Also require the plugin (installed-on-disk): this entry runs the plugin's `claude-vscode.editor.open`
+		// command, so without the plugin it would be a dead link. The permanent Control Center section + its deep
+		// links stay regardless.
+		if (!this.productService.defaultChatAgent?.entitlementUrl && isClaudeCodePluginInstalled(this.extensionsWorkbenchService)) {
 			const newSessionCommand = 'command:claude-vscode.editor.open';
 			this.clawdiusStartCommands.set('clawdius.newSession', newSessionCommand);
 			entries.unshift({

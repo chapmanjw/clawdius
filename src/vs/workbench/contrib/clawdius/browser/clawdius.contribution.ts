@@ -19,7 +19,8 @@ import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/
 import { IClawdiusConfigService } from '../common/clawdiusConfig.js';
 import { ClawdiusConfigStore } from './clawdiusConfigStore.js';
 import { registerClawdiusConfigActions } from './clawdiusConfigActions.js';
-import { ClawdiusPluginSetupContribution } from './clawdiusPluginSetup.js';
+import { ClawdiusPluginSetupContribution, InstallClaudeCodePluginAction } from './clawdiusPluginSetup.js';
+import { ClawdiusMissingPluginStatusEntry } from './clawdiusMissingPluginStatusEntry.js';
 import { EditorPaneDescriptor, IEditorPaneRegistry } from '../../../browser/editor.js';
 import { EditorExtensions, IEditorFactoryRegistry, IEditorSerializer } from '../../../common/editor.js';
 import { EditorInput } from '../../../common/editor/editorInput.js';
@@ -150,6 +151,12 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	// `Eventually` (idle, a few seconds after restore) so the ~225 MB first-run extension download does not
 	// compete with startup.
 	registerWorkbenchContribution2(ClawdiusPluginSetupContribution.ID, ClawdiusPluginSetupContribution, WorkbenchPhase.Eventually);
+
+	// Presence safety net: a warning status-bar entry + a command that (re)installs the critical Claude Code
+	// plugin when it is missing (a failed first-run install, or a later removal), so a degraded Clawdius is
+	// visible and one click from recovery. The Control Center Plugins tab + welcome page read the same presence.
+	registerWorkbenchContribution2(ClawdiusMissingPluginStatusEntry.ID, ClawdiusMissingPluginStatusEntry, WorkbenchPhase.BlockRestore);
+	registerAction2(InstallClaudeCodePluginAction);
 
 	// Claude Code usage: the status-bar indicator (logo + inline session bar) + hover popup, and the full
 	// usage dashboard editor it opens (also reachable from the bottom-left Account button). All data is the

@@ -77,6 +77,15 @@ block titles, brand orange (#d97757) accents, lavender (#a78bfa) highlights, and
 }
 .clawdius-control-block-title::before { content: "> "; opacity: 0.6; }
 
+/* CLAWDIUS-BEGIN missing-plugin absence banner (Plugins tab safety net) */
+.clawdius-control-missing-plugin {
+	gap: 10px; padding: 14px 16px; border-radius: 6px;
+	border: 1px solid var(--vscode-inputValidation-warningBorder, #d97757);
+	background: var(--vscode-inputValidation-warningBackground, rgba(217, 119, 87, 0.12));
+}
+.clawdius-control-missing-plugin-body { font-size: 13px; opacity: 0.9; }
+/* CLAWDIUS-END */
+
 /* scope row */
 .clawdius-control-bar { display: flex; align-items: center; gap: 18px; }
 .clawdius-control-spacer { flex: 1 1 auto; }

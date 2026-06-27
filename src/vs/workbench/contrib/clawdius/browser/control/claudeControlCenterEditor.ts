@@ -53,9 +53,11 @@ import { ICommandService } from '../../../../../platform/commands/common/command
 import { ITerminalService, ITerminalGroupService } from '../../../terminal/browser/terminal.js';
 import { ConfigScope, ConfigSection, IClawdiusConfigService, IConfigItem } from '../../common/clawdiusConfig.js';
 import { CONFIG_DELETE_COMMAND_ID, configCreateCommandId } from '../clawdiusConfigActions.js';
+import { IExtensionsWorkbenchService } from '../../../extensions/common/extensions.js';
 import {
 	ALLOW_BYPASS_KEY, INITIAL_PERMISSION_MODE_KEY, PermissionMode, parsePermissionMode, permissionModeWrites, permissionModes,
 } from '../clawdiusPermissionModeStatusEntry.js';
+import { INSTALL_CLAUDE_CODE_PLUGIN_COMMAND_ID, isClaudeCodePluginInstalled } from '../clawdiusPluginSetup.js';
 import { ClaudeControlCenterInput, ControlTab } from './claudeControlCenterInput.js';
 import { ClaudeUsageDashboardView } from '../usage/claudeUsageDashboardView.js';
 import { BUILTIN_TOOLS, IJsonWrite, IPermissionsState, PERMISSION_BUCKETS, PermissionBucket, builtinRule, mcpToolRule, parsePermissions, parseRule } from './claudePermissionsModel.js';
@@ -202,6 +204,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@IEditorService private readonly editorService: IEditorService,
 		@IClawdiusConfigService private readonly configService: IClawdiusConfigService,
+		@IExtensionsWorkbenchService private readonly extensionsWorkbenchService: IExtensionsWorkbenchService,
 		@IAgentHostService private readonly agentHostService: IAgentHostService,
 		@ICommandService private readonly commandService: ICommandService,
 		@IDialogService private readonly dialogService: IDialogService,
@@ -243,6 +246,11 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			// tool list vanish a moment after it appears. The cached tools for a server are dropped only when that
 			// server's def actually changes (see ensureMcpDefs, which re-reads defs and prunes the matching tools).
 			if (this.adding?.mode === 'mcp' || this.tab === 'skills' || this.tab === 'plugins' || this.tab === 'mcp' || this.tab === 'hooks') { this.render(); }
+		}));
+		// The Plugins tab leads with a "plugin missing" banner; re-render it when the critical plugin is installed
+		// or removed so the banner appears / disappears live. Presence is read from the installed-on-disk list.
+		this._register(this.extensionsWorkbenchService.onChange(() => {
+			if (this.tab === 'plugins') { this.render(); }
 		}));
 	}
 
@@ -2202,6 +2210,17 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	/** "Installed plugins" section: the enable/disable list, with an "Add plugin" header button that reveals an
 	 *  inline panel offering add-by-id and browse-the-marketplaces. */
 	private renderInstalledSection(parent: HTMLElement): void {
+		// CLAWDIUS-BEGIN absence safety net: lead with a prominent banner when the critical Claude Code plugin is
+		// missing (Clawdius needs it for the chat pane + sessions). Disappears after install (the extension-change
+		// listener re-renders this tab).
+		if (!isClaudeCodePluginInstalled(this.extensionsWorkbenchService)) {
+			const banner = append(parent, h('.clawdius-control-block.clawdius-control-missing-plugin'));
+			append(banner, h('.clawdius-control-block-title')).textContent = localize('clawdius.control.plugins.missingTitle', "Claude Code plugin not installed");
+			append(banner, h('.clawdius-control-missing-plugin-body')).textContent = localize('clawdius.control.plugins.missingBody', "The Claude Code plugin is not installed. Clawdius needs it for the chat pane and sessions.");
+			const acts = append(banner, h('.clawdius-control-bar'));
+			this.button(acts, localize('clawdius.control.plugins.installNow', "Install"), () => void this.commandService.executeCommand(INSTALL_CLAUDE_CODE_PLUGIN_COMMAND_ID), 'primary');
+		}
+		// CLAWDIUS-END
 		const block = append(parent, h('.clawdius-control-block'));
 		const hd = append(block, h('.clawdius-control-bar'));
 		append(hd, h('.clawdius-control-block-title')).textContent = localize('clawdius.control.plugins.listTitle', "Installed plugins");

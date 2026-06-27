@@ -66,18 +66,26 @@ jobs:
           echo "Clawdius fork scaffolding intact; pinned upstream $(cat UPSTREAM_VERSION)"
       - name: Branding guard (Clawdius branding, Open VSX, no telemetry, Clawdius theme)
         run: node script/clawdius/branding-guard.ts
-      - name: Brand ratchet (Copilot icon usage may only shrink) + falsifiability
+      - name: Brand ratchet (Copilot icon/string/asset may only shrink) + falsifiability
         shell: bash
         run: |
           set -e
-          probe=src/__brand_ratchet_selftest__.ts
-          printf 'export const x = Codicon.copilot;\n' > "$probe"
+          # Probe all three tracked surfaces: a .ts icon, a non-.ts text string under src/, an extensions/ string,
+          # and a Copilot-named asset file - each must trip the ratchet (proves it is not .ts-or-src-only).
+          ts=src/__brand_ratchet_selftest__.ts
+          md=src/__brand_ratchet_selftest__.md
+          ext=extensions/__brand_ratchet_selftest__.json
+          svg=src/__brand_ratchet-copilot-selftest__.svg
+          printf 'export const x = Codicon.copilot;\n' > "$ts"
+          printf 'See GitHub Copilot docs.\n' > "$md"
+          printf '{ "x": "a Copilot label" }\n' > "$ext"
+          printf '<svg></svg>\n' > "$svg"
           if node script/clawdius/brand-ratchet.ts; then
-            echo "FAIL: brand ratchet did not flag a planted Codicon.copilot"; rm -f "$probe"; exit 1
+            echo "FAIL: brand ratchet did not flag the planted Copilot surfaces"; rm -f "$ts" "$md" "$ext" "$svg"; exit 1
           fi
-          rm -f "$probe"
+          rm -f "$ts" "$md" "$ext" "$svg"
           node script/clawdius/brand-ratchet.ts
-          echo "brand ratchet is falsifiable and clean against the committed baseline"
+          echo "brand ratchet is falsifiable (icon + non-.ts text + extensions + asset name) and clean against baseline"
 
   # Type-checks the sources and runs the Clawdius unit tests in the browser mocha harness: the
   # no-default-account egress regression plus the workflow-store/transcript and Claude-CLI-plugin-discovery

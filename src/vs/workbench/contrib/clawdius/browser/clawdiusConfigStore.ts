@@ -25,7 +25,7 @@ import {
 	IClawdiusConfigSnapshot, IConfigBudgetImport, IConfigBudgetMeta, IConfigItem, IConfigScopeGroup, IConfigSectionGroup,
 	IMeasuredPrefix,
 } from '../common/clawdiusConfig.js';
-import { estimateTokens } from '../common/clawdiusContextBudget.js';
+import { estimateTokens, normalizeConfirmedPath } from '../common/clawdiusContextBudget.js';
 
 interface IScopeRoots {
 	readonly scope: ConfigScope;
@@ -599,7 +599,7 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 				if (!t || t[0] !== '{') { continue; }
 				try {
 					const obj = JSON.parse(t);
-					if (typeof obj?.file_path === 'string') { out.add(obj.file_path.toLowerCase()); }
+					if (typeof obj?.file_path === 'string') { out.add(normalizeConfirmedPath(obj.file_path)); }
 				} catch { /* skip a non-JSON line */ }
 			}
 		} catch { /* best-effort */ }

@@ -33,7 +33,7 @@ import { EditorResourceAccessor, SideBySideEditor } from '../../../common/editor
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IClawdiusConfigService, IMeasuredPrefix } from '../common/clawdiusConfig.js';
-import { BudgetTier, formatApproxTokens, IBudgetHeading, IBudgetSource, IContextBudget, resolveContextBudget } from '../common/clawdiusContextBudget.js';
+import { BudgetTier, formatApproxTokens, IBudgetHeading, IBudgetSource, IContextBudget, normalizeConfirmedPath, resolveContextBudget } from '../common/clawdiusContextBudget.js';
 
 export const CONTEXT_BUDGET_VIEW_CONTAINER_ID = 'workbench.view.clawdiusContextBudget';
 export const CONTEXT_BUDGET_VIEW_ID = 'clawdius.contextBudget';
@@ -63,6 +63,8 @@ export class ClawdiusContextBudgetView extends ViewPane {
 	/** Confirmed-loaded fs paths (lower-cased) from the opt-in hook log; undefined until fetched once. */
 	private confirmedLoads: ReadonlySet<string> | undefined;
 	private confirmedPending = false;
+	/** Guards the async measured/confirmed fetches so they don't touch state or schedule after disposal. */
+	private disposed = false;
 
 	constructor(
 		options: IViewPaneOptions,
@@ -80,6 +82,11 @@ export class ClawdiusContextBudgetView extends ViewPane {
 		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
+	}
+
+	override dispose(): void {
+		this.disposed = true;
+		super.dispose();
 	}
 
 	protected override renderBody(container: HTMLElement): void {
@@ -136,8 +143,9 @@ export class ClawdiusContextBudgetView extends ViewPane {
 		if (this.confirmedLoads === undefined && !this.confirmedPending) {
 			this.confirmedPending = true;
 			this.configService.readConfirmedLoads().then(set => {
-				this.confirmedLoads = set;
 				this.confirmedPending = false;
+				if (this.disposed) { return; }
+				this.confirmedLoads = set;
 				if (set.size) { this.renderScheduler.schedule(); }
 			}, () => { this.confirmedPending = false; });
 		}
@@ -174,8 +182,9 @@ export class ClawdiusContextBudgetView extends ViewPane {
 			if (!this.measuredPending.has(key)) {
 				this.measuredPending.add(key);
 				this.configService.readMeasuredPrefix(folder).then(res => {
-					this.measuredCache.set(key, res ?? null);
 					this.measuredPending.delete(key);
+					if (this.disposed) { return; }
+					this.measuredCache.set(key, res ?? null);
 					this.renderScheduler.schedule();
 				}, () => this.measuredPending.delete(key));
 			}
@@ -234,7 +243,7 @@ export class ClawdiusContextBudgetView extends ViewPane {
 		name.textContent = src.label;
 		name.title = src.label;
 
-		if (src.resource && this.confirmedLoads?.has(src.resource.fsPath.toLowerCase())) {
+		if (src.resource && this.confirmedLoads?.has(normalizeConfirmedPath(src.resource.fsPath))) {
 			const c = append(row, $('.ctxb-confirmed.codicon.codicon-pass'));
 			c.title = localize('clawdius.ctxb.confirmedTip', "Confirmed loaded in a recent Claude session");
 		}

@@ -6,9 +6,13 @@
 // CLAWDIUS-BEGIN Context Budget - confirmed-loaded (opt-in)
 // The ONLY ground truth for "which instruction files Claude actually loaded" is Claude Code's InstructionsLoaded
 // hook. Capturing it means writing a hook into ~/.claude/settings.json that logs each loaded file's path - a
-// config mutation, so it is strictly OPT-IN behind an explicit consent dialog, and fully reversible. The hook
-// command appends the hook payload (one JSON object per loaded file, on stdin) to a local log; nothing leaves
-// the machine. The Context Budget panel reads that log and badges sources it confirms actually loaded.
+// config mutation, so it is strictly OPT-IN behind an explicit consent dialog, and fully reversible.
+//
+// The hook command only INVOKES a small script that Clawdius writes (a .ps1 on Windows, a .sh on POSIX); the
+// stdin capture and the (single-quoted) log path live INSIDE that script, not on the shell command line - so the
+// outer shell (Git Bash on Windows by default) cannot mangle `$input` or the path, and there is no command-line
+// escaping hazard. The script appends the hook payload (one JSON object per loaded file) + a newline to a local
+// JSONL log. Nothing leaves the machine. The Context Budget panel reads that log and badges sources it confirms.
 
 import { VSBuffer } from '../../../../base/common/buffer.js';
 import { isWindows } from '../../../../base/common/platform.js';
@@ -25,32 +29,67 @@ import { IPathService } from '../../../services/path/common/pathService.js';
 export const ENABLE_CONFIRMED_LOADS_COMMAND_ID = 'clawdius.enableConfirmedLoads';
 export const DISABLE_CONFIRMED_LOADS_COMMAND_ID = 'clawdius.disableConfirmedLoads';
 
-/** Marker substring in the hook command, so the disable action can find + remove only our entry. */
 const LOG_FILE_NAME = '.clawdius-instructions.jsonl';
 
 export function instructionsLogUri(home: URI): URI {
 	return URI.joinPath(home, '.claude', LOG_FILE_NAME);
 }
 
-/** A platform-appropriate shell command that appends the hook's stdin JSON (one object per loaded file) + a
- *  newline to the log, producing JSONL. */
-function hookCommand(home: URI): string {
-	const log = instructionsLogUri(home).fsPath;
-	return isWindows
-		? `powershell -NoProfile -Command "$input | Add-Content -LiteralPath '${log}'"`
-		: `sh -c 'cat >> "${log}"; echo "" >> "${log}"'`;
+function scriptUri(home: URI): URI {
+	return URI.joinPath(home, '.claude', '.clawdius', isWindows ? 'log-instructions.ps1' : 'log-instructions.sh');
 }
 
-/** Read settings.json; returns its raw text, or undefined when missing/empty. Throws on invalid JSON. */
+const SQ = String.fromCharCode(39); // single quote, built from its code point to keep the lint happy
+
+/** PowerShell single-quoted literal (escape an embedded `'` as `''`). */
+function psLiteral(s: string): string { return SQ + s.split(SQ).join(SQ + SQ) + SQ; }
+/** POSIX single-quoted literal (escape an embedded `'` as `'\''`). */
+function shLiteral(s: string): string { return SQ + s.split(SQ).join(SQ + '\\' + SQ + SQ) + SQ; }
+
+/** The script body that appends stdin + a newline to the log, in the platform's native interpreter. */
+function scriptContent(home: URI): string {
+	const log = instructionsLogUri(home).fsPath;
+	// Add-Content appends a trailing newline and (with no -Encoding) avoids the per-append UTF-8 BOM that
+	// Windows PowerShell 5.1 would otherwise inject mid-file and corrupt the JSONL.
+	return isWindows
+		? `$input | Add-Content -LiteralPath ${psLiteral(log)}\r\n`
+		: `cat >> ${shLiteral(log)}\nprintf '\\n' >> ${shLiteral(log)}\n`;
+}
+
+/** The hook command: just invoke the script. Only the script path is on the command line, double-quoted. */
+function hookCommand(home: URI): string {
+	const script = scriptUri(home).fsPath;
+	return isWindows
+		? `powershell -NoProfile -ExecutionPolicy Bypass -File "${script}"`
+		: `sh "${script}"`;
+}
+
+interface IHookEntry {
+	readonly hooks?: ReadonlyArray<{ readonly command?: string }>;
+}
+
+/** Read settings.json; returns raw text, or undefined when missing/empty. Throws on invalid JSON. */
 async function readSettings(fileService: IFileService, uri: URI): Promise<string | undefined> {
 	let raw: string | undefined;
 	try { raw = (await fileService.readFile(uri)).value.toString(); } catch { return undefined; }
 	if (raw.trim() === '') { return undefined; }
-	JSON.parse(raw); // throws if invalid - callers must not clobber a hand-edited broken file
+	JSON.parse(raw); // throws on invalid - callers must not clobber a hand-edited broken file
 	return raw;
 }
 
-/** Installs the InstructionsLoaded logging hook after an explicit consent dialog. */
+function existingInstructionsHooks(raw: string | undefined): IHookEntry[] {
+	if (raw === undefined) { return []; }
+	const arr = (JSON.parse(raw) as { hooks?: { InstructionsLoaded?: unknown } })?.hooks?.InstructionsLoaded;
+	return Array.isArray(arr) ? arr as IHookEntry[] : [];
+}
+
+/** True if a hook entry is the Clawdius logging hook (any of its commands invokes our log script). */
+function isClawdiusEntry(entry: IHookEntry, home: URI): boolean {
+	const cmd = hookCommand(home);
+	return (entry.hooks ?? []).some(h => h.command === cmd || (h.command?.includes(LOG_FILE_NAME) ?? false) || (h.command?.includes('log-instructions') ?? false));
+}
+
+/** Installs the InstructionsLoaded logging hook after an explicit consent dialog (preserving existing hooks). */
 export class EnableConfirmedLoadsAction extends Action2 {
 
 	static readonly ID = ENABLE_CONFIRMED_LOADS_COMMAND_ID;
@@ -76,7 +115,7 @@ export class EnableConfirmedLoadsAction extends Action2 {
 
 		const { confirmed } = await dialogService.confirm({
 			message: localize('clawdius.confirm.title', "Enable confirmed context-load tracking?"),
-			detail: localize('clawdius.confirm.detail', "This adds an InstructionsLoaded hook to ~/.claude/settings.json. Claude Code will then run a small command each turn that appends the paths of the instruction files it loads to ~/.claude/{0} (local only - nothing leaves your machine). Turn it off any time with \"Clawdius: Disable Confirmed Context Loads\".", LOG_FILE_NAME),
+			detail: localize('clawdius.confirm.detail', "This adds an InstructionsLoaded hook to ~/.claude/settings.json and a small logging script under ~/.claude/.clawdius/. Claude Code then runs that script each turn to append the paths of the instruction files it loads to ~/.claude/{0} (local only - nothing leaves your machine). Turn it off any time with \"Clawdius: Disable Confirmed Context Loads\".", LOG_FILE_NAME),
 			primaryButton: localize('clawdius.confirm.enable', "Enable"),
 		});
 		if (!confirmed) {
@@ -93,8 +132,14 @@ export class EnableConfirmedLoadsAction extends Action2 {
 		if (raw === undefined) {
 			await fileService.writeFile(settingsUri, VSBuffer.fromString('{}\n'));
 		}
-		const entry = { hooks: [{ type: 'command', command: hookCommand(home) }] };
-		await jsonEditing.write(settingsUri, [{ path: ['hooks', 'InstructionsLoaded'], value: [entry] }], true);
+		// Write the logging script (creates the parent dir).
+		await fileService.writeFile(scriptUri(home), VSBuffer.fromString(scriptContent(home)));
+		// Preserve any existing InstructionsLoaded hooks; replace only our entry.
+		const merged = [
+			...existingInstructionsHooks(raw).filter(e => !isClawdiusEntry(e, home)),
+			{ hooks: [{ type: 'command', command: hookCommand(home) }] },
+		];
+		await jsonEditing.write(settingsUri, [{ path: ['hooks', 'InstructionsLoaded'], value: merged }], true);
 		notificationService.info(localize('clawdius.confirm.enabled', "Confirmed context-load tracking enabled. After your next Claude turn, open the Context Budget panel to see which sources actually loaded."));
 	}
 }
@@ -129,13 +174,12 @@ export class DisableConfirmedLoadsAction extends Action2 {
 			notificationService.error(localize('clawdius.confirm.invalid', "Can't update settings: {0} is not valid JSON. Fix it and try again.", settingsUri.fsPath));
 			return;
 		}
-		const arr = raw !== undefined ? (JSON.parse(raw) as { hooks?: { InstructionsLoaded?: unknown[] } })?.hooks?.InstructionsLoaded : undefined;
-		if (!Array.isArray(arr)) {
+		const all = existingInstructionsHooks(raw);
+		const kept = all.filter(e => !isClawdiusEntry(e, home));
+		if (kept.length === all.length) {
 			notificationService.info(localize('clawdius.confirm.notEnabled', "Confirmed context-load tracking is not enabled."));
 			return;
 		}
-		// Drop only the entries that reference our log file; keep any unrelated InstructionsLoaded hooks.
-		const kept = arr.filter(e => !JSON.stringify(e).includes(LOG_FILE_NAME));
 		await jsonEditing.write(settingsUri, [{ path: ['hooks', 'InstructionsLoaded'], value: kept.length ? kept : undefined }], true);
 		notificationService.info(localize('clawdius.confirm.disabled', "Confirmed context-load tracking disabled."));
 	}

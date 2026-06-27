@@ -274,4 +274,14 @@ export function formatApproxTokens(tokens: number): string {
 	if (tokens < 1000) { return `~${tokens}`; }
 	return `~${(tokens / 1000).toFixed(1)}k`;
 }
+
+/**
+ * Normalize an absolute file path for set membership / equality across the Claude Code hook payload
+ * (`file_path`) and a VS Code `URI.fsPath`. Claude documents `file_path` as absolute but does not promise
+ * separator spelling or drive-letter casing, so collapse `\` to `/` and lowercase before comparing - else
+ * the confirmed-load badges silently never match on Windows.
+ */
+export function normalizeConfirmedPath(p: string): string {
+	return p.replace(/\\/g, '/').toLowerCase();
+}
 // CLAWDIUS-END

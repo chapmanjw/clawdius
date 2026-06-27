@@ -91,7 +91,7 @@ interface ISkillRow { readonly name: string; readonly description?: string; read
 /** A file inside an expanded skill package (the skill folder + one level into its subdirectories). */
 interface ISkillFileEntry { readonly name: string; readonly resource: URI; readonly isDirectory: boolean; readonly relPath: string; readonly isSkillMd: boolean }
 /** A valid `plugin-id@marketplace-id` (no shell metacharacters, so it is safe to put in a terminal command). */
-const PLUGIN_ID_RE = /^[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+$/;
+export const PLUGIN_ID_RE = /^[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+$/;
 type BtnVariant = 'primary' | 'ghost' | 'link' | 'danger' | 'add';
 
 /** True when every OAuth sub-field on the form is blank (so the OAuth section starts collapsed on edit). */
@@ -99,6 +99,55 @@ function isOauthFormBlank(oauth: IMcpServerForm['oauth']): boolean {
 	return oauth.clientId.trim().length === 0 && oauth.callbackPort.trim().length === 0
 		&& oauth.scopes.trim().length === 0 && oauth.authServerMetadataUrl.trim().length === 0;
 }
+
+// CLAWDIUS-BEGIN extracted security guards (pure, exported for unit tests)
+// These guards sit on the path to the user's terminal and to ~/.claude settings.json, so they are lifted out of
+// their async call sites into pure, exported functions: same checks, no IO, independently testable. The methods
+// below call these and behave identically.
+
+/** Shell metacharacters that must never reach a staged `claude ...` terminal command: command chaining (; & |),
+ *  substitution (` $ ( )), redirection (< >), quotes, and newlines. A github owner/repo, an https/git URL, or a
+ *  filesystem path (incl. Windows backslashes + spaces) uses none of these. */
+const MARKETPLACE_SOURCE_UNSAFE_RE = /[;&|`$()<>"'\r\n]/;
+
+/** True when `source` is safe to interpolate into `claude plugin marketplace add <source>`: non-empty once
+ *  trimmed, and free of shell metacharacters. */
+export function isSafeMarketplaceSource(source: string): boolean {
+	const trimmed = source.trim();
+	return trimmed.length > 0 && !MARKETPLACE_SOURCE_UNSAFE_RE.test(trimmed);
+}
+
+/** Characters that are NOT allowed in an `mcpServers[<name>]` key (anything outside letters, digits, '_', '.', '-'). */
+const MCP_SERVER_NAME_UNSAFE_RE = /[^a-zA-Z0-9_.-]/;
+
+/** True when `name` is a safe `mcpServers` key: non-empty and only letters, digits, '_', '.', '-'. */
+export function isSafeMcpServerName(name: string): boolean {
+	return name.length > 0 && !MCP_SERVER_NAME_UNSAFE_RE.test(name);
+}
+
+/** Why a proposed new skill-package file name was rejected (selects the matching toast). */
+export type NewSkillFileNameError = 'badName' | 'skillMdReserved';
+
+/** Validate a new supporting-file name for a skill package. Rejects empty, path separators, traversal (`..`), a
+ *  bare `.`, and (only at the package root, `target === ''`) a case-insensitive `skill.md` collision with the
+ *  manifest. `name` is expected already trimmed (as the form provides it). */
+export function validateNewSkillFileName(name: string, target: string): { readonly ok: boolean; readonly reason?: NewSkillFileNameError } {
+	if (!name || name.includes('/') || name.includes('\\') || name.includes('..') || name === '.') {
+		return { ok: false, reason: 'badName' };
+	}
+	if (target === '' && name.toLowerCase() === 'skill.md') {
+		return { ok: false, reason: 'skillMdReserved' };
+	}
+	return { ok: true };
+}
+
+/** True when a skill-package file may be deleted: a real file (not a directory, not the SKILL.md manifest) that
+ *  lives strictly inside the skill folder. URI-aware containment so a sibling-prefix path like `skills/foo-bar`
+ *  is never treated as inside `skills/foo`. */
+export function canDeleteSkillFile(file: URI, folder: URI, isDirectory: boolean, isSkillMd: boolean): boolean {
+	return !isDirectory && !isSkillMd && isEqualOrParent(file, folder) && !isEqual(file, folder);
+}
+// CLAWDIUS-END
 
 export class ClaudeControlCenterEditor extends EditorPane {
 
@@ -1247,13 +1296,12 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const form = this.skillFileForm;
 		if (!form) { return; }
 		const name = form.name.trim();
-		// Guardrails: a simple name only - no separators, no traversal, not the manifest.
-		if (!name || name.includes('/') || name.includes('\\') || name.includes('..') || name === '.') {
-			this.toast(localize('clawdius.control.skills.badFileName', "Enter a simple file name (no slashes or '..')."));
-			return;
-		}
-		if (form.target === '' && name.toLowerCase() === 'skill.md') {
-			this.toast(localize('clawdius.control.skills.skillMdReserved', "SKILL.md already exists - open it from the file list."));
+		// Guardrails: a simple name only - no separators, no traversal, not the manifest (see validateNewSkillFileName).
+		const nameCheck = validateNewSkillFileName(name, form.target);
+		if (!nameCheck.ok) {
+			this.toast(nameCheck.reason === 'skillMdReserved'
+				? localize('clawdius.control.skills.skillMdReserved', "SKILL.md already exists - open it from the file list.")
+				: localize('clawdius.control.skills.badFileName', "Enter a simple file name (no slashes or '..')."));
 			return;
 		}
 		const targetDir = form.target ? URI.joinPath(folder, form.target) : folder;
@@ -1279,7 +1327,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	private async deleteSkillFile(folder: URI, file: ISkillFileEntry): Promise<void> {
 		// Guardrails: files only, never the manifest, and the file must live strictly under the skill folder
 		// (URI-aware containment so a sibling-prefix path like `skills/foo-bar` is never treated as inside `foo`).
-		if (file.isDirectory || file.isSkillMd || !isEqualOrParent(file.resource, folder) || isEqual(file.resource, folder)) { return; }
+		if (!canDeleteSkillFile(file.resource, folder, file.isDirectory, file.isSkillMd)) { return; }
 		const confirmed = await this.dialogService.confirm({
 			type: 'warning',
 			message: localize('clawdius.control.skills.confirmDeleteFile', "Delete '{0}'?", file.relPath),
@@ -1853,7 +1901,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const state = this.mcpForm;
 		if (!state) { return; }
 		const name = state.name.trim();
-		if (!name || /[^a-zA-Z0-9_.-]/.test(name)) {
+		if (!isSafeMcpServerName(name)) {
 			this.toast(localize('clawdius.control.mcp.badName', "Enter a simple server name (letters, numbers, '-', '_', '.')."));
 			return;
 		}
@@ -2555,10 +2603,10 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	private async marketplaceAddInTerminal(source: string): Promise<void> {
 		const trimmed = source.trim();
 		// The source is interpolated into a terminal command staged via sendText(.., false) - one Enter from
-		// running. Reject command-injection metacharacters (chaining ; & |, substitution ` $ ( ), redirection
-		// < >, quotes) so a pasted/odd value can't stage an injection. A github owner/repo, an https/git URL,
-		// or a filesystem path (incl. Windows backslashes + spaces) uses none of these.
-		if (trimmed.length === 0 || /[;&|`$()<>"'\r\n]/.test(trimmed)) {
+		// running. Reject command-injection metacharacters (see isSafeMarketplaceSource) so a pasted/odd value
+		// can't stage an injection. A github owner/repo, an https/git URL, or a filesystem path (incl. Windows
+		// backslashes + spaces) uses none of these.
+		if (!isSafeMarketplaceSource(source)) {
 			this.toast(localize('clawdius.control.plugins.badMarketplace', "Enter a marketplace as a github owner/repo, URL, or local path (no shell metacharacters)."));
 			return;
 		}

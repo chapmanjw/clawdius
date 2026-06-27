@@ -73,11 +73,51 @@ interface IScopeTarget {
 // --- small helpers -------------------------------------------------------------------------------
 
 /** Turn a free-text name into a filesystem-safe slug (keeps `:` as a sub-path separator for commands). */
-function slug(name: string): string {
+export function slug(name: string): string {
 	return name.trim().toLowerCase().replace(/[^a-z0-9._:-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '');
 }
 
-function getAtPath(obj: unknown, path: readonly (string | number)[]): unknown {
+/** A command name's relative path under `commands/` (without extension): slug it, then map the `:` namespace
+ *  separator to a real sub-folder, so `git:commit` becomes `git/commit`. */
+export function commandRelPath(name: string): string {
+	return slug(name).replace(/:/g, '/');
+}
+
+/** Resolve the on-disk file a "create" in `section` targets, given the chosen scope `target` and (for the
+ *  name-bearing sections) the entered `name`. Pure path logic - no IO. Mirrors the per-section file layout the
+ *  Claude Code CLI reads:
+ *  - Memories: the scope's canonical CLAUDE.md (global lives under `.claude/`, project at the folder root).
+ *  - Commands/Skills/Agents: slugged file/folder under the scope's `.claude/`.
+ *  - Mcp: the project `.mcp.json` or the global `.claude.json` at the base dir (the name is a JSON key, not a path).
+ *  - Hooks/Permissions/Plugins: the scope's `.claude/settings.json` (the entry is written inside it). */
+export function resolveCreateResource(
+	section: ConfigSection,
+	target: { readonly scope: ConfigScope; readonly claudeDir: URI; readonly baseDir: URI },
+	name?: string,
+): URI {
+	switch (section) {
+		case ConfigSection.Memories:
+			return target.scope === ConfigScope.Global
+				? URI.joinPath(target.claudeDir, 'CLAUDE.md')
+				: URI.joinPath(target.baseDir, 'CLAUDE.md');
+		case ConfigSection.Commands:
+			return URI.joinPath(target.claudeDir, 'commands', `${commandRelPath(name ?? '')}.md`);
+		case ConfigSection.Skills:
+			return URI.joinPath(target.claudeDir, 'skills', slug(name ?? ''), 'SKILL.md');
+		case ConfigSection.Agents:
+			return URI.joinPath(target.claudeDir, 'agents', `${slug(name ?? '')}.md`);
+		case ConfigSection.Mcp:
+			return target.scope === ConfigScope.Project
+				? URI.joinPath(target.baseDir, '.mcp.json')
+				: URI.joinPath(target.baseDir, '.claude.json');
+		case ConfigSection.Hooks:
+		case ConfigSection.Permissions:
+		case ConfigSection.Plugins:
+			return URI.joinPath(target.claudeDir, 'settings.json');
+	}
+}
+
+export function getAtPath(obj: unknown, path: readonly (string | number)[]): unknown {
 	let cur: unknown = obj;
 	for (const key of path) {
 		if (cur === null || typeof cur !== 'object') { return undefined; }
@@ -187,9 +227,7 @@ async function createInSection(s: ICreateServices, section: ConfigSection): Prom
 		switch (section) {
 			case ConfigSection.Memories: {
 				// The canonical memory file Claude Code reads for this scope.
-				const resource = target.scope === ConfigScope.Global
-					? URI.joinPath(target.claudeDir, 'CLAUDE.md')
-					: URI.joinPath(target.baseDir, 'CLAUDE.md');
+				const resource = resolveCreateResource(section, target);
 				await ensureFile(s, resource, target.scope === ConfigScope.Global ? '# User memory\n\n' : '# Project memory\n\n');
 				await openResource(s, resource);
 				break;
@@ -197,8 +235,7 @@ async function createInSection(s: ICreateServices, section: ConfigSection): Prom
 			case ConfigSection.Commands: {
 				const name = await promptName(s, localize('clawdius.config.commandName', "Command name (use ':' for a subfolder, e.g. git:commit)"), 'review');
 				if (!name) { return; }
-				const rel = slug(name).replace(/:/g, '/');
-				const resource = URI.joinPath(target.claudeDir, 'commands', `${rel}.md`);
+				const resource = resolveCreateResource(section, target, name);
 				await ensureFile(s, resource, commandTemplate(name));
 				await openResource(s, resource);
 				break;
@@ -206,7 +243,7 @@ async function createInSection(s: ICreateServices, section: ConfigSection): Prom
 			case ConfigSection.Skills: {
 				const name = await promptName(s, localize('clawdius.config.skillName', "Skill name"), 'pdf-filler');
 				if (!name) { return; }
-				const resource = URI.joinPath(target.claudeDir, 'skills', slug(name), 'SKILL.md');
+				const resource = resolveCreateResource(section, target, name);
 				await ensureFile(s, resource, skillTemplate(name));
 				await openResource(s, resource);
 				break;
@@ -214,7 +251,7 @@ async function createInSection(s: ICreateServices, section: ConfigSection): Prom
 			case ConfigSection.Agents: {
 				const name = await promptName(s, localize('clawdius.config.agentName', "Sub-agent name"), 'code-reviewer');
 				if (!name) { return; }
-				const resource = URI.joinPath(target.claudeDir, 'agents', `${slug(name)}.md`);
+				const resource = resolveCreateResource(section, target, name);
 				await ensureFile(s, resource, agentTemplate(name));
 				await openResource(s, resource);
 				break;
@@ -222,9 +259,7 @@ async function createInSection(s: ICreateServices, section: ConfigSection): Prom
 			case ConfigSection.Mcp: {
 				const name = await promptName(s, localize('clawdius.config.mcpName', "MCP server name"), 'my-server');
 				if (!name) { return; }
-				const resource = target.scope === ConfigScope.Project
-					? URI.joinPath(target.baseDir, '.mcp.json')
-					: URI.joinPath(target.baseDir, '.claude.json');
+				const resource = resolveCreateResource(section, target, name);
 				await ensureJsonFile(s, resource);
 				await s.jsonEditing.write(resource, [{ path: ['mcpServers', name], value: { command: '', args: [] } }], true);
 				await openResource(s, resource);
@@ -233,7 +268,7 @@ async function createInSection(s: ICreateServices, section: ConfigSection): Prom
 			case ConfigSection.Hooks: {
 				const event = await s.quickInput.pick(HOOK_EVENTS.map(label => ({ label })), { placeHolder: localize('clawdius.config.hookEvent', "Hook event") });
 				if (!event) { return; }
-				const resource = URI.joinPath(target.claudeDir, 'settings.json');
+				const resource = resolveCreateResource(section, target);
 				await appendJsoncArray(s, resource, ['hooks', event.label], { matcher: '', hooks: [{ type: 'command', command: '' }] });
 				await openResource(s, resource);
 				break;
@@ -246,14 +281,14 @@ async function createInSection(s: ICreateServices, section: ConfigSection): Prom
 				if (!kind) { return; }
 				const rule = await promptName(s, localize('clawdius.config.permRule', "Permission rule, e.g. Bash(git push:*)"), 'Read(~/.zshrc)');
 				if (!rule) { return; }
-				const resource = URI.joinPath(target.claudeDir, 'settings.json');
+				const resource = resolveCreateResource(section, target);
 				await appendJsoncArray(s, resource, ['permissions', kind.label], rule);
 				await openResource(s, resource);
 				break;
 			}
 			case ConfigSection.Plugins: {
 				// Plugins are installed via the CLI; open the settings file where they are enabled/disabled.
-				const resource = URI.joinPath(target.claudeDir, 'settings.json');
+				const resource = resolveCreateResource(section, target);
 				await ensureJsonFile(s, resource);
 				await openResource(s, resource);
 				break;
@@ -267,15 +302,28 @@ async function createInSection(s: ICreateServices, section: ConfigSection): Prom
 
 // --- delete --------------------------------------------------------------------------------------
 
-async function deleteJsoncEntry(s: IDeleteServices, item: IConfigItem): Promise<void> {
-	const resource = item.resource;
-	if (!resource || !item.jsonPath) { return; }
-	// A targeted removal at the EXACT path: an object property (an MCP server `['mcpServers',name]` or a hook
-	// event `['hooks',event]`) or one array element (a permission rule `['permissions',kind,index]`). Passing
-	// `value: undefined` makes setProperty/jsonc-parser delete just that node, leaving the rest of the file -
-	// including its comments and sibling entries - untouched.
-	const path: JSONPath = [...item.jsonPath];
-	await s.jsonEditing.write(resource, [{ path, value: undefined }], true);
+/** What deleting `item` resolves to, before any IO. Pure decision over the item's delete-ability + backing:
+ *  - `file`: move a file/folder to trash (the `targetResource` when set, else the opened `resource` - e.g. a skill
+ *    opens its SKILL.md but deletes the whole skill folder).
+ *  - `jsonc`: a targeted removal at the EXACT json path (an object property like an MCP server `['mcpServers',name]`
+ *    or a hook event `['hooks',event]`, or one array element like a permission rule `['permissions',kind,index]`).
+ *  - `none`: nothing to do (not deletable, or a backing with no resolvable target). */
+export type DeletePlan =
+	| { readonly kind: 'none' }
+	| { readonly kind: 'file'; readonly target: URI }
+	| { readonly kind: 'jsonc'; readonly resource: URI; readonly path: JSONPath };
+
+export function planDeletion(item: IConfigItem): DeletePlan {
+	if (!item?.canDelete) { return { kind: 'none' }; }
+	if (item.backing === ConfigBacking.File || item.backing === ConfigBacking.Folder) {
+		const target = item.targetResource ?? item.resource;
+		return target ? { kind: 'file', target } : { kind: 'none' };
+	}
+	if (item.backing === ConfigBacking.Jsonc) {
+		if (!item.resource || !item.jsonPath) { return { kind: 'none' }; }
+		return { kind: 'jsonc', resource: item.resource, path: [...item.jsonPath] };
+	}
+	return { kind: 'none' };
 }
 
 async function deleteItem(s: IDeleteServices, item: IConfigItem): Promise<void> {
@@ -290,11 +338,13 @@ async function deleteItem(s: IDeleteServices, item: IConfigItem): Promise<void> 
 	});
 	if (!confirmed.confirmed) { return; }
 	try {
-		if (item.backing === ConfigBacking.File || item.backing === ConfigBacking.Folder) {
-			const target = item.targetResource ?? item.resource;
-			if (target) { await s.fileService.del(target, { useTrash: true, recursive: true }); }
-		} else if (item.backing === ConfigBacking.Jsonc) {
-			await deleteJsoncEntry(s, item);
+		const plan = planDeletion(item);
+		if (plan.kind === 'file') {
+			await s.fileService.del(plan.target, { useTrash: true, recursive: true });
+		} else if (plan.kind === 'jsonc') {
+			// Passing `value: undefined` makes setProperty/jsonc-parser delete just that node, leaving the rest of
+			// the file - including its comments and sibling entries - untouched.
+			await s.jsonEditing.write(plan.resource, [{ path: plan.path, value: undefined }], true);
 		}
 		await s.configService.refresh(true);
 	} catch (err) {

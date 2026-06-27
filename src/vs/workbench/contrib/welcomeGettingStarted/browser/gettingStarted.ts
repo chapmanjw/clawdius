@@ -1219,7 +1219,7 @@ export class GettingStartedPage extends EditorPane {
 		// Also require the plugin (installed-on-disk): this entry runs the plugin's `claude-vscode.editor.open`
 		// command, so without the plugin it would be a dead link. The permanent Control Center section + its deep
 		// links stay regardless.
-		if (!this.productService.defaultChatAgent?.entitlementUrl && isClaudeCodePluginInstalled(this.extensionsWorkbenchService)) {
+		if (!this.productService.defaultChatAgent?.entitlementUrl && isClaudeCodePluginInstalled(this.extensionsWorkbenchService.local)) {
 			const newSessionCommand = 'command:claude-vscode.editor.open';
 			this.clawdiusStartCommands.set('clawdius.newSession', newSessionCommand);
 			entries.unshift({

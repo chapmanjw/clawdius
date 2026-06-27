@@ -2261,7 +2261,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		// CLAWDIUS-BEGIN absence safety net: lead with a prominent banner when the critical Claude Code plugin is
 		// missing (Clawdius needs it for the chat pane + sessions). Disappears after install (the extension-change
 		// listener re-renders this tab).
-		if (!isClaudeCodePluginInstalled(this.extensionsWorkbenchService)) {
+		if (!isClaudeCodePluginInstalled(this.extensionsWorkbenchService.local)) {
 			const banner = append(parent, h('.clawdius-control-block.clawdius-control-missing-plugin'));
 			append(banner, h('.clawdius-control-block-title')).textContent = localize('clawdius.control.plugins.missingTitle', "Claude Code plugin not installed");
 			append(banner, h('.clawdius-control-missing-plugin-body')).textContent = localize('clawdius.control.plugins.missingBody', "The Claude Code plugin is not installed. Clawdius needs it for the chat pane and sessions.");

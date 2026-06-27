@@ -53,7 +53,7 @@ export class ClawdiusMissingPluginStatusEntry extends Disposable implements IWor
 
 	private update(): void {
 		// Show only when the plugin is missing; otherwise clear the entry entirely.
-		if (isClaudeCodePluginInstalled(this.extensionsWorkbenchService)) {
+		if (isClaudeCodePluginInstalled(this.extensionsWorkbenchService.local)) {
 			this.entry.clear();
 			return;
 		}

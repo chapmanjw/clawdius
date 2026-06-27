@@ -66,7 +66,10 @@ const SIGNATURE_FAILURE_IDS = new Set<string>([
 	ExtensionManagementErrorCode.DownloadSignature,
 ]);
 
-function isSignatureFailure(err: unknown): boolean {
+/** True when an install error means "signature verification failed", so the install is worth retrying without
+ *  verification. Checks both `.code` and `.name` because across an IPC boundary the error is recreated as a plain
+ *  Error that preserves `.name` but drops the custom `.code`. Pure: a function of the error shape only. */
+export function isSignatureFailure(err: unknown): boolean {
 	const candidate = err as { code?: unknown; name?: unknown } | undefined;
 	const code = typeof candidate?.code === 'string' ? candidate.code : undefined;
 	const name = typeof candidate?.name === 'string' ? candidate.name : undefined;
@@ -116,10 +119,31 @@ async function doInstallClaudeGalleryExtension(extensionsWorkbenchService: IExte
 	}
 }
 
+/** True when an extension with `id` appears in the installed-on-disk list. Membership uses `areSameExtensions`
+ *  (id match is case-insensitive), so this is a pure function of the list + id - no service needed. */
+export function isExtensionInstalled(local: readonly { identifier: { id: string } }[], id: string): boolean {
+	return local.some(e => areSameExtensions(e.identifier, { id }));
+}
+
 /** True when the official Claude Code plugin is INSTALLED on disk right now (regardless of whether the extension
- *  host managed to register it - a load failure must not read as "missing", which would prompt a useless reinstall). */
-export function isClaudeCodePluginInstalled(extensionsWorkbenchService: IExtensionsWorkbenchService): boolean {
-	return extensionsWorkbenchService.local.some(e => areSameExtensions(e.identifier, { id: CLAUDE_CODE_EXTENSION_ID }));
+ *  host managed to register it - a load failure must not read as "missing", which would prompt a useless reinstall).
+ *  Takes the authoritative installed list (`IExtensionsWorkbenchService.local`) so the predicate is testable without
+ *  the service. */
+export function isClaudeCodePluginInstalled(local: readonly { identifier: { id: string } }[]): boolean {
+	return isExtensionInstalled(local, CLAUDE_CODE_EXTENSION_ID);
+}
+
+/** Decide whether a default extension should be installed on this launch. Pure decision over the extension's
+ *  gating (`when`), whether it is already installed, and whether first-run is already done (a later re-offer only
+ *  heals the `critical` plugin, never the optional first-run-only ones). */
+export function shouldInstallExtension(ext: { critical?: boolean; when?: () => boolean }, done: boolean, isInstalled: boolean): boolean {
+	if ((ext.when && !ext.when()) || isInstalled) {
+		return false;
+	}
+	if (done && !ext.critical) {
+		return false;
+	}
+	return true;
 }
 
 /** Installs (or reinstalls) the official Claude Code plugin from the gallery, surfacing a failure to the user.
@@ -204,14 +228,14 @@ export class ClawdiusPluginSetupContribution extends Disposable implements IWork
 		// run: a never-completed first run does the full flow; a completed run whose critical plugin is now absent
 		// (a failed/offline install, or a later removal) re-offers just the install - the safety net that heals a
 		// degraded Clawdius. Failures stay non-fatal and retry next launch.
-		if (done && isClaudeCodePluginInstalled(this._extensionsWorkbenchService)) {
+		if (done && isClaudeCodePluginInstalled(this._extensionsWorkbenchService.local)) {
 			return;
 		}
 		void this._run(done);
 	}
 
 	private _syncInstalledContext(): void {
-		this._installedContext.set(isClaudeCodePluginInstalled(this._extensionsWorkbenchService));
+		this._installedContext.set(isClaudeCodePluginInstalled(this._extensionsWorkbenchService.local));
 	}
 
 	private async _run(done: boolean): Promise<void> {
@@ -244,12 +268,8 @@ export class ClawdiusPluginSetupContribution extends Disposable implements IWork
 	 *  convenience and are never reinstalled after the user may have removed them on purpose. */
 	private async _ensureInstalled(done: boolean): Promise<void> {
 		const installed = await this._extensionsWorkbenchService.queryLocal();
-		const isInstalled = (id: string) => installed.some(extension => areSameExtensions(extension.identifier, { id }));
 		for (const ext of ClawdiusPluginSetupContribution.EXTENSIONS) {
-			if ((ext.when && !ext.when()) || isInstalled(ext.id)) {
-				continue;
-			}
-			if (done && !ext.critical) {
+			if (!shouldInstallExtension(ext, done, isExtensionInstalled(installed, ext.id))) {
 				continue;
 			}
 			try {

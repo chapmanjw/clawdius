@@ -46,14 +46,23 @@ function psLiteral(s: string): string { return SQ + s.split(SQ).join(SQ + SQ) + 
 /** POSIX single-quoted literal (escape an embedded `'` as `'\''`). */
 function shLiteral(s: string): string { return SQ + s.split(SQ).join(SQ + '\\' + SQ + SQ) + SQ; }
 
-/** The script body that appends stdin + a newline to the log, in the platform's native interpreter. */
+/** The script body that appends the hook payload as one JSONL line, in the platform's native interpreter. */
 function scriptContent(home: URI): string {
 	const log = instructionsLogUri(home).fsPath;
-	// Add-Content appends a trailing newline and (with no -Encoding) avoids the per-append UTF-8 BOM that
-	// Windows PowerShell 5.1 would otherwise inject mid-file and corrupt the JSONL.
-	return isWindows
-		? `$input | Add-Content -LiteralPath ${psLiteral(log)}\r\n`
-		: `cat >> ${shLiteral(log)}\nprintf '\\n' >> ${shLiteral(log)}\n`;
+	// Claude Code can fire InstructionsLoaded for several files near-simultaneously, each invoking this script
+	// as its own process. Serialize the append so concurrent invocations neither drop nor interleave lines:
+	// a named mutex on Windows, and a single atomic write (one append, <= PIPE_BUF) on POSIX. On Windows,
+	// Add-Content with no -Encoding also avoids the per-append UTF-8 BOM that PowerShell 5.1 would inject.
+	if (isWindows) {
+		return [
+			`$m = New-Object System.Threading.Mutex($false, 'ClawdiusInstructionsLog')`,
+			`try { [void]$m.WaitOne(5000) } catch { }`,
+			`try { $input | Add-Content -LiteralPath ${psLiteral(log)} } finally { try { $m.ReleaseMutex() } catch { } }`,
+			``,
+		].join('\r\n');
+	}
+	// $(cat) strips trailing newlines; printf '%s\n' then does one atomic write of the line + a single newline.
+	return `printf '%s\\n' "$(cat)" >> ${shLiteral(log)}\n`;
 }
 
 /** The hook command: just invoke the script. Only the script path is on the command line, double-quoted. */

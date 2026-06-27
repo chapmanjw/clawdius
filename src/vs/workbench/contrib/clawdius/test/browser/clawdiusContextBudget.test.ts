@@ -9,8 +9,8 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/tes
 import {
 	ConfigScope, ConfigSection, ContextInclusion, IClawdiusConfigSnapshot, IConfigBudgetMeta, IConfigItem,
 } from '../../common/clawdiusConfig.js';
-import { BudgetTier, estimateTokens, formatApproxTokens, resolveContextBudget } from '../../common/clawdiusContextBudget.js';
-import { encodeProjectDir, extractPaths, isClaudeMdExcluded, parseImportTargets, parseMeasuredPrefix } from '../../browser/clawdiusConfigStore.js';
+import { BudgetTier, classifyMeasured, estimateTokens, formatApproxTokens, normalizeConfirmedPath, resolveContextBudget } from '../../common/clawdiusContextBudget.js';
+import { dropPartialFirstLine, encodeProjectDir, extractPaths, isClaudeMdExcluded, nestedDirChain, parseConfirmedLoads, parseImportTargets, parseMeasuredPrefix } from '../../browser/clawdiusConfigStore.js';
 
 function memoriesScope(scope: ConfigScope, key: string, root: URI, items: IConfigItem[], folderName?: string) {
 	return { scope, key, root, folderName, exists: true, sections: [{ section: ConfigSection.Memories, items }] };
@@ -255,6 +255,46 @@ suite('clawdiusContextBudget', () => {
 		// Cursor's globs:/alwaysApply: keys are NOT Claude Code keys => ignored.
 		assert.strictEqual(extractPaths('---\nglobs: *.ts\nalwaysApply: false\n---\nbody'), undefined);
 		assert.strictEqual(extractPaths('no frontmatter here'), undefined);
+	});
+
+	test('normalizeConfirmedPath collapses backslashes and case so a Windows + POSIX spelling match', () => {
+		assert.deepStrictEqual(
+			[normalizeConfirmedPath('C:\\Users\\X\\CLAUDE.md'), normalizeConfirmedPath('c:/users/x/claude.md')],
+			['c:/users/x/claude.md', 'c:/users/x/claude.md'],
+		);
+	});
+
+	test('classifyMeasured distinguishes delta / estimate-exceeds-measured / equal', () => {
+		assert.deepStrictEqual(classifyMeasured(40000, 5000), { kind: 'delta', remainder: 35000 });
+		assert.deepStrictEqual(classifyMeasured(3000, 5000), { kind: 'exceeds' }); // the honesty-bug case
+		assert.deepStrictEqual(classifyMeasured(5000, 5000), { kind: 'equal' });
+	});
+
+	test('dropPartialFirstLine removes the truncated leading record but keeps a newline-less window whole', () => {
+		assert.strictEqual(dropPartialFirstLine('rtial\n{"a":1}\n{"b":2}'), '{"a":1}\n{"b":2}');
+		assert.strictEqual(dropPartialFirstLine('one-line-no-newline'), 'one-line-no-newline');
+	});
+
+	test('nestedDirChain returns dirs between the folder (exclusive) and the active file dir (inclusive), outer-first', () => {
+		assert.deepStrictEqual(
+			nestedDirChain(URI.file('/work/a/b/c/login.ts'), URI.file('/work')).map(u => u.path),
+			['/work/a', '/work/a/b', '/work/a/b/c'],
+		);
+		assert.deepStrictEqual(nestedDirChain(URI.file('/work/x.ts'), URI.file('/work')), []); // file in root -> no nested
+	});
+
+	test('parseConfirmedLoads scopes by cwd, keeps the most recent record per path, and tolerates junk', () => {
+		const lines = [
+			'{"file_path":"/work/a.md","cwd":"/work","load_reason":"session_start"}',
+			'not json',
+			'{"file_path":"/work/a.md","cwd":"/work/sub","load_reason":"include"}',   // later record for a.md wins
+			'{"file_path":"/other/b.md","cwd":"/workother"}',                          // cwd outside scope -> dropped
+			'{"file_path":"/work/c.md","cwd":42}',                                     // non-string cwd -> dropped
+		].join('\n');
+		const map = parseConfirmedLoads(lines, ['/work']);
+		assert.deepStrictEqual([...map.keys()].sort(), ['/work/a.md']);
+		assert.strictEqual(map.get('/work/a.md')?.loadReason, 'include'); // most-recent-wins
+		assert.strictEqual(parseConfirmedLoads(lines, []).size, 3); // empty scopes admits all valid records
 	});
 
 	test('encodeProjectDir replaces every non-alphanumeric (matching Claude Code projects/<enc>)', () => {

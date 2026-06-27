@@ -175,6 +175,55 @@ export function encodeProjectDir(folder: URI): string {
 	return folder.fsPath.replace(/[^a-zA-Z0-9]/g, '-');
 }
 
+/** Drop the partial leading line from a byte-range tail read (up to and including the first '\n'), so per-line
+ *  JSON.parse never sees a truncated first record. A window with no newline (one over-long record) is kept whole. */
+export function dropPartialFirstLine(text: string): string {
+	const nl = text.indexOf('\n');
+	return nl >= 0 ? text.slice(nl + 1) : text;
+}
+
+/** The directories strictly between `folder` (exclusive - its root CLAUDE.md is in the static scan) and the
+ *  active file's own directory (inclusive), outer-first. Returns [] when the file sits directly in the folder.
+ *  Bounded (64) and terminates at the filesystem root. Pure: depends only on dirname + path identity. */
+export function nestedDirChain(activeFile: URI, folder: URI): URI[] {
+	const chain: URI[] = [];
+	let dir = dirname(activeFile);
+	for (let guard = 0; guard < 64 && extUriIgnorePathCase.isEqualOrParent(dir, folder) && !extUriIgnorePathCase.isEqual(dir, folder); guard++) {
+		chain.push(dir);
+		const up = dirname(dir);
+		if (extUriIgnorePathCase.isEqual(up, dir)) { break; } // filesystem root reached
+		dir = up;
+	}
+	return chain.reverse();
+}
+
+/** Parse the InstructionsLoaded JSONL tail into (normalized file path) -> most-recent record, keeping only
+ *  records whose session `cwd` is inside one of `scopes` (already-normalized workspace folder paths; empty =
+ *  no scoping). Tail order => the LAST record for a path wins. Pure; the store supplies the text + scopes. */
+export function parseConfirmedLoads(text: string, scopes: readonly string[]): Map<string, IConfirmedLoad> {
+	const out = new Map<string, IConfirmedLoad>();
+	const str = (v: unknown): string | undefined => typeof v === 'string' ? v : undefined;
+	const inScope = (cwd: unknown): boolean => {
+		if (scopes.length === 0) { return true; }
+		if (typeof cwd !== 'string') { return false; }
+		const c = normalizeConfirmedPath(cwd);
+		return scopes.some(s => c === s || c.startsWith(s + '/'));
+	};
+	for (const line of text.split(/\r?\n/).slice(-1000)) {
+		const t = line.trim();
+		if (!t || t[0] !== '{') { continue; }
+		try {
+			const obj = JSON.parse(t);
+			if (typeof obj?.file_path === 'string' && inScope(obj?.cwd)) {
+				out.set(normalizeConfirmedPath(obj.file_path), {
+					loadReason: str(obj?.load_reason), memoryType: str(obj?.memory_type), parentFilePath: str(obj?.parent_file_path),
+				});
+			}
+		} catch { /* skip a non-JSON line */ }
+	}
+	return out;
+}
+
 /** Claude Code loads only the first ~200 lines / 25KB of MEMORY.md, so estimate from that slice. */
 function capAutoMemory(content: string): string {
 	return content.split(/\r?\n/).slice(0, 200).join('\n').slice(0, 25 * 1024);
@@ -628,9 +677,7 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 			const size = (await this.fileService.stat(uri)).size ?? 0;
 			if (size <= maxBytes) { return (await this.fileService.readFile(uri)).value.toString(); }
 			const buf = await this.fileService.readFile(uri, { position: size - maxBytes, length: maxBytes });
-			const text = buf.value.toString();
-			const nl = text.indexOf('\n');
-			return nl >= 0 ? text.slice(nl + 1) : text;
+			return dropPartialFirstLine(buf.value.toString());
 		} catch { return undefined; }
 	}
 
@@ -639,20 +686,10 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 		if (!folder) { return []; }
 		const home = await this.pathService.userHome();
 		const key = folder.toString();
-		// Collect the directories strictly between the workspace folder and the active file's own directory
-		// (inclusive of the file's dir, exclusive of the root - the root CLAUDE.md is already in the static scan).
-		// A CLAUDE.md in any of them loads on demand (load_reason: nested_traversal) when Claude reads files there.
-		const chain: URI[] = [];
-		let dir = dirname(activeFile);
-		for (let guard = 0; guard < 64 && extUriIgnorePathCase.isEqualOrParent(dir, folder) && !extUriIgnorePathCase.isEqual(dir, folder); guard++) {
-			chain.push(dir);
-			const up = dirname(dir);
-			if (extUriIgnorePathCase.isEqual(up, dir)) { break; } // filesystem root reached
-			dir = up;
-		}
 		const items: IConfigItem[] = [];
-		// Root-most first, so the UI lists them outer -> inner.
-		for (const d of chain.reverse()) {
+		// A CLAUDE.md in any directory between the workspace folder and the active file's dir loads on demand
+		// (load_reason: nested_traversal) when Claude reads files there. nestedDirChain returns them outer-first.
+		for (const d of nestedDirChain(activeFile, folder)) {
 			const uri = URI.joinPath(d, 'CLAUDE.md');
 			if (this.excludedClaudeMd(uri, ConfigScope.Project)) { continue; }
 			const rel = extUriIgnorePathCase.relativePath(folder, uri) ?? 'CLAUDE.md';
@@ -679,40 +716,15 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 	}
 
 	async readConfirmedLoads(workspaceFolders: readonly URI[]): Promise<ReadonlyMap<string, IConfirmedLoad>> {
-		const out = new Map<string, IConfirmedLoad>();
 		try {
 			const home = await this.pathService.userHome();
 			// Tail-read so the panel stays fast even if the append-only log has grown large over time.
 			const text = await this.readTextTail(URI.joinPath(home, '.claude', '.clawdius-instructions.jsonl'), 512 * 1024);
-			if (text === undefined) { return out; }
-			// A record counts only when its session cwd is inside one of the open workspace folders, so a
-			// different project's Claude session does not light up badges here. Empty folders = no scoping.
-			const scopes = workspaceFolders.map(f => normalizeConfirmedPath(f.fsPath));
-			const inScope = (cwd: unknown): boolean => {
-				if (scopes.length === 0) { return true; }
-				if (typeof cwd !== 'string') { return false; }
-				const c = normalizeConfirmedPath(cwd);
-				return scopes.some(s => c === s || c.startsWith(s + '/'));
-			};
-			const str = (v: unknown): string | undefined => typeof v === 'string' ? v : undefined;
-			// Recent tail only, so the map reflects recent sessions rather than the whole history. Iterating tail
-			// order means the LAST (most recent) record for a path wins.
-			for (const line of text.split(/\r?\n/).slice(-1000)) {
-				const t = line.trim();
-				if (!t || t[0] !== '{') { continue; }
-				try {
-					const obj = JSON.parse(t);
-					if (typeof obj?.file_path === 'string' && inScope(obj?.cwd)) {
-						out.set(normalizeConfirmedPath(obj.file_path), {
-							loadReason: str(obj?.load_reason),
-							memoryType: str(obj?.memory_type),
-							parentFilePath: str(obj?.parent_file_path),
-						});
-					}
-				} catch { /* skip a non-JSON line */ }
-			}
-		} catch { /* best-effort */ }
-		return out;
+			if (text === undefined) { return new Map(); }
+			// Records are scoped to sessions whose cwd is inside an open workspace folder, so a different
+			// project's Claude session does not light up badges here.
+			return parseConfirmedLoads(text, workspaceFolders.map(f => normalizeConfirmedPath(f.fsPath)));
+		} catch { return new Map(); }
 	}
 
 	/** readText() memoized for the current refresh (see `_readCache`). */

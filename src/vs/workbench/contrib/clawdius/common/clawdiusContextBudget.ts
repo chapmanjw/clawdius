@@ -289,6 +289,23 @@ export function formatApproxTokens(tokens: number): string {
 	return `~${(tokens / 1000).toFixed(1)}k`;
 }
 
+/** How the measured cached prefix relates to the memory-and-rules estimate, for the overlay message. */
+export type MeasuredReconciliation =
+	| { readonly kind: 'delta'; readonly remainder: number }   // measured > estimate: the rest is system prompt + tools + MCP
+	| { readonly kind: 'exceeds' }                             // estimate > measured: the estimate over-counts / lighter session
+	| { readonly kind: 'equal' };                             // estimate == measured
+
+/**
+ * Classify the measured-vs-estimate relationship. Guards the honesty promise: when the chars/4 estimate exceeds
+ * the whole measured prefix, the overlay must NOT claim the estimate is "a slice of it" (it isn't) - so this
+ * returns a distinct `exceeds` kind the view renders differently, instead of falling through to the slice text.
+ */
+export function classifyMeasured(measuredTokens: number, estimateTokens: number): MeasuredReconciliation {
+	if (measuredTokens > estimateTokens) { return { kind: 'delta', remainder: measuredTokens - estimateTokens }; }
+	if (estimateTokens > measuredTokens) { return { kind: 'exceeds' }; }
+	return { kind: 'equal' };
+}
+
 /**
  * Normalize an absolute file path for set membership / equality across the Claude Code hook payload
  * (`file_path`) and a VS Code `URI.fsPath`. Claude documents `file_path` as absolute but does not promise

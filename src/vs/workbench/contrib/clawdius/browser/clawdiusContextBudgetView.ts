@@ -33,7 +33,7 @@ import { EditorResourceAccessor, SideBySideEditor } from '../../../common/editor
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IClawdiusConfigService, IConfigItem, IConfirmedLoad, IMeasuredPrefix } from '../common/clawdiusConfig.js';
-import { BudgetTier, containingFolderOf, formatApproxTokens, IBudgetHeading, IBudgetSource, IContextBudget, normalizeConfirmedPath, resolveContextBudget } from '../common/clawdiusContextBudget.js';
+import { BudgetTier, classifyMeasured, containingFolderOf, formatApproxTokens, IBudgetHeading, IBudgetSource, IContextBudget, normalizeConfirmedPath, resolveContextBudget } from '../common/clawdiusContextBudget.js';
 
 export const CONTEXT_BUDGET_VIEW_CONTAINER_ID = 'workbench.view.clawdiusContextBudget';
 export const CONTEXT_BUDGET_VIEW_ID = 'clawdius.contextBudget';
@@ -214,12 +214,15 @@ export class ClawdiusContextBudgetView extends ViewPane {
 		}
 		if (cached) {
 			const el = append(this.bodyEl, $('.ctxb-measured'));
-			// Reconcile the two numbers: measured (whole cached prefix) = memory & rules estimate + the rest
-			// (system prompt + tool schemas + MCP + menus), which the estimate intentionally excludes.
-			const remainder = cached.tokens - estimateTokens;
-			el.textContent = remainder > 0
-				? localize('clawdius.ctxb.measuredDelta', "Measured last session: {0} cached prefix = {1} memory & rules (estimated above) + ~{2} system prompt, tool schemas & MCP.", formatApproxTokens(cached.tokens), formatApproxTokens(estimateTokens), formatApproxTokens(remainder))
-				: localize('clawdius.ctxb.measured', "Measured last session: {0} cached prefix (system + tools + MCP + memory) — your estimate above is the memory & rules slice of it.", formatApproxTokens(cached.tokens));
+			// Reconcile the two numbers honestly. measured (whole cached prefix) normally = memory & rules estimate
+			// + the rest (system prompt + tool schemas + MCP). But the chars/4 estimate can over-count, so when it
+			// exceeds the measured prefix we must NOT claim it is a slice of it - render a distinct message.
+			const rec = classifyMeasured(cached.tokens, estimateTokens);
+			el.textContent = rec.kind === 'delta'
+				? localize('clawdius.ctxb.measuredDelta', "Measured last session: {0} cached prefix = {1} memory & rules (estimated above) + ~{2} system prompt, tool schemas & MCP.", formatApproxTokens(cached.tokens), formatApproxTokens(estimateTokens), formatApproxTokens(rec.remainder))
+				: rec.kind === 'exceeds'
+					? localize('clawdius.ctxb.measuredExceeds', "Measured last session: {0} cached prefix — smaller than the {1} memory & rules estimate above (the estimate over-counts, or that session loaded less).", formatApproxTokens(cached.tokens), formatApproxTokens(estimateTokens))
+					: localize('clawdius.ctxb.measuredEqual', "Measured last session: {0} cached prefix — all of it memory & rules (estimated above).", formatApproxTokens(cached.tokens));
 		}
 	}
 

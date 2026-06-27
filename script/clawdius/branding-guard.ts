@@ -24,14 +24,41 @@ ok(!p.voiceWsUrl, 'voiceWsUrl (Microsoft voice endpoint) is present');
 ok(!p.defaultChatAgent || !/GitHub\.copilot/i.test(p.defaultChatAgent.extensionId || ''), 'defaultChatAgent still points at GitHub.copilot');
 ok(Object.keys(p.trustedExtensionAuthAccess || {}).length === 0, 'trustedExtensionAuthAccess is not empty');
 
-// Negative: no live Microsoft/GitHub-Copilot egress endpoints or external Microsoft links in product.json.
-// The 'github.copilot.*' command/output identifiers are deferred to Phase 2 and intentionally NOT asserted
-// here; these checks target URLs/hosts, which are the network-egress + external-link surface. The headline
-// offender was defaultChatAgent.entitlementUrl/tokenEntitlementUrl/mcpRegistryDataUrl/managedSettingsUrl,
-// fetched by core (DefaultAccountProviderContribution at BlockStartup) on startup with the user's session.
-ok(!/:\/\/api\.github\.com/i.test(productText), 'product.json has an api.github.com URL (Copilot egress)');
-ok(!/:\/\/aka\.ms/i.test(productText), 'product.json has an aka.ms (Microsoft) URL');
-ok(!/marketplace\.visualstudio\.com|vsassets\.io/i.test(productText), 'product.json references the Microsoft Marketplace');
+// The RUNTIME gate that blocks Copilot from Open VSX and uninstall-protects Claude Code lives in these
+// product.json arrays (enforced in extension-management source). An upstream merge that regenerates
+// product.json could silently drop them, re-enabling github.copilot install with NO other CI signal - pin them.
+const blockedExts = new Set((p.clawdiusBlockedExtensions || []).map((s: string) => s.toLowerCase()));
+ok(blockedExts.has('github.copilot') && blockedExts.has('github.copilot-chat'),
+	'clawdiusBlockedExtensions no longer blocks github.copilot / github.copilot-chat (Copilot re-installable)');
+ok(((p.clawdiusUninstallProtectedExtensions || []) as string[]).map(s => s.toLowerCase()).includes('anthropic.claude-code'),
+	'clawdiusUninstallProtectedExtensions no longer protects anthropic.claude-code');
+const trustedPubs = ((p.trustedExtensionPublishers || []) as string[]).map(s => s.toLowerCase());
+ok(!trustedPubs.includes('microsoft') && !trustedPubs.includes('github'),
+	'trustedExtensionPublishers re-added a Microsoft/GitHub publisher');
+
+// The startup-fetch URLs DefaultAccountProviderContribution would call at BlockStartup with the user's session
+// must stay empty strings (each call site short-circuits on ''). Pin them empty rather than relying on host
+// matching, since a repopulated entitlement/registry URL on a non-denied host would otherwise pass.
+const dca = p.defaultChatAgent || {};
+for (const k of ['entitlementUrl', 'entitlementSignupLimitedUrl', 'tokenEntitlementUrl', 'mcpRegistryDataUrl', 'managedSettingsUrl']) {
+	ok(dca[k] === undefined || dca[k] === '', `defaultChatAgent.${k} is not empty (startup egress vector)`);
+}
+
+// Host ALLOWLIST (not a denylist): every https?:// host in product.json must be one we expect. A denylist of
+// a few known-bad Microsoft hosts let any OTHER host (1DS telemetry events.data.microsoft.com, App Insights
+// dc.services.visualstudio.com, *.githubcopilot.com, exp-tas, blob.core.windows.net, ...) slip in on an
+// upstream merge. The allowlist fails CLOSED: a newly merged host that isn't listed trips the guard. Templated
+// subdomains (e.g. {{uuid}}.vscode-cdn.net for webview content) match by registrable suffix. Update the list
+// deliberately when a new legitimate host is added.
+const ALLOWED_HOST_SUFFIXES = ['open-vsx.org', 'github.com', 'nodejs.org', 'vscode-cdn.net'];
+const urlHostRe = /https?:\/\/([^/"'\s)]+)/gi;
+const badHosts: string[] = [];
+let hm: RegExpExecArray | null;
+while ((hm = urlHostRe.exec(productText))) {
+	const host = hm[1].toLowerCase();
+	if (!ALLOWED_HOST_SUFFIXES.some(s => host === s || host.endsWith('.' + s))) { badHosts.push(host); }
+}
+ok(badHosts.length === 0, `product.json has URL host(s) outside the allowlist (possible Microsoft/telemetry/Copilot egress): ${[...new Set(badHosts)].join(', ')}`);
 
 // Phase 6 zero-egress guarantee (audit: .research/egress-audit.md). Each of these product.json keys is the
 // SOLE source of an uninitiated outbound request (startup/idle/background poll); when the key is absent the

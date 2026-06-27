@@ -13,6 +13,7 @@ import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.j
 import { ResourceMap } from '../../../../base/common/map.js';
 import { isMacintosh, isWindows } from '../../../../base/common/platform.js';
 import { URI } from '../../../../base/common/uri.js';
+import { dirname, extUriIgnorePathCase } from '../../../../base/common/resources.js';
 import { parse as parseJsonc } from '../../../../base/common/jsonc.js';
 import { match as globMatch, splitGlobAware } from '../../../../base/common/glob.js';
 import { RunOnceScheduler } from '../../../../base/common/async.js';
@@ -25,7 +26,7 @@ import {
 	IClawdiusConfigSnapshot, IConfigBudgetImport, IConfigBudgetMeta, IConfigItem, IConfigScopeGroup, IConfigSectionGroup,
 	IMeasuredPrefix,
 } from '../common/clawdiusConfig.js';
-import { estimateTokens, normalizeConfirmedPath } from '../common/clawdiusContextBudget.js';
+import { containingFolderOf, estimateTokens, normalizeConfirmedPath } from '../common/clawdiusContextBudget.js';
 
 interface IScopeRoots {
 	readonly scope: ConfigScope;
@@ -391,7 +392,7 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 					];
 		for (const c of memoryCandidates) {
 			if (this.excludedClaudeMd(c.uri, r.scope)) { continue; }
-			const item = await this.memoryItem(r, c.label, c.uri, false, home);
+			const item = await this.memoryItem(r.scope, r.key, c.label, c.uri, false, home);
 			if (item) { items.push(item); }
 		}
 
@@ -413,7 +414,7 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 		// Rules (.claude/rules/**/*.md): auto-loaded always-on unless they declare a `paths:` frontmatter.
 		const rulesDir = URI.joinPath(r.claudeDir, 'rules');
 		for (const rf of await this.walkMarkdown(rulesDir, rulesDir, 0)) {
-			const item = await this.memoryItem(r, `rules/${rf.rel.replace(/\\/g, '/')}`, rf.resource, true, home);
+			const item = await this.memoryItem(r.scope, r.key, `rules/${rf.rel.replace(/\\/g, '/')}`, rf.resource, true, home);
 			if (item) { items.push(item); }
 		}
 
@@ -421,8 +422,8 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 	}
 
 	/** Build a memory/rule item: own-file budget + transitively-resolved `@`-imports + heading children.
-	 *  Returns undefined when the file does not exist. */
-	private async memoryItem(r: IScopeRoots, label: string, uri: URI, isRule: boolean, home: URI): Promise<IConfigItem | undefined> {
+	 *  Returns undefined when the file does not exist. `nested` marks a subtree CLAUDE.md (lazy load). */
+	private async memoryItem(scope: ConfigScope, key: string, label: string, uri: URI, isRule: boolean, home: URI, nested = false): Promise<IConfigItem | undefined> {
 		const content = await this.readText(uri);
 		if (content === undefined) { return undefined; }
 		const visited = new ResourceMap<boolean>();
@@ -437,16 +438,17 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 			const endLine = i + 1 < hs.length ? hs[i + 1].line : lines.length + 1;
 			const spanText = lines.slice(hd.line - 1, endLine - 1).join('\n');
 			return {
-				id: this.id(r.key, ConfigSection.Memories, `${label}:h${i}`),
-				scope: r.scope, section: ConfigSection.Memories, label: hd.text.trim(), resource: uri, reveal: { lineNumber: hd.line },
+				id: this.id(key, ConfigSection.Memories, `${label}:h${i}`),
+				scope, section: ConfigSection.Memories, label: hd.text.trim(), resource: uri, reveal: { lineNumber: hd.line },
 				budget: { kind: 'memory' as const, approxTokens: estimateTokens(spanText), chars: spanText.length, inclusion: ContextInclusion.Always },
 			};
 		});
+		const merged = imports.length ? { ...base, imports } : base;
 		return {
-			id: this.id(r.key, ConfigSection.Memories, label),
-			scope: r.scope, section: ConfigSection.Memories, label, resource: uri,
-			backing: ConfigBacking.File, canDelete: r.scope !== ConfigScope.Managed, canMove: false,
-			budget: imports.length ? { ...base, imports } : base,
+			id: this.id(key, ConfigSection.Memories, label),
+			scope, section: ConfigSection.Memories, label, resource: uri,
+			backing: ConfigBacking.File, canDelete: scope !== ConfigScope.Managed, canMove: false,
+			budget: nested ? { ...merged, nested: true } : merged,
 			children,
 		};
 	}
@@ -615,6 +617,34 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 
 	private async readText(uri: URI): Promise<string | undefined> {
 		try { return (await this.fileService.readFile(uri)).value.toString(); } catch { return undefined; }
+	}
+
+	async nestedMemoriesFor(activeFile: URI, workspaceFolders: readonly URI[]): Promise<IConfigItem[]> {
+		const folder = containingFolderOf(activeFile, workspaceFolders);
+		if (!folder) { return []; }
+		const home = await this.pathService.userHome();
+		const key = folder.toString();
+		// Collect the directories strictly between the workspace folder and the active file's own directory
+		// (inclusive of the file's dir, exclusive of the root - the root CLAUDE.md is already in the static scan).
+		// A CLAUDE.md in any of them loads on demand (load_reason: nested_traversal) when Claude reads files there.
+		const chain: URI[] = [];
+		let dir = dirname(activeFile);
+		for (let guard = 0; guard < 64 && extUriIgnorePathCase.isEqualOrParent(dir, folder) && !extUriIgnorePathCase.isEqual(dir, folder); guard++) {
+			chain.push(dir);
+			const up = dirname(dir);
+			if (extUriIgnorePathCase.isEqual(up, dir)) { break; } // filesystem root reached
+			dir = up;
+		}
+		const items: IConfigItem[] = [];
+		// Root-most first, so the UI lists them outer -> inner.
+		for (const d of chain.reverse()) {
+			const uri = URI.joinPath(d, 'CLAUDE.md');
+			if (this.excludedClaudeMd(uri, ConfigScope.Project)) { continue; }
+			const rel = extUriIgnorePathCase.relativePath(folder, uri) ?? 'CLAUDE.md';
+			const item = await this.memoryItem(ConfigScope.Project, key, rel, uri, false, home, true);
+			if (item) { items.push(item); }
+		}
+		return items;
 	}
 
 	async readMeasuredPrefix(folder: URI): Promise<IMeasuredPrefix | undefined> {

@@ -56,6 +56,8 @@ export interface IBudgetSource {
 	readonly menuTokens?: number;
 	/** Per-heading token breakdown of a memory/rule file (heaviest-first in the UI; click to open at the line). */
 	readonly headings?: readonly IBudgetHeading[];
+	/** A nested/subtree CLAUDE.md: loads on demand when the active file's directory is read, not every turn. */
+	readonly nested?: boolean;
 }
 
 /** A markdown heading's section within a memory/rule file, with its estimated token span. */
@@ -149,6 +151,7 @@ function toSource(item: IConfigItem, scope: ConfigScope, matched?: boolean): IBu
 		matched,
 		menuTokens: b.menuTokens,
 		headings: headings.length ? headings : undefined,
+		nested: b.nested,
 	};
 }
 
@@ -181,6 +184,7 @@ export function resolveContextBudget(
 	snapshot: IClawdiusConfigSnapshot,
 	activeFile: URI | undefined,
 	workspaceFolders: readonly URI[],
+	nestedMemories: readonly IConfigItem[] = [],
 ): IContextBudget {
 	const folder = containingFolderOf(activeFile, workspaceFolders);
 	// The active file's path relative to its own project folder (so a rule's `paths` match within that project),
@@ -227,6 +231,16 @@ export function resolveContextBudget(
 					if (item.budget) { onInvoke.push(toSource(item, scopeGroup.scope)); }
 				}
 			}
+		}
+	}
+
+	// Nested/subtree CLAUDE.md files along the active file's path: they load on demand (nested_traversal) when
+	// Claude reads files under them, so they belong in always-on for THIS file. Added as primaries (their own
+	// @-imports defer too), deduped by path against the static scan.
+	for (const item of nestedMemories) {
+		const b = item.budget;
+		if (b && b.inclusion === ContextInclusion.Always) {
+			addPrimary(toSource(item, ConfigScope.Project), b);
 		}
 	}
 

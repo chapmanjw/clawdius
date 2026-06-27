@@ -116,6 +116,9 @@ export interface IConfigBudgetMeta {
 	/** For a skill / agent: the always-on "menu" cost - the name + description that Claude Code injects into the
 	 *  system prompt every turn so the model can decide to invoke it (the body is the on-invoke `approxTokens`). */
 	readonly menuTokens?: number;
+	/** A nested/subtree CLAUDE.md that loads on demand (`load_reason: nested_traversal`) when Claude reads a
+	 *  file under its directory - not every turn. Set for memory files discovered along the active file's path. */
+	readonly nested?: boolean;
 }
 
 /** A single configuration item (an agent, a skill, a slash command, a hook event, a permission rule, ...). */
@@ -204,6 +207,10 @@ export interface IClawdiusConfigService {
 	/** The measured always-on cached prefix from the workspace folder's most recent session transcript, as
 	 *  ground truth next to the estimate. Local read; undefined when there is no transcript yet. */
 	readMeasuredPrefix(folder: URI): Promise<IMeasuredPrefix | undefined>;
+	/** Subtree CLAUDE.md files along the active file's path (between its workspace folder and its own directory).
+	 *  They load on demand (nested_traversal) when Claude reads files there, so they belong in THIS file's
+	 *  always-on budget but aren't in the workspace-wide static scan. Empty when none apply. */
+	nestedMemoriesFor(activeFile: URI, workspaceFolders: readonly URI[]): Promise<IConfigItem[]>;
 	/** Normalized fs paths of the instruction files an opt-in InstructionsLoaded hook recorded as actually
 	 *  loaded, scoped to sessions whose `cwd` is inside one of `workspaceFolders` so a different project's
 	 *  session does not badge files here (empty when the hook is off or nothing logged yet). For the badges. */

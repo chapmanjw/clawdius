@@ -32,7 +32,7 @@ import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPan
 import { EditorResourceAccessor, SideBySideEditor } from '../../../common/editor.js';
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
-import { IClawdiusConfigService, IMeasuredPrefix } from '../common/clawdiusConfig.js';
+import { IClawdiusConfigService, IConfigItem, IMeasuredPrefix } from '../common/clawdiusConfig.js';
 import { BudgetTier, containingFolderOf, formatApproxTokens, IBudgetHeading, IBudgetSource, IContextBudget, normalizeConfirmedPath, resolveContextBudget } from '../common/clawdiusContextBudget.js';
 
 export const CONTEXT_BUDGET_VIEW_CONTAINER_ID = 'workbench.view.clawdiusContextBudget';
@@ -63,7 +63,10 @@ export class ClawdiusContextBudgetView extends ViewPane {
 	/** Confirmed-loaded fs paths (lower-cased) from the opt-in hook log; undefined until fetched once. */
 	private confirmedLoads: ReadonlySet<string> | undefined;
 	private confirmedPending = false;
-	/** Guards the async measured/confirmed fetches so they don't touch state or schedule after disposal. */
+	/** Nested/subtree CLAUDE.md files along the active file's path, fetched once per active file (async disk walk). */
+	private readonly nestedCache = new Map<string, IConfigItem[]>();
+	private readonly nestedPending = new Set<string>();
+	/** Guards the async measured/confirmed/nested fetches so they don't touch state or schedule after disposal. */
 	private disposed = false;
 
 	constructor(
@@ -95,7 +98,9 @@ export class ClawdiusContextBudgetView extends ViewPane {
 		// Re-resolve when the active file changes (different rules apply) or config is edited - debounced so rapid
 		// Ctrl+Tab does not thrash the DOM rebuild.
 		this._register(this.editorService.onDidActiveEditorChange(() => this.renderScheduler.schedule()));
-		this._register(this.configService.onDidChange(() => this.renderScheduler.schedule()));
+		// A config change can alter nested CLAUDE.md content or what claudeMdExcludes suppresses, so drop the
+		// per-file nested cache and re-walk on the next render.
+		this._register(this.configService.onDidChange(() => { this.nestedCache.clear(); this.renderScheduler.schedule(); }));
 		this.renderBudget();
 		// The snapshot is empty until the first refresh; trigger one (idempotent / coalesced in the store).
 		if (!this.didRefresh) {
@@ -137,7 +142,21 @@ export class ClawdiusContextBudgetView extends ViewPane {
 
 		const activeFile = this.activeFile();
 		const folders = this.workspaceService.getWorkspace().folders.map(f => f.uri);
-		const budget = resolveContextBudget(this.configService.snapshot, activeFile, folders);
+
+		// Nested/subtree CLAUDE.md along the active file's path - a targeted async disk walk, cached per file.
+		const nestedKey = activeFile?.toString();
+		const nested = nestedKey ? this.nestedCache.get(nestedKey) ?? [] : [];
+		if (activeFile && nestedKey && !this.nestedCache.has(nestedKey) && !this.nestedPending.has(nestedKey)) {
+			this.nestedPending.add(nestedKey);
+			this.configService.nestedMemoriesFor(activeFile, folders).then(items => {
+				this.nestedPending.delete(nestedKey);
+				if (this.disposed) { return; }
+				this.nestedCache.set(nestedKey, items);
+				if (items.length) { this.renderScheduler.schedule(); }
+			}, () => this.nestedPending.delete(nestedKey));
+		}
+
+		const budget = resolveContextBudget(this.configService.snapshot, activeFile, folders, nested);
 
 		// One-time fetch of the opt-in confirmed-loaded set; rows get a badge once it resolves.
 		if (this.confirmedLoads === undefined && !this.confirmedPending) {
@@ -258,6 +277,12 @@ export class ClawdiusContextBudgetView extends ViewPane {
 			const d = append(row, $('.ctxb-glob'));
 			d.textContent = src.description.length > 64 ? src.description.slice(0, 61) + '…' : src.description;
 			d.title = src.description;
+		}
+
+		if (src.nested) {
+			const n = append(row, $('.ctxb-glob'));
+			n.textContent = localize('clawdius.ctxb.nested', "nested · loads on read");
+			n.title = localize('clawdius.ctxb.nestedTip', "A subdirectory CLAUDE.md - Claude loads it on demand when it reads files in that folder.");
 		}
 
 		if (src.paths && src.paths.length) {

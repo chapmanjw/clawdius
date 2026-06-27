@@ -86,6 +86,19 @@ suite('clawdiusContextBudget', () => {
 		assert.deepStrictEqual(budget.notApplied.map(s => s.label).sort(), ['rules/python.md', 'rules/typescript.md']);
 	});
 
+	test('nested CLAUDE.md along the active file path folds into always-on, marked nested', () => {
+		const nested = [
+			item(ConfigScope.Project, ConfigSection.Memories, 'src/CLAUDE.md', { kind: 'memory', approxTokens: 60, chars: 240, inclusion: ContextInclusion.Always, nested: true }),
+		];
+		const base = resolveContextBudget(snapshot(), URI.file('/work/src/auth/login.ts'), folders);
+		const withNested = resolveContextBudget(snapshot(), URI.file('/work/src/auth/login.ts'), folders, nested);
+		const nestedSrc = withNested.alwaysOn.find(s => s.label === 'src/CLAUDE.md');
+		assert.strictEqual(nestedSrc?.nested, true);
+		assert.strictEqual(nestedSrc?.tier, BudgetTier.Project);
+		assert.strictEqual(withNested.alwaysOn.length, base.alwaysOn.length + 1);
+		assert.strictEqual(withNested.alwaysOnTokens, base.alwaysOnTokens + 60);
+	});
+
 	test('a brace path (*.{ts,tsx}) matches a .tsx file', () => {
 		const snap: IClawdiusConfigSnapshot = {
 			scopes: [memoriesScope(ConfigScope.Project, 'file:///work', URI.file('/work/.claude'), [

@@ -289,7 +289,7 @@ function coerceModelStat(m: Record<string, unknown>): IClaudeModelStat {
  * `dailyActivity: {}`) must not crash the renderers. Numbers are coerced to finite, objects/arrays validated,
  * and dailyActivity is sorted and capped so a huge history can't block the UI thread.
  */
-function normalizeStats(raw: unknown): IClaudeStats | undefined {
+export function normalizeStats(raw: unknown): IClaudeStats | undefined {
 	if (!isPlainObject(raw)) { return undefined; }
 
 	const modelUsage: { [model: string]: IClaudeModelStat } = {};
@@ -439,10 +439,11 @@ interface IClaudeSettings {
 	readonly env?: { readonly [key: string]: unknown };
 }
 
-/** Infer the engine provider from ~/.claude/settings.json env. Defaults to Anthropic. */
-export async function detectProvider(fileService: IFileService, claudeDir: URI): Promise<ClaudeProvider> {
-	const settings = await readJson<IClaudeSettings>(fileService, URI.joinPath(claudeDir, SETTINGS_FILE));
-	const env = settings?.env ?? {};
+/**
+ * Infer the engine provider from a Claude Code settings `env` map. Pure (the file read lives in
+ * {@link detectProvider}); extracted so the provider precedence is unit-testable without a file service.
+ */
+export function providerFromEnv(env: { readonly [key: string]: unknown }): ClaudeProvider {
 	const truthy = (v: unknown) => v === true || v === 1 || v === '1' || v === 'true';
 	if (truthy(env['CLAUDE_CODE_USE_BEDROCK'])) { return ClaudeProvider.Bedrock; }
 	if (truthy(env['CLAUDE_CODE_USE_VERTEX'])) { return ClaudeProvider.Vertex; }
@@ -451,6 +452,12 @@ export async function detectProvider(fileService: IFileService, claudeDir: URI):
 		return ClaudeProvider.Custom;
 	}
 	return ClaudeProvider.Anthropic;
+}
+
+/** Infer the engine provider from ~/.claude/settings.json env. Defaults to Anthropic. */
+export async function detectProvider(fileService: IFileService, claudeDir: URI): Promise<ClaudeProvider> {
+	const settings = await readJson<IClaudeSettings>(fileService, URI.joinPath(claudeDir, SETTINGS_FILE));
+	return providerFromEnv(settings?.env ?? {});
 }
 
 // --- The Claude wordmark glyph (inline SVG, inherits currentColor so it takes the host text color) ---

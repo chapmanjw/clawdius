@@ -32,7 +32,7 @@ import { IViewPaneOptions, ViewPane } from '../../../browser/parts/views/viewPan
 import { EditorResourceAccessor, SideBySideEditor } from '../../../common/editor.js';
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
-import { IClawdiusConfigService, IConfigItem, IMeasuredPrefix } from '../common/clawdiusConfig.js';
+import { IClawdiusConfigService, IConfigItem, IConfirmedLoad, IMeasuredPrefix } from '../common/clawdiusConfig.js';
 import { BudgetTier, containingFolderOf, formatApproxTokens, IBudgetHeading, IBudgetSource, IContextBudget, normalizeConfirmedPath, resolveContextBudget } from '../common/clawdiusContextBudget.js';
 
 export const CONTEXT_BUDGET_VIEW_CONTAINER_ID = 'workbench.view.clawdiusContextBudget';
@@ -61,7 +61,7 @@ export class ClawdiusContextBudgetView extends ViewPane {
 	private readonly measuredCache = new Map<string, IMeasuredPrefix | null>();
 	private readonly measuredPending = new Set<string>();
 	/** Confirmed-loaded fs paths (lower-cased) from the opt-in hook log; undefined until fetched once. */
-	private confirmedLoads: ReadonlySet<string> | undefined;
+	private confirmedLoads: ReadonlyMap<string, IConfirmedLoad> | undefined;
 	private confirmedPending = false;
 	/** Nested/subtree CLAUDE.md files along the active file's path, fetched once per active file (async disk walk). */
 	private readonly nestedCache = new Map<string, IConfigItem[]>();
@@ -97,7 +97,9 @@ export class ClawdiusContextBudgetView extends ViewPane {
 		this.bodyEl = append(container, $('.clawdius-ctxbudget'));
 		// Re-resolve when the active file changes (different rules apply) or config is edited - debounced so rapid
 		// Ctrl+Tab does not thrash the DOM rebuild.
-		this._register(this.editorService.onDidActiveEditorChange(() => this.renderScheduler.schedule()));
+		// Re-fetch the confirmed-load log on each editor change so badges pick up what a turn loaded since the
+		// panel opened (a cheap tail read; near-live without a file watcher).
+		this._register(this.editorService.onDidActiveEditorChange(() => { this.confirmedLoads = undefined; this.renderScheduler.schedule(); }));
 		// A config change can alter nested CLAUDE.md content or what claudeMdExcludes suppresses, so drop the
 		// per-file nested cache and re-walk on the next render.
 		this._register(this.configService.onDidChange(() => { this.nestedCache.clear(); this.renderScheduler.schedule(); }));
@@ -185,13 +187,13 @@ export class ClawdiusContextBudgetView extends ViewPane {
 		const foot = append(this.bodyEl, $('.ctxb-foot'));
 		foot.textContent = localize('clawdius.ctxb.foot', "Estimated; counts memory, rules + the skill menu. Excludes the system prompt, MCP tool schemas, and agent/command menus that also load every turn. \"Loaded\" is predicted from your config, not confirmed.");
 
-		this.renderMeasured(folders, activeFile);
+		this.renderMeasured(folders, activeFile, budget.alwaysOnTokens);
 	}
 
 	/** The measured cached-prefix from the project's most recent session transcript (system + tools + MCP +
 	 *  memory) - real ground truth next to the estimate. Fetched once per folder, async, zero-egress. Uses the
 	 *  folder that contains the active file, so a multi-root workspace shows THIS file's project, not folder[0]. */
-	private renderMeasured(folders: readonly URI[], activeFile: URI | undefined): void {
+	private renderMeasured(folders: readonly URI[], activeFile: URI | undefined, estimateTokens: number): void {
 		const folder = containingFolderOf(activeFile, folders) ?? folders[0];
 		if (!folder) {
 			return;
@@ -212,7 +214,12 @@ export class ClawdiusContextBudgetView extends ViewPane {
 		}
 		if (cached) {
 			const el = append(this.bodyEl, $('.ctxb-measured'));
-			el.textContent = localize('clawdius.ctxb.measured', "Measured last session: {0} cached prefix (system + tools + MCP + memory) — your estimate above is the memory & rules slice of it.", formatApproxTokens(cached.tokens));
+			// Reconcile the two numbers: measured (whole cached prefix) = memory & rules estimate + the rest
+			// (system prompt + tool schemas + MCP + menus), which the estimate intentionally excludes.
+			const remainder = cached.tokens - estimateTokens;
+			el.textContent = remainder > 0
+				? localize('clawdius.ctxb.measuredDelta', "Measured last session: {0} cached prefix = {1} memory & rules (estimated above) + ~{2} system prompt, tool schemas & MCP.", formatApproxTokens(cached.tokens), formatApproxTokens(estimateTokens), formatApproxTokens(remainder))
+				: localize('clawdius.ctxb.measured', "Measured last session: {0} cached prefix (system + tools + MCP + memory) — your estimate above is the memory & rules slice of it.", formatApproxTokens(cached.tokens));
 		}
 	}
 
@@ -247,6 +254,20 @@ export class ClawdiusContextBudgetView extends ViewPane {
 		}
 	}
 
+	/** The confirmed-load badge hover: why it loaded, the tier Claude assigned (ground truth, flagged when it
+	 *  disagrees with the predicted tier), and the file that imported it - all from the InstructionsLoaded hook. */
+	private confirmedTooltip(cl: IConfirmedLoad, predictedTier: BudgetTier): string {
+		const parts = [localize('clawdius.ctxb.confirmedTip', "Confirmed loaded in a recent Claude session")];
+		if (cl.loadReason) { parts.push(localize('clawdius.ctxb.confirmedWhy', "reason: {0}", cl.loadReason)); }
+		if (cl.memoryType) {
+			parts.push(cl.memoryType.toLowerCase() === predictedTier
+				? localize('clawdius.ctxb.confirmedTier', "loaded as: {0}", cl.memoryType)
+				: localize('clawdius.ctxb.confirmedTierMismatch', "loaded as: {0} (predicted {1})", cl.memoryType, predictedTier));
+		}
+		if (cl.parentFilePath) { parts.push(localize('clawdius.ctxb.confirmedParent', "via: {0}", cl.parentFilePath)); }
+		return parts.join(' · ');
+	}
+
 	private renderRow(src: IBudgetSource, softTokens: boolean): void {
 		const clickable = !!src.resource;
 		const wrap = append(this.bodyEl, $('.ctxb-rowwrap'));
@@ -263,9 +284,14 @@ export class ClawdiusContextBudgetView extends ViewPane {
 		name.textContent = src.label;
 		name.title = src.label;
 
-		if (src.resource && this.confirmedLoads?.has(normalizeConfirmedPath(src.resource.fsPath))) {
+		const confirmed = src.resource ? this.confirmedLoads?.get(normalizeConfirmedPath(src.resource.fsPath)) : undefined;
+		if (confirmed) {
 			const c = append(row, $('.ctxb-confirmed.codicon.codicon-pass'));
-			c.title = localize('clawdius.ctxb.confirmedTip', "Confirmed loaded in a recent Claude session");
+			c.title = this.confirmedTooltip(confirmed, src.tier);
+			// The hook's observed memory_type is ground truth; flag when it disagrees with the predicted tier.
+			if (confirmed.memoryType && confirmed.memoryType.toLowerCase() !== src.tier) {
+				append(row, $('.ctxb-nomatch', undefined, localize('clawdius.ctxb.tierMismatch', "tier?")));
+			}
 		}
 
 		if (src.kind === 'import') {

@@ -190,6 +190,16 @@ export interface IMeasuredPrefix {
 	readonly atIso?: string;
 }
 
+/** What an InstructionsLoaded hook recorded the last time Claude loaded an instruction file (ground truth). */
+export interface IConfirmedLoad {
+	/** Why it loaded (observed strings: `session_start`, `include`, `nested_traversal`, ...). */
+	readonly loadReason?: string;
+	/** The tier Claude assigned it (`User` | `Project` | `Local` | `Managed`) - ground truth vs the predicted tier. */
+	readonly memoryType?: string;
+	/** For an imported/nested file: the file that pulled it in (so the UI can say "loaded because X imported it"). */
+	readonly parentFilePath?: string;
+}
+
 /** Shared, container-wide config service: one scan + watcher set produces the snapshot the Control Center reads. */
 export const IClawdiusConfigService = createDecorator<IClawdiusConfigService>('clawdiusConfigService');
 
@@ -211,10 +221,11 @@ export interface IClawdiusConfigService {
 	 *  They load on demand (nested_traversal) when Claude reads files there, so they belong in THIS file's
 	 *  always-on budget but aren't in the workspace-wide static scan. Empty when none apply. */
 	nestedMemoriesFor(activeFile: URI, workspaceFolders: readonly URI[]): Promise<IConfigItem[]>;
-	/** Normalized fs paths of the instruction files an opt-in InstructionsLoaded hook recorded as actually
-	 *  loaded, scoped to sessions whose `cwd` is inside one of `workspaceFolders` so a different project's
-	 *  session does not badge files here (empty when the hook is off or nothing logged yet). For the badges. */
-	readConfirmedLoads(workspaceFolders: readonly URI[]): Promise<ReadonlySet<string>>;
+	/** Per instruction file (keyed by normalized fs path) what an opt-in InstructionsLoaded hook recorded the
+	 *  most recent time Claude actually loaded it, scoped to sessions whose `cwd` is inside one of
+	 *  `workspaceFolders` so a different project's session does not badge files here (empty when the hook is off
+	 *  or nothing logged yet). Powers the "confirmed loaded" badges and their why/when hover. */
+	readConfirmedLoads(workspaceFolders: readonly URI[]): Promise<ReadonlyMap<string, IConfirmedLoad>>;
 }
 
 /** Codicon id used for a section row. */

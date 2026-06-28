@@ -3,7 +3,7 @@
   "version": "1.125.0-alpha-0.1",
   "distro": "8edd514e8c5617018ec1e3f7e9c482edd103640a",
   "author": {
-    "name": "Microsoft Corporation"
+    "name": "John Chapman"
   },
   "license": "MIT",
   "main": "./out/main.js",
@@ -264,10 +264,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/microsoft/vscode.git"
+    "url": "https://github.com/chapmanjw/clawdius.git"
   },
   "bugs": {
-    "url": "https://github.com/microsoft/vscode/issues"
+    "url": "https://github.com/chapmanjw/clawdius/issues"
   },
   "optionalDependencies": {
     "windows-foreground-love": "0.6.1"

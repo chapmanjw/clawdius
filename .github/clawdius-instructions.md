@@ -65,6 +65,19 @@ MANDATORY: Always check for compilation errors before running any tests or valid
 - Use the run test tool if you need to run tests. If that tool is not available, then you can use `scripts/test.sh` (or `scripts\test.bat` on Windows) for unit tests (add `--grep <pattern>` to filter tests) or `scripts/test-integration.sh` (or `scripts\test-integration.bat` on Windows) for integration tests (integration tests end with .integrationTest.ts or are in /extensions/).
 - Use `npm run valid-layers-check` to check for layering issues
 
+## Commit message hygiene
+
+This is a public repository: every commit message is permanent and world-readable. Each message must:
+
+- Plainly state what the commit changes, in imperative mood, with the subject line at or under 72 characters.
+- Carry a `Co-authored-by:` trailer, and never embed a private Claude session URL.
+- Contain no internal-only references: review/tooling process (Codex, Rutherford, consensus, "must-fix"), roadmap or phase labels (Phase A-C, Phase 0-2, Ultracode P#, M0-2, N2/N3, Wave #, INC-#, "area #", pre-import), ephemeral run names ("testN findings"), or private paths (`.research`, private notes/docs, clawdius-private). Naming a removed subsystem (e.g. "Remove the OpenAI Codex agent subsystem") or the gitignored `.research` path is legitimate public content and is allowed.
+
+Enforcement is two layers:
+
+- A `commit-msg` hook (`script/clawdius/commit-msg-lint.mjs`, wired through the package.json `commitmsg` script and husky) rejects the mechanical violations on every commit: over-long subject, missing trailer, session URL, or a known internal label.
+- Before pushing, every message also gets a succinctness + public-visibility review by the multi-agent reviewers (Codex + Claude Code, via Rutherford). The hook is the deterministic backstop; the review is the judgment pass that tells a real internal leak apart from a legitimate public mention.
+
 ## Coding Guidelines
 
 ### Indentation

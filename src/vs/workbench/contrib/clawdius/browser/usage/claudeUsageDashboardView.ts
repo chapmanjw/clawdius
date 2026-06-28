@@ -686,7 +686,8 @@ export class ClaudeUsageDashboardView extends Disposable {
 		// Scope the observer to the plot's OWN window (ownerDocument.defaultView) via getWindow, so it works when
 		// the dashboard is hosted in an auxiliary window; disposed with the rest of this render via renderStore.
 		const resizeObserver = this.renderStore.add(new DisposableResizeObserver('ClaudeUsageDashboardView.tokensPerDay', () => redraw(), getWindow(plot)));
-		resizeObserver.observe(plot);
+		// observe() returns a per-target unobserve disposable; own it (the leak tracker flags it otherwise).
+		this.renderStore.add(resizeObserver.observe(plot));
 
 		// X-axis date labels (first .. mid .. last).
 		const xaxis = append(block, h('.clawdius-usage-chart-xaxis'));

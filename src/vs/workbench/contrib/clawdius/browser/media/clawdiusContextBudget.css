@@ -5,6 +5,8 @@
 
 /* CLAWDIUS-BEGIN Context Budget Inspector view */
 .clawdius-ctxbudget {
+	/* box-sizing: include the 8px padding in the explicit pixel height layoutBody() sets, else content-box makes the view 16px too tall and clips its last rows behind the status bar. */
+	box-sizing: border-box;
 	padding: 8px 14px;
 	font-size: 12px;
 	line-height: 1.5;

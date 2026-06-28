@@ -298,3 +298,31 @@ VS Code's Copilot chat. The official `anthropic.claude-code` is on Open VSX (v2.
   (24h-of-day activity, tool frequency, per-project/session, cache read/write split) -- keyed by
   path+size+mtime+offset so the hover never triggers it and large histories are not rescanned; built only on
   dashboard open. NEXT.
+
+## Release-prep repo hygiene (2026-06)
+
+A public-release hygiene pass; all changes are committed (see git log). Grouped by kind.
+
+### In-place edits to upstream files
+- `eslint.config.js`, `build/hygiene.ts`: added a Clawdius copyright-header variant for Clawdius-authored dirs (`contrib/clawdius`, `platform/clawdius`, `clawdius-chat`). Both enforcers still require the Microsoft header elsewhere; only the copyright line differs. Marker `// CLAWDIUS-BEGIN clawdius-authored ... header`.
+- `build/lib/electron.ts`, `build/gulpfile.vscode.ts`, `build/gulpfile.reh.ts`, `cli/build.rs`: Win32 version-resource publisher fields -> CompanyName "John Chapman", LegalCopyright "Copyright (C) 2026 John Chapman; portions Copyright (C) Microsoft Corporation". The MIT per-file headers are untouched.
+- `cli/Cargo.toml` + renamed dir `cli/src/bin/code` -> `cli/src/bin/clawdius`, `build/azure-pipelines/cli/cli-compile.yml`: Rust CLI bin `code` -> `clawdius` (internal crate `code-cli` and lib `cli` unchanged). NOTE: the fork does not currently build/ship the Rust CLI (CI is GitHub Actions, not the upstream Azure pipeline), so this is source-consistency only.
+- `build/npm/postinstall.ts`: the `.claude/CLAUDE.md` symlink repointed to the renamed dev guide.
+- `test/{README, unit/README, integration/browser/README, smoke/README, sanity/README, automation/README, mcp/README}.md`: full Clawdius rebrand (the 9 code.visualstudio.com links repointed to chapmanjw/clawdius).
+- `.github/ISSUE_TEMPLATE/{bug_report, config, feature_request}.md`, `.github/pull_request_template.md`: rebranded to the fork; dead Microsoft-community links dropped.
+- `.vscode-test.js`: dropped the dead `copilot` integration suite. `.eslint-allowed-javascript-files`: pruned 36 entries for removed copilot/lit-html/signals-core files; normalized to LF. `.vscode/settings.json`: dropped the dead azure-pipelines autoApprove ref.
+- `CHANGES_AGAINST_UPSTREAM.md`: reconciled 4 stale spots (retired claudeUsageEntry.ts in the new-files list, superseded rows 35-37, row 67 restricted-imports), plus this section.
+
+### Renamed
+- `.github/copilot-instructions.md` -> `.github/clawdius-instructions.md` (the repo's Claude-agent dev guide; content rebranded). The product-wide `copilot-instructions.md` workspace convention (its enum + discovery + ~30 tests) is intentionally left unchanged.
+
+### Removed upstream files (dead for this fork)
+- Microsoft-internal CI/security: `.config/1espt/`, `.config/guardian/.gdnsuppress`.
+- Dev container: `.devcontainer/` (its README cloned microsoft/vscode; the fork builds natively on Windows and packaging never reads it).
+- GitHub bots/metadata: `.mention-bot`, `.github/CODEOWNERS`, `classifier.json`, `commands.json`, `similarity.yml`, `insiders.yml`, `endgame/insiders.yml`, `CODENOTIFY`, `commands/codespaces_issue.yml`, `ISSUE_TEMPLATE/copilot_bug_report.md`, `agents/{data,demonstrate}.md`, `instructions/{kusto,telemetry}.instructions.md`, `skills/azure-pipelines/`, and the Microsoft issue-triage prompts (`codenotify`, `build-champ`, `find-duplicates`, `find-issue`, `fixIssueNo`, `issue-grouping`, `migrate`). KEPT: `dependabot.yml`, the generic dev-guidance instructions/prompts/skills, and `.config/configuration.winget`.
+
+### New convention
+- 51 Clawdius-authored `.ts` files now carry `Copyright (c) 2026 John Chapman (Clawdius)`. Upstream-derived files keep the Microsoft header (MIT requires retaining it; `LICENSE.txt` already carries the dual notice).
+
+### Moved out of the repo (not tracked)
+- The gitignored `.research/` receipts (never committed) were moved to `clawdius-private-docs/research/`. The `.research/` gitignore line is kept for future receipts.

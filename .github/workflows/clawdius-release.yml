@@ -1,0 +1,95 @@
+name: Clawdius Release
+
+# Cut a release by pushing a tag, e.g.:
+#   git tag v1.125.0-alpha1 && git push origin v1.125.0-alpha1
+# Builds, signs (when the signing secrets are configured), and publishes per-platform
+# assets to a GitHub Release. Signing is optional per leg: a leg runs UNSIGNED when its
+# secrets are absent, so the pipeline goes green before any signing certs are in place.
+#
+# Build status: the Windows leg is first. The Linux (deb/rpm/tar/snap) and macOS
+# (universal + notarized dmg) legs are added in follow-up commits. Until a leg has been
+# proven on a real runner, validate it with a throwaway pre-release tag (v0.0.0-testN).
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Build Windows (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    # Hosted runners, free for this public repo. windows-11-arm builds arm64 natively.
+    runs-on: ${{ matrix.arch == 'arm64' && 'windows-11-arm' || 'windows-2022' }}
+    environment: release
+    env:
+      # Mapped from secrets so steps can gate on presence (secrets can't be used in if:).
+      AZ_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZ_TRUSTED_SIGNING_ENDPOINT }}
+      AZ_TRUSTED_SIGNING_ACCOUNT: ${{ secrets.AZ_TRUSTED_SIGNING_ACCOUNT }}
+      AZ_TRUSTED_SIGNING_PROFILE: ${{ secrets.AZ_TRUSTED_SIGNING_PROFILE }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      # The hosted windows-2022 image ships VS2022 with the C++ workload + Spectre-
+      # mitigated libs. If a future image drops them the native build fails MSB8040 and
+      # this is where a Microsoft.VisualStudio.Component.VC.*.Spectre install would go.
+      - name: Install dependencies
+        run: npm ci
+      - name: Set up Azure Trusted Signing
+        if: ${{ env.AZ_TRUSTED_SIGNING_ENDPOINT != '' }}
+        shell: pwsh
+        run: |
+          # Azure.CodeSigning dlib that signtool /dlib uses. Pin the version after a
+          # validation run; see https://www.nuget.org/packages/Microsoft.Trusted.Signing.Client
+          $pkg = Join-Path $env:RUNNER_TEMP 'tsclient'
+          nuget install Microsoft.Trusted.Signing.Client -OutputDirectory $pkg -ExcludeVersion
+          $dlib = (Get-ChildItem $pkg -Recurse -Filter 'Azure.CodeSigning.Dlib.dll' | Select-Object -First 1).FullName
+          $signtool = (Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter signtool.exe | Where-Object { $_.FullName -match 'x64' } | Select-Object -Last 1).FullName
+          "CLAWDIUS_SIGN_DLIB=$dlib"   >> $env:GITHUB_ENV
+          "CLAWDIUS_SIGNTOOL=$signtool" >> $env:GITHUB_ENV
+      - name: Build, package, sign
+        shell: pwsh
+        run: ./build/release/win32.ps1 -Arch ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clawdius-win32-${{ matrix.arch }}
+          path: release-artifacts/*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Combine checksums
+        run: |
+          cd dist
+          cat SHA256SUMS-*.txt > SHA256SUMS 2>/dev/null || true
+          rm -f SHA256SUMS-*.txt
+          ls -la
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || startsWith(github.ref_name, 'v0.0.0') }}
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

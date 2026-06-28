@@ -324,9 +324,9 @@ async function main() {
 	fs.mkdirSync(claudeDir, { recursive: true });
 
 	const claudeMdLink = path.join(claudeDir, 'CLAUDE.md');
-	const claudeMdLinkType = ensureAgentHarnessLink(path.join('..', '.github', 'copilot-instructions.md'), claudeMdLink);
+	const claudeMdLinkType = ensureAgentHarnessLink(path.join('..', '.github', 'clawdius-instructions.md'), claudeMdLink);
 	if (claudeMdLinkType !== 'existing') {
-		log('.', `Created ${claudeMdLinkType} .claude/CLAUDE.md -> .github/copilot-instructions.md`);
+		log('.', `Created ${claudeMdLinkType} .claude/CLAUDE.md -> .github/clawdius-instructions.md`);
 	}
 
 	const claudeSkillsLink = path.join(claudeDir, 'skills');

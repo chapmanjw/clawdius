@@ -1224,13 +1224,11 @@ suite('AgentSessions', () => {
 			const backgroundSession = createSession({ providerType: AgentSessionProviders.Background });
 			const cloudSession = createSession({ providerType: AgentSessionProviders.Cloud });
 			const claudeSession = createSession({ providerType: AgentSessionProviders.Claude });
-			const codexSession = createSession({ providerType: AgentSessionProviders.Codex });
 			const localSession = createSession({ providerType: AgentSessionProviders.Local });
 
 			assert.strictEqual(filter.exclude(backgroundSession), false, 'Background should be allowed');
 			assert.strictEqual(filter.exclude(cloudSession), false, 'Cloud should be allowed');
 			assert.strictEqual(filter.exclude(claudeSession), true, 'Claude should be excluded');
-			assert.strictEqual(filter.exclude(codexSession), true, 'Codex should be excluded');
 			assert.strictEqual(filter.exclude(localSession), true, 'Local should be excluded');
 		});
 
@@ -1241,11 +1239,9 @@ suite('AgentSessions', () => {
 			));
 
 			const claudeSession = createSession({ providerType: AgentSessionProviders.Claude });
-			const codexSession = createSession({ providerType: AgentSessionProviders.Codex });
 			const unknownSession = createSession({ providerType: 'some-unknown-type' });
 
 			assert.strictEqual(filter.exclude(claudeSession), false);
-			assert.strictEqual(filter.exclude(codexSession), false);
 			assert.strictEqual(filter.exclude(unknownSession), false);
 		});
 

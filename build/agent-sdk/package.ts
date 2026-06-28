@@ -116,7 +116,6 @@ function parseTargetTriple(sdkTarget: string): { os: string; cpu: string; libc?:
  * Chmod the executable binaries inside a per-SDK extracted node_modules tree.
  * Layout differs per SDK; we don't pretend it's configurable:
  *   - claude: a single top-level `claude` binary per platform package
- *   - codex:  `vendor/<rust-triple>/bin/codex` under the platform package
  */
 function chmodPlatformBinaries(nodeModulesDir: string, sdk: Sdk): void {
 	if (sdk === 'claude') {
@@ -134,30 +133,6 @@ function chmodPlatformBinaries(nodeModulesDir: string, sdk: Sdk): void {
 			}
 		}
 		return;
-	}
-
-	// codex
-	const scopeDir = path.join(nodeModulesDir, '@openai');
-	if (!fs.existsSync(scopeDir)) {
-		return;
-	}
-	for (const child of fs.readdirSync(scopeDir)) {
-		if (!child.startsWith('codex-')) {
-			continue;
-		}
-		const vendorDir = path.join(scopeDir, child, 'vendor');
-		if (!fs.existsSync(vendorDir)) {
-			continue;
-		}
-		for (const triple of fs.readdirSync(vendorDir)) {
-			const binDir = path.join(vendorDir, triple, 'bin');
-			if (!fs.existsSync(binDir)) {
-				continue;
-			}
-			for (const f of fs.readdirSync(binDir)) {
-				fs.chmodSync(path.join(binDir, f), 0o755);
-			}
-		}
 	}
 }
 
@@ -222,8 +197,8 @@ function isCliInvocation(): boolean {
 function parseCliArgs(): IBuildArgs {
 	const flags = parseFlags(process.argv.slice(2));
 	const sdk = flags.get('sdk');
-	if (sdk !== 'claude' && sdk !== 'codex') {
-		throw new Error(`--sdk must be 'claude' or 'codex'; got '${sdk}'`);
+	if (sdk !== 'claude') {
+		throw new Error(`--sdk must be 'claude'; got '${sdk}'`);
 	}
 	const sdkTarget = flags.get('target');
 	if (!sdkTarget) {

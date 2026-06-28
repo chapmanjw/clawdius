@@ -73,14 +73,6 @@ export const AgentHostCustomTerminalToolEnabledSettingId = 'chat.agentHost.custo
 export const AgentHostClaudeAgentEnabledSettingId = 'chat.agentHost.claudeAgent.enabled';
 
 /**
- * Configuration key controlling whether the Codex provider is registered in
- * the agent host process. When `false` (the default), the agent host skips
- * registering the Codex provider regardless of SDK availability. The agent
- * host process must be restarted for changes to take effect.
- */
-export const AgentHostCodexAgentEnabledSettingId = 'chat.agentHost.codexAgent.enabled';
-
-/**
  * Optional override that points at an **SDK root directory** containing a
  * `node_modules/@anthropic-ai/claude-agent-sdk` subtree. When set, the agent
  * host loads the Claude SDK from that path instead of the bare import (which
@@ -94,19 +86,12 @@ export const AgentHostClaudeSdkRootEnvVar = 'VSCODE_AGENT_HOST_CLAUDE_SDK_ROOT';
 /**
  * Environment variable form of {@link AgentHostClaudeAgentEnabledSettingId}.
  * Set by the agent host starters from the setting. Accepts `'true'` /
- * `'false'`; absent means "default" (`true` for Claude, `false` for Codex).
+ * `'false'`; absent means "default" (`true`).
  */
 export const AgentHostClaudeAgentEnabledEnvVar = 'VSCODE_AGENT_HOST_CLAUDE_AGENT_ENABLED';
 
 /**
- * Environment variable form of {@link AgentHostCodexAgentEnabledSettingId}.
- * Set by the agent host starters from the setting. Accepts `'true'` /
- * `'false'`; absent means "default" (`false`).
- */
-export const AgentHostCodexAgentEnabledEnvVar = 'VSCODE_AGENT_HOST_CODEX_AGENT_ENABLED';
-
-/**
- * Resolves the effective enable state for a Claude/Codex provider from the
+ * Resolves the effective enable state for a Claude provider from the
  * env-var value forwarded by the starter. Recognized values (case- and
  * whitespace-insensitive):
  *
@@ -172,51 +157,6 @@ export const ClaudePreferAgentHostAgentsSettingId = 'chat.agents.claude.preferAg
  * surface scope.
  */
 export const ClaudePreferAgentHostEditorSettingId = 'chat.editor.claude.preferAgentHost';
-
-// -- Codex agent settings --------------------------------------------------------
-//
-// Codex is opt-in via `chat.agentHost.codexAgent.sdkRoot`. The setting points
-// at an absolute path to a directory containing a `node_modules/@openai/codex`
-// subtree (the same shape `npm install @openai/codex` produces, and the same
-// shape the agent host downloads on demand from `product.agentSdks.codex`).
-// The agent host spawns the native codex binary from inside that tree as a
-// long-lived child process and speaks JSON-RPC over stdio. The binary is not
-// bundled with VS Code; users either install codex themselves (typically via
-// `npm install -g @openai/codex` or a platform package manager) or rely on
-// the on-demand download.
-
-/**
- * Absolute path to the **SDK root directory** containing a
- * `node_modules/@openai/codex` subtree. When non-empty, the agent host treats
- * it as a dev override and skips the on-demand download from
- * `product.agentSdks.codex`. Empty (the default) falls through to product
- * config; if neither is present, the provider is not registered.
- */
-export const AgentHostCodexAgentSdkRootSettingId = 'chat.agentHost.codexAgent.sdkRoot';
-
-/**
- * Optional override for `$CODEX_HOME`. When set, the codex app-server child
- * process inherits this value, controlling where rollouts and config live.
- */
-export const AgentHostCodexAgentCodexHomeSettingId = 'chat.agentHost.codexAgent.codexHome';
-
-/**
- * Additional command-line arguments passed to `codex app-server`. Mainly for
- * debugging (e.g. `--log-level=debug`).
- */
-export const AgentHostCodexAgentBinaryArgsSettingId = 'chat.agentHost.codexAgent.binaryArgs';
-
-/**
- * Environment variable form of {@link AgentHostCodexAgentSdkRootSettingId}.
- * Forwarded by the starters from the setting.
- */
-export const AgentHostCodexAgentSdkRootEnvVar = 'VSCODE_AGENT_HOST_CODEX_SDK_ROOT';
-
-/** Forwarded `$CODEX_HOME`. */
-export const AgentHostCodexAgentCodexHomeEnvVar = 'CODEX_HOME';
-
-/** Forwarded extra args for `codex app-server` (JSON-encoded string[]). */
-export const AgentHostCodexAgentBinaryArgsEnvVar = 'VSCODE_AGENT_HOST_CODEX_APP_SERVER_ARGS';
 
 // -- OpenTelemetry settings ------------------------------------------------------
 //
@@ -321,7 +261,7 @@ export function buildAgentHostOTelEnv(
 }
 
 /**
- * Settings -> env-var fan-out for the Claude/Codex SDK overrides that the
+ * Settings -> env-var fan-out for the Claude SDK overrides that the
  * agent host process consumes. Shared by both starters
  * (`nodeAgentHostStarter.ts`, `electronAgentHostStarter.ts`) so they don't
  * drift the next time someone adds a setting.
@@ -332,11 +272,7 @@ export function buildAgentHostOTelEnv(
  * the caller spreads into the spawned child's environment.
  */
 export interface IAgentSdkStarterSettings {
-	readonly codexSdkRoot?: string;
-	readonly codexHome?: string;
-	readonly codexBinaryArgs?: readonly string[];
 	readonly claudeAgentEnabled?: boolean;
-	readonly codexAgentEnabled?: boolean;
 }
 
 export function buildAgentSdkEnv(
@@ -350,16 +286,8 @@ export function buildAgentSdkEnv(
 		}
 		out[key] = value;
 	};
-	setIfMissing(AgentHostCodexAgentSdkRootEnvVar, settings.codexSdkRoot);
-	setIfMissing(AgentHostCodexAgentCodexHomeEnvVar, settings.codexHome);
-	if (Array.isArray(settings.codexBinaryArgs) && settings.codexBinaryArgs.length > 0) {
-		setIfMissing(AgentHostCodexAgentBinaryArgsEnvVar, JSON.stringify(settings.codexBinaryArgs));
-	}
 	if (settings.claudeAgentEnabled !== undefined) {
 		setIfMissing(AgentHostClaudeAgentEnabledEnvVar, settings.claudeAgentEnabled ? 'true' : 'false');
-	}
-	if (settings.codexAgentEnabled !== undefined) {
-		setIfMissing(AgentHostCodexAgentEnabledEnvVar, settings.codexAgentEnabled ? 'true' : 'false');
 	}
 	return out;
 }

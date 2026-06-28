@@ -103,8 +103,6 @@
 		"src/vs/platform/agentHost/node/claude/phase9-plan.md": 10,
 		"src/vs/platform/agentHost/node/claude/roadmap.md": 44,
 		"src/vs/platform/agentHost/node/claude/smoke.md": 7,
-		"src/vs/platform/agentHost/node/codex/codexAgent.ts": 1,
-		"src/vs/platform/agentHost/node/codex/codexProxyService.ts": 2,
 		"src/vs/platform/agentHost/node/copilot/copilotToolDisplay.ts": 27,
 		"src/vs/platform/agentHost/node/copilot/sessionCustomizationDiscovery.ts": 7,
 		"src/vs/platform/agentHost/node/shared/agentHostOctoKitService.ts": 3,

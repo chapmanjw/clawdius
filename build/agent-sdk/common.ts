@@ -137,9 +137,6 @@ export type VscodeBuildArch = 'x64' | 'arm64';
  * - Claude ships `linux-{x64,arm64}-musl` packages separately from the glibc
  *   variants. Alpine REH builds get the `-musl` variant; regular Linux gets
  *   the plain `linux-*`.
- * - Codex's Linux binaries are statically musl-linked and ship under a
- *   single `linux-*` SKU that runs on both glibc and musl hosts. Alpine
- *   REH gets the same `linux-*` package as regular Linux.
  *
  * REH uses two encodings for Alpine x64: the modern `{platform: 'alpine',
  * arch: 'x64'}` and the legacy `{platform: 'linux', arch: 'alpine'}`. Both

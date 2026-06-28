@@ -15,7 +15,7 @@ import { URI } from '../../../base/common/uri.js';
 import { generateUuid } from '../../../base/common/uuid.js';
 import * as os from 'os';
 import * as inspector from 'inspector';
-import { AgentHostClaudeAgentEnabledEnvVar, AgentHostCodexAgentEnabledEnvVar, AgentHostIpcChannels, IAgentHostInspectInfo, IAgentHostSocketInfo, IAgentService, IConnectionTrackerService, isAgentEnabled } from '../common/agentService.js';
+import { AgentHostClaudeAgentEnabledEnvVar, AgentHostIpcChannels, IAgentHostInspectInfo, IAgentHostSocketInfo, IAgentService, IConnectionTrackerService, isAgentEnabled } from '../common/agentService.js';
 import { AgentService } from './agentService.js';
 import { IAgentConfigurationService } from './agentConfigurationService.js';
 import { IAgentHostCompletions } from './agentHostCompletions.js';
@@ -32,8 +32,6 @@ import { IClawdiusCliConfigService } from '../../clawdius/common/clawdiusCliConf
 import { ClawdiusCliConfigService } from '../../clawdius/node/clawdiusCliConfigService.js';
 // CLAWDIUS-END
 import { ClaudeProxyService, IClaudeProxyService } from './claude/claudeProxyService.js';
-import { CodexAgent, CodexSdkPackage } from './codex/codexAgent.js';
-import { CodexProxyService, ICodexProxyService } from './codex/codexProxyService.js';
 import { AgentSdkDownloader, IAgentSdkDownloader } from './agentSdkDownloader.js';
 import { IAgentHostOTelService } from '../common/otel/agentHostOTelService.js';
 import { AgentHostOTelService } from './otel/agentHostOTelService.js';
@@ -166,7 +164,7 @@ async function startAgentHost(): Promise<void> {
 		const checkpointService = disposables.add(instantiationService.createInstance(AgentHostCheckpointService));
 		diServices.set(IAgentHostCheckpointService, checkpointService);
 		// Register the agent SDK downloader BEFORE any service that injects it
-		// (ClaudeAgentSdkService and CodexAgent below). The downloader resolves
+		// (ClaudeAgentSdkService below). The downloader resolves
 		// dev-override env var → on-disk cache → product.agentSdks download.
 		const agentSdkDownloader = instantiationService.createInstance(AgentSdkDownloader);
 		diServices.set(IAgentSdkDownloader, agentSdkDownloader);
@@ -188,8 +186,6 @@ async function startAgentHost(): Promise<void> {
 		diServices.set(IClaudeUsageStatsService, usageStatsService);
 		server.registerChannel(ClaudeUsageStatsChannelName, ProxyChannel.fromService(usageStatsService, disposables));
 		// CLAWDIUS-END
-		const codexProxyService = disposables.add(instantiationService.createInstance(CodexProxyService));
-		diServices.set(ICodexProxyService, codexProxyService);
 		const agentHostOTelService = disposables.add(instantiationService.createInstance(AgentHostOTelService));
 		diServices.set(IAgentHostOTelService, agentHostOTelService);
 		agentService = new AgentService(logService, fileService, sessionDataService, productService, gitService, checkpointService, rootConfigResource, telemetryService, fileMonitorService);
@@ -202,23 +198,17 @@ async function startAgentHost(): Promise<void> {
 		diServices.set(IAgentHostTerminalManager, agentService.terminalManager);
 		diServices.set(IAgentConfigurationService, agentService.configurationService);
 		diServices.set(IAgentHostCompletions, agentService.completionsService);
-		// Claude and Codex providers are gated on two things:
-		//  1. The user-facing enable toggle (`chat.agentHost.<x>Agent.enabled`,
-		//     forwarded as an env var by the starters). Claude defaults to on,
-		//     Codex defaults to off.
+		// The Claude provider is gated on two things:
+		//  1. The user-facing enable toggle (`chat.agentHost.claudeAgent.enabled`,
+		//     forwarded as an env var by the starters). Claude defaults to on.
 		//  2. The SDK being reachable. Claude is a devDependency of this repo
 		//     so the bare-import path in `ClaudeAgentSdkService._loadSdk`
 		//     always succeeds in dev; in built products the SDK ships via
-		//     `product.agentSdks.claude` and the downloader handles it. Codex
-		//     has no equivalent dev path yet, so it still requires either the
-		//     env-var override or a `product.agentSdks.codex` entry.
+		//     `product.agentSdks.claude` and the downloader handles it.
 		// If either gate fails, the provider is not registered and never appears
 		// in the agent picker (matches the pre-CDN UX exactly).
 		if (isAgentEnabled(process.env[AgentHostClaudeAgentEnabledEnvVar], true) && (!environmentService.isBuilt || agentSdkDownloader.isAvailable(ClaudeSdkPackage))) {
 			agentService.registerProvider(instantiationService.createInstance(ClaudeAgent));
-		}
-		if (isAgentEnabled(process.env[AgentHostCodexAgentEnabledEnvVar], false) && agentSdkDownloader.isAvailable(CodexSdkPackage)) {
-			agentService.registerProvider(instantiationService.createInstance(CodexAgent));
 		}
 	} catch (err) {
 		logService.error('Failed to create AgentService', err);

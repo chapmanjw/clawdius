@@ -122,7 +122,7 @@ function parseCliArgs(): IUploadArgs {
 	if (!tgzPath) { throw new Error('--tarball=<path> is required'); }
 	// Filename convention from package.ts: `<sdk>-<sdkVersion>-<sdkTarget>.tgz`.
 	const basename = path.basename(tgzPath);
-	const match = /^(claude|codex)-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-((?:darwin|linux|win32)-(?:x64|arm64)(?:-musl)?)\.tgz$/.exec(basename);
+	const match = /^(claude)-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-((?:darwin|linux|win32)-(?:x64|arm64)(?:-musl)?)\.tgz$/.exec(basename);
 	if (!match) {
 		throw new Error(`Cannot derive (sdk, version, target) from tarball filename '${basename}'`);
 	}

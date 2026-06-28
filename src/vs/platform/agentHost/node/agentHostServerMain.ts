@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 // Standalone agent host server with WebSocket protocol transport.
-// Start with: node out/vs/platform/agentHost/node/agentHostServerMain.js [--port <port>] [--host <host>] [--connection-token <token>] [--connection-token-file <path>] [--without-connection-token] [--enable-mock-agent] [--claude-sdk-root <path>] [--codex-sdk-root <path>] [--quiet] [--log <level>]
+// Start with: node out/vs/platform/agentHost/node/agentHostServerMain.js [--port <port>] [--host <host>] [--connection-token <token>] [--connection-token-file <path>] [--without-connection-token] [--enable-mock-agent] [--claude-sdk-root <path>] [--quiet] [--log <level>]
 
 import { fileURLToPath } from 'url';
 
@@ -41,13 +41,11 @@ import { ClawdiusCliConfigService } from '../../clawdius/node/clawdiusCliConfigS
 // CLAWDIUS-END
 import { ClaudeAgentSdkService, ClaudeSdkPackage, IClaudeAgentSdkService } from './claude/claudeAgentSdkService.js';
 import { ClaudeProxyService, IClaudeProxyService } from './claude/claudeProxyService.js';
-import { CodexAgent, CodexSdkPackage } from './codex/codexAgent.js';
-import { CodexProxyService, ICodexProxyService } from './codex/codexProxyService.js';
 import { AgentSdkDownloader, IAgentSdkDownloader } from './agentSdkDownloader.js';
 import { IAgentHostOTelService } from '../common/otel/agentHostOTelService.js';
 import { AgentHostOTelService } from './otel/agentHostOTelService.js';
 import { AgentService } from './agentService.js';
-import { AgentHostClaudeAgentEnabledEnvVar, AgentHostClaudeSdkRootEnvVar, AgentHostCodexAgentEnabledEnvVar, IAgentService, AgentHostCodexAgentSdkRootEnvVar, isAgentEnabled } from '../common/agentService.js';
+import { AgentHostClaudeAgentEnabledEnvVar, AgentHostClaudeSdkRootEnvVar, IAgentService, isAgentEnabled } from '../common/agentService.js';
 import { IAgentConfigurationService } from './agentConfigurationService.js';
 import { IAgentHostCompletions } from './agentHostCompletions.js';
 import { IAgentHostTerminalManager } from './agentHostTerminalManager.js';
@@ -96,12 +94,6 @@ interface IServerOptions {
 	 * for the Claude agent; empty falls through to `product.agentSdks.claude`.
 	 */
 	readonly claudeSdkRoot: string;
-	/**
-	 * Absolute path to the **SDK root directory** that contains
-	 * `node_modules/@openai/codex`. Acts as the dev override for the Codex
-	 * agent; empty falls through to `product.agentSdks.codex`.
-	 */
-	readonly codexSdkRoot: string;
 	readonly quiet: boolean;
 	/** Connection token string, or `undefined` when `--without-connection-token`. */
 	readonly connectionToken: string | undefined;
@@ -115,17 +107,14 @@ function parseServerOptions(): IServerOptions {
 	const hostIdx = argv.indexOf('--host');
 	const host = hostIdx >= 0 ? argv[hostIdx + 1] : undefined;
 	const enableMockAgent = argv.includes('--enable-mock-agent');
-	// `--claude-sdk-root` and `--codex-sdk-root` are dev overrides — they
-	// short-circuit the on-demand download from `product.agentSdks`. They must
-	// point at an SDK ROOT DIRECTORY (the parent of `node_modules/`), not the
-	// package directory or the binary file itself. Required in air-gapped
-	// deployments where the CDN is unreachable AND no product config is
-	// present; in those environments, set one of these flags or the matching
-	// env var, otherwise the corresponding provider will not register.
+	// `--claude-sdk-root` is a dev override — it short-circuits the on-demand
+	// download from `product.agentSdks`. It must point at an SDK ROOT DIRECTORY
+	// (the parent of `node_modules/`), not the package directory or the binary
+	// file itself. Required in air-gapped deployments where the CDN is
+	// unreachable AND no product config is present; in those environments, set
+	// this flag or the matching env var, otherwise the provider will not register.
 	const claudeSdkRootIdx = argv.indexOf('--claude-sdk-root');
 	const claudeSdkRoot = (claudeSdkRootIdx >= 0 ? argv[claudeSdkRootIdx + 1] : process.env[AgentHostClaudeSdkRootEnvVar]) ?? '';
-	const codexSdkRootIdx = argv.indexOf('--codex-sdk-root');
-	const codexSdkRoot = (codexSdkRootIdx >= 0 ? argv[codexSdkRootIdx + 1] : process.env[AgentHostCodexAgentSdkRootEnvVar]) ?? '';
 	const quiet = argv.includes('--quiet');
 
 	// Connection token
@@ -168,7 +157,7 @@ function parseServerOptions(): IServerOptions {
 		connectionToken = generateUuid();
 	}
 
-	return { port, host, enableMockAgent, claudeSdkRoot, codexSdkRoot, quiet, connectionToken };
+	return { port, host, enableMockAgent, claudeSdkRoot, quiet, connectionToken };
 }
 
 // ---- Main -------------------------------------------------------------------
@@ -270,9 +259,6 @@ async function main(): Promise<void> {
 		if (options.claudeSdkRoot) {
 			process.env[AgentHostClaudeSdkRootEnvVar] = options.claudeSdkRoot;
 		}
-		if (options.codexSdkRoot) {
-			process.env[AgentHostCodexAgentSdkRootEnvVar] = options.codexSdkRoot;
-		}
 		// Register the agent SDK downloader BEFORE any service that injects it.
 		const agentSdkDownloader = instantiationService.createInstance(AgentSdkDownloader);
 		diServices.set(IAgentSdkDownloader, agentSdkDownloader);
@@ -280,30 +266,21 @@ async function main(): Promise<void> {
 		diServices.set(IClaudeProxyService, claudeProxyService);
 		const claudeAgentSdkService = instantiationService.createInstance(ClaudeAgentSdkService);
 		diServices.set(IClaudeAgentSdkService, claudeAgentSdkService);
-		const codexProxyService = disposables.add(instantiationService.createInstance(CodexProxyService));
-		diServices.set(ICodexProxyService, codexProxyService);
 		const agentHostOTelService = disposables.add(instantiationService.createInstance(AgentHostOTelService));
 		diServices.set(IAgentHostOTelService, agentHostOTelService);
-		// Claude and Codex providers are gated on two things:
-		//  1. The user-facing enable toggle (`chat.agentHost.<x>Agent.enabled`,
+		// The Claude provider is gated on two things:
+		//  1. The user-facing enable toggle (`chat.agentHost.claudeAgent.enabled`,
 		//     forwarded as an env var by the renderer-side starters; the remote
-		//     server reads the env directly). Claude defaults to on, Codex
-		//     defaults to off.
+		//     server reads the env directly). Claude defaults to on.
 		//  2. The SDK being reachable. Claude is a devDependency of this repo
 		//     so the bare-import path in `ClaudeAgentSdkService._loadSdk`
 		//     always succeeds in dev; in built/shipped server installs the
 		//     SDK comes from the CLI flag / env var dev override or a
-		//     `product.agentSdks.claude` entry. Codex still requires the
-		//     env-var override or product config.
+		//     `product.agentSdks.claude` entry.
 		if (isAgentEnabled(process.env[AgentHostClaudeAgentEnabledEnvVar], true) && (!environmentService.isBuilt || agentSdkDownloader.isAvailable(ClaudeSdkPackage))) {
 			const claudeAgent = disposables.add(instantiationService.createInstance(ClaudeAgent));
 			agentService.registerProvider(claudeAgent);
 			log('ClaudeAgent registered');
-		}
-		if (isAgentEnabled(process.env[AgentHostCodexAgentEnabledEnvVar], false) && agentSdkDownloader.isAvailable(CodexSdkPackage)) {
-			const codexAgent = disposables.add(instantiationService.createInstance(CodexAgent));
-			agentService.registerProvider(codexAgent);
-			log('CodexAgent registered');
 		}
 	}
 

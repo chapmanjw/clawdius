@@ -1303,10 +1303,6 @@ export abstract class BaseAgentHostSessionsProvider extends Disposable implement
 			return Codicon.claude;
 		}
 
-		if (provider === 'openai' || provider.includes('codex')) {
-			return Codicon.openai;
-		}
-
 		return undefined;
 	}
 

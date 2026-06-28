@@ -5,14 +5,9 @@
 
 import * as nls from '../../../nls.js';
 import { Extensions as ConfigurationExtensions, IConfigurationRegistry } from '../../configuration/common/configurationRegistry.js';
-import product from '../../product/common/product.js';
 import { Registry } from '../../registry/common/platform.js';
 import {
 	AgentHostClaudeAgentEnabledSettingId,
-	AgentHostCodexAgentBinaryArgsSettingId,
-	AgentHostCodexAgentEnabledSettingId,
-	AgentHostCodexAgentSdkRootSettingId,
-	AgentHostCodexAgentCodexHomeSettingId,
 	AgentHostOTelCaptureContentSettingId,
 	AgentHostOTelDbSpanExporterEnabledSettingId,
 	AgentHostOTelEnabledSettingId,
@@ -48,34 +43,6 @@ configurationRegistry.registerConfiguration({
 			description: nls.localize('chat.agentHost.claudeAgent.enabled', "When enabled, the agent host registers the Claude provider (subject to the Claude SDK being reachable). Independent of `#chat.agents.claude.preferAgentHost#` and `#chat.editor.claude.preferAgentHost#`, which choose which integration surfaces Claude. Requires `#chat.agentHost.enabled#`. The agent host process must be restarted for changes to take effect."),
 			default: true,
 			tags: ['experimental', 'advanced'],
-		},
-		[AgentHostCodexAgentEnabledSettingId]: {
-			type: 'boolean',
-			description: nls.localize('chat.agentHost.codexAgent.enabled', "When enabled, the agent host registers the Codex provider (subject to the Codex SDK being reachable). Requires `#chat.agentHost.enabled#`. The agent host process must be restarted for changes to take effect."),
-			default: false,
-			tags: ['experimental', 'advanced'],
-		},
-		[AgentHostCodexAgentSdkRootSettingId]: {
-			type: 'string',
-			description: nls.localize('chat.agentHost.codexAgent.sdkRoot', "Experimental, for local SDK development only. Absolute path to a directory containing `node_modules/@openai/codex`. When set, the agent host spawns the Codex binary from this tree instead of downloading the SDK. Empty (the default) falls through to the SDK distribution shipped with this build. Requires `#chat.agentHost.enabled#`. The agent host process must be restarted for changes to take effect."),
-			default: '',
-			tags: ['experimental', 'advanced'],
-			included: product.quality !== 'stable',
-		},
-		[AgentHostCodexAgentCodexHomeSettingId]: {
-			type: 'string',
-			description: nls.localize('chat.agentHost.codexAgent.codexHome', "Optional override for `$CODEX_HOME`. Controls where the codex binary reads config and writes rollouts. When empty, codex uses its default (`~/.codex`)."),
-			default: '',
-			tags: ['experimental', 'advanced'],
-			included: product.quality !== 'stable',
-		},
-		[AgentHostCodexAgentBinaryArgsSettingId]: {
-			type: 'array',
-			items: { type: 'string' },
-			description: nls.localize('chat.agentHost.codexAgent.binaryArgs', "Additional command-line arguments passed to `codex app-server`. Primarily useful for debugging (for example, `--log-level=debug`)."),
-			default: [],
-			tags: ['experimental', 'advanced'],
-			included: product.quality !== 'stable',
 		},
 		[AgentHostOTelEnabledSettingId]: {
 			type: 'boolean',

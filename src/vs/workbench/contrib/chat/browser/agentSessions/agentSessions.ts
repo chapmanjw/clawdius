@@ -16,7 +16,6 @@ export enum AgentSessionProviders {
 	Background = SessionType.CopilotCLI,
 	Cloud = SessionType.CopilotCloud,
 	Claude = SessionType.ClaudeCode,
-	Codex = SessionType.Codex,
 	Growth = SessionType.Growth,
 	AgentHostCopilot = SessionType.AgentHostCopilot,
 }
@@ -43,7 +42,6 @@ export function getAgentSessionProvider(sessionResource: URI | string): AgentSes
 		case AgentSessionProviders.Background:
 		case AgentSessionProviders.Cloud:
 		case AgentSessionProviders.Claude:
-		case AgentSessionProviders.Codex:
 		case AgentSessionProviders.AgentHostCopilot:
 			return type;
 		default:
@@ -61,8 +59,6 @@ export function getAgentSessionProviderName(provider: AgentSessionTarget): strin
 			return localize('chat.session.providerLabel.cloud', "Cloud");
 		case AgentSessionProviders.Claude:
 			return 'Claude';
-		case AgentSessionProviders.Codex:
-			return 'Codex';
 		case AgentSessionProviders.Growth:
 			return 'Growth';
 		case AgentSessionProviders.AgentHostCopilot:
@@ -80,8 +76,6 @@ export function getAgentSessionProviderIcon(provider: AgentSessionTarget): Theme
 			return Codicon.copilot;
 		case AgentSessionProviders.Cloud:
 			return Codicon.cloud;
-		case AgentSessionProviders.Codex:
-			return Codicon.openai;
 		case AgentSessionProviders.Claude:
 			return Codicon.claude;
 		case AgentSessionProviders.Growth:
@@ -101,7 +95,6 @@ export function isFirstPartyAgentSessionProvider(provider: AgentSessionTarget): 
 		case AgentSessionProviders.AgentHostCopilot:
 			return true;
 		case AgentSessionProviders.Claude:
-		case AgentSessionProviders.Codex:
 		case AgentSessionProviders.Growth:
 			return false;
 		default:
@@ -122,7 +115,6 @@ export function getAgentCanContinueIn(provider: AgentSessionTarget): boolean {
 		case AgentSessionProviders.Cloud:
 			return true;
 		case AgentSessionProviders.Claude:
-		case AgentSessionProviders.Codex:
 		case AgentSessionProviders.Growth:
 		case AgentSessionProviders.AgentHostCopilot:
 			return false;
@@ -143,8 +135,6 @@ export function getAgentSessionProviderDescription(provider: AgentSessionTarget)
 			// CLAWDIUS-BEGIN claude branding (no copilot subscription)
 			return localize('chat.session.providerDescription.claude', "Delegate tasks to Claude. The agent iterates via chat and works interactively to implement changes on your main workspace.");
 		// CLAWDIUS-END
-		case AgentSessionProviders.Codex:
-			return localize('chat.session.providerDescription.codex', "Opens a new Codex session in the editor. Codex sessions can be managed from the chat sessions view.");
 		case AgentSessionProviders.Growth:
 			return localize('chat.session.providerDescription.growth', "Learn about Copilot features.");
 		case AgentSessionProviders.AgentHostCopilot:

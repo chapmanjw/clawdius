@@ -2,14 +2,14 @@
 name = "code-cli"
 version = "0.1.0"
 edition = "2021"
-default-run = "code"
+default-run = "clawdius"
 
 [lib]
 name = "cli"
 path = "src/lib.rs"
 
 [[bin]]
-name = "code"
+name = "clawdius"
 
 [dependencies]
 futures = "0.3.28"

@@ -513,8 +513,9 @@ export class ClaudeAgentSession extends Disposable {
 	 * - Post-materialize: queue the change on the pipeline; the SDK
 	 *   applies it on the NEXT user request via
 	 *   `Query.setModel` / `Query.applyFlagSettings`. `'max'` effort is
-	 *   clamped to `'xhigh'` on the runtime path (CAPI lacks a `'max'`
-	 *   tier today).
+	 *   clamped to `'xhigh'` on the runtime path (the SDK's
+	 *   `applyFlagSettings` effort setter has no `'max'` value; only the
+	 *   startup `Options.effort` path accepts it).
 	 *
 	 * In both cases the new model is persisted to the per-session
 	 * metadata overlay so a later resume sees the user's choice.
@@ -525,7 +526,7 @@ export class ClaudeAgentSession extends Disposable {
 			const requestedEffort = resolveClaudeEffort(model);
 			const runtimeEffort = clampEffortForRuntime(requestedEffort);
 			if (requestedEffort === 'max') {
-				this._logService.warn(`[Claude:${this.sessionId}] setModel: 'max' effort clamped to 'xhigh' (Copilot CAPI has no 'max' model yet)`);
+				this._logService.warn(`[Claude:${this.sessionId}] setModel: 'max' effort clamped to 'xhigh' (the SDK runtime effort setter applyFlagSettings accepts no 'max' value)`);
 			}
 			await this._pipeline.setModel(model.id);
 			if (runtimeEffort !== undefined) {

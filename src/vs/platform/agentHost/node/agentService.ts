@@ -456,7 +456,7 @@ export class AgentService extends Disposable implements IAgentService {
 		// `listSessions` snapshot, so renderer-side caches don't evict a
 		// live/active session (which would close the chat view holding the
 		// in-flight response bubble). Two cases need this: a provider can
-		// transiently drop a session (e.g. `CopilotAgent.listSessions` returns
+		// transiently drop a session (e.g. `ClaudeAgent.listSessions` returns
 		// an empty array right after `session/turnComplete`), and a provisional
 		// session (created but not yet materialized — see `createSession`) that
 		// has had any turn activity must stay visible until it materializes.

@@ -22,9 +22,10 @@ export class AgentHostAuthenticationService {
 
 	async authenticate(params: AuthenticateParams, providers: Iterable<IAgent>): Promise<AuthenticateResult> {
 		this._logService.trace(`[AgentHostAuthenticationService] authenticate called: resource=${params.resource}`);
-		// Multiple providers may share the same protected resource (e.g.
-		// both Copilot CLI and Claude consume the GitHub Copilot token).
-		// Fan out to every matching provider in parallel; the request is
+		// Generic agent auth-token store: providers declare the protected
+		// resources they need (RFC 9728), and a token is offered here keyed
+		// by resource + scopes. Multiple providers may share one resource,
+		// so fan out to every matching provider in parallel; the request is
 		// considered authenticated if at least one accepts. Provider
 		// failures are isolated -- one provider rejecting (e.g. proxy
 		// server bind failure) MUST NOT prevent another provider from

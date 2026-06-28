@@ -19,12 +19,12 @@ import { hasKey } from '../../../../base/common/types.js';
 import { NullLogService } from '../../../log/common/log.js';
 import { FileService } from '../../../files/common/fileService.js';
 import { InMemoryFileSystemProvider } from '../../../files/common/inMemoryFilesystemProvider.js';
-import { AgentSession, GITHUB_COPILOT_PROTECTED_RESOURCE } from '../../common/agentService.js';
+import { AgentSession } from '../../common/agentService.js';
 import { ISessionDatabase, ISessionDataService } from '../../common/sessionDataService.js';
 import { SessionDatabase } from '../../node/sessionDatabase.js';
 import { ActionType, ActionEnvelope } from '../../common/state/sessionActions.js';
 import { ChangesetStatus, CustomizationType, MessageAttachmentKind, MessageKind, SessionActiveClient, ResponsePartKind, ROOT_STATE_URI, SessionLifecycle, SessionStatus, ToolCallConfirmationReason, ToolCallStatus, ToolResultContentType, TurnState, buildSubagentSessionUri, customizationId, isSubagentSession, type ChangesetState, type MarkdownResponsePart, type ToolCallCompletedState, type ToolCallResponsePart } from '../../common/state/sessionState.js';
-import { type MessageResourceAttachment } from '../../common/state/protocol/state.js';
+import { type MessageResourceAttachment, type ProtectedResourceMetadata } from '../../common/state/protocol/state.js';
 import { IProductService } from '../../../product/common/productService.js';
 import { AgentService } from '../../node/agentService.js';
 import { MockAgent, ScriptedMockAgent } from './mockAgent.js';
@@ -62,7 +62,7 @@ suite('AgentService (node dispatcher)', () => {
 
 	const disposables = new DisposableStore();
 	let service: AgentService;
-	let copilotAgent: MockAgent;
+	let stubAgent: MockAgent;
 	let fileService: FileService;
 	let nullSessionDataService: ISessionDataService;
 
@@ -87,8 +87,8 @@ suite('AgentService (node dispatcher)', () => {
 		await fileService.writeFile(URI.from({ scheme: Schemas.inMemory, path: '/testDir/file.txt' }), VSBuffer.fromString('hello'));
 
 		service = disposables.add(new AgentService(new NullLogService(), fileService, nullSessionDataService, { _serviceBrand: undefined } as IProductService, createNoopGitService()));
-		copilotAgent = new MockAgent('copilot');
-		disposables.add(toDisposable(() => copilotAgent.dispose()));
+		stubAgent = new MockAgent('copilot');
+		disposables.add(toDisposable(() => stubAgent.dispose()));
 	});
 
 	teardown(() => disposables.clear());
@@ -99,19 +99,19 @@ suite('AgentService (node dispatcher)', () => {
 	suite('registerProvider', () => {
 
 		test('registers a provider successfully', () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 			// No throw - success
 		});
 
 		test('throws on duplicate provider registration', () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 			const duplicate = new MockAgent('copilot');
 			disposables.add(toDisposable(() => duplicate.dispose()));
 			assert.throws(() => service.registerProvider(duplicate), /already registered/);
 		});
 
 		test('maps progress events to protocol actions via onDidAction', async () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 			const session = await service.createSession({ provider: 'copilot' });
 
 			// Start a turn so there's an active turn to map events to
@@ -124,7 +124,7 @@ suite('AgentService (node dispatcher)', () => {
 			const envelopes: ActionEnvelope[] = [];
 			disposables.add(service.onDidAction(e => envelopes.push(e)));
 
-			copilotAgent.fireProgress({
+			stubAgent.fireProgress({
 				kind: 'action', session,
 				action: { type: ActionType.SessionResponsePart, turnId: 'turn-1', part: { kind: ResponsePartKind.Markdown, id: 'msg-1', content: 'hello' } },
 			});
@@ -418,14 +418,14 @@ suite('AgentService (node dispatcher)', () => {
 	suite('createSession', () => {
 
 		test('creates session via specified provider', async () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 
 			const session = await service.createSession({ provider: 'copilot' });
 			assert.strictEqual(AgentSession.provider(session), 'copilot');
 		});
 
 		test('honors requested session URI', async () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 
 			const requestedSession = AgentSession.uri('copilot', 'requested-session');
 			const session = await service.createSession({ provider: 'copilot', session: requestedSession });
@@ -450,7 +450,7 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test('uses default provider when none specified', async () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 
 			const session = await service.createSession();
 			assert.strictEqual(AgentSession.provider(session), 'copilot');
@@ -466,16 +466,16 @@ suite('AgentService (node dispatcher)', () => {
 	suite('disposeSession', () => {
 
 		test('dispatches to the correct provider and cleans up tracking', async () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 
 			const session = await service.createSession({ provider: 'copilot' });
 			await service.disposeSession(session);
 
-			assert.strictEqual(copilotAgent.disposeSessionCalls.length, 1);
+			assert.strictEqual(stubAgent.disposeSessionCalls.length, 1);
 		});
 
 		test('is a no-op for unknown sessions', async () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 			const unknownSession = URI.from({ scheme: 'unknown', path: '/nope' });
 
 			// Should not throw
@@ -488,7 +488,7 @@ suite('AgentService (node dispatcher)', () => {
 	suite('aggregation', () => {
 
 		test('listSessions aggregates sessions from all providers', async () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 
 			await service.createSession({ provider: 'copilot' });
 
@@ -538,8 +538,8 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test('listSessions uses SDK title when no custom title exists', async () => {
-			service.registerProvider(copilotAgent);
-			copilotAgent.sessionMetadataOverrides = { summary: 'Auto-generated Title' };
+			service.registerProvider(stubAgent);
+			stubAgent.sessionMetadataOverrides = { summary: 'Auto-generated Title' };
 
 			await service.createSession({ provider: 'copilot' });
 
@@ -549,7 +549,7 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test('listSessions never returns subagent sessions', async () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 			const parentSession = await service.createSession({ provider: 'copilot' });
 
 			// Simulate a live subagent being spawned: `_handleSubagentStarted`
@@ -958,7 +958,7 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test.skip('listSessions overlays live state manager title over SDK title', async () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 
 			const session = await service.createSession({ provider: 'copilot' });
 
@@ -1259,7 +1259,7 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test('subscribe to a registered session changeset URI returns a changeset snapshot', async () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 			const session = await service.createSession({ provider: 'copilot' });
 
 			const changesetUri = buildSessionChangesetUri(session.toString());
@@ -1278,7 +1278,7 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test('subscribe to an unknown changeset id fails without restoring the parent session', async () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 			// Build a changeset URI with a producer-defined id we don't
 			// recognise (`staged`). The unknown-changeset early throw must
 			// fire before the session-restore fallback so the parent session
@@ -1299,7 +1299,7 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test('createSession stores live session config', async () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 
 			const config = { isolation: 'worktree', branch: 'feature/config' };
 			const session = await service.createSession({ provider: 'copilot', config });
@@ -1308,7 +1308,7 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test('seeds activeClient into the initial session state when provided', async () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 
 			const envelopes: ActionEnvelope[] = [];
 			disposables.add(service.onDidAction(env => envelopes.push(env)));
@@ -1330,7 +1330,7 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test('omits activeClient from the initial session state when not provided', async () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 
 			const session = await service.createSession({ provider: 'copilot' });
 
@@ -1342,49 +1342,57 @@ suite('AgentService (node dispatcher)', () => {
 
 	suite('authenticate', () => {
 
+		// Neutral protected-resource fixture for the generic token-store
+		// tests below. Uses the same resource the stub agent advertises so
+		// `authenticate` matches it and the token is stored.
+		const TEST_PROTECTED_RESOURCE: ProtectedResourceMetadata = {
+			resource: 'https://api.github.com',
+			scopes_supported: ['read:user', 'user:email'],
+		};
+
 		test('routes token to provider matching the resource', async () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 
 			const result = await service.authenticate({ resource: 'https://api.github.com', token: 'ghp_test123' });
 
 			assert.deepStrictEqual(result, { authenticated: true });
-			assert.deepStrictEqual(copilotAgent.authenticateCalls, [{ resource: 'https://api.github.com', token: 'ghp_test123' }]);
+			assert.deepStrictEqual(stubAgent.authenticateCalls, [{ resource: 'https://api.github.com', token: 'ghp_test123' }]);
 		});
 
 		test('returns not authenticated for unknown resource', async () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 
 			const result = await service.authenticate({ resource: 'https://unknown.example.com', token: 'tok' });
 
-			assert.deepStrictEqual({ result, token: service.getAuthToken({ resource: 'https://unknown.example.com' }), authenticateCalls: copilotAgent.authenticateCalls }, {
+			assert.deepStrictEqual({ result, token: service.getAuthToken({ resource: 'https://unknown.example.com' }), authenticateCalls: stubAgent.authenticateCalls }, {
 				result: { authenticated: false },
 				token: undefined,
 				authenticateCalls: [],
 			});
 		});
 
-		test('stores GitHub Copilot token for operation handlers', async () => {
-			service.registerProvider(copilotAgent);
+		test('stores an auth token for operation handlers', async () => {
+			service.registerProvider(stubAgent);
 
-			const result = await service.authenticate({ resource: GITHUB_COPILOT_PROTECTED_RESOURCE.resource, token: 'copilot-token' });
+			const result = await service.authenticate({ resource: TEST_PROTECTED_RESOURCE.resource, token: 'auth-token' });
 
-			assert.deepStrictEqual({ result, token: service.getAuthToken({ resource: GITHUB_COPILOT_PROTECTED_RESOURCE.resource, scopes: GITHUB_COPILOT_PROTECTED_RESOURCE.scopes_supported }), authenticateCalls: copilotAgent.authenticateCalls }, {
+			assert.deepStrictEqual({ result, token: service.getAuthToken({ resource: TEST_PROTECTED_RESOURCE.resource, scopes: TEST_PROTECTED_RESOURCE.scopes_supported }), authenticateCalls: stubAgent.authenticateCalls }, {
 				result: { authenticated: true },
-				token: 'copilot-token',
-				authenticateCalls: [{ resource: GITHUB_COPILOT_PROTECTED_RESOURCE.resource, token: 'copilot-token' }],
+				token: 'auth-token',
+				authenticateCalls: [{ resource: TEST_PROTECTED_RESOURCE.resource, token: 'auth-token' }],
 			});
 		});
 
 		test('stores tokens for the same resource by scopes', async () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 
-			await service.authenticate({ resource: GITHUB_COPILOT_PROTECTED_RESOURCE.resource, scopes: ['read:user'], token: 'read-token' });
-			await service.authenticate({ resource: GITHUB_COPILOT_PROTECTED_RESOURCE.resource, scopes: ['read:user', 'user:email'], token: 'profile-token' });
+			await service.authenticate({ resource: TEST_PROTECTED_RESOURCE.resource, scopes: ['read:user'], token: 'read-token' });
+			await service.authenticate({ resource: TEST_PROTECTED_RESOURCE.resource, scopes: ['read:user', 'user:email'], token: 'profile-token' });
 
 			assert.deepStrictEqual({
-				readToken: service.getAuthToken({ resource: GITHUB_COPILOT_PROTECTED_RESOURCE.resource, scopes: ['read:user'] }),
-				profileToken: service.getAuthToken({ resource: GITHUB_COPILOT_PROTECTED_RESOURCE.resource, scopes: ['user:email', 'read:user'] }),
-				supersetToken: service.getAuthToken({ resource: GITHUB_COPILOT_PROTECTED_RESOURCE.resource, scopes: ['user:email'] }),
+				readToken: service.getAuthToken({ resource: TEST_PROTECTED_RESOURCE.resource, scopes: ['read:user'] }),
+				profileToken: service.getAuthToken({ resource: TEST_PROTECTED_RESOURCE.resource, scopes: ['user:email', 'read:user'] }),
+				supersetToken: service.getAuthToken({ resource: TEST_PROTECTED_RESOURCE.resource, scopes: ['user:email'] }),
 			}, {
 				readToken: 'read-token',
 				profileToken: 'profile-token',
@@ -1400,14 +1408,14 @@ suite('AgentService (node dispatcher)', () => {
 			const claudeAgent = new MockAgent('claude');
 			claudeAgent.getProtectedResources = () => [{ resource: 'https://api.github.com', authorization_servers: ['https://github.com/login/oauth'], required: true }];
 			disposables.add(toDisposable(() => claudeAgent.dispose()));
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 			service.registerProvider(claudeAgent);
 
 			const result = await service.authenticate({ resource: 'https://api.github.com', token: 'tok' });
 
 			assert.deepStrictEqual({
 				result,
-				copilotCalls: copilotAgent.authenticateCalls,
+				copilotCalls: stubAgent.authenticateCalls,
 				claudeCalls: claudeAgent.authenticateCalls,
 			}, {
 				result: { authenticated: true },
@@ -1424,14 +1432,14 @@ suite('AgentService (node dispatcher)', () => {
 			flakyAgent.getProtectedResources = () => [{ resource: 'https://api.github.com', authorization_servers: ['https://github.com/login/oauth'], required: true }];
 			flakyAgent.authenticate = async () => { throw new Error('proxy bind failed'); };
 			disposables.add(toDisposable(() => flakyAgent.dispose()));
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 			service.registerProvider(flakyAgent);
 
 			const result = await service.authenticate({ resource: 'https://api.github.com', token: 'tok' });
 
 			assert.deepStrictEqual({
 				result,
-				copilotCalls: copilotAgent.authenticateCalls,
+				copilotCalls: stubAgent.authenticateCalls,
 			}, {
 				result: { authenticated: true },
 				copilotCalls: [{ resource: 'https://api.github.com', token: 'tok' }],
@@ -1464,9 +1472,9 @@ suite('AgentService (node dispatcher)', () => {
 
 		test('shuts down all providers', async () => {
 			let copilotShutdown = false;
-			copilotAgent.shutdown = async () => { copilotShutdown = true; };
+			stubAgent.shutdown = async () => { copilotShutdown = true; };
 
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 
 			await service.shutdown();
 			assert.ok(copilotShutdown);
@@ -1478,12 +1486,12 @@ suite('AgentService (node dispatcher)', () => {
 	suite('restoreSession', () => {
 
 		test('restores a session with message history', async () => {
-			service.registerProvider(copilotAgent);
-			const { session } = await copilotAgent.createSession();
-			const sessions = await copilotAgent.listSessions();
+			service.registerProvider(stubAgent);
+			const { session } = await stubAgent.createSession();
+			const sessions = await stubAgent.listSessions();
 			const sessionResource = sessions[0].session;
 
-			copilotAgent.sessionMessages = [
+			stubAgent.sessionMessages = [
 				{ type: 'message', session, role: 'user', messageId: 'msg-1', content: 'Hello', toolRequests: [] },
 				{ type: 'message', session, role: 'assistant', messageId: 'msg-2', content: 'Hi there!', toolRequests: [] },
 			];
@@ -1502,12 +1510,12 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test('restores a session with tool calls', async () => {
-			service.registerProvider(copilotAgent);
-			const { session } = await copilotAgent.createSession();
-			const sessions = await copilotAgent.listSessions();
+			service.registerProvider(stubAgent);
+			const { session } = await stubAgent.createSession();
+			const sessions = await stubAgent.listSessions();
 			const sessionResource = sessions[0].session;
 
-			copilotAgent.sessionMessages = [
+			stubAgent.sessionMessages = [
 				{ type: 'message', session, role: 'user', messageId: 'msg-1', content: 'Run a command', toolRequests: [] },
 				{ type: 'message', session, role: 'assistant', messageId: 'msg-2', content: 'I will run a command.', toolRequests: [{ toolCallId: 'tc-1', name: 'shell' }] },
 				{ type: 'tool_start', session, toolCallId: 'tc-1', toolName: 'shell', displayName: 'Shell', invocationMessage: 'Running command...' },
@@ -1529,12 +1537,12 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test('interleaves reasoning, markdown, and tool calls in stream order on resume', async () => {
-			service.registerProvider(copilotAgent);
-			const { session } = await copilotAgent.createSession();
-			const sessions = await copilotAgent.listSessions();
+			service.registerProvider(stubAgent);
+			const { session } = await stubAgent.createSession();
+			const sessions = await stubAgent.listSessions();
 			const sessionResource = sessions[0].session;
 
-			copilotAgent.sessionMessages = [
+			stubAgent.sessionMessages = [
 				{ type: 'message', session, role: 'user', messageId: 'u-1', content: 'Hello', toolRequests: [] },
 				{ type: 'message', session, role: 'assistant', messageId: 'a-1', content: 'Reply A', reasoningText: 'Thinking A', toolRequests: [{ toolCallId: 'tc-1', name: 'shell' }] },
 				{ type: 'tool_start', session, toolCallId: 'tc-1', toolName: 'shell', displayName: 'Shell', invocationMessage: 'Running...' },
@@ -1563,12 +1571,12 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test('flushes interrupted turns', async () => {
-			service.registerProvider(copilotAgent);
-			const { session } = await copilotAgent.createSession();
-			const sessions = await copilotAgent.listSessions();
+			service.registerProvider(stubAgent);
+			const { session } = await stubAgent.createSession();
+			const sessions = await stubAgent.listSessions();
 			const sessionResource = sessions[0].session;
 
-			copilotAgent.sessionMessages = [
+			stubAgent.sessionMessages = [
 				{ type: 'message', session, role: 'user', messageId: 'msg-1', content: 'Interrupted', toolRequests: [] },
 				{ type: 'message', session, role: 'user', messageId: 'msg-2', content: 'Retried', toolRequests: [] },
 				{ type: 'message', session, role: 'assistant', messageId: 'msg-3', content: 'Answer', toolRequests: [] },
@@ -1584,7 +1592,7 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test('throws when session is not found on backend', async () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 			await assert.rejects(
 				() => service.restoreSession(AgentSession.uri('copilot', 'nonexistent')),
 				/Session not found on backend/,
@@ -1592,17 +1600,17 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test('restores known session without listing all provider sessions', async () => {
-			service.registerProvider(copilotAgent);
-			const { session } = await copilotAgent.createSession();
+			service.registerProvider(stubAgent);
+			const { session } = await stubAgent.createSession();
 			service.stateManager.deleteSession(session.toString());
 
-			copilotAgent.sessionMessages = [
+			stubAgent.sessionMessages = [
 				{ type: 'message', session, role: 'user', messageId: 'msg-1', content: 'Hello', toolRequests: [] },
 				{ type: 'message', session, role: 'assistant', messageId: 'msg-2', content: 'Hi', toolRequests: [] },
 			];
 
 			let listSessionsCalled = false;
-			copilotAgent.listSessions = async () => {
+			stubAgent.listSessions = async () => {
 				listSessionsCalled = true;
 				throw new Error('restoreSession should not enumerate sessions');
 			};
@@ -1614,21 +1622,21 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test('falls back to listing sessions when direct metadata restore fails', async () => {
-			service.registerProvider(copilotAgent);
-			const { session } = await copilotAgent.createSession();
+			service.registerProvider(stubAgent);
+			const { session } = await stubAgent.createSession();
 			service.stateManager.deleteSession(session.toString());
 
-			copilotAgent.sessionMessages = [
+			stubAgent.sessionMessages = [
 				{ type: 'message', session, role: 'user', messageId: 'msg-1', content: 'Hello', toolRequests: [] },
 				{ type: 'message', session, role: 'assistant', messageId: 'msg-2', content: 'Hi', toolRequests: [] },
 			];
 
-			copilotAgent.getSessionMetadata = async () => {
+			stubAgent.getSessionMetadata = async () => {
 				throw new Error('direct metadata unavailable');
 			};
-			const originalListSessions = copilotAgent.listSessions.bind(copilotAgent);
+			const originalListSessions = stubAgent.listSessions.bind(stubAgent);
 			let listSessionsCalled = false;
-			copilotAgent.listSessions = async () => {
+			stubAgent.listSessions = async () => {
 				listSessionsCalled = true;
 				return originalListSessions();
 			};
@@ -1645,12 +1653,12 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test('restores a session with subagent tool calls', async () => {
-			service.registerProvider(copilotAgent);
-			const { session } = await copilotAgent.createSession();
-			const sessions = await copilotAgent.listSessions();
+			service.registerProvider(stubAgent);
+			const { session } = await stubAgent.createSession();
+			const sessions = await stubAgent.listSessions();
 			const sessionResource = sessions[0].session;
 
-			copilotAgent.sessionMessages = [
+			stubAgent.sessionMessages = [
 				{ type: 'message', session, role: 'user', messageId: 'msg-1', content: 'Review this code', toolRequests: [] },
 				{ type: 'message', session, role: 'assistant', messageId: 'msg-2', content: '', toolRequests: [{ toolCallId: 'tc-sub', name: 'task' }] },
 				{ type: 'tool_start', session, toolCallId: 'tc-sub', toolName: 'task', displayName: 'Task', invocationMessage: 'Delegating...', toolKind: 'subagent' as const, subagentDescription: 'Find related files', subagentAgentName: 'explore' },
@@ -1713,13 +1721,13 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test('inner assistant messages from subagent do not create extra turns (fixture)', async () => {
-			service.registerProvider(copilotAgent);
-			const { session } = await copilotAgent.createSession();
-			const sessions = await copilotAgent.listSessions();
+			service.registerProvider(stubAgent);
+			const { session } = await stubAgent.createSession();
+			const sessions = await stubAgent.listSessions();
 			const sessionResource = sessions[0].session;
 
 			// Load real SDK events from fixture (sanitized from ~/.copilot/session-state/)
-			copilotAgent.sessionMessages = await loadFixtureMessages('subagent-session.jsonl', session);
+			stubAgent.sessionMessages = await loadFixtureMessages('subagent-session.jsonl', session);
 
 			await service.restoreSession(sessionResource);
 
@@ -1762,7 +1770,7 @@ suite('AgentService (node dispatcher)', () => {
 	suite('subscriber refcount eviction', () => {
 
 		test('an empty session created in this lifetime stays observable until GC fires', async () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 			const sessionResource = await service.createSession({ provider: 'copilot' });
 
 			service.addSubscriber(sessionResource, 'client-1');
@@ -1775,7 +1783,7 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test('a session with an active turn is NOT evicted when its last subscriber drops', async () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 			const sessionResource = await service.createSession({ provider: 'copilot' });
 
 			service.addSubscriber(sessionResource, 'client-1');
@@ -1794,12 +1802,12 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test('a restored idle session is evicted when its last subscriber drops', async () => {
-			service.registerProvider(copilotAgent);
-			const { session } = await copilotAgent.createSession();
-			const sessions = await copilotAgent.listSessions();
+			service.registerProvider(stubAgent);
+			const { session } = await stubAgent.createSession();
+			const sessions = await stubAgent.listSessions();
 			const sessionResource = sessions[0].session;
 
-			copilotAgent.sessionMessages = [
+			stubAgent.sessionMessages = [
 				{ type: 'message', session, role: 'user', messageId: 'msg-1', content: 'Hello', toolRequests: [] },
 				{ type: 'message', session, role: 'assistant', messageId: 'msg-2', content: 'Hi', toolRequests: [] },
 			];
@@ -1812,12 +1820,12 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test('multiple subscribers keep a restored session alive until all drop', async () => {
-			service.registerProvider(copilotAgent);
-			const { session } = await copilotAgent.createSession();
-			const sessions = await copilotAgent.listSessions();
+			service.registerProvider(stubAgent);
+			const { session } = await stubAgent.createSession();
+			const sessions = await stubAgent.listSessions();
 			const sessionResource = sessions[0].session;
 
-			copilotAgent.sessionMessages = [
+			stubAgent.sessionMessages = [
 				{ type: 'message', session, role: 'user', messageId: 'msg-1', content: 'Hello', toolRequests: [] },
 				{ type: 'message', session, role: 'assistant', messageId: 'msg-2', content: 'Hi', toolRequests: [] },
 			];
@@ -1833,12 +1841,12 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test('subagent subscriber pins the parent session against eviction', async () => {
-			service.registerProvider(copilotAgent);
-			const { session } = await copilotAgent.createSession();
-			const sessions = await copilotAgent.listSessions();
+			service.registerProvider(stubAgent);
+			const { session } = await stubAgent.createSession();
+			const sessions = await stubAgent.listSessions();
 			const sessionResource = sessions[0].session;
 
-			copilotAgent.sessionMessages = [
+			stubAgent.sessionMessages = [
 				{ type: 'message', session, role: 'user', messageId: 'msg-1', content: 'Review', toolRequests: [] },
 				{ type: 'message', session, role: 'assistant', messageId: 'msg-2', content: '', toolRequests: [{ toolCallId: 'tc-sub', name: 'task' }] },
 				{ type: 'tool_start', session, toolCallId: 'tc-sub', toolName: 'task', displayName: 'Task', invocationMessage: 'Delegating', toolKind: 'subagent' as const, subagentDescription: 'Find files', subagentAgentName: 'explore' },
@@ -1866,12 +1874,12 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test('nested subagent subscriber pins ancestor session against eviction', async () => {
-			service.registerProvider(copilotAgent);
-			const { session } = await copilotAgent.createSession();
-			const sessions = await copilotAgent.listSessions();
+			service.registerProvider(stubAgent);
+			const { session } = await stubAgent.createSession();
+			const sessions = await stubAgent.listSessions();
 			const sessionResource = sessions[0].session;
 
-			copilotAgent.sessionMessages = [
+			stubAgent.sessionMessages = [
 				{ type: 'message', session, role: 'user', messageId: 'msg-1', content: 'Review', toolRequests: [] },
 				{ type: 'message', session, role: 'assistant', messageId: 'msg-2', content: '', toolRequests: [{ toolCallId: 'tc-sub', name: 'task' }] },
 				{ type: 'tool_start', session, toolCallId: 'tc-sub', toolName: 'task', displayName: 'Task', invocationMessage: 'Delegating', toolKind: 'subagent' as const, subagentDescription: 'Find files', subagentAgentName: 'explore' },
@@ -1898,12 +1906,12 @@ suite('AgentService (node dispatcher)', () => {
 			// Regression: when a depth-2 subagent URI unsubscribes the eviction
 			// must reach all the way to the root, not stop at the intermediate
 			// parent and leave root state cached indefinitely.
-			service.registerProvider(copilotAgent);
-			const { session } = await copilotAgent.createSession();
-			const sessions = await copilotAgent.listSessions();
+			service.registerProvider(stubAgent);
+			const { session } = await stubAgent.createSession();
+			const sessions = await stubAgent.listSessions();
 			const sessionResource = sessions[0].session;
 
-			copilotAgent.sessionMessages = [
+			stubAgent.sessionMessages = [
 				{ type: 'message', session, role: 'user', messageId: 'msg-1', content: 'hi', toolRequests: [] },
 				{ type: 'message', session, role: 'assistant', messageId: 'msg-2', content: 'done', toolRequests: [] },
 			];
@@ -1925,8 +1933,8 @@ suite('AgentService (node dispatcher)', () => {
 
 		test('addSubscriber for <session>/changeset/uncommitted triggers the first git diff refresh', async () => {
 			const workingDirectory = URI.from({ scheme: Schemas.inMemory, path: '/wd-refresh' });
-			copilotAgent.resolvedWorkingDirectory = workingDirectory;
-			copilotAgent.sessionMetadataOverrides = { workingDirectory };
+			stubAgent.resolvedWorkingDirectory = workingDirectory;
+			stubAgent.sessionMetadataOverrides = { workingDirectory };
 
 			// Recording git service: a call to `computeSessionFileDiffs`
 			// with `baseBranch=undefined` is the signature of the uncommitted
@@ -1940,7 +1948,7 @@ suite('AgentService (node dispatcher)', () => {
 
 			const sessionDataService = createSessionDataService();
 			const localService = disposables.add(new AgentService(new NullLogService(), fileService, sessionDataService, { _serviceBrand: undefined } as IProductService, gitService));
-			localService.registerProvider(copilotAgent);
+			localService.registerProvider(stubAgent);
 			const sessionResource = await localService.createSession({ provider: 'copilot' });
 			const uncommittedUri = URI.parse(buildUncommittedChangesetUri(sessionResource.toString()));
 
@@ -1969,8 +1977,8 @@ suite('AgentService (node dispatcher)', () => {
 			// without this trigger. Subscribing to the session-changeset
 			// URI from any other client must also fire its own refresh.
 			const workingDirectory = URI.from({ scheme: Schemas.inMemory, path: '/wd-refresh-2' });
-			copilotAgent.resolvedWorkingDirectory = workingDirectory;
-			copilotAgent.sessionMetadataOverrides = { workingDirectory };
+			stubAgent.resolvedWorkingDirectory = workingDirectory;
+			stubAgent.sessionMetadataOverrides = { workingDirectory };
 
 			const computeCalls: { wd: string; baseBranch: string | undefined }[] = [];
 			const gitService = createNoopGitService();
@@ -1981,7 +1989,7 @@ suite('AgentService (node dispatcher)', () => {
 
 			const sessionDataService = createSessionDataService();
 			const localService = disposables.add(new AgentService(new NullLogService(), fileService, sessionDataService, { _serviceBrand: undefined } as IProductService, gitService));
-			localService.registerProvider(copilotAgent);
+			localService.registerProvider(stubAgent);
 			const sessionResource = await localService.createSession({ provider: 'copilot' });
 			const sessionChangesetUri = URI.parse(buildSessionChangesetUri(sessionResource.toString()));
 
@@ -2010,8 +2018,8 @@ suite('AgentService (node dispatcher)', () => {
 			//    a separate subscribe), populates `summary.workingDirectory`
 			//    from disk, and MUST drain the pending refresh.
 			const workingDirectory = URI.from({ scheme: Schemas.inMemory, path: '/wd-restore-drain' });
-			copilotAgent.resolvedWorkingDirectory = workingDirectory;
-			copilotAgent.sessionMetadataOverrides = { workingDirectory };
+			stubAgent.resolvedWorkingDirectory = workingDirectory;
+			stubAgent.sessionMetadataOverrides = { workingDirectory };
 
 			const computeCalls: { wd: string; baseBranch: string | undefined }[] = [];
 			const gitService = createNoopGitService();
@@ -2022,13 +2030,13 @@ suite('AgentService (node dispatcher)', () => {
 
 			const sessionDataService = createSessionDataService();
 			const localService = disposables.add(new AgentService(new NullLogService(), fileService, sessionDataService, { _serviceBrand: undefined } as IProductService, gitService));
-			localService.registerProvider(copilotAgent);
+			localService.registerProvider(stubAgent);
 
 			// Seed a session on the agent without calling
 			// `localService.createSession` — mirrors a restored-from-disk
 			// session not yet in the service's state manager.
-			const { session } = await copilotAgent.createSession();
-			const sessions = await copilotAgent.listSessions();
+			const { session } = await stubAgent.createSession();
+			const sessions = await stubAgent.listSessions();
 			const sessionResource = sessions[0].session;
 			const uncommittedUri = URI.parse(buildUncommittedChangesetUri(sessionResource.toString()));
 
@@ -2045,7 +2053,7 @@ suite('AgentService (node dispatcher)', () => {
 			// session-URI subscribe). After this, the pending refresh
 			// must drain and `_tryComputeGitDiffs` must run for the
 			// uncommitted slot.
-			copilotAgent.sessionMessages = [
+			stubAgent.sessionMessages = [
 				{ type: 'message', session, role: 'user', messageId: 'msg-1', content: 'Hi', toolRequests: [] },
 			];
 			await localService.restoreSession(sessionResource);
@@ -2066,19 +2074,19 @@ suite('AgentService (node dispatcher)', () => {
 
 		test('an empty unsubscribed session is disposed after the grace period', () => {
 			return runWithFakedTimers({ useFakeTimers: true }, async () => {
-				service.registerProvider(copilotAgent);
+				service.registerProvider(stubAgent);
 				const sessionResource = await service.createSession({ provider: 'copilot' });
 				service.addSubscriber(sessionResource, 'client-1');
 
 				service.unsubscribe(sessionResource, 'client-1');
 
 				// Before the grace period, dispose has not been called.
-				assert.strictEqual(copilotAgent.disposeSessionCalls.length, 0, 'no GC before grace expires');
+				assert.strictEqual(stubAgent.disposeSessionCalls.length, 0, 'no GC before grace expires');
 
 				// After the grace period, the session is disposed entirely.
 				await new Promise(resolve => setTimeout(resolve, 30_000));
 				assert.deepStrictEqual(
-					copilotAgent.disposeSessionCalls.map(u => u.toString()),
+					stubAgent.disposeSessionCalls.map(u => u.toString()),
 					[sessionResource.toString()],
 					'GC fired after grace period',
 				);
@@ -2087,7 +2095,7 @@ suite('AgentService (node dispatcher)', () => {
 
 		test('a session with at least one turn is not GC-disposed', () => {
 			return runWithFakedTimers({ useFakeTimers: true }, async () => {
-				service.registerProvider(copilotAgent);
+				service.registerProvider(stubAgent);
 				const sessionResource = await service.createSession({ provider: 'copilot' });
 				service.addSubscriber(sessionResource, 'client-1');
 				service.dispatchAction(
@@ -2104,13 +2112,13 @@ suite('AgentService (node dispatcher)', () => {
 				service.unsubscribe(sessionResource, 'client-1');
 				await new Promise(resolve => setTimeout(resolve, 30_000));
 
-				assert.strictEqual(copilotAgent.disposeSessionCalls.length, 0, 'session with turns must not be GC-disposed');
+				assert.strictEqual(stubAgent.disposeSessionCalls.length, 0, 'session with turns must not be GC-disposed');
 			});
 		});
 
 		test('resubscribe within the grace period cancels GC', () => {
 			return runWithFakedTimers({ useFakeTimers: true }, async () => {
-				service.registerProvider(copilotAgent);
+				service.registerProvider(stubAgent);
 				const sessionResource = await service.createSession({ provider: 'copilot' });
 				service.addSubscriber(sessionResource, 'client-1');
 
@@ -2120,13 +2128,13 @@ suite('AgentService (node dispatcher)', () => {
 				service.addSubscriber(sessionResource, 'client-1');
 				await new Promise(resolve => setTimeout(resolve, 30_000));
 
-				assert.strictEqual(copilotAgent.disposeSessionCalls.length, 0, 'GC must be cancelled after resubscribe');
+				assert.strictEqual(stubAgent.disposeSessionCalls.length, 0, 'GC must be cancelled after resubscribe');
 			});
 		});
 
 		test('GC is rearmed after a resubscribe-then-unsubscribe cycle', () => {
 			return runWithFakedTimers({ useFakeTimers: true }, async () => {
-				service.registerProvider(copilotAgent);
+				service.registerProvider(stubAgent);
 				const sessionResource = await service.createSession({ provider: 'copilot' });
 				service.addSubscriber(sessionResource, 'client-1');
 
@@ -2137,9 +2145,9 @@ suite('AgentService (node dispatcher)', () => {
 
 				// Old timer was cancelled; a fresh 30s timer is now armed.
 				await new Promise(resolve => setTimeout(resolve, 29_000));
-				assert.strictEqual(copilotAgent.disposeSessionCalls.length, 0, 'rearmed timer not yet fired');
+				assert.strictEqual(stubAgent.disposeSessionCalls.length, 0, 'rearmed timer not yet fired');
 				await new Promise(resolve => setTimeout(resolve, 2_000));
-				assert.strictEqual(copilotAgent.disposeSessionCalls.length, 1, 'rearmed timer fires after fresh 30s');
+				assert.strictEqual(stubAgent.disposeSessionCalls.length, 1, 'rearmed timer fires after fresh 30s');
 			});
 		});
 
@@ -2150,7 +2158,7 @@ suite('AgentService (node dispatcher)', () => {
 			// Without explicit cancellation, the timer would fire and
 			// dispose the just-revived session.
 			return runWithFakedTimers({ useFakeTimers: true }, async () => {
-				service.registerProvider(copilotAgent);
+				service.registerProvider(stubAgent);
 				const sessionResource = await service.createSession({ provider: 'copilot', session: AgentSession.uri('copilot', 'recreate-test') });
 				service.addSubscriber(sessionResource, 'client-1');
 				service.unsubscribe(sessionResource, 'client-1');
@@ -2162,7 +2170,7 @@ suite('AgentService (node dispatcher)', () => {
 				// Wait past the original grace window. If GC wasn't
 				// cancelled by createSession, dispose would have fired.
 				await new Promise(resolve => setTimeout(resolve, 30_000));
-				assert.strictEqual(copilotAgent.disposeSessionCalls.length, 0, 'createSession on same URI must cancel pending GC');
+				assert.strictEqual(stubAgent.disposeSessionCalls.length, 0, 'createSession on same URI must cancel pending GC');
 			});
 		});
 	});
@@ -2422,8 +2430,8 @@ suite('AgentService (node dispatcher)', () => {
 		test('createSession uses agent-resolved working directory in state', async () => {
 			// Simulate an agent that resolves a worktree path different from the input
 			const worktreeDir = URI.file('/source/repo.worktrees/agents-xyz');
-			copilotAgent.resolvedWorkingDirectory = worktreeDir;
-			service.registerProvider(copilotAgent);
+			stubAgent.resolvedWorkingDirectory = worktreeDir;
+			service.registerProvider(stubAgent);
 
 			const sourceDir = URI.file('/source/repo');
 			const session = await service.createSession({ provider: 'copilot', workingDirectory: sourceDir });
@@ -2435,8 +2443,8 @@ suite('AgentService (node dispatcher)', () => {
 
 		test('createSession falls back to config working directory when agent does not resolve', async () => {
 			// Agent does not override the working directory (e.g. folder isolation)
-			copilotAgent.resolvedWorkingDirectory = undefined;
-			service.registerProvider(copilotAgent);
+			stubAgent.resolvedWorkingDirectory = undefined;
+			service.registerProvider(stubAgent);
 
 			const sourceDir = URI.file('/source/repo');
 			const session = await service.createSession({ provider: 'copilot', workingDirectory: sourceDir });
@@ -2448,8 +2456,8 @@ suite('AgentService (node dispatcher)', () => {
 		test('restoreSession uses agent working directory in state', async () => {
 			// Agent returns the worktree path through listSessions
 			const worktreeDir = URI.file('/source/repo.worktrees/agents-xyz');
-			copilotAgent.sessionMetadataOverrides = { workingDirectory: worktreeDir };
-			service.registerProvider(copilotAgent);
+			stubAgent.sessionMetadataOverrides = { workingDirectory: worktreeDir };
+			service.registerProvider(stubAgent);
 
 			const session = await service.createSession({ provider: 'copilot' });
 
@@ -2510,7 +2518,7 @@ suite('AgentService (node dispatcher)', () => {
 		}
 
 		test('createSession seeds both halves before SessionReady', async () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 
 			const session = await service.createSession({ provider: 'copilot' });
 			const sessionStr = session.toString();
@@ -2522,7 +2530,7 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test('forked createSession seeds both halves on the forked session', async () => {
-			service.registerProvider(copilotAgent);
+			service.registerProvider(stubAgent);
 
 			// Set up a source session with at least one completed turn. The
 			// fork path at agentService.ts:493-504 intentionally drops

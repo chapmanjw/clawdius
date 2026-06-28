@@ -737,12 +737,12 @@ export class AgentSideEffects extends Disposable {
 		switch (action.type) {
 			case ActionType.SessionTurnStarted: {
 				// Per-turn streaming part tracking is owned by the agent
-				// (e.g. CopilotAgentSession) and reset on its `send()` call.
+				// (e.g. ClaudeAgentSession) and reset on its `send()` call.
 
 				// `/rename [title]` is a generic, agent-agnostic slash command:
 				// it is intercepted here and redirected to a title change rather
 				// than forwarded to the agent SDK. Mirrors the per-agent text-side
-				// dispatch (`parseLeadingSlashCommand` in CopilotAgentSession), but
+				// dispatch (`parseLeadingSlashCommand` in ClaudeAgentSession), but
 				// applies to every session type.
 				if (this._tryHandleRenameCommand(channel, action.turnId, action.message.text)) {
 					break;

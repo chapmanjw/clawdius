@@ -20,9 +20,9 @@ export interface IActiveClientStructuralSnapshot {
  * Deep-equal two client-tool snapshots on `name + description + inputSchema`.
  * `undefined` and `[]` compare equal. Order-insensitive.
  *
- * Single shared implementation for the agent-host providers — previously
- * duplicated as `snapshotsEqual` (Claude client-tools model) and an inline
- * loop in the Copilot `ActiveClient` staleness check.
+ * Single shared implementation for the agent-host providers — collapses
+ * what used to be two copies (the `snapshotsEqual` helper in the Claude
+ * client-tools model and a separate inline staleness-check loop).
  */
 export function structuralToolsEqual(
 	a: readonly ToolDefinition[] | undefined,
@@ -54,9 +54,9 @@ export function structuralToolsEqual(
 
 /**
  * Live, mutable holder for the active client's identity (`clientId`) and the
- * structural tool snapshot it contributes. Shared between the Copilot and
- * Claude providers so a single long-lived instance per session URI survives
- * SDK-session dispose / resume cycles.
+ * structural tool snapshot it contributes. Held per session URI by the Claude
+ * provider so a single long-lived instance survives SDK-session dispose /
+ * resume cycles.
  *
  * The `clientId` is read at tool-call **stamp time** (not cached per turn) so
  * that a window reload — which connects with a new `clientId` and re-pushes an

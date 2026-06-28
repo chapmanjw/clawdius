@@ -458,27 +458,10 @@ export interface AuthenticateResult {
 }
 
 /**
- * Canonical {@link ProtectedResourceMetadata} for the GitHub Copilot
- * resource. Shared between every agent provider that consumes a GitHub
- * Copilot bearer token (e.g. Copilot CLI, Claude) so they advertise an
- * identical resource identifier to the auth flow — clients dispatch by
- * `resource`, and divergent metadata would silently route the same
- * token down separate code paths.
- */
-export const GITHUB_COPILOT_PROTECTED_RESOURCE: ProtectedResourceMetadata = {
-	resource: 'https://api.github.com',
-	resource_name: 'GitHub Copilot',
-	authorization_servers: ['https://github.com/login/oauth'],
-	scopes_supported: ['read:user', 'user:email'],
-	required: true,
-};
-
-/**
  * Canonical {@link ProtectedResourceMetadata} for GitHub repository write
- * operations (e.g. creating a pull request). Distinct from
- * {@link GITHUB_COPILOT_PROTECTED_RESOURCE} so that the broader `repo`
- * scope is only requested when a session actually needs it (e.g. when a
- * changeset operation handler throws `AHP_AUTH_REQUIRED` with this
+ * operations (e.g. creating a pull request). Carries the broader `repo`
+ * scope, which is only requested when a session actually needs it (e.g.
+ * when a changeset operation handler throws `AHP_AUTH_REQUIRED` with this
  * resource), rather than at session create for every agent.
  *
  * `required: false` reflects that the resource is only needed on demand —

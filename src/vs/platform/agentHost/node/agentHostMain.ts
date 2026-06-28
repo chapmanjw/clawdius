@@ -77,7 +77,7 @@ import { createAgentHostTelemetryService } from './agentHostTelemetryService.js'
 import { ITelemetryService } from '../../telemetry/common/telemetry.js';
 
 // Entry point for the agent host utility process.
-// Sets up IPC, logging, and registers agent providers (Copilot).
+// Sets up IPC, logging, and registers the Claude agent provider.
 // When VSCODE_AGENT_HOST_PORT or VSCODE_AGENT_HOST_SOCKET_PATH env vars
 // are set, also starts a WebSocket server for external clients.
 
@@ -156,9 +156,9 @@ async function startAgentHost(): Promise<void> {
 		const gitService = instantiationService.createInstance(AgentHostGitService);
 		diServices.set(IAgentHostGitService, gitService);
 		// Checkpoint service depends on session data + git services, so
-		// construct it AFTER both are registered. Consumed by CopilotAgent
-		// (baseline capture) and AgentService's inner DI (changeset
-		// pipeline / end-of-turn capture).
+		// construct it AFTER both are registered. Consumed by AgentService's
+		// inner DI (the changeset pipeline reads turn/baseline refs;
+		// AgentSideEffects captures the end-of-turn checkpoint).
 		const checkpointService = disposables.add(instantiationService.createInstance(AgentHostCheckpointService));
 		diServices.set(IAgentHostCheckpointService, checkpointService);
 		// Register the agent SDK downloader BEFORE any service that injects it

@@ -326,3 +326,39 @@ A public-release hygiene pass; all changes are committed (see git log). Grouped 
 
 ### Moved out of the repo (not tracked)
 - The gitignored `.research/` receipts (never committed) were moved to `clawdius-private-docs/research/`. The `.research/` gitignore line is kept for future receipts.
+
+## Release pipeline (2026-06)
+
+Tag-driven build/sign/publish for the desktop apps. New files plus in-place edits to the
+packaging templates.
+
+### New files
+- `.github/workflows/clawdius-release.yml` - tag-triggered (v*) pipeline: Windows
+  (x64/arm64), Linux (x64/arm64 deb/rpm/tar + best-effort snap), macOS (universal), then a
+  publish job that drafts a GitHub Release with each leg's signed SHA256SUMS.
+- `build/release/win32.ps1` - Windows build -> Azure Trusted Signing (guarded) -> Inno
+  user/system installers -> zip -> checksums. Locally validated (x64, unsigned).
+- `build/release/linux.sh` - Linux build -> tar/deb/rpm -> GPG sign (guarded) -> checksums.
+  Authored; pending runner/WSL validation.
+- `build/release/darwin.sh` - universal build -> Developer ID sign + notarize (guarded) ->
+  dmg + zip. Authored; pending macOS runner validation.
+
+### In-place edits to upstream packaging
+- `package.json` / `package-lock.json`: version 1.125.0-alpha-0.1 -> 1.125.0-alpha1 (the
+  old suffix broke the Inno RawVersion regex).
+- `build/win32/code.iss`: AppPublisher Microsoft Corporation -> John Chapman; the
+  code.visualstudio.com URLs + install-time MsgBox -> the fork; OutputBaseFilename
+  VSCodeSetup -> ClawdiusSetup.
+- `resources/linux/**`: rebranded the deb/rpm/snap/AppStream metadata to Clawdius/John
+  Chapman/the fork, and REMOVED the Microsoft apt-repo + GPG-key registration from
+  debian/postinst (a Clawdius .deb must not add packages.microsoft.com); debian/templates
+  emptied.
+- `build/darwin/sign.ts`: macOS permission-prompt strings (Camera/Mic/AppleScript/Audio
+  Capture) "...in Visual Studio Code..." -> Clawdius.
+- `build/darwin/create-dmg.ts`: DMG title defaulted to "Code OSS" -> product.nameLong;
+  background falls back to None when the quality-specific tiff is absent.
+
+### Known follow-ups
+- A Clawdius dmg-background tiff (no background for the no-quality fork until added).
+- arm64, snap, and the whole macOS leg are unproven until a runner pass.
+- The operational signing/cert setup lives in the private docs repo, not here.

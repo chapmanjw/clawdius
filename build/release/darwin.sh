@@ -65,7 +65,13 @@ fi
 echo "==> create dmg"
 node build/darwin/create-dmg.ts "$buildDir" "$out"
 mv "$out/VSCode-darwin-universal.dmg" "$out/Clawdius-darwin-universal-$version.dmg"
-[ -n "${APPLE_API_KEY_P8_PATH:-}" ] && xcrun stapler staple "$out/Clawdius-darwin-universal-$version.dmg" || true
+# The DMG needs its OWN notarization ticket (the app's ticket inside does not cover it,
+# so `stapler staple <dmg>` fails unless the DMG itself was submitted to notarytool).
+if [ -n "${CODESIGN_IDENTITY:-}" ] && [ -n "${APPLE_API_KEY_P8_PATH:-}" ] && [ -n "${APPLE_API_KEY_ID:-}" ] && [ -n "${APPLE_API_ISSUER_ID:-}" ]; then
+	echo "==> notarize dmg"
+	xcrun notarytool submit "$out/Clawdius-darwin-universal-$version.dmg" --key "$APPLE_API_KEY_P8_PATH" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" --wait
+	xcrun stapler staple "$out/Clawdius-darwin-universal-$version.dmg"
+fi
 
 # 6. Portable zip of the (signed) app.
 echo "==> zip app"

@@ -139,7 +139,8 @@ jobs:
       - uses: snapcore/action-build@v1
         id: snapbuild
         with:
-          path: .build/linux/snap/${{ matrix.arch }}
+          # gulp prepare-snap writes the snapcraft tree to .build/linux/snap/<arch>/<applicationName>-<arch>
+          path: .build/linux/snap/${{ matrix.arch }}/clawdius-${{ matrix.arch }}
       - name: Collect snap
         run: |
           mkdir -p release-artifacts
@@ -199,8 +200,8 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: [windows, linux, snap, macos]
-    # Publish once Windows + Linux + macOS succeed; snap is optional (continue-on-error).
-    if: ${{ always() && needs.windows.result == 'success' && needs.linux.result == 'success' && needs.macos.result == 'success' }}
+    # Publish only on a tag push, once Windows + Linux + macOS succeed; snap is optional.
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/') && needs.windows.result == 'success' && needs.linux.result == 'success' && needs.macos.result == 'success' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4

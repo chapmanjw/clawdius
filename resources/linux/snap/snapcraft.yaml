@@ -1,10 +1,10 @@
 name: @@NAME@@
 version: '@@VERSION@@'
-summary: Code editing. Redefined.
+summary: Claude-native code editing.
 description: |
-  Visual Studio Code is a new choice of tool that combines the
-  simplicity of a code editor with what developers need for the core
-  edit-build-debug cycle.
+  Clawdius is a Claude-native code editor: a fork of Visual Studio
+  Code (OSS) with Claude Code built in. See
+  https://github.com/chapmanjw/clawdius for details.
 
 architectures:
   - build-on: amd64

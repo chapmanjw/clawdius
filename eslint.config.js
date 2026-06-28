@@ -142,6 +142,29 @@ export default defineConfig(
 			]
 		},
 	},
+	// CLAWDIUS-BEGIN clawdius-authored .ts files carry the Clawdius copyright header
+	{
+		files: [
+			'src/vs/workbench/contrib/clawdius/**/*.ts',
+			'src/vs/platform/clawdius/**/*.ts',
+			'extensions/clawdius-chat/**/*.ts',
+			'extensions/clawdius-themes/**/*.ts',
+			'clawdius/**/*.ts',
+			'script/clawdius/**/*.ts'
+		],
+		rules: {
+			'header/header': [
+				2,
+				'block',
+				[
+					'---------------------------------------------------------------------------------------------',
+					' *  Copyright (c) 2026 John Chapman (Clawdius). All rights reserved.',
+					' *  Licensed under the MIT License. See License.txt in the project root for license information.',
+					' *--------------------------------------------------------------------------------------------'
+				]
+			]
+		},
+	},
 	// TS
 	{
 		files: [

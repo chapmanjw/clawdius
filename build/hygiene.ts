@@ -23,6 +23,22 @@ const copyrightHeaderLines = [
 	' *--------------------------------------------------------------------------------------------*/',
 ];
 
+// CLAWDIUS-BEGIN clawdius-authored files carry the Clawdius copyright header (mirrors eslint.config.js)
+const clawdiusHeaderLines = [
+	copyrightHeaderLines[0],
+	' *  Copyright (c) 2026 John Chapman (Clawdius). All rights reserved.',
+	copyrightHeaderLines[2],
+	copyrightHeaderLines[3],
+];
+const clawdiusAuthoredDirs = [
+	'src/vs/workbench/contrib/clawdius/',
+	'src/vs/platform/clawdius/',
+	'extensions/clawdius-chat/',
+	'extensions/clawdius-themes/',
+	'clawdius/',
+	'script/clawdius/',
+];
+
 interface VinylFileWithLines extends VinylFile {
 	__lines: string[];
 }
@@ -185,9 +201,11 @@ export function hygiene(some: NodeJS.ReadWriteStream | string[] | undefined, run
 
 	const copyrights = es.through(function (file: VinylFileWithLines) {
 		const lines = file.__lines;
+		const relPath = file.relative.replace(/\\/g, '/');
+		const expectedHeader = clawdiusAuthoredDirs.some(dir => relPath.startsWith(dir)) ? clawdiusHeaderLines : copyrightHeaderLines;
 
-		for (let i = 0; i < copyrightHeaderLines.length; i++) {
-			if (lines[i] !== copyrightHeaderLines[i]) {
+		for (let i = 0; i < expectedHeader.length; i++) {
+			if (lines[i] !== expectedHeader[i]) {
 				console.error(file.relative + ': Missing or bad copyright statement');
 				errorCount++;
 				break;

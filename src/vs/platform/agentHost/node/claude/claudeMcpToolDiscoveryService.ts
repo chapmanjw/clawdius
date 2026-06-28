@@ -55,7 +55,6 @@ export class ClaudeMcpToolDiscoveryService implements IClaudeMcpToolDiscoverySer
 					mcpServers: undefined,
 					cliResolution,
 				},
-				undefined, // Clawdius native ~/.claude auth: no CAPI proxy handle
 				data => this.logService.trace(`[mcp-discovery stderr] ${data}`),
 				msg => this.logService.trace(`[mcp-discovery] declined elicitation: ${msg}`),
 			);

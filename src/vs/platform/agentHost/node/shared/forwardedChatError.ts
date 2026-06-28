@@ -3,8 +3,6 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { CopilotApiError, COPILOT_API_ERROR_STATUS_STREAMING } from './copilotApiService.js';
-
 /**
  * Marker prefix used to smuggle a structured, serialized chat fetch error
  * through the agent SDK subprocess boundary. The model proxies run in this
@@ -84,61 +82,6 @@ function statusToFetchType(status: number): string {
 		default:
 			return 'failed';
 	}
-}
-
-/**
- * Builds a {@link IForwardedChatError} from a {@link CopilotApiError}. The
- * error's Anthropic envelope carries the upstream message and type, which are
- * surfaced as `reason`/`capiError` so the core formatter can render the right
- * message (rate limit, quota, filtered, etc.).
- */
-export function buildForwardedChatError(err: CopilotApiError): IForwardedChatError {
-	const status = err.status === COPILOT_API_ERROR_STATUS_STREAMING ? 502 : err.status;
-	const requestId = typeof err.envelope.request_id === 'string' ? err.envelope.request_id : '';
-	// CAPI rate-limit/quota errors carry their fine-grained code in the
-	// response body (e.g. `{ "error": { "code": "quota_exceeded", ... } }`).
-	// The proxy synthesizes a non-conforming body into the Anthropic envelope
-	// as `error.type: 'api_error'` with the raw body as the message, so prefer
-	// a CAPI code/message parsed out of the message when present.
-	const capiError = extractCapiError(err.envelope.error.message) ?? { code: err.envelope.error.type, message: err.envelope.error.message };
-	return {
-		fetchError: {
-			type: statusToFetchType(status),
-			reason: capiError.message ?? err.envelope.error.message,
-			requestId,
-			capiError,
-		},
-	};
-}
-
-/**
- * Attempts to parse a CAPI-style error body (`{ "error": { "code", "message" } }`)
- * out of an envelope message string. Returns `undefined` when the message is
- * not such a JSON payload.
- */
-function extractCapiError(message: string): { code?: string; message?: string } | undefined {
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(message);
-	} catch {
-		return undefined;
-	}
-	if (!parsed || typeof parsed !== 'object') {
-		return undefined;
-	}
-	const error = (parsed as { error?: unknown }).error;
-	if (!error || typeof error !== 'object') {
-		return undefined;
-	}
-	const code = (error as { code?: unknown }).code;
-	const msg = (error as { message?: unknown }).message;
-	if (typeof code !== 'string' && typeof msg !== 'string') {
-		return undefined;
-	}
-	return {
-		code: typeof code === 'string' ? code : undefined,
-		message: typeof msg === 'string' ? msg : undefined,
-	};
 }
 
 /**

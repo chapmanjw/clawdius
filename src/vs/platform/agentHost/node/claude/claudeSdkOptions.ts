@@ -16,14 +16,13 @@ import { PendingRequestRegistry } from '../../common/pendingRequestRegistry.js';
 import type { ModelSelection } from '../../common/state/protocol/state.js';
 import { IClaudeAgentSdkService } from './claudeAgentSdkService.js';
 import { buildClientToolMcpServer } from './clientTools/claudeClientToolMcpServer.js';
-import { IClaudeProxyHandle } from './claudeProxyService.js';
 import { SessionClientToolsDiff } from './clientTools/claudeSessionClientToolsModel.js';
 
 /**
  * Inputs to {@link buildOptions} that vary per startup. Pure-data: no
  * services, no live event subscribers. The function is a deterministic
- * projection from this bag plus a {@link IClaudeProxyHandle} onto the
- * SDK's {@link Options} discriminated union.
+ * projection from this bag onto the SDK's {@link Options} discriminated
+ * union.
  */
 export interface IBuildOptionsInput {
 	readonly sessionId: string;
@@ -87,23 +86,14 @@ export interface IBuildOptionsInput {
  */
 export async function buildOptions(
 	input: IBuildOptionsInput,
-	// CLAWDIUS-BEGIN native ~/.claude auth: handle is undefined in Clawdius mode (no CAPI proxy); the SDK subprocess then authenticates via ~/.claude OAuth like the claude CLI
-	proxyHandle: IClaudeProxyHandle | undefined,
-	// CLAWDIUS-END
 	logStderr: (data: string) => void,
 	logElicitation: (msg: string) => void,
 ): Promise<Options> {
-	// CLAWDIUS-BEGIN native ~/.claude auth: only strip ANTHROPIC_API_KEY when proxying
-	const subprocessEnv = buildSubprocessEnv(proxyHandle !== undefined);
-	// CLAWDIUS-END
+	// CLAWDIUS native ~/.claude auth: no CAPI proxy, so keep the inherited ANTHROPIC_API_KEY env intact and
+	// never redirect ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN — the SDK subprocess authenticates via ~/.claude OAuth.
+	const subprocessEnv = buildSubprocessEnv(false);
 	const resolvedRgDiskPath = await rgDiskPath();
 	const settingsEnv: Record<string, string> = {
-		// CLAWDIUS-BEGIN native ~/.claude auth: only redirect to the local CAPI proxy when a handle exists
-		...(proxyHandle ? {
-			ANTHROPIC_BASE_URL: proxyHandle.baseUrl,
-			ANTHROPIC_AUTH_TOKEN: `${proxyHandle.nonce}.${input.sessionId}`,
-		} : {}),
-		// CLAWDIUS-END
 		CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
 		USE_BUILTIN_RIPGREP: '0',
 		PATH: `${dirname(resolvedRgDiskPath)}${delimiter}${process.env.PATH ?? ''}`,

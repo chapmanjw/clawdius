@@ -20,7 +20,6 @@ import { AgentService } from './agentService.js';
 import { IAgentConfigurationService } from './agentConfigurationService.js';
 import { IAgentHostCompletions } from './agentHostCompletions.js';
 import { IAgentHostTerminalManager } from './agentHostTerminalManager.js';
-import { CopilotApiService, ICopilotApiService } from './shared/copilotApiService.js';
 import { ClaudeAgent } from './claude/claudeAgent.js';
 import { ClaudeAgentSdkService, ClaudeSdkPackage, IClaudeAgentSdkService } from './claude/claudeAgentSdkService.js';
 import { ClaudeMcpToolDiscoveryChannelName, IClaudeMcpToolDiscoveryService } from '../common/claudeMcpToolDiscovery.js';
@@ -31,7 +30,6 @@ import { ClaudeUsageStatsService } from '../../clawdius/node/claudeUsageStatsSer
 import { IClawdiusCliConfigService } from '../../clawdius/common/clawdiusCliConfig.js';
 import { ClawdiusCliConfigService } from '../../clawdius/node/clawdiusCliConfigService.js';
 // CLAWDIUS-END
-import { ClaudeProxyService, IClaudeProxyService } from './claude/claudeProxyService.js';
 import { AgentSdkDownloader, IAgentSdkDownloader } from './agentSdkDownloader.js';
 import { IAgentHostOTelService } from '../common/otel/agentHostOTelService.js';
 import { AgentHostOTelService } from './otel/agentHostOTelService.js';
@@ -168,10 +166,6 @@ async function startAgentHost(): Promise<void> {
 		// dev-override env var → on-disk cache → product.agentSdks download.
 		const agentSdkDownloader = instantiationService.createInstance(AgentSdkDownloader);
 		diServices.set(IAgentSdkDownloader, agentSdkDownloader);
-		const copilotApiService = instantiationService.createInstance(CopilotApiService, undefined);
-		diServices.set(ICopilotApiService, copilotApiService);
-		const claudeProxyService = disposables.add(instantiationService.createInstance(ClaudeProxyService));
-		diServices.set(IClaudeProxyService, claudeProxyService);
 		const claudeAgentSdkService = instantiationService.createInstance(ClaudeAgentSdkService);
 		diServices.set(IClaudeAgentSdkService, claudeAgentSdkService);
 		// CLAWDIUS-BEGIN live MCP tool discovery (#93): a short-lived SDK session lists a configured MCP

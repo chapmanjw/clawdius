@@ -7,7 +7,6 @@ import assert from 'assert';
 import { URI } from '../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
 import { buildOptions, buildSubprocessEnv } from '../../node/claude/claudeSdkOptions.js';
-import type { IClaudeProxyHandle } from '../../node/claude/claudeProxyService.js';
 import type { IClawdiusCliResolution } from '../../../clawdius/common/clawdiusCliConfig.js';
 
 suite('claudeSdkOptions / buildSubprocessEnv', () => {
@@ -85,12 +84,6 @@ suite('claudeSdkOptions / buildOptions plugins projection', () => {
 
 	ensureNoDisposablesAreLeakedInTestSuite();
 
-	const proxyHandle: IClaudeProxyHandle = {
-		baseUrl: 'http://127.0.0.1:0',
-		nonce: 'n',
-		dispose: () => { },
-	};
-
 	const BUNDLED: IClawdiusCliResolution = { mode: 'bundled', executable: 'node', extraEnv: {}, providerPreset: 'oauth', disableLoginPrompt: false };
 
 	function input(plugins: readonly URI[] | undefined, cliResolution: IClawdiusCliResolution = BUNDLED) {
@@ -111,7 +104,6 @@ suite('claudeSdkOptions / buildOptions plugins projection', () => {
 	test('non-empty plugins project to Options.plugins as local entries', async () => {
 		const opts = await buildOptions(
 			input([URI.file('/p/a'), URI.file('/p/b')]),
-			proxyHandle,
 			() => { },
 			() => { },
 		);
@@ -122,47 +114,47 @@ suite('claudeSdkOptions / buildOptions plugins projection', () => {
 	});
 
 	test('empty plugins array omits Options.plugins', async () => {
-		const opts = await buildOptions(input([]), proxyHandle, () => { }, () => { });
+		const opts = await buildOptions(input([]), () => { }, () => { });
 		assert.strictEqual(opts.plugins, undefined);
 	});
 
 	test('undefined plugins omits Options.plugins', async () => {
-		const opts = await buildOptions(input(undefined), proxyHandle, () => { }, () => { });
+		const opts = await buildOptions(input(undefined), () => { }, () => { });
 		assert.strictEqual(opts.plugins, undefined);
 	});
 
 	test('bundled resolution maps executable to the current binary and omits pathToClaudeCodeExecutable', async () => {
-		const opts = await buildOptions(input(undefined, { mode: 'bundled', executable: 'node', extraEnv: {}, providerPreset: 'oauth', disableLoginPrompt: false }), proxyHandle, () => { }, () => { });
+		const opts = await buildOptions(input(undefined, { mode: 'bundled', executable: 'node', extraEnv: {}, providerPreset: 'oauth', disableLoginPrompt: false }), () => { }, () => { });
 		assert.strictEqual(opts.executable, process.execPath);
 		assert.strictEqual(opts.pathToClaudeCodeExecutable, undefined);
 	});
 
 	test('userCli resolution points the SDK at the user cli.js', async () => {
-		const opts = await buildOptions(input(undefined, { mode: 'userCli', executable: 'node', pathToClaudeCodeExecutable: '/u/claude/cli.js', extraEnv: {}, providerPreset: 'oauth', disableLoginPrompt: false }), proxyHandle, () => { }, () => { });
+		const opts = await buildOptions(input(undefined, { mode: 'userCli', executable: 'node', pathToClaudeCodeExecutable: '/u/claude/cli.js', extraEnv: {}, providerPreset: 'oauth', disableLoginPrompt: false }), () => { }, () => { });
 		assert.strictEqual(opts.pathToClaudeCodeExecutable, '/u/claude/cli.js');
 	});
 
 	test('extraEnv overlays onto the subprocess env (base env preserved)', async () => {
-		const opts = await buildOptions(input(undefined, { mode: 'bundled', executable: 'node', extraEnv: { CLAUDE_CODE_USE_BEDROCK: '1' }, providerPreset: 'bedrock', disableLoginPrompt: true }), proxyHandle, () => { }, () => { });
+		const opts = await buildOptions(input(undefined, { mode: 'bundled', executable: 'node', extraEnv: { CLAUDE_CODE_USE_BEDROCK: '1' }, providerPreset: 'bedrock', disableLoginPrompt: true }), () => { }, () => { });
 		const env = opts.env as Record<string, string | undefined>;
 		assert.strictEqual(env.CLAUDE_CODE_USE_BEDROCK, '1');
 		assert.strictEqual(env.ELECTRON_RUN_AS_NODE, '1');
 	});
 
 	test('user env overlay cannot reintroduce a scrubbed reserved key (scrub wins)', async () => {
-		const opts = await buildOptions(input(undefined, { mode: 'bundled', executable: 'node', extraEnv: { NODE_OPTIONS: '--inspect', SAFE_VAR: 'ok' }, providerPreset: 'oauth', disableLoginPrompt: false }), proxyHandle, () => { }, () => { });
+		const opts = await buildOptions(input(undefined, { mode: 'bundled', executable: 'node', extraEnv: { NODE_OPTIONS: '--inspect', SAFE_VAR: 'ok' }, providerPreset: 'oauth', disableLoginPrompt: false }), () => { }, () => { });
 		const env = opts.env as Record<string, string | undefined>;
 		assert.strictEqual(env.NODE_OPTIONS, undefined); // the deliberate scrub wins over the user overlay
 		assert.strictEqual(env.SAFE_VAR, 'ok'); // a non-reserved user var still passes through
 	});
 
 	test('wrapper resolution projects spawnClaudeCodeProcess (enterprise wrapper launch)', async () => {
-		const opts = await buildOptions(input(undefined, { mode: 'wrapper', executable: 'node', wrapperPath: '/opt/ent/claude', wrapperTarget: 'bundled', extraEnv: {}, providerPreset: 'oauth', disableLoginPrompt: false }), proxyHandle, () => { }, () => { });
+		const opts = await buildOptions(input(undefined, { mode: 'wrapper', executable: 'node', wrapperPath: '/opt/ent/claude', wrapperTarget: 'bundled', extraEnv: {}, providerPreset: 'oauth', disableLoginPrompt: false }), () => { }, () => { });
 		assert.strictEqual(typeof opts.spawnClaudeCodeProcess, 'function');
 	});
 
 	test('non-wrapper resolution omits spawnClaudeCodeProcess', async () => {
-		const opts = await buildOptions(input(undefined, { mode: 'bundled', executable: 'node', extraEnv: {}, providerPreset: 'oauth', disableLoginPrompt: false }), proxyHandle, () => { }, () => { });
+		const opts = await buildOptions(input(undefined, { mode: 'bundled', executable: 'node', extraEnv: {}, providerPreset: 'oauth', disableLoginPrompt: false }), () => { }, () => { });
 		assert.strictEqual(opts.spawnClaudeCodeProcess, undefined);
 	});
 });

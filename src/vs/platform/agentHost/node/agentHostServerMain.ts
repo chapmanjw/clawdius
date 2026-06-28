@@ -33,14 +33,12 @@ import { IProductService } from '../../product/common/productService.js';
 import { InstantiationService } from '../../instantiation/common/instantiationService.js';
 import { ServiceCollection } from '../../instantiation/common/serviceCollection.js';
 import { registerAgentHostNetworkServices } from './agentHostBootstrap.js';
-import { CopilotApiService, ICopilotApiService } from './shared/copilotApiService.js';
 import { ClaudeAgent } from './claude/claudeAgent.js';
 // CLAWDIUS-BEGIN cli backend resolution
 import { IClawdiusCliConfigService } from '../../clawdius/common/clawdiusCliConfig.js';
 import { ClawdiusCliConfigService } from '../../clawdius/node/clawdiusCliConfigService.js';
 // CLAWDIUS-END
 import { ClaudeAgentSdkService, ClaudeSdkPackage, IClaudeAgentSdkService } from './claude/claudeAgentSdkService.js';
-import { ClaudeProxyService, IClaudeProxyService } from './claude/claudeProxyService.js';
 import { AgentSdkDownloader, IAgentSdkDownloader } from './agentSdkDownloader.js';
 import { IAgentHostOTelService } from '../common/otel/agentHostOTelService.js';
 import { AgentHostOTelService } from './otel/agentHostOTelService.js';
@@ -250,10 +248,6 @@ async function main(): Promise<void> {
 		diServices.set(IAgentConfigurationService, agentService.configurationService);
 		diServices.set(IAgentHostCompletions, agentService.completionsService);
 		diServices.set(IAgentHostGitService, gitService);
-		// Register `ICopilotApiService` BEFORE `IClaudeProxyService` —
-		// the proxy service constructor requires it.
-		const copilotApiService = instantiationService.createInstance(CopilotApiService, undefined);
-		diServices.set(ICopilotApiService, copilotApiService);
 		// CLI flags become env vars BEFORE the downloader is constructed so
 		// `isAvailable()` and `loadSdkRoot()` see them as dev overrides.
 		if (options.claudeSdkRoot) {
@@ -262,8 +256,6 @@ async function main(): Promise<void> {
 		// Register the agent SDK downloader BEFORE any service that injects it.
 		const agentSdkDownloader = instantiationService.createInstance(AgentSdkDownloader);
 		diServices.set(IAgentSdkDownloader, agentSdkDownloader);
-		const claudeProxyService = disposables.add(instantiationService.createInstance(ClaudeProxyService));
-		diServices.set(IClaudeProxyService, claudeProxyService);
 		const claudeAgentSdkService = instantiationService.createInstance(ClaudeAgentSdkService);
 		diServices.set(IClaudeAgentSdkService, claudeAgentSdkService);
 		const agentHostOTelService = disposables.add(instantiationService.createInstance(AgentHostOTelService));

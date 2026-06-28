@@ -34,7 +34,6 @@ import { SessionClientCustomizationsDiff } from './customizations/claudeSessionC
 import { projectSessionCustomizations } from './customizations/claudeSessionCustomizationsProjector.js';
 import { ClaudeSdkCustomizationBundler } from './customizations/claudeSdkCustomizationBundler.js';
 import { resolvePromptToContentBlocks } from './claudePromptResolver.js';
-import { IClaudeProxyHandle } from './claudeProxyService.js';
 import { ClaudeSdkPipeline, IRematerializer, type ISdkResolvedCustomizations } from './claudeSdkPipeline.js';
 import { SubagentRegistry } from './claudeSubagentRegistry.js';
 import { ClaudePermissionKind } from './claudeToolDisplay.js';
@@ -45,13 +44,10 @@ export type { IRematerializer } from './claudeSdkPipeline.js';
 /**
  * Inputs to {@link ClaudeAgentSession.materialize}. Carries the
  * agent-supplied dependencies that the session itself does not own
- * (proxy auth, the `canUseTool` closure that bridges back to the
- * agent's per-session lookup, and the resume-vs-fresh discriminator).
+ * (the `canUseTool` closure that bridges back to the agent's
+ * per-session lookup, and the resume-vs-fresh discriminator).
  */
 export interface IMaterializeContext {
-	// CLAWDIUS-BEGIN native ~/.claude auth: optional - undefined in Clawdius mode (no CAPI proxy); buildOptions then omits the proxy env vars and the SDK uses ~/.claude OAuth
-	readonly proxyHandle: IClaudeProxyHandle | undefined;
-	// CLAWDIUS-END
 	readonly canUseTool: NonNullable<Options['canUseTool']>;
 	readonly isResume: boolean;
 	/**
@@ -232,11 +228,10 @@ export class ClaudeAgentSession extends Disposable {
 	 * snapshot change). Idempotent on re-call: extra calls throw rather
 	 * than silently re-materialize.
 	 *
-	 * If the supplied {@link IMaterializeContext.proxyHandle}'s underlying
-	 * `abortController` fires while `sdk.startup()` is in flight, the SDK
-	 * unwinds via the controller; if `startup` resolves anyway, the
-	 * `WarmQuery` is asyncDisposed and a {@link CancellationError} is
-	 * thrown (Q8 belt-and-suspenders).
+	 * If the session's `abortController` fires while `sdk.startup()` is in
+	 * flight, the SDK unwinds via the controller; if `startup` resolves
+	 * anyway, the `WarmQuery` is asyncDisposed and a {@link CancellationError}
+	 * is thrown (Q8 belt-and-suspenders).
 	 */
 	async materialize(ctx: IMaterializeContext): Promise<void> {
 		if (this._pipeline) {
@@ -264,7 +259,6 @@ export class ClaudeAgentSession extends Disposable {
 				agent: this._resolveAgentName(this._provisionalAgent),
 				cliResolution: await this._cliConfigService.resolveCliBackend(), // CLAWDIUS cli backend resolution
 			},
-			ctx.proxyHandle,
 			data => this._logService.error(`[Claude SDK stderr] ${data}`),
 			msg => this._logService.info(`[Claude] declining elicitation from MCP server (Phase 7 stub): ${msg}`),
 		);
@@ -363,7 +357,6 @@ export class ClaudeAgentSession extends Disposable {
 						agent: this._resolveAgentName(this._provisionalAgent),
 						cliResolution: await this._cliConfigService.resolveCliBackend(), // CLAWDIUS cli backend resolution
 					},
-					ctx.proxyHandle,
 					data => this._logService.error(`[Claude SDK stderr] ${data}`),
 					msg => this._logService.info(`[Claude] declining elicitation from MCP server (Phase 7 stub): ${msg}`),
 				);

@@ -1,8 +1,8 @@
-# VS Code Release Sanity Check Tests
+# Clawdius Release Sanity Check Tests
 
 ## Overview
 
-Automated end-to-end release sanity tests for published VS Code builds.
+Automated end-to-end release sanity tests for published Clawdius builds.
 These tests verify critical functionality across different platforms and installation methods,
 ensuring that published builds meet quality standards before reaching end users.
 
@@ -10,7 +10,7 @@ See [Sanity Check wiki page](https://github.com/microsoft/vscode/wiki/Sanity-Che
 
 ## Usage
 
-Many tests will use the underlying platform to install and verify basic VS Code functionality.
+Many tests will use the underlying platform to install and verify basic Clawdius functionality.
 Such tests will need to be run on the corresponding target OS/virtual machine and will fail if ran outside.
 Use -g or -f command-line options to filter tests to match the host platform.
 
@@ -83,7 +83,7 @@ Each container includes:
 - Node.js 22.x runtime
 - X11 server (Xvfb) for headless desktop testing
 - D-Bus for desktop integration
-- Architecture-specific VS Code dependencies
+- Architecture-specific Clawdius dependencies
 
 Some containers include web browser used for validating web server targets.
 
@@ -143,14 +143,14 @@ For the following platforms only downloads are validated (and not install/runtim
 
 ## References
 
-The following public documentation pages provide details on end-user VS Code setup scenarios.
+The following public documentation pages provide details on end-user Clawdius setup scenarios.
 
-- [Download VS Code](https://code.visualstudio.com/Download)
-- [Requirements](https://code.visualstudio.com/docs/supporting/requirements)
-- [Setup Overview](https://code.visualstudio.com/docs/setup/setup-overview)
-- [Linux Setup](https://code.visualstudio.com/docs/setup/linux)
-- [macOS Setup](https://code.visualstudio.com/docs/setup/mac)
-- [Windows Setup](https://code.visualstudio.com/docs/setup/windows)
-- [Portable Mode](https://code.visualstudio.com/docs/editor/portable)
-- [VS Code Server](https://code.visualstudio.com/docs/remote/vscode-server)
-- [Developing in WSL](https://code.visualstudio.com/docs/remote/wsl)
+- [Download Clawdius](https://github.com/chapmanjw/clawdius)
+- [Requirements](https://github.com/chapmanjw/clawdius)
+- [Setup Overview](https://github.com/chapmanjw/clawdius)
+- [Linux Setup](https://github.com/chapmanjw/clawdius)
+- [macOS Setup](https://github.com/chapmanjw/clawdius)
+- [Windows Setup](https://github.com/chapmanjw/clawdius)
+- [Portable Mode](https://github.com/chapmanjw/clawdius)
+- [Clawdius Server](https://github.com/chapmanjw/clawdius)
+- [Developing in WSL](https://github.com/chapmanjw/clawdius)

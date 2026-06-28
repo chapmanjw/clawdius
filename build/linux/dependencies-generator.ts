@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 import { spawnSync } from 'child_process';
+import { existsSync } from 'fs';
 import path from 'path';
 import { getChromiumSysroot, getVSCodeSysroot } from './debian/install-sysroot.ts';
 import { generatePackageDeps as generatePackageDepsDebian } from './debian/calculate-deps.ts';
@@ -56,8 +57,12 @@ export async function getDependencies(packageType: 'deb' | 'rpm', buildDir: stri
 	const appPath = path.join(buildDir, applicationName);
 	// Add the native modules
 	const files = findResult.stdout.toString().trimEnd().split('\n');
-	// Add the tunnel binary.
-	files.push(path.join(buildDir, 'bin', product.tunnelApplicationName));
+	// Add the tunnel binary, when present. Clawdius does not build the Rust
+	// dev-tunnels CLI, so bin/<tunnelApplicationName> is absent and is skipped.
+	const tunnelPath = path.join(buildDir, 'bin', product.tunnelApplicationName);
+	if (existsSync(tunnelPath)) {
+		files.push(tunnelPath);
+	}
 	// Add the main executable.
 	files.push(appPath);
 	// Add chrome sandbox and crashpad handler.

@@ -1,0 +1,6 @@
+{
+	"displayName": "Clawdius Chat",
+	"description": "The Clawdius default chat participant, powered by the local Claude Code CLI.",
+	"lmProvider.displayName": "Clawdius (Claude Code)",
+	"participant.description": "Build with Clawdius"
+}

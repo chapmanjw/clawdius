@@ -1,8 +1,8 @@
 {
   "name": "clawdius-chat",
   "publisher": "vscode",
-  "displayName": "Clawdius Chat",
-  "description": "The Clawdius default chat participant, powered by the local Claude Code CLI.",
+  "displayName": "%displayName%",
+  "description": "%description%",
   "version": "1.0.0",
   "license": "MIT",
   "engines": {
@@ -25,7 +25,7 @@
     "languageModelChatProviders": [
       {
         "vendor": "clawdius",
-        "displayName": "Clawdius (Claude Code)"
+        "displayName": "%lmProvider.displayName%"
       }
     ],
     "chatParticipants": [
@@ -33,7 +33,7 @@
         "id": "vscode.clawdius-chat.default",
         "name": "clawdius",
         "fullName": "Clawdius",
-        "description": "Build with Clawdius",
+        "description": "%participant.description%",
         "isDefault": true,
         "locations": [
           "panel"

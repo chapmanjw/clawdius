@@ -1,14 +1,17 @@
-<!-- BEGIN MICROSOFT SECURITY.MD V1.0.0 BLOCK -->
+# Security
 
-## Security
+Clawdius is a personal, independent fork of [microsoft/vscode](https://github.com/microsoft/vscode), provided as-is with no warranty.
 
-Microsoft takes the security of our software products and services seriously, which
-includes all source code repositories in our GitHub organizations.
+## Reporting a vulnerability
 
-**Please do not report security vulnerabilities through public GitHub issues.**
+For a security issue in Clawdius's own changes, please report it privately through this repository's [GitHub Security Advisories](https://github.com/chapmanjw/clawdius/security/advisories/new) rather than a public issue.
 
-For security reporting information, locations, contact information, and policies,
-please review the latest guidance for Microsoft repositories at
-[https://aka.ms/SECURITY.md](https://aka.ms/SECURITY.md).
+Vulnerabilities elsewhere belong with their owners:
 
-<!-- END MICROSOFT SECURITY.MD BLOCK -->
+- Unmodified upstream VS Code code: Microsoft, per their [security policy](https://aka.ms/SECURITY.md).
+- The Claude Code extension: [Anthropic](https://www.anthropic.com/).
+- Any extension you installed: that extension's maintainer.
+
+## Network posture
+
+Clawdius runs with zero network egress by default: no telemetry, no crash reporting, no marketplace or update pings. Network traffic happens only when you start it, such as a Claude turn through your `~/.claude` login or an extension you choose to install.

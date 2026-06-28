@@ -2,8 +2,7 @@
 
 Clawdius is a fork of microsoft/vscode and builds with the upstream toolchain. The supported baseline
 matches microsoft/vscode's own CI: the Visual Studio 2022 C++ Build Tools plus the pinned Node. On that
-baseline the build is a clean `npm ci` with no workarounds (verified from a wiped `node_modules`, the
-Copilot extension's `sqlite3` builds with its own node-gyp).
+baseline the build is a clean `npm ci` with no workarounds.
 
 Base: microsoft/vscode `1.125.0` (see `UPSTREAM_VERSION`).
 
@@ -34,7 +33,7 @@ Or by hand, from a VS 2022 x64 developer environment so `VCINSTALLDIR` and `cl.e
 ```bat
 call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat" x64
 cd /d <repo>
-npm ci             :: installs deps + builds all native modules (root + extensions, incl. copilot sqlite3)
+npm ci             :: installs deps + builds all native modules (root + extensions)
 npm run compile    :: TypeScript -> out/
 scripts\code.bat . :: launch
 ```
@@ -43,27 +42,22 @@ No `vs2022_install` override and no node-gyp override are needed on the VS 2022 
 
 ## VS 2026 compatibility lane (only if you build on VS 2026 / toolset v18)
 
-VS 2026 is newer than VS Code 1.125's blessed toolchain and needs three workarounds, which is why the
+VS 2026 is newer than VS Code 1.125's blessed toolchain and needs two workarounds, which is why the
 VS 2022 baseline above is preferred:
 1. `set vs2022_install=<VS 2026 path>` because preinstall only whitelists "2022" and "2019".
 2. Run inside the VS 2026 x64 dev env (`vcvarsall.bat x64`) for `VCINSTALLDIR`.
-3. The Copilot `sqlite3` (deprecated, pins node-gyp 10.3.1 which cannot target VS 2026) must be built
-   manually with node-gyp >= 13: `npm install -g node-gyp@latest`; in `extensions\copilot` run
-   `npm install --ignore-scripts`; then in `node_modules\sqlite3` run
-   `node <node-gyp-13>\bin\node-gyp.js rebuild --runtime=electron --target=42.3.0 --dist-url=https://electronjs.org/headers --arch=x64`.
-   Phase 2 removes the Copilot extension, which moots this.
 
 ## Verification (Phase 0)
 
-A vanilla build launches as "Code - OSS" (Clawdius branding lands in Phase 1), boots as a normal
-multi-process Electron app (main, renderers, extension host, GPU, utilities) with no crash, and shuts
-down cleanly. `out/` is ~206 MB; `.build/electron` downloads on first launch.
+A build launches as Clawdius and boots as a normal multi-process Electron app (main, renderers,
+extension host, GPU, utilities, and the Claude agent-host utility process) with no crash, and shuts
+down cleanly. `.build/electron` downloads on first launch.
 
 ## Notes
 
-- Git LFS: an upstream test-cache object (`extensions/copilot/test/simulation/cache/base.sqlite`) 404s on
-  the LFS server. Use `GIT_LFS_SKIP_SMUDGE=1` for clone, checkout, and merge (CI uses
-  `actions/checkout` with `lfs: false`). The pointers are not needed to build.
+- Git LFS: some upstream test-cache objects 404 on the LFS server. Use `GIT_LFS_SKIP_SMUDGE=1` for
+  clone, checkout, and merge (CI uses `actions/checkout` with `lfs: false`). The pointers are not
+  needed to build.
 - Full incremental development uses the watch tasks, not `npm run compile`; see the inherited
   `.claude/CLAUDE.md`. `npm run compile` is the correct one-shot full build used here.
 - Cross-platform packaging (NSIS, dmg, deb, rpm), signing, and the full CI matrix are Phase 6 / Phase 7.

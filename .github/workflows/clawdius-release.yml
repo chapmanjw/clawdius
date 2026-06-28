@@ -150,11 +150,57 @@ jobs:
           path: release-artifacts/*
           if-no-files-found: error
 
+  macos:
+    name: Build macOS (universal)
+    runs-on: macos-14
+    environment: release
+    env:
+      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+      APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+      APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Install dependencies
+        run: npm ci
+      - name: Import signing cert + notarization key
+        if: ${{ env.APPLE_CERT_P12 != '' }}
+        run: |
+          set -e
+          KEYCHAIN="$RUNNER_TEMP/buildagent.keychain"
+          security create-keychain -p "" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "" "$KEYCHAIN"
+          echo "$APPLE_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          IDENT=$(security find-identity -p codesigning -v "$KEYCHAIN" | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)"/\1/')
+          echo "CODESIGN_IDENTITY=$IDENT" >> "$GITHUB_ENV"
+          echo "AGENT_TEMPDIRECTORY=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "$APPLE_API_KEY_P8" | base64 --decode > "$RUNNER_TEMP/apikey.p8"
+          echo "APPLE_API_KEY_P8_PATH=$RUNNER_TEMP/apikey.p8" >> "$GITHUB_ENV"
+          rm -f "$RUNNER_TEMP/cert.p12"
+      - name: Build, sign, notarize, package
+        run: bash ./build/release/darwin.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clawdius-darwin-universal
+          path: release-artifacts/*
+          if-no-files-found: error
+
   release:
     name: Publish GitHub Release
-    needs: [windows, linux, snap]
-    # Publish once Windows + Linux succeed; snap is optional (continue-on-error).
-    if: ${{ always() && needs.windows.result == 'success' && needs.linux.result == 'success' }}
+    needs: [windows, linux, snap, macos]
+    # Publish once Windows + Linux + macOS succeed; snap is optional (continue-on-error).
+    if: ${{ always() && needs.windows.result == 'success' && needs.linux.result == 'success' && needs.macos.result == 'success' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4

@@ -55,11 +55,11 @@ if (/claude\.ai\/code\/session|Claude-Session:/i.test(msg)) {
 const INTERNAL: [RegExp, string][] = [
 	[/\bconsensus\b/i, 'consensus (internal review process)'],
 	[/\bRutherford\b/i, 'Rutherford (internal orchestrator)'],
+	[/\bCodex (MINOR|MAJOR|re-?review|verdict|caught|flagged|round|pass|review|gate)\b/i, 'Codex review chatter (internal)'],
 	[/\(\s*Codex\b/i, '(Codex ...) (internal review tool)'],
-	[/\bCodex review\b/i, 'Codex review (internal)'],
-	[/\bCodex MINOR/i, 'Codex MINOR (internal review label)'],
 	[/\bper Codex\b/i, 'per Codex (internal)'],
 	[/\bmust-fix\b/i, 'must-fix (internal review label)'],
+	[/\bledger\b/i, 'ledger (internal CHANGES jargon; say "changelog"/"document")'],
 	[/\bUltracode P\d/i, 'Ultracode P# (internal phase label)'],
 	[/\bPhase [A-Z]\b/, 'Phase <letter> (internal roadmap)'],
 	[/\bPhase \d/, 'Phase <n> (internal roadmap)'],

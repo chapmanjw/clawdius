@@ -75,6 +75,9 @@ async function main(buildDir?: string) {
 		// the package includes both arm64 and x64 trees regardless of host arch.
 		'**/node_modules/@microsoft/mxc-sdk/bin/**',
 		'**/node_modules.asar.unpacked/@microsoft/mxc-sdk/bin/**',
+		// @vscode/fs-copyfile ships a prebuilt native binary that is byte-identical across arches.
+		'**/node_modules/@vscode/fs-copyfile/build/Release/*.node',
+		'**/node_modules.asar.unpacked/@vscode/fs-copyfile/build/Release/*.node',
 	];
 
 	await makeUniversalApp({
@@ -84,7 +87,7 @@ async function main(buildDir?: string) {
 		outAppPath,
 		force: true,
 		mergeASARs: true,
-		x64ArchFiles: '{*/kerberos.node,**/extensions/microsoft-authentication/dist/libmsalruntime.dylib,**/extensions/microsoft-authentication/dist/msal-node-runtime.node,**/node_modules/@vscode/ripgrep-universal/bin/darwin-*/*,**/node_modules.asar.unpacked/@vscode/ripgrep-universal/bin/darwin-*/*,**/node_modules/@microsoft/mxc-sdk/bin/**,**/node_modules.asar.unpacked/@microsoft/mxc-sdk/bin/**}',
+		x64ArchFiles: '{*/kerberos.node,**/extensions/microsoft-authentication/dist/libmsalruntime.dylib,**/extensions/microsoft-authentication/dist/msal-node-runtime.node,**/node_modules/@vscode/ripgrep-universal/bin/darwin-*/*,**/node_modules.asar.unpacked/@vscode/ripgrep-universal/bin/darwin-*/*,**/node_modules/@microsoft/mxc-sdk/bin/**,**/node_modules.asar.unpacked/@microsoft/mxc-sdk/bin/**,**/node_modules/@vscode/fs-copyfile/build/Release/*.node,**/node_modules.asar.unpacked/@vscode/fs-copyfile/build/Release/*.node}',
 		filesToSkipComparison: (file: string) => {
 			for (const expected of filesToSkip) {
 				if (minimatch(file, expected)) {

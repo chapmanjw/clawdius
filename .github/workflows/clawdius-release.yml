@@ -49,6 +49,15 @@ jobs:
       # this is where a Microsoft.VisualStudio.Component.VC.*.Spectre install would go.
       - name: Install dependencies
         run: npm ci
+      - name: Add Windows SDK signtool to PATH
+        shell: pwsh
+        run: |
+          # The gulp build (patchWin32Dependencies) strips Authenticode off prebuilt
+          # native modules via signtool, which isn't on the hosted runner's default PATH.
+          $st = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match '\\x64\\' } | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $st) { throw 'signtool.exe not found under the Windows 10 Kits' }
+          Split-Path $st.FullName | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          Write-Host "signtool: $($st.FullName)"
       - name: Set up Azure Trusted Signing
         if: ${{ env.AZ_TRUSTED_SIGNING_ENDPOINT != '' }}
         shell: pwsh

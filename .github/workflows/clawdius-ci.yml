@@ -43,7 +43,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          owned=$(git ls-files 'clawdius/**' 'script/clawdius/**' 'extensions/clawdius-*/**' CHANGES_AGAINST_UPSTREAM.md MERGING.md BUILD.md 'README-CLAWDIUS*')
+          owned=$(git ls-files 'clawdius/**' 'script/clawdius/**' 'extensions/clawdius-*/**' docs/CHANGES_AGAINST_UPSTREAM.md docs/MERGING.md docs/BUILD.md docs/CONTRIBUTING.md docs/SECURITY.md 'README-CLAWDIUS*')
           # Discover in-place upstream edits by their begin-marker across ALL tracked files (built at
           # runtime so this workflow does not match itself). The scanner self-selects: it skips its own
           # source, scans owned files in full, and inspects only the marked regions of everything else, so
@@ -56,7 +56,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          for f in UPSTREAM_VERSION MERGING.md CHANGES_AGAINST_UPSTREAM.md BUILD.md \
+          for f in UPSTREAM_VERSION docs/MERGING.md docs/CHANGES_AGAINST_UPSTREAM.md docs/BUILD.md \
                    .gitleaks.toml .pre-commit-config.yaml clawdius/SECURITY-SCANNING.md \
                    script/clawdius/scan-forbidden.ts script/clawdius/diff-stat \
                    script/clawdius/branding-guard.ts script/clawdius/brand-ratchet.ts \

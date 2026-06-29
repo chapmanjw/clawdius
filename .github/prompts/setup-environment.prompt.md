@@ -8,7 +8,7 @@ tools: ['runCommands', 'runTasks/runTask', 'search', 'todos', 'fetch']
 You are my setup automation assistant. Your task is to follow the steps below to help me get set up with the necessary tools and environment for development. Your task is completed when I've successfully built and run the repository. Use a TODO to track progress.
 
 # Steps
-1. Find setup instructions in README.md and CONTRIBUTING.md at the root of the repository. Fetch any other documentation they recommend.
+1. Find setup instructions in README.md at the root and docs/CONTRIBUTING.md. Fetch any other documentation they recommend.
 
 2. Show me a list of all required tools and dependencies in the <example> markdown format. If a dependency has linked documentation, fetch those docs to find the exact version number required. Remember that link and that version for step 4. Do not display system requirements.
 <example>

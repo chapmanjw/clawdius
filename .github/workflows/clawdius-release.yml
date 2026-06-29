@@ -96,6 +96,7 @@ jobs:
       GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
       GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
       GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+      CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -118,6 +119,17 @@ jobs:
           gpgconf --reload gpg-agent || true
       - name: Build, package, sign
         run: bash ./build/release/linux.sh ${{ matrix.arch }}
+      - name: Publish to Cloudsmith (real release tags only)
+        # Throwaway v0.0.0-test* tags build the packages but never publish. Non-blocking:
+        # a Cloudsmith hiccup must not fail the Linux leg or block the GitHub release.
+        if: ${{ env.CLOUDSMITH_API_KEY != '' && !startsWith(github.ref_name, 'v0.0.0') }}
+        continue-on-error: true
+        run: |
+          python3 -m pip install --user --break-system-packages cloudsmith-cli
+          export PATH="$HOME/.local/bin:$PATH"
+          shopt -s nullglob
+          for f in release-artifacts/*.deb; do cloudsmith push deb chapmanjw/clawdius/any-distro/any-version "$f"; done
+          for f in release-artifacts/*.rpm; do cloudsmith push rpm chapmanjw/clawdius/any-distro/any-version "$f"; done
       - uses: actions/upload-artifact@v4
         with:
           name: clawdius-linux-${{ matrix.arch }}

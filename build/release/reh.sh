@@ -2,7 +2,7 @@
 # Build and tar the Clawdius REH (remote extension host) server for one arch.
 # Produces in <repo>/release-artifacts/:
 #   clawdius-reh-linux-<arch>-<version>.tar.gz   (downloaded by open-remote-ssh/-wsl)
-#   SHA256SUMS-reh-linux-<arch>.txt
+#   SHA256SUMS-reh-linux-<arch>.txt              (+ .asc detached GPG signature when signing)
 #
 # The Open Remote - SSH / Open Remote - WSL extensions resolve product.json's
 # serverDownloadUrlTemplate to this asset, extract it (tar --strip-components 1), and run
@@ -40,8 +40,19 @@ echo "==> tar.gz"
 tar -czf "$out/clawdius-reh-linux-$arch-$version.tar.gz" \
 	-C "$(dirname "$repo")" "vscode-reh-linux-$arch"
 
-# 3. Checksum (cosmetic; the extensions don't require it, but the desktop legs ship one).
+# 3. Checksum + detached GPG signature (guarded), mirroring the desktop Linux legs so the remote
+#    server ships a signed verification artifact. The signed SHA256SUMS-reh-*.asc is the dependable
+#    cross-distro way to verify the downloaded server tarball.
 ( cd "$out" && sha256sum "clawdius-reh-linux-$arch-$version.tar.gz" > "SHA256SUMS-reh-linux-$arch.txt" )
+if [ -n "${GPG_KEY_ID:-}" ]; then
+	echo "==> GPG sign checksums (key $GPG_KEY_ID)"
+	export GPG_TTY="$(tty 2>/dev/null || echo /dev/console)"
+	gpg --batch --yes --pinentry-mode loopback ${GPG_PASSPHRASE:+--passphrase "$GPG_PASSPHRASE"} \
+		--local-user "$GPG_KEY_ID" --armor --detach-sign \
+		--output "$out/SHA256SUMS-reh-linux-$arch.txt.asc" "$out/SHA256SUMS-reh-linux-$arch.txt" || echo "  (checksum signature failed)"
+else
+	echo "   GPG signing skipped (no GPG_KEY_ID)"
+fi
 
 echo "=== REH linux $arch done ==="
 ls -lh "$out" | grep -E "reh-linux-$arch" || true

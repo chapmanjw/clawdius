@@ -156,7 +156,12 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 		if (this.entry.value) {
 			this.entry.value.update(props);
 		} else {
-			this.entry.value = this.statusbarService.addEntry(props, 'clawdius.usage', StatusbarAlignment.RIGHT, { location: { id: 'status.editor.mode', priority: 100.05 }, alignment: StatusbarAlignment.RIGHT });
+			// Absolute priority (not a relative anchor): anchoring next to status.editor.mode drops this into the
+			// status bar's relative-entry bucket and, when that reference entry is absent or shares the number,
+			// the slot oscillates (drifting left of effort / right of the budget pill). A fixed number pins it.
+			// The Clawdius cluster, left -> right (higher priority = further left): effort 100.07, permission
+			// 100.06, context budget 100.05, usage 100.04 (rightmost, just right of the budget pill).
+			this.entry.value = this.statusbarService.addEntry(props, 'clawdius.usage', StatusbarAlignment.RIGHT, 100.04);
 		}
 	}
 

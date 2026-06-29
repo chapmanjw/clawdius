@@ -144,6 +144,25 @@ class ClawdiusCheckForUpdatesAction extends Action2 {
 	}
 }
 
+// "Sponsor Clawdius" -> the GitHub Sponsors page. Shown in the Help menu (just above About) and reused by
+// the onboarding screens + the title-bar heart link.
+export const CLAWDIUS_SPONSOR_URL = 'https://github.com/sponsors/chapmanjw';
+class SponsorClawdiusAction extends Action2 {
+	constructor() {
+		super({
+			id: 'clawdius.sponsor',
+			title: localize2('clawdius.sponsor', "Sponsor Clawdius"),
+			category: localize2('clawdius.category', "Clawdius"),
+			icon: Codicon.heart,
+			f1: true,
+			menu: { id: MenuId.MenubarHelpMenu, group: 'z_about', order: 0 },
+		});
+	}
+	override async run(accessor: ServicesAccessor): Promise<void> {
+		await accessor.get(IOpenerService).open(URI.parse(CLAWDIUS_SPONSOR_URL));
+	}
+}
+
 if (!product.defaultChatAgent?.entitlementUrl) {
 
 	// The shared config service: ONE scan + watcher set produces the typed snapshot the Control Center reads
@@ -242,5 +261,8 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 
 	// Manage-gear "Check for Updates..." -> opens the Clawdius releases page (no auto-update server yet).
 	registerAction2(ClawdiusCheckForUpdatesAction);
+
+	// "Sponsor Clawdius" in the Help menu, just above About.
+	registerAction2(SponsorClawdiusAction);
 }
 // CLAWDIUS-END

@@ -14,6 +14,7 @@ import { IHostService } from '../../../services/host/browser/host.js';
 import { isMacintosh, isWindows, isLinux, isTahoeOrNewer } from '../../../../base/common/platform.js';
 import { IMenuService, MenuId } from '../../../../platform/actions/common/actions.js';
 import { IActionViewItemService } from '../../../../platform/actions/browser/actionViewItemService.js';
+import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { BrowserTitlebarPart, BrowserTitleService, IAuxiliaryTitlebarPart } from '../../../browser/parts/titlebar/titlebarPart.js';
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
@@ -78,9 +79,10 @@ export class NativeTitlebarPart extends BrowserTitlebarPart {
 		@IEditorService editorService: IEditorService,
 		@IMenuService menuService: IMenuService,
 		@IKeybindingService keybindingService: IKeybindingService,
-		@IActionViewItemService actionViewItemService: IActionViewItemService
+		@IActionViewItemService actionViewItemService: IActionViewItemService,
+		@IOpenerService openerService: IOpenerService
 	) {
-		super(id, targetWindow, editorGroupsContainer, contextMenuService, configurationService, environmentService, instantiationService, themeService, storageService, layoutService, contextKeyService, hostService, editorService, menuService, keybindingService, actionViewItemService);
+		super(id, targetWindow, editorGroupsContainer, contextMenuService, configurationService, environmentService, instantiationService, themeService, storageService, layoutService, contextKeyService, hostService, editorService, menuService, keybindingService, actionViewItemService, openerService);
 
 		this.tahoeOrNewer = isTahoeOrNewer(environmentService.os.release);
 
@@ -303,9 +305,10 @@ export class MainNativeTitlebarPart extends NativeTitlebarPart {
 		@IEditorService editorService: IEditorService,
 		@IMenuService menuService: IMenuService,
 		@IKeybindingService keybindingService: IKeybindingService,
-		@IActionViewItemService actionViewItemService: IActionViewItemService
+		@IActionViewItemService actionViewItemService: IActionViewItemService,
+		@IOpenerService openerService: IOpenerService
 	) {
-		super(Parts.TITLEBAR_PART, mainWindow, editorGroupService.mainPart, contextMenuService, configurationService, environmentService, instantiationService, themeService, storageService, layoutService, contextKeyService, hostService, nativeHostService, editorGroupService, editorService, menuService, keybindingService, actionViewItemService);
+		super(Parts.TITLEBAR_PART, mainWindow, editorGroupService.mainPart, contextMenuService, configurationService, environmentService, instantiationService, themeService, storageService, layoutService, contextKeyService, hostService, nativeHostService, editorGroupService, editorService, menuService, keybindingService, actionViewItemService, openerService);
 	}
 }
 
@@ -333,10 +336,11 @@ export class AuxiliaryNativeTitlebarPart extends NativeTitlebarPart implements I
 		@IEditorService editorService: IEditorService,
 		@IMenuService menuService: IMenuService,
 		@IKeybindingService keybindingService: IKeybindingService,
-		@IActionViewItemService actionViewItemService: IActionViewItemService
+		@IActionViewItemService actionViewItemService: IActionViewItemService,
+		@IOpenerService openerService: IOpenerService
 	) {
 		const id = AuxiliaryNativeTitlebarPart.COUNTER++;
-		super(`workbench.parts.auxiliaryTitle.${id}`, getWindow(container), editorGroupsContainer, contextMenuService, configurationService, environmentService, instantiationService, themeService, storageService, layoutService, contextKeyService, hostService, nativeHostService, editorGroupService, editorService, menuService, keybindingService, actionViewItemService);
+		super(`workbench.parts.auxiliaryTitle.${id}`, getWindow(container), editorGroupsContainer, contextMenuService, configurationService, environmentService, instantiationService, themeService, storageService, layoutService, contextKeyService, hostService, nativeHostService, editorGroupService, editorService, menuService, keybindingService, actionViewItemService, openerService);
 	}
 
 	override get preventZoom(): boolean {

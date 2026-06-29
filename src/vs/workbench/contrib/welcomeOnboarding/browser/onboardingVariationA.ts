@@ -35,6 +35,7 @@ import { ITelemetryService } from '../../../../platform/telemetry/common/telemet
 import { InstallChatEvent, InstallChatClassification, ChatSetupStrategy } from '../../chat/browser/chatSetup/chatSetup.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IAccessibilityService } from '../../../../platform/accessibility/common/accessibility.js';
+import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import {
 	OnboardingStepId,
 	ONBOARDING_STEPS,
@@ -151,6 +152,7 @@ export class OnboardingVariationA extends Disposable implements IOnboardingServi
 		@ITelemetryService private readonly telemetryService: ITelemetryService,
 		@ICommandService private readonly commandService: ICommandService,
 		@IAccessibilityService private readonly accessibilityService: IAccessibilityService,
+		@IOpenerService private readonly openerService: IOpenerService,
 	) {
 		super();
 
@@ -213,6 +215,29 @@ export class OnboardingVariationA extends Disposable implements IOnboardingServi
 		const footer = append(this.card, $('.onboarding-a-footer'));
 
 		this.footerLeft = append(footer, $('.onboarding-a-footer-left'));
+
+		// CLAWDIUS: persistent "Sponsor Clawdius" link in the footer (all steps).
+		const sponsorBtn = append(this.footerLeft, $<HTMLButtonElement>('button.onboarding-a-sponsor-btn'));
+		sponsorBtn.type = 'button';
+		sponsorBtn.style.display = 'inline-flex';
+		sponsorBtn.style.alignItems = 'center';
+		sponsorBtn.style.gap = '6px';
+		sponsorBtn.style.background = 'transparent';
+		sponsorBtn.style.border = 'none';
+		sponsorBtn.style.padding = '4px 6px';
+		sponsorBtn.style.cursor = 'pointer';
+		sponsorBtn.style.font = 'inherit';
+		sponsorBtn.style.fontSize = '12px';
+		sponsorBtn.style.color = 'var(--vscode-descriptionForeground)';
+		const sponsorHeart = $('span.codicon.codicon-heart');
+		sponsorHeart.setAttribute('aria-hidden', 'true');
+		sponsorHeart.style.color = '#db61a2';
+		sponsorBtn.appendChild(sponsorHeart);
+		const sponsorText = append(sponsorBtn, $('span'));
+		sponsorText.textContent = localize('clawdius.onboarding.sponsor', "Sponsor Clawdius");
+		this.disposables.add(addDisposableListener(sponsorBtn, EventType.CLICK, () => {
+			this.openerService.open(URI.parse('https://github.com/sponsors/chapmanjw'));
+		}));
 
 		const footerRight = append(footer, $('.onboarding-a-footer-right'));
 

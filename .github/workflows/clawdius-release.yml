@@ -65,7 +65,7 @@ jobs:
           # Azure.CodeSigning dlib that signtool /dlib uses. Pin the version after a
           # validation run; see https://www.nuget.org/packages/Microsoft.Trusted.Signing.Client
           $pkg = Join-Path $env:RUNNER_TEMP 'tsclient'
-          nuget install Microsoft.Trusted.Signing.Client -OutputDirectory $pkg -ExcludeVersion
+          nuget install Microsoft.Trusted.Signing.Client -OutputDirectory $pkg -ExcludeVersion -PreRelease
           $dlib = (Get-ChildItem $pkg -Recurse -Filter 'Azure.CodeSigning.Dlib.dll' | Select-Object -First 1).FullName
           $signtool = (Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter signtool.exe | Where-Object { $_.FullName -match 'x64' } | Select-Object -Last 1).FullName
           "CLAWDIUS_SIGN_DLIB=$dlib"   >> $env:GITHUB_ENV

@@ -7,8 +7,8 @@ description: |
   https://github.com/chapmanjw/clawdius for details.
 
 architectures:
-  - build-on: amd64
-    run-on: @@ARCHITECTURE@@
+  - build-on: [amd64]
+    build-for: [@@ARCHITECTURE@@]
 
 grade: stable
 confinement: classic

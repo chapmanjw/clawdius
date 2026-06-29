@@ -58,6 +58,8 @@ clawdius.local.json
 # Research/receipts must NOT live in the public tree - they belong in the clawdius-private-docs repo.
 # This is a defensive net in case a tool writes here anyway.
 .research/
+# Throwaway user-data / extensions dirs for local dev launches.
+.dev-profiles/
 # CLAWDIUS-END
 
 # Clawdius release pipeline output

@@ -133,6 +133,9 @@ jobs:
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     environment: release
     continue-on-error: true # snap is the flakiest leg; never block the release on it
+    env:
+      # Mapped so the publish step can gate on presence (secrets can't be used in if:).
+      SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -159,6 +162,15 @@ jobs:
         run: |
           mkdir -p release-artifacts
           cp "${{ steps.snapbuild.outputs.snap }}" release-artifacts/
+      - name: Publish to Snap Store (real release tags only)
+        # Throwaway v0.0.0-test* tags build the snap but never publish it. Runs only
+        # when the store credential is present; the leg is continue-on-error so a held
+        # classic-confinement review never blocks the GitHub release.
+        if: ${{ env.SNAPCRAFT_STORE_CREDENTIALS != '' && !startsWith(github.ref_name, 'v0.0.0') }}
+        uses: snapcore/action-publish@v1
+        with:
+          snap: ${{ steps.snapbuild.outputs.snap }}
+          release: edge
       - uses: actions/upload-artifact@v4
         with:
           name: clawdius-snap-${{ matrix.arch }}

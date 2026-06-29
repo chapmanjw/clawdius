@@ -156,6 +156,9 @@
 		"managedSettingsUrl": ""
 	},
 	"trustedExtensionAuthAccess": {},
+	"linkProtectionTrustedDomains": [
+		"https://github.com"
+	],
 	"onboardingKeymaps": [
 		{
 			"id": "vscode",

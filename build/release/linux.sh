@@ -63,9 +63,17 @@ cp -v "${rpms[@]}" "$out/"
 if [ -n "${GPG_KEY_ID:-}" ]; then
 	echo "==> GPG sign (key $GPG_KEY_ID)"
 	export GPG_TTY="$(tty 2>/dev/null || echo /dev/console)"
+	# rpm --addsign must get the passphrase non-interactively: feed it via a temp
+	# file + rpm's _gpg_sign_cmd_extra_args (loopback pinentry).
+	rpmpass="$(mktemp)"
+	printf '%s' "${GPG_PASSPHRASE:-}" > "$rpmpass"
 	for f in "$out"/*.rpm; do
-		rpm --addsign --define "_gpg_name $GPG_KEY_ID" "$f" || echo "  WARNING: rpm signing FAILED for $(basename "$f")"
+		rpm --addsign \
+			--define "_gpg_name $GPG_KEY_ID" \
+			--define "_gpg_sign_cmd_extra_args --pinentry-mode loopback --passphrase-file $rpmpass" \
+			"$f" || echo "  WARNING: rpm signing FAILED for $(basename "$f")"
 	done
+	rm -f "$rpmpass"
 	for f in "$out"/*.deb; do
 		if command -v dpkg-sig >/dev/null; then
 			dpkg-sig --sign builder -k "$GPG_KEY_ID" "$f" || echo "  WARNING: deb signing FAILED for $(basename "$f")"

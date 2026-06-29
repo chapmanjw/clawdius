@@ -340,7 +340,12 @@ export class ExtensionManagementService extends AbstractExtensionManagementServi
 	private async downloadExtension(extension: IGalleryExtension, operation: InstallOperation, verifySignature: boolean, clientTargetPlatform?: TargetPlatform): Promise<{ readonly location: URI; readonly verificationStatus: ExtensionSignatureVerificationCode | undefined }> {
 		if (verifySignature) {
 			const value = this.configurationService.getValue(VerifyExtensionSignatureConfigKey);
-			verifySignature = isBoolean(value) ? value : true;
+			// CLAWDIUS-BEGIN default extension signature verification OFF: the gallery is pinned to Open VSX,
+			// which does not sign extensions the MS way, so an unset value must NOT force verification - it
+			// throws "Signature verification was not executed" and blocks installs, including into remotes.
+			// An explicit "extensions.verifySignature": true still re-enables it.
+			verifySignature = isBoolean(value) ? value : false;
+			// CLAWDIUS-END
 		}
 		const { location, verificationStatus } = await this.extensionsDownloader.download(extension, operation, verifySignature, clientTargetPlatform);
 		const shouldRequireSignature = shouldRequireRepositorySignatureFor(extension.private, await this.extensionGalleryManifestService.getExtensionGalleryManifest());

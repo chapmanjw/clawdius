@@ -39,6 +39,7 @@ import { ProgressLocation } from '../../../../platform/progress/common/progress.
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IWorkbenchContribution } from '../../../common/contributions.js';
 import { IExtensionsWorkbenchService } from '../../extensions/common/extensions.js';
+import { IExtensionManagementServerService } from '../../../services/extensionManagement/common/extensionManagement.js';
 
 /** Open VSX / marketplace id of the official Anthropic Claude Code extension. Module-level (not a static class
  *  field) so the EXTENSIONS list below can reference it without touching the class binding during its own static
@@ -79,7 +80,9 @@ export function isSignatureFailure(err: unknown): boolean {
 function installFromGallery(extensionsWorkbenchService: IExtensionsWorkbenchService, id: string, donotVerifySignature: boolean): Promise<unknown> {
 	return extensionsWorkbenchService.install(
 		id,
-		{ context: { [EXTENSION_INSTALL_SKIP_WALKTHROUGH_CONTEXT]: true }, enable: true, donotVerifySignature },
+		// installEverywhere: when a remote is connected, route a workspace-kind extension into the remote
+		// server (local already has it); on a plain desktop window it resolves to the local server.
+		{ context: { [EXTENSION_INSTALL_SKIP_WALKTHROUGH_CONTEXT]: true }, enable: true, installEverywhere: true, donotVerifySignature },
 		ProgressLocation.Notification,
 	);
 }
@@ -198,6 +201,7 @@ export class ClawdiusPluginSetupContribution extends Disposable implements IWork
 
 	constructor(
 		@IExtensionsWorkbenchService private readonly _extensionsWorkbenchService: IExtensionsWorkbenchService,
+		@IExtensionManagementServerService private readonly _serverService: IExtensionManagementServerService,
 		@IConfigurationService private readonly _configurationService: IConfigurationService,
 		@IStorageService private readonly _storageService: IStorageService,
 		@ILogService private readonly _logService: ILogService,
@@ -228,7 +232,7 @@ export class ClawdiusPluginSetupContribution extends Disposable implements IWork
 		// run: a never-completed first run does the full flow; a completed run whose critical plugin is now absent
 		// (a failed/offline install, or a later removal) re-offers just the install - the safety net that heals a
 		// degraded Clawdius. Failures stay non-fatal and retry next launch.
-		if (done && isClaudeCodePluginInstalled(this._extensionsWorkbenchService.local)) {
+		if (done && this._isClaudeCodePresentEverywhere()) {
 			return;
 		}
 		void this._run(done);
@@ -236,6 +240,21 @@ export class ClawdiusPluginSetupContribution extends Disposable implements IWork
 
 	private _syncInstalledContext(): void {
 		this._installedContext.set(isClaudeCodePluginInstalled(this._extensionsWorkbenchService.local));
+	}
+
+	/** True only when the critical plugin is present everywhere it must run: locally, and - when a remote is
+	 *  connected - on the remote server specifically. `.local` collapses per-server installs by id, so a
+	 *  local-only install reads as present; the remote check uses the un-collapsed `.installed` + `.server`.
+	 *  This is why a workspace-kind plugin installed only locally must still be installed into the remote. */
+	private _isClaudeCodePresentEverywhere(): boolean {
+		const localPresent = isClaudeCodePluginInstalled(this._extensionsWorkbenchService.local);
+		const remote = this._serverService.remoteExtensionManagementServer;
+		if (!remote) {
+			return localPresent;
+		}
+		const onRemote = this._extensionsWorkbenchService.installed.some(e =>
+			e.server === remote && areSameExtensions(e.identifier, { id: CLAUDE_CODE_EXTENSION_ID }));
+		return localPresent && onRemote;
 	}
 
 	private async _run(done: boolean): Promise<void> {
@@ -269,7 +288,12 @@ export class ClawdiusPluginSetupContribution extends Disposable implements IWork
 	private async _ensureInstalled(done: boolean): Promise<void> {
 		const installed = await this._extensionsWorkbenchService.queryLocal();
 		for (const ext of ClawdiusPluginSetupContribution.EXTENSIONS) {
-			if (!shouldInstallExtension(ext, done, isExtensionInstalled(installed, ext.id))) {
+			// The critical plugin must be present on the remote too (a workspace extension), so use the
+			// everywhere-aware check; the optional remotes are local-only first-run conveniences.
+			const isInstalled = ext.id === CLAUDE_CODE_EXTENSION_ID
+				? this._isClaudeCodePresentEverywhere()
+				: isExtensionInstalled(installed, ext.id);
+			if (!shouldInstallExtension(ext, done, isInstalled)) {
 				continue;
 			}
 			try {

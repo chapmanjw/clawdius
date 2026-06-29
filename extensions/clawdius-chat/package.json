@@ -14,6 +14,9 @@
     "chatProvider"
   ],
   "main": "./out/extension",
+  "extensionKind": [
+    "ui"
+  ],
   "activationEvents": [
     "onStartupFinished"
   ],

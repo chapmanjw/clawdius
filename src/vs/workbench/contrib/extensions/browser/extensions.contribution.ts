@@ -334,7 +334,9 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration)
 			[VerifyExtensionSignatureConfigKey]: {
 				type: 'boolean',
 				description: localize('extensions.verifySignature', "When enabled, extensions are verified to be signed before getting installed."),
-				default: true,
+				// CLAWDIUS-BEGIN off by default - the gallery is pinned to Open VSX (extensions unsigned the MS way)
+				default: false,
+				// CLAWDIUS-END
 				scope: ConfigurationScope.APPLICATION,
 				included: isNative
 			},

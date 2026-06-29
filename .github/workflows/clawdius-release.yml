@@ -19,6 +19,11 @@ on:
 permissions:
   contents: write
 
+env:
+  # Authenticate native-module downloads (e.g. @vscode/ripgrep) during npm ci so
+  # the hosted runners do not hit GitHub API rate-limit 403s.
+  GITHUB_TOKEN: ${{ github.token }}
+
 jobs:
   windows:
     name: Build Windows (${{ matrix.arch }})

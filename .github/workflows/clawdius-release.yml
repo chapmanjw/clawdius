@@ -158,15 +158,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
-      - name: Add swap space
-        # The minified mangler compile peaks above the 16 GB runner RAM and gets OOM-killed mid-build;
-        # a swap file on the large /mnt volume gives the kernel headroom so the server build completes.
-        run: |
-          sudo fallocate -l 8G /mnt/swapfile
-          sudo chmod 600 /mnt/swapfile
-          sudo mkswap /mnt/swapfile
-          sudo swapon /mnt/swapfile
-          free -h
       - name: Install build toolchain
         run: |
           sudo apt-get update

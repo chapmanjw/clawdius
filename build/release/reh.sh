@@ -27,9 +27,11 @@ case "$arch" in
 	*) echo "ERROR: unsupported arch: $arch" >&2; exit 1 ;;
 esac
 
-# 1. Build the REH server folder (emits ../vscode-reh-linux-<arch>).
+# 1. Build the REH server folder (emits ../vscode-reh-linux-<arch>). Non-minified on purpose: the
+#    minifier's mangler step OOM-kills the 16 GB CI runner, and the server does not need mangling
+#    (the desktop client only mangles its -min build). The server is bundled but not minified.
 if [ "${SKIP_BUILD:-}" != "1" ]; then
-	npm run gulp "vscode-reh-linux-$arch-min"
+	npm run gulp "vscode-reh-linux-$arch"
 fi
 [ -d "$rehdir" ] || { echo "ERROR: REH folder missing: $rehdir" >&2; exit 1; }
 [ -f "$rehdir/bin/clawdius-server" ] || { echo "ERROR: bin/clawdius-server missing in $rehdir" >&2; exit 1; }

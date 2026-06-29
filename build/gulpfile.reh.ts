@@ -22,7 +22,7 @@ import * as fs from 'fs';
 import glob from 'glob';
 import { promisify } from 'util';
 import rceditCallback from 'rcedit';
-import { compileBuildWithManglingTask } from './gulpfile.compile.ts';
+import { compileBuildWithManglingTask, compileBuildWithoutManglingTask } from './gulpfile.compile.ts';
 import { cleanExtensionsBuildTask, compileNonNativeExtensionsBuildTask, compileNativeExtensionsBuildTask, compileExtensionMediaBuildTask } from './gulpfile.extensions.ts';
 import { vscodeWebResourceIncludes, createVSCodeWebFileContentMapper } from './gulpfile.vscode.web.ts';
 import * as cp from 'child_process';
@@ -609,7 +609,11 @@ function tweakProductForServerWeb(product: typeof import('../product.json')) {
 			task.task(serverTaskCI);
 
 			const serverTask = task.define(`vscode-${type}${dashed(platform)}${dashed(arch)}${dashed(minified)}`, task.series(
-				compileBuildWithManglingTask,
+				// CLAWDIUS-BEGIN the server does not need mangling; the desktop only mangles its -min build
+				// (gulpfile.vscode.ts). The mangler's peak memory OOM-kills the 16 GB CI runner, so the
+				// non-min server build (built by build/release/reh.sh) skips it, matching the desktop pattern.
+				minified ? compileBuildWithManglingTask : compileBuildWithoutManglingTask,
+				// CLAWDIUS-END
 				cleanExtensionsBuildTask,
 				compileNonNativeExtensionsBuildTask,
 				compileExtensionMediaBuildTask,

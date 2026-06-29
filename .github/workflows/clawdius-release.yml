@@ -141,7 +141,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [x64, arm64]
+        # snap is x64-only: snapcraft.yaml's override-build hard-codes the x86_64 crashpad rpath, so a
+        # native arm64 snap cannot be produced without per-arch rpath templating (deferred to a later release).
+        arch: [x64]
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     environment: release
     continue-on-error: true # snap is the flakiest leg; never block the release on it

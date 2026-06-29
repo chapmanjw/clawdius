@@ -87,6 +87,9 @@ async function main(buildDir?: string) {
 		// @vscode/native-watchdog reports byte-identical across arches as well.
 		'**/node_modules/@vscode/native-watchdog/build/Release/*.node',
 		'**/node_modules.asar.unpacked/@vscode/native-watchdog/build/Release/*.node',
+		// @vscode/policy-watcher: same again.
+		'**/node_modules/@vscode/policy-watcher/build/Release/*.node',
+		'**/node_modules.asar.unpacked/@vscode/policy-watcher/build/Release/*.node',
 	];
 
 	await makeUniversalApp({
@@ -96,7 +99,7 @@ async function main(buildDir?: string) {
 		outAppPath,
 		force: true,
 		mergeASARs: true,
-		x64ArchFiles: '{*/kerberos.node,**/extensions/microsoft-authentication/dist/libmsalruntime.dylib,**/extensions/microsoft-authentication/dist/msal-node-runtime.node,**/node_modules/@vscode/ripgrep-universal/bin/darwin-*/*,**/node_modules.asar.unpacked/@vscode/ripgrep-universal/bin/darwin-*/*,**/node_modules/@microsoft/mxc-sdk/bin/**,**/node_modules.asar.unpacked/@microsoft/mxc-sdk/bin/**,**/node_modules/@vscode/fs-copyfile/build/Release/*.node,**/node_modules.asar.unpacked/@vscode/fs-copyfile/build/Release/*.node,**/node_modules/@parcel/watcher/build/Release/*.node,**/node_modules.asar.unpacked/@parcel/watcher/build/Release/*.node,**/node_modules/@vscode/deviceid/build/Release/*.node,**/node_modules.asar.unpacked/@vscode/deviceid/build/Release/*.node,**/node_modules/@vscode/native-watchdog/build/Release/*.node,**/node_modules.asar.unpacked/@vscode/native-watchdog/build/Release/*.node}',
+		x64ArchFiles: '{*/kerberos.node,**/extensions/microsoft-authentication/dist/libmsalruntime.dylib,**/extensions/microsoft-authentication/dist/msal-node-runtime.node,**/node_modules/@vscode/ripgrep-universal/bin/darwin-*/*,**/node_modules.asar.unpacked/@vscode/ripgrep-universal/bin/darwin-*/*,**/node_modules/@microsoft/mxc-sdk/bin/**,**/node_modules.asar.unpacked/@microsoft/mxc-sdk/bin/**,**/node_modules/@vscode/fs-copyfile/build/Release/*.node,**/node_modules.asar.unpacked/@vscode/fs-copyfile/build/Release/*.node,**/node_modules/@parcel/watcher/build/Release/*.node,**/node_modules.asar.unpacked/@parcel/watcher/build/Release/*.node,**/node_modules/@vscode/deviceid/build/Release/*.node,**/node_modules.asar.unpacked/@vscode/deviceid/build/Release/*.node,**/node_modules/@vscode/native-watchdog/build/Release/*.node,**/node_modules.asar.unpacked/@vscode/native-watchdog/build/Release/*.node,**/node_modules/@vscode/policy-watcher/build/Release/*.node,**/node_modules.asar.unpacked/@vscode/policy-watcher/build/Release/*.node}',
 		filesToSkipComparison: (file: string) => {
 			for (const expected of filesToSkip) {
 				if (minimatch(file, expected)) {

@@ -4,7 +4,7 @@ Clawdius is a Claude-only build of VS Code. It forks [microsoft/vscode](https://
 
 The assistant is the official **Claude Code** extension from Anthropic, installed from Open VSX on first run and driven by your existing `~/.claude` login. There is no Copilot sign-in, no Codex, and no Microsoft telemetry.
 
-> Status: alpha. It builds and runs from source on Windows; signed installers are not published yet. See [BUILD.md](BUILD.md).
+> Status: alpha. It builds from source and runs on Windows, macOS, and Linux; the release pipeline produces per-platform builds. Signed installers are not published yet. See [BUILD.md](BUILD.md).
 
 ## What's different from Code - OSS
 
@@ -18,7 +18,7 @@ The assistant is the official **Claude Code** extension from Anthropic, installe
 
 ## Build and run
 
-Clawdius builds with the upstream VS Code toolchain. On Windows that means Visual Studio 2022 C++ Build Tools and the Node version pinned in `.nvmrc` (24.15.x). [BUILD.md](BUILD.md) lists the exact components.
+Clawdius builds with the upstream VS Code toolchain on Windows, macOS, and Linux. On Windows that means Visual Studio 2022 C++ Build Tools and the Node version pinned in `.nvmrc` (24.15.x); macOS and Linux follow the standard Code - OSS build prerequisites. [BUILD.md](BUILD.md) lists the exact Windows components.
 
 ```
 npm ci

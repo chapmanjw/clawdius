@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
+import { Disposable, DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { $, append, addDisposableListener, EventType, clearNode, getActiveWindow } from '../../../../base/browser/dom.js';
 import { isCancellationError } from '../../../../base/common/errors.js';
@@ -36,6 +36,7 @@ import { InstallChatEvent, InstallChatClassification, ChatSetupStrategy } from '
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IAccessibilityService } from '../../../../platform/accessibility/common/accessibility.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
+import { IHostService } from '../../../services/host/browser/host.js';
 import {
 	OnboardingStepId,
 	ONBOARDING_STEPS,
@@ -153,6 +154,7 @@ export class OnboardingVariationA extends Disposable implements IOnboardingServi
 		@ICommandService private readonly commandService: ICommandService,
 		@IAccessibilityService private readonly accessibilityService: IAccessibilityService,
 		@IOpenerService private readonly openerService: IOpenerService,
+		@IHostService private readonly hostService: IHostService,
 	) {
 		super();
 
@@ -184,6 +186,15 @@ export class OnboardingVariationA extends Disposable implements IOnboardingServi
 
 		// Overlay
 		this.overlay = append(container, $('.onboarding-a-overlay'));
+		// CLAWDIUS: the min/max/close are NATIVE Window Controls Overlay buttons on Windows/Linux, drawn by
+		// the OS compositor ABOVE all DOM, so no CSS scrim can reach them - they would stay bright over the
+		// modal backdrop and stand out. setWindowDimmed() routes to the main process (setTitleBarOverlay
+		// with a dimmed symbolColor) - the same path native dialogs use - to mute just the controls. The
+		// title-bar background itself keeps its normal theme color (scrimming it read as too dark). No-op on
+		// web/macOS; undone on hide when `disposables` is cleared (_removeFromDOM).
+		const dimmedWindow = getActiveWindow();
+		void this.hostService.setWindowDimmed(dimmedWindow, true);
+		this.disposables.add(toDisposable(() => { void this.hostService.setWindowDimmed(dimmedWindow, false); }));
 		this.overlay.setAttribute('role', 'dialog');
 		this.overlay.setAttribute('aria-modal', 'true');
 		this.overlay.setAttribute('aria-label', localize('onboarding.a.aria', "Welcome to Clawdius"));

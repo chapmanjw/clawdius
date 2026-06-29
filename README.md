@@ -115,15 +115,15 @@ Grab the build for your platform from the [Releases](https://github.com/chapmanj
 
 Choose an installer (`<arch>` is `x64` or `arm64`):
 
-- `ClawdiusUserSetup-<arch>.exe` — installs for the current user, no administrator rights needed. Recommended.
-- `ClawdiusSystemSetup-<arch>.exe` — installs for all users (requires administrator).
-- `Clawdius-win32-<arch>.zip` — portable; unzip and run `Clawdius.exe`.
+- `ClawdiusUserSetup-<arch>-<version>.exe` — installs for the current user, no administrator rights needed. Recommended.
+- `ClawdiusSystemSetup-<arch>-<version>.exe` — installs for all users (requires administrator).
+- `Clawdius-win32-<arch>-<version>.zip` — portable; unzip and run `Clawdius.exe`.
 
 If SmartScreen warns about an unrecognized app, choose **More info → Run anyway**.
 
 ### macOS (Apple Silicon)
 
-Download `Clawdius-darwin-arm64.dmg`, open it, and drag Clawdius into Applications. Until builds are notarized, Gatekeeper blocks the first launch — right-click the app and choose **Open**, or clear the quarantine flag:
+Download `Clawdius-darwin-arm64-<version>.dmg`, open it, and drag Clawdius into Applications. Until builds are notarized, Gatekeeper blocks the first launch — right-click the app and choose **Open**, or clear the quarantine flag:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/Clawdius.app
@@ -136,14 +136,14 @@ Intel Macs are not built yet.
 Pick the package for your distribution and architecture (`x64` or `arm64`):
 
 ```bash
-# Debian / Ubuntu
-sudo apt install ./clawdius_<version>_<arch>.deb
+# Debian / Ubuntu  (amd64 for x64 CPUs, arm64 for arm64)
+sudo apt install ./clawdius_*_amd64.deb
 
-# Fedora / RHEL / openSUSE
-sudo dnf install ./clawdius-<version>.<arch>.rpm
+# Fedora / RHEL / openSUSE  (x86_64 for x64 CPUs, aarch64 for arm64)
+sudo dnf install ./clawdius-*.x86_64.rpm
 
-# Portable tarball
-tar -xf Clawdius-linux-<arch>.tar.gz && ./Clawdius-linux-<arch>/bin/clawdius
+# Portable tarball  (extracts to a VSCode-linux-<arch> folder)
+tar -xf Clawdius-linux-x64-*.tar.gz && ./VSCode-linux-x64/bin/clawdius
 ```
 
 Hosted apt and rpm repositories are coming with the first signed release.
@@ -151,7 +151,7 @@ Hosted apt and rpm repositories are coming with the first signed release.
 ### Snap
 
 ```bash
-sudo snap install --classic --dangerous ./clawdius_<version>_amd64.snap
+sudo snap install --classic --dangerous ./clawdius_*_amd64.snap
 ```
 
 The `--dangerous` flag is needed until the snap is published to the Snap Store. Snap is x64 only for now.

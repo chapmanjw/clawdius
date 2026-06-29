@@ -31,6 +31,21 @@ paths = [
   '''(.*/)?\.vscode-test.*''',
   '''package-lock\.json''',
   '''test/clawdius/mocks/.*''',
+  # CLAWDIUS: upstream VS Code files the default rules false-positive on. Every one of the 125
+  # full-history findings was triaged to Microsoft / VS Code-team authors, in upstream files, with
+  # zero hits in any Clawdius-authored path - see SECURITY-SCANNING.md. These patterns stay scoped to
+  # upstream files so a real secret in a Clawdius path would still be caught: the minified TypeScript
+  # compiler bundles, upstream extension manifests (Application Insights aiKeys), the upstream CI
+  # pipelines, the per-channel product.json, the SSH key-PARSING code, and the surveys/search code.
+  '''tsserver\.js''',
+  '''typescriptServices\.js''',
+  '''build/(azure-pipelines|tfs)/''',
+  '''quality/.*/product\.json''',
+  '''extensions/.*/package\.json''',
+  '''extensions/(copilot|github|github-authentication)/''',
+  '''sshRemoteAgentHostService\.ts''',
+  '''workbench/contrib/surveys/''',
+  '''workbench/parts/preferences/''',
 ]
 # Note: the upstream VS Code tree contains example tokens in tests. Tune this allowlist
 # against a clean baseline scan before activating gitleaks as a blocking pre-commit hook.

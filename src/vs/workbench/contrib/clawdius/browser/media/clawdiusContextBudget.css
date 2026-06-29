@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Copyright (c) 2026 John Chapman (Clawdius). All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -13,6 +13,28 @@
 	height: 100%;
 	overflow: auto;
 	user-select: text;
+}
+
+/* CLAWDIUS: theme the overflow scrollbar with the workbench scrollbar-slider colors so it matches the dark theme instead of the light OS default. */
+.clawdius-ctxbudget::-webkit-scrollbar {
+	width: 10px;
+	height: 10px;
+}
+
+.clawdius-ctxbudget::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+.clawdius-ctxbudget::-webkit-scrollbar-thumb {
+	background: var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.4));
+}
+
+.clawdius-ctxbudget::-webkit-scrollbar-thumb:hover {
+	background: var(--vscode-scrollbarSlider-hoverBackground, rgba(100, 100, 100, 0.7));
+}
+
+.clawdius-ctxbudget::-webkit-scrollbar-thumb:active {
+	background: var(--vscode-scrollbarSlider-activeBackground, rgba(191, 191, 191, 0.4));
 }
 
 .clawdius-ctxbudget .ctxb-head {

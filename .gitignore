@@ -55,7 +55,7 @@ dist
 .aws/
 .clawdius/
 clawdius.local.json
-# Research/receipts must NOT live in the public tree - they belong in the clawdius-private-docs repo.
+# Research/receipts must NOT live in the public tree - they belong in a separate private docs repo.
 # This is a defensive net in case a tool writes here anyway.
 .research/
 # Throwaway user-data / extensions dirs for local dev launches.

@@ -127,7 +127,7 @@ class OpenClaudeControlCenterAction extends Action2 {
 // the built-in updater is Disabled/MissingConfiguration), so this opens the GitHub releases page where testers
 // download the latest build. It lives in the Manage (gear) menu's `7_update` group - where the native update
 // item would sit - so the slot is not empty. Replace with the real IUpdateService flow once an update server +
-// signed release pipeline exist (see clawdius-private-docs release plan).
+// signed release pipeline exist.
 const CLAWDIUS_RELEASES_URL = 'https://github.com/chapmanjw/clawdius/releases';
 class ClawdiusCheckForUpdatesAction extends Action2 {
 	constructor() {

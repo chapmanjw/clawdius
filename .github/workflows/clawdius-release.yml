@@ -190,7 +190,7 @@ jobs:
           if-no-files-found: error
 
   macos:
-    name: Build macOS (universal)
+    name: Build macOS (arm64)
     runs-on: macos-14
     environment: release
     env:
@@ -231,7 +231,7 @@ jobs:
         run: bash ./build/release/darwin.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: clawdius-darwin-universal
+          name: clawdius-darwin-arm64
           path: release-artifacts/*
           if-no-files-found: error
 

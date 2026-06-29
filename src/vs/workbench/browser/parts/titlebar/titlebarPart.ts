@@ -57,9 +57,6 @@ import { CommandsRegistry } from '../../../../platform/commands/common/commands.
 import { safeIntl } from '../../../../base/common/date.js';
 import { IsCompactTitleBarContext, TitleBarVisibleContext } from '../../../common/contextkeys.js';
 import { ServiceCollection } from '../../../../platform/instantiation/common/serviceCollection.js';
-import { IOpenerService } from '../../../../platform/opener/common/opener.js';
-import { URI } from '../../../../base/common/uri.js';
-import product from '../../../../platform/product/common/product.js';
 
 export interface ITitleVariable {
 	readonly name: string;
@@ -319,8 +316,7 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 		@IEditorService editorService: IEditorService,
 		@IMenuService private readonly menuService: IMenuService,
 		@IKeybindingService private readonly keybindingService: IKeybindingService,
-		@IActionViewItemService private readonly actionViewItemService: IActionViewItemService,
-		@IOpenerService private readonly openerService: IOpenerService
+		@IActionViewItemService private readonly actionViewItemService: IActionViewItemService
 	) {
 		super(id, { hasTitle: false }, themeService, storageService, layoutService);
 
@@ -506,49 +502,6 @@ export class BrowserTitlebarPart extends Part implements ITitlebarPart {
 				},
 				actionViewItemProvider: (action, options) => createActionViewItem(this.instantiationService, action, options),
 				hoverDelegate: this.hoverDelegate
-			}));
-		}
-
-		// CLAWDIUS: "Sponsor Clawdius" link at the top-right (Clawdius mode only). Sits to the
-		// left of the action toolbar / window controls, but in the same top-right region.
-		if (!product.defaultChatAgent?.entitlementUrl) {
-			const sponsorLabel = localize('clawdius.titlebar.sponsor', "Sponsor Clawdius (opens in browser)");
-			const sponsorLink = append(this.rightContent, $('div.clawdius-sponsor-link'));
-			sponsorLink.setAttribute('role', 'button');
-			sponsorLink.setAttribute('tabindex', '0');
-			sponsorLink.title = sponsorLabel;
-			sponsorLink.setAttribute('aria-label', sponsorLabel);
-			sponsorLink.style.display = 'flex';
-			sponsorLink.style.alignItems = 'center';
-			sponsorLink.style.gap = '4px';
-			sponsorLink.style.height = '100%';
-			sponsorLink.style.padding = '0 8px';
-			sponsorLink.style.fontSize = '12px';
-			sponsorLink.style.cursor = 'pointer';
-			sponsorLink.style.position = 'relative';
-			sponsorLink.style.zIndex = '2500';
-			sponsorLink.style.color = 'var(--vscode-titleBar-inactiveForeground)';
-			sponsorLink.style.setProperty('-webkit-app-region', 'no-drag');
-
-			const sponsorHeart = $('span.codicon.codicon-heart');
-			sponsorHeart.setAttribute('aria-hidden', 'true');
-			sponsorHeart.style.color = '#db61a2';
-			sponsorLink.appendChild(sponsorHeart);
-
-			const sponsorText = append(sponsorLink, $('span'));
-			sponsorText.textContent = localize('clawdius.titlebar.sponsorText', "Sponsor Clawdius");
-
-			const sponsorExternal = $('span.codicon.codicon-link-external');
-			sponsorExternal.setAttribute('aria-hidden', 'true');
-			sponsorLink.appendChild(sponsorExternal);
-
-			const openSponsor = () => { this.openerService.open(URI.parse('https://github.com/sponsors/chapmanjw')); };
-			this._register(addDisposableListener(sponsorLink, EventType.CLICK, () => openSponsor()));
-			this._register(addDisposableListener(sponsorLink, EventType.KEY_DOWN, (e: KeyboardEvent) => {
-				if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
-					EventHelper.stop(e, true);
-					openSponsor();
-				}
 			}));
 		}
 
@@ -1013,9 +966,8 @@ export class MainBrowserTitlebarPart extends BrowserTitlebarPart {
 		@IMenuService menuService: IMenuService,
 		@IKeybindingService keybindingService: IKeybindingService,
 		@IActionViewItemService actionViewItemService: IActionViewItemService,
-		@IOpenerService openerService: IOpenerService,
 	) {
-		super(Parts.TITLEBAR_PART, mainWindow, editorGroupService.mainPart, contextMenuService, configurationService, environmentService, instantiationService, themeService, storageService, layoutService, contextKeyService, hostService, editorService, menuService, keybindingService, actionViewItemService, openerService);
+		super(Parts.TITLEBAR_PART, mainWindow, editorGroupService.mainPart, contextMenuService, configurationService, environmentService, instantiationService, themeService, storageService, layoutService, contextKeyService, hostService, editorService, menuService, keybindingService, actionViewItemService);
 	}
 }
 
@@ -1050,10 +1002,9 @@ export class AuxiliaryBrowserTitlebarPart extends BrowserTitlebarPart implements
 		@IMenuService menuService: IMenuService,
 		@IKeybindingService keybindingService: IKeybindingService,
 		@IActionViewItemService actionViewItemService: IActionViewItemService,
-		@IOpenerService openerService: IOpenerService,
 	) {
 		const id = AuxiliaryBrowserTitlebarPart.COUNTER++;
-		super(`workbench.parts.auxiliaryTitle.${id}`, getWindow(container), editorGroupsContainer, contextMenuService, configurationService, environmentService, instantiationService, themeService, storageService, layoutService, contextKeyService, hostService, editorService, menuService, keybindingService, actionViewItemService, openerService);
+		super(`workbench.parts.auxiliaryTitle.${id}`, getWindow(container), editorGroupsContainer, contextMenuService, configurationService, environmentService, instantiationService, themeService, storageService, layoutService, contextKeyService, hostService, editorService, menuService, keybindingService, actionViewItemService);
 	}
 
 	override get preventZoom(): boolean {

@@ -551,6 +551,25 @@ export class ClaudeControlCenterEditor extends EditorPane {
 				if (this.tab !== def.tab) { this.tab = def.tab; this.clearTransientForms(); this.render(); }
 			}));
 		}
+
+		// CLAWDIUS: a right-justified "Sponsor Clawdius" link in-line with the tab row.
+		const sponsor = append(strip, h('a.clawdius-control-sponsor')) as HTMLAnchorElement;
+		sponsor.style.marginLeft = 'auto';
+		sponsor.style.display = 'inline-flex';
+		sponsor.style.alignItems = 'center';
+		sponsor.style.gap = '5px';
+		sponsor.style.cursor = 'pointer';
+		sponsor.style.opacity = '0.7';
+		sponsor.title = localize('clawdius.control.sponsorTip', "Sponsor Clawdius (opens in browser)");
+		const sponsorHeart = append(sponsor, h('span.codicon.codicon-heart'));
+		sponsorHeart.style.color = '#db61a2';
+		sponsorHeart.setAttribute('aria-hidden', 'true');
+		append(sponsor, h('span')).textContent = localize('clawdius.control.sponsor', "Sponsor Clawdius");
+		const sponsorExt = append(sponsor, h('span.codicon.codicon-link-external'));
+		sponsorExt.setAttribute('aria-hidden', 'true');
+		this.renderStore.add(addDisposableListener(sponsor, EventType.CLICK, () => {
+			this.openerService.open(URI.parse('https://github.com/sponsors/chapmanjw'));
+		}));
 	}
 
 	private renderHero(parent: HTMLElement, title: string, sub: string): void {

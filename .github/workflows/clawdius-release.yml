@@ -176,11 +176,11 @@ jobs:
         run: |
           mkdir -p release-artifacts
           cp "${{ steps.snapbuild.outputs.snap }}" release-artifacts/
-      - name: Publish to Snap Store (real release tags only)
-        # Throwaway v0.0.0-test* tags build the snap but never publish it. Runs only
-        # when the store credential is present; the leg is continue-on-error so a held
-        # classic-confinement review never blocks the GitHub release.
-        if: ${{ env.SNAPCRAFT_STORE_CREDENTIALS != '' && !startsWith(github.ref_name, 'v0.0.0') }}
+      - name: Publish to Snap Store (deferred)
+        # DEFERRED until the classic-confinement store request is approved. The snap is still built and
+        # attached to the GitHub release; only the store upload is held. To re-enable, restore the gate:
+        #   if: ${{ env.SNAPCRAFT_STORE_CREDENTIALS != '' && !startsWith(github.ref_name, 'v0.0.0') }}
+        if: ${{ false }}
         uses: snapcore/action-publish@v1
         with:
           snap: ${{ steps.snapbuild.outputs.snap }}

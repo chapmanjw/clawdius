@@ -136,6 +136,38 @@ jobs:
           path: release-artifacts/*
           if-no-files-found: error
 
+  reh:
+    name: Build REH server (${{ matrix.arch }})
+    # The remote extension host server, downloaded by Open Remote - SSH / WSL from the
+    # serverDownloadUrlTemplate in product.json. Built in the same run as the desktop client so the
+    # commit/version handshake matches. No publish step; the tarballs ride into the same release.
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Install build toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxkbfile-dev libkrb5-dev
+      - name: Install dependencies
+        run: npm ci
+      - name: Build + tar REH server
+        run: bash ./build/release/reh.sh ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clawdius-reh-linux-${{ matrix.arch }}
+          path: release-artifacts/*
+          if-no-files-found: error
+
   snap:
     name: Build Snap (${{ matrix.arch }})
     strategy:
@@ -239,9 +271,9 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [windows, linux, snap, macos]
+    needs: [windows, linux, snap, reh, macos]
     # Publish only on a tag push, once Windows + Linux + macOS succeed; snap is optional.
-    if: ${{ always() && startsWith(github.ref, 'refs/tags/') && needs.windows.result == 'success' && needs.linux.result == 'success' && needs.macos.result == 'success' }}
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/') && needs.windows.result == 'success' && needs.linux.result == 'success' && needs.macos.result == 'success' && needs.reh.result == 'success' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4

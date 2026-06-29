@@ -14,6 +14,7 @@
 	"serverApplicationName": "clawdius-server",
 	"serverDataFolderName": ".clawdius-server",
 	"tunnelApplicationName": "clawdius-tunnel",
+	"serverDownloadUrlTemplate": "https://github.com/chapmanjw/clawdius/releases/download/v${version}/clawdius-reh-${os}-${arch}-${version}.tar.gz",
 	"win32DirName": "Clawdius",
 	"win32NameVersion": "Clawdius",
 	"win32RegValueName": "Clawdius",

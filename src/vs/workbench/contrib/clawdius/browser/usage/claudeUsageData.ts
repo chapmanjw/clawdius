@@ -10,9 +10,15 @@
 // extension (the `clawdius.refreshUsageCapacity` command) when the user opens a usage surface; that response
 // is cached locally to `.clawdius-usage-cache.json` and read here. No startup fetch, no background timer.
 
+import { Schemas } from '../../../../../base/common/network.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { localize } from '../../../../../nls.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
+// Re-export the shared provider gate + capacity constants from the common module so every existing importer and
+// test keeps working unchanged while the single source of truth lives in platform/clawdius/common. The node
+// capacity service imports the same module, so the gate can never drift between the renderer and the REH server.
+import { ClaudeProvider, providerFromEnv, CAPACITY_CACHE_FILE, CREDENTIALS_FILE, SETTINGS_FILE } from '../../../../../platform/clawdius/common/claudeUsageProvider.js';
+export { ClaudeProvider, providerFromEnv, engineIsAnthropic, CAPACITY_CACHE_FILE, CREDENTIALS_FILE, SETTINGS_FILE } from '../../../../../platform/clawdius/common/claudeUsageProvider.js';
 
 // --- Live capacity (subscription rate-limit windows) from /api/oauth/usage, cached locally ---
 
@@ -70,13 +76,8 @@ export interface IStreaks {
 }
 
 // --- Account identity + engine provider ---
-
-export const enum ClaudeProvider {
-	Anthropic = 'anthropic',
-	Bedrock = 'bedrock',
-	Vertex = 'vertex',
-	Custom = 'custom',
-}
+// ClaudeProvider / providerFromEnv / engineIsAnthropic and the shared filename constants are re-exported from
+// the common module above; detectProvider / providerHasLimits below build on the re-exported ClaudeProvider.
 
 export interface IClaudeAccount {
 	readonly signedIn: boolean;
@@ -94,10 +95,8 @@ export interface IUsageWindow {
 	readonly resets?: string | null;
 }
 
-export const CAPACITY_CACHE_FILE = '.clawdius-usage-cache.json';
+// CAPACITY_CACHE_FILE / CREDENTIALS_FILE / SETTINGS_FILE are re-exported from the common provider module (above).
 export const STATS_CACHE_FILE = 'stats-cache.json';
-export const CREDENTIALS_FILE = '.credentials.json';
-export const SETTINGS_FILE = 'settings.json';
 
 /** Command (clawdius-chat extension) that performs the single allowed, user-initiated /api/oauth/usage fetch. */
 export const REFRESH_CAPACITY_COMMAND_ID = 'clawdius.refreshUsageCapacity';
@@ -439,25 +438,21 @@ interface IClaudeSettings {
 	readonly env?: { readonly [key: string]: unknown };
 }
 
-/**
- * Infer the engine provider from a Claude Code settings `env` map. Pure (the file read lives in
- * {@link detectProvider}); extracted so the provider precedence is unit-testable without a file service.
- */
-export function providerFromEnv(env: { readonly [key: string]: unknown }): ClaudeProvider {
-	const truthy = (v: unknown) => v === true || v === 1 || v === '1' || v === 'true';
-	if (truthy(env['CLAUDE_CODE_USE_BEDROCK'])) { return ClaudeProvider.Bedrock; }
-	if (truthy(env['CLAUDE_CODE_USE_VERTEX'])) { return ClaudeProvider.Vertex; }
-	const baseUrl = env['ANTHROPIC_BASE_URL'];
-	if (typeof baseUrl === 'string' && baseUrl.length > 0 && !/api\.anthropic\.com/i.test(baseUrl)) {
-		return ClaudeProvider.Custom;
-	}
-	return ClaudeProvider.Anthropic;
-}
+// providerFromEnv (the pure precedence core of detectProvider) is re-exported from the common provider module.
 
 /** Infer the engine provider from ~/.claude/settings.json env. Defaults to Anthropic. */
 export async function detectProvider(fileService: IFileService, claudeDir: URI): Promise<ClaudeProvider> {
 	const settings = await readJson<IClaudeSettings>(fileService, URI.joinPath(claudeDir, SETTINGS_FILE));
 	return providerFromEnv(settings?.env ?? {});
+}
+
+/**
+ * Scheme-aware home path for the transcript aggregator (and the capacity router). A local Windows home is a
+ * file:// URI whose `.fsPath` is the native path (C:\Users\...); a WSL/SSH remote is a vscode-remote:// URI whose
+ * `.path` is the remote POSIX home (/home/user). `.fsPath` would mangle the remote URI, so only use it for file.
+ */
+export function usageHomePath(homeUri: URI): string {
+	return homeUri.scheme === Schemas.file ? homeUri.fsPath : homeUri.path;
 }
 
 // --- The Claude wordmark glyph (inline SVG, inherits currentColor so it takes the host text color) ---

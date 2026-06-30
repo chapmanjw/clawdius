@@ -23,7 +23,6 @@ import { CancellationToken, CancellationTokenSource } from '../../../../../base/
 import { VSBuffer } from '../../../../../base/common/buffer.js';
 import { Codicon } from '../../../../../base/common/codicons.js';
 import { Disposable, DisposableStore, MutableDisposable } from '../../../../../base/common/lifecycle.js';
-import { Schemas } from '../../../../../base/common/network.js';
 import { ThemeIcon } from '../../../../../base/common/themables.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { localize } from '../../../../../nls.js';
@@ -40,7 +39,7 @@ import { classifySettings } from '../control/claudeControlCenterData.js';
 import {
 	capacityWindows, compact, computeStreaks, formatDuration, IClaudeAccount, IClaudeCapacity, IClaudeDailyActivity,
 	IClaudeDailyModelTokens, IClaudeModelStat, IClaudeStats, IWindowedStats, modelLabel, providerHasLimits, providerLabel,
-	readAccount, readCapacity, resetLabel, resolveModelRows, windowStats,
+	readAccount, readCapacity, resetLabel, resolveModelRows, usageHomePath, windowStats,
 } from './claudeUsageData.js';
 
 /** Default transcript retention when `cleanupPeriodDays` is unset / invalid in ~/.claude/settings.json. */
@@ -320,7 +319,7 @@ export class ClaudeUsageDashboardView extends Disposable {
 		// file:// URI (-> C:\Users\...); a WSL/SSH remote is a vscode-remote:// URI whose `.path` is the remote
 		// POSIX home (-> /home/user). `.fsPath` would mangle the remote URI, so only use it for the file scheme.
 		const homeUri = await this.pathService.userHome();
-		const home = homeUri.scheme === Schemas.file ? homeUri.fsPath : homeUri.path;
+		const home = usageHomePath(homeUri);
 		let result;
 		try {
 			result = await this.agentHostService.getUsageStats(home);

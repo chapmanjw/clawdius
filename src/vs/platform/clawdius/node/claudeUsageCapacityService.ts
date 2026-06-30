@@ -17,17 +17,12 @@ import { readFile, stat, writeFile } from 'fs/promises';
 import { join } from '../../../base/common/path.js';
 import { ILogService } from '../../log/common/log.js';
 import { IClaudeUsageCapacityService } from '../common/claudeUsageCapacity.js';
-
-// Same filenames as the claudeUsageData.ts constants (that file is browser-layer and can't be imported here).
-const CAPACITY_CACHE_FILE = '.clawdius-usage-cache.json';
-const CREDENTIALS_FILE = '.credentials.json';
-const SETTINGS_FILE = 'settings.json';
-
-/** Minimum age of the cached limits before an automatic (non-forced) refresh re-hits the network. */
-const USAGE_CAPACITY_TTL_MS = 60_000;
-
-/** Anthropic's own subscription-usage endpoint (the only provider that exposes it). */
-const OAUTH_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
+// Provider gate + capacity constants come from the shared common module (the single source of truth, also imported
+// by the renderer usage data layer), so the node service and the renderer can never drift apart.
+import {
+	engineIsAnthropic, oauthUsageHeaders, CAPACITY_CACHE_FILE, CREDENTIALS_FILE, SETTINGS_FILE,
+	USAGE_CAPACITY_TTL_MS, OAUTH_USAGE_URL,
+} from '../common/claudeUsageProvider.js';
 
 export class ClaudeUsageCapacityService implements IClaudeUsageCapacityService {
 
@@ -42,7 +37,8 @@ export class ClaudeUsageCapacityService implements IClaudeUsageCapacityService {
 			const claudeDir = join(homeDirPath, '.claude');
 			// Provider gate: only Anthropic's own API exposes /api/oauth/usage. If the engine is pointed at Bedrock /
 			// Vertex / a custom base URL, do NOT reach api.anthropic.com - the subscription limits don't apply there.
-			if (!(await this.engineIsAnthropic(claudeDir))) {
+			// The gate logic lives in the shared common module; this service only supplies the parsed settings env.
+			if (!engineIsAnthropic(await this.readSettingsEnv(claudeDir))) {
 				return;
 			}
 			const cachePath = join(claudeDir, CAPACITY_CACHE_FILE);
@@ -64,7 +60,7 @@ export class ClaudeUsageCapacityService implements IClaudeUsageCapacityService {
 				return;
 			}
 			const res = await fetch(OAUTH_USAGE_URL, {
-				headers: { 'Authorization': `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20', 'Content-Type': 'application/json' },
+				headers: oauthUsageHeaders(token),
 				// Bound the outbound call so a stalled api.anthropic.com connection can't hang the awaiting UI.
 				signal: AbortSignal.timeout(15_000),
 			});
@@ -82,25 +78,15 @@ export class ClaudeUsageCapacityService implements IClaudeUsageCapacityService {
 	}
 
 	/**
-	 * Whether `<claudeDir>/settings.json` points the engine at Anthropic's own API (vs Bedrock / Vertex / a custom
-	 * base URL). Mirrors detectProvider()/engineIsAnthropic() in the local copies. Defaults to Anthropic when the
-	 * settings file is absent / unreadable.
+	 * Read the engine-provider `env` map from `<claudeDir>/settings.json` for the shared {@link engineIsAnthropic}
+	 * gate. Returns `{}` when the settings file is absent / unreadable, so the gate defaults to Anthropic.
 	 */
-	private async engineIsAnthropic(claudeDir: string): Promise<boolean> {
+	private async readSettingsEnv(claudeDir: string): Promise<{ readonly [key: string]: unknown }> {
 		try {
 			const settings = JSON.parse(await readFile(join(claudeDir, SETTINGS_FILE), 'utf8'));
-			const env = (settings && settings.env) || {};
-			const truthy = (v: unknown) => v === true || v === 1 || v === '1' || v === 'true';
-			if (truthy(env.CLAUDE_CODE_USE_BEDROCK) || truthy(env.CLAUDE_CODE_USE_VERTEX)) {
-				return false;
-			}
-			const baseUrl = env.ANTHROPIC_BASE_URL;
-			if (typeof baseUrl === 'string' && baseUrl.length > 0 && !/api\.anthropic\.com/i.test(baseUrl)) {
-				return false;
-			}
-			return true;
+			return (settings && settings.env) || {};
 		} catch {
-			return true;
+			return {};
 		}
 	}
 

@@ -85,6 +85,19 @@ ok(/registerCommand\('clawdius\.refreshUsageCapacity'/.test(chatExt), 'clawdius-
 ok(!/setInterval\([^)]*fetchUsageCapacity/.test(chatExt), 'clawdius-chat: usage capacity is fetched on a background timer (uninitiated egress)');
 ok(!/^\s*fetchUsageCapacity\(\);\s*$/m.test(chatExt), 'clawdius-chat: fetchUsageCapacity() is called directly (likely at activation) - it must run on demand only');
 
+// Hand-mirror parity backstop. The clawdius-chat extension can't import src/vs, so its copy of the provider gate +
+// capacity fetch is a DELIBERATE hand-mirror of src/vs/platform/clawdius/common/claudeUsageProvider.ts (the shared
+// source of truth that the node service and the renderer both import). Assert the extension copy still carries the
+// same provider env keys, base-URL check, usage URL, cache filename, and anthropic-beta header value, so a drift in
+// the mirror trips CI instead of silently letting the local-window copy diverge from the shared spec.
+for (const key of ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'ANTHROPIC_BASE_URL']) {
+	ok(chatExt.includes(key), `clawdius-chat: provider gate drifted from the shared spec (missing env key ${key})`);
+}
+ok(/api\\?\.anthropic\\?\.com/.test(chatExt), 'clawdius-chat: provider gate drifted (the api.anthropic.com base-URL check is missing)');
+ok(chatExt.includes('api.anthropic.com/api/oauth/usage'), 'clawdius-chat: capacity fetch drifted (the OAuth usage URL is missing)');
+ok(chatExt.includes('.clawdius-usage-cache.json'), 'clawdius-chat: capacity cache filename drifted from the shared spec');
+ok(chatExt.includes('oauth-2025-04-20'), 'clawdius-chat: the anthropic-beta header value drifted from the shared spec');
+
 // Same zero-egress backstop for the REMOTE-side mirror of the capacity fetch: the REH server's capacity service
 // (which serves WSL/SSH windows against the remote ~/.claude) must be ON DEMAND only - invoked via its IPC
 // channel, with NO background timer and NO constructor/startup self-call. A regression to a timer or a self-call

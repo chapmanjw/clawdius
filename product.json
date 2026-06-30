@@ -158,7 +158,11 @@
 	},
 	"trustedExtensionAuthAccess": {},
 	"linkProtectionTrustedDomains": [
-		"https://github.com"
+		"https://github.com",
+		"https://claude.ai",
+		"https://*.claude.ai",
+		"https://claude.com",
+		"https://*.claude.com"
 	],
 	"onboardingKeymaps": [
 		{

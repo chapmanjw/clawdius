@@ -541,6 +541,16 @@ export interface IExtensionService {
 	startExtensionHosts(updates?: { readonly toAdd: readonly IExtension[]; readonly toRemove: readonly string[] }): Promise<void>;
 
 	/**
+	 * CLAWDIUS: Restart ONLY the remote extension host(s), leaving the local extension hosts running.
+	 * A full `restartExtensionHost` tears down the LOCAL ext host too, which - in a remote window - kills
+	 * the remote resolver extension (and the transport it owns), permanently dropping the remote
+	 * connection ("Cannot reconnect. Please reload the window."). This restarts just the remote host, so a
+	 * remote-side extension (e.g. the Claude plugin running in WSL/SSH) re-activates and re-reads its
+	 * config without disturbing the connection. No-op when there is no remote extension host.
+	 */
+	restartRemoteExtensionHosts(): Promise<void>;
+
+	/**
 	 * Modify the environment of the remote extension host
 	 * @param env New properties for the remote extension host
 	 */
@@ -611,6 +621,7 @@ export class NullExtensionService implements IExtensionService {
 	getInspectPorts(_extensionHostKind: ExtensionHostKind, _tryEnableInspector: boolean): Promise<IExtensionInspectInfo[]> { return Promise.resolve([]); }
 	async stopExtensionHosts(): Promise<boolean> { return true; }
 	async startExtensionHosts(): Promise<void> { }
+	async restartRemoteExtensionHosts(): Promise<void> { }
 	async setRemoteEnvironment(_env: { [key: string]: string | null }): Promise<void> { }
 	canAddExtension(): boolean { return false; }
 	canRemoveExtension(): boolean { return false; }

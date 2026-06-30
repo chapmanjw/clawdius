@@ -43,6 +43,8 @@ import { themeColorFromId } from '../../../../platform/theme/common/themeService
 import { IWorkbenchContribution } from '../../../common/contributions.js';
 import { STATUS_BAR_ERROR_ITEM_BACKGROUND, STATUS_BAR_ERROR_ITEM_FOREGROUND, STATUS_BAR_WARNING_ITEM_BACKGROUND, STATUS_BAR_WARNING_ITEM_FOREGROUND } from '../../../common/theme.js';
 import { IStatusbarEntry, IStatusbarEntryAccessor, IStatusbarService, StatusbarAlignment } from '../../../services/statusbar/browser/statusbar.js';
+import { IExtensionService } from '../../../services/extensions/common/extensions.js';
+import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 
 /** The four documented permission modes (the `claudeCode.initialPermissionMode` enum). Auto mode is omitted - it is not in the public config enum. */
 export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
@@ -218,6 +220,8 @@ export class SetPermissionModeAction extends Action2 {
 		const quickInputService = accessor.get(IQuickInputService);
 		const configurationService = accessor.get(IConfigurationService);
 		const commandService = accessor.get(ICommandService);
+		const extensionService = accessor.get(IExtensionService);
+		const environmentService = accessor.get(IWorkbenchEnvironmentService);
 
 		const current = readMode(configurationService);
 		const wasBypassAllowed = bypassAllowed(configurationService);
@@ -248,7 +252,14 @@ export class SetPermissionModeAction extends Action2 {
 		// either a mode change OR newly enabling the bypass gate (picking Bypass when it was configured-but-gated-
 		// off flips the gate to true without changing the mode string, yet the behavior does change).
 		if (shouldRestartAfterPermissionChange(current, wasBypassAllowed, chosen.mode)) {
-			await commandService.executeCommand('workbench.action.restartExtensionHost');
+			// On a REMOTE window the plugin runs in the remote ext host; a full restart would tear down the
+			// LOCAL host that owns the remote resolver and drop the connection ("Cannot reconnect"), so restart
+			// ONLY the remote host. On a LOCAL window restart the (local) host as before.
+			if (environmentService.remoteAuthority) {
+				await extensionService.restartRemoteExtensionHosts();
+			} else {
+				await commandService.executeCommand('workbench.action.restartExtensionHost');
+			}
 		}
 	}
 }

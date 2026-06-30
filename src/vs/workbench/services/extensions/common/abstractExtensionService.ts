@@ -972,6 +972,24 @@ export abstract class AbstractExtensionService extends Disposable implements IEx
 		}
 	}
 
+	// CLAWDIUS-BEGIN: restart only the remote extension host(s), leaving local hosts running
+	public async restartRemoteExtensionHosts(): Promise<void> {
+		await this._initializeIfNeeded();
+		const remoteHosts = this._getExtensionHostManagers(ExtensionHostKind.Remote);
+		if (remoteHosts.length === 0) {
+			return;
+		}
+		// Stop just the remote host(s); leave the LOCAL host (and the remote resolver extension it hosts)
+		// alive so the remote management connection survives. _startExtensionHostsIfNecessary then recreates
+		// the missing remote host - the same stop-one + restart path VS Code uses for remote-host crash
+		// recovery (see _onExtensionHostCrashed for ExtensionHostKind.Remote).
+		for (const host of remoteHosts) {
+			await this._extensionHostManagers.stopOne(host);
+		}
+		this._startExtensionHostsIfNecessary(false, Array.from(this._allRequestedActivateEvents.keys()));
+	}
+	// CLAWDIUS-END
+
 	private _startOnDemandExtensionHosts(): void {
 		const snapshot = this._registry.getSnapshot();
 		for (const extHostManager of this._extensionHostManagers) {

@@ -41,6 +41,8 @@ import { IWorkbenchContribution } from '../../../common/contributions.js';
 import { IJSONEditingService } from '../../../services/configuration/common/jsonEditing.js';
 import { IPathService } from '../../../services/path/common/pathService.js';
 import { IStatusbarEntry, IStatusbarEntryAccessor, IStatusbarService, StatusbarAlignment } from '../../../services/statusbar/browser/statusbar.js';
+import { IExtensionService } from '../../../services/extensions/common/extensions.js';
+import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 import { blockBar } from './usage/claudeUsageCharts.js';
 
 /** The effort levels, ordered low -> high. Mirrors the plugin's effortLevel enum (max is model-gated like xhigh). */
@@ -328,6 +330,8 @@ export class SetEffortLevelAction extends Action2 {
 		const jsonEditing = accessor.get(IJSONEditingService);
 		const commandService = accessor.get(ICommandService);
 		const notificationService = accessor.get(INotificationService);
+		const extensionService = accessor.get(IExtensionService);
+		const environmentService = accessor.get(IWorkbenchEnvironmentService);
 
 		const settingsUri = URI.joinPath(await pathService.userHome(), '.claude', 'settings.json');
 		const notifyInvalid = () => notificationService.error(localize('clawdius.effort.invalidSettings', "Can't update the default effort: {0} is not valid JSON. Fix the file and try again.", settingsUri.fsPath));
@@ -372,11 +376,18 @@ export class SetEffortLevelAction extends Action2 {
 					await fileService.writeFile(settingsUri, VSBuffer.fromString('{}\n'));
 				}
 				await jsonEditing.write(settingsUri, plan.writes.map(w => ({ path: [...w.path], value: w.value })), true);
-				// Restart the extension host so the Claude plugin re-activates and its CLI re-reads
-				// ~/.claude/settings.json fresh - the only reliable way to apply the new effort to open chats. A
-				// plain webview reload is page-only and reads the plugin's STALE cached config (it lands one
-				// selection behind), so it cannot be used here. Note: this restarts ALL extensions, not just Claude.
-				await commandService.executeCommand('workbench.action.restartExtensionHost');
+				// Re-activate the Claude plugin so its CLI re-reads ~/.claude/settings.json fresh - the only
+				// reliable way to apply the new effort to open chats (a plain webview reload is page-only and
+				// reads the plugin's STALE cached config, landing one selection behind). On a LOCAL window the
+				// plugin runs in the local ext host, so restart it. On a REMOTE window the plugin runs in the
+				// REMOTE ext host; a full restart would ALSO tear down the LOCAL host that owns the remote
+				// resolver, dropping the connection ("Cannot reconnect. Please reload the window."), so restart
+				// ONLY the remote host instead.
+				if (environmentService.remoteAuthority) {
+					await extensionService.restartRemoteExtensionHosts();
+				} else {
+					await commandService.executeCommand('workbench.action.restartExtensionHost');
+				}
 				return;
 		}
 	}

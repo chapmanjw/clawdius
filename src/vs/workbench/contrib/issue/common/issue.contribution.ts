@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Disposable } from '../../../../base/common/lifecycle.js';
+import { URI } from '../../../../base/common/uri.js';
 import { localize, localize2 } from '../../../../nls.js';
 import { ICommandAction } from '../../../../platform/action/common/action.js';
 import { Categories } from '../../../../platform/action/common/actionCommonCategories.js';
@@ -12,6 +13,7 @@ import { CommandsRegistry, ICommandMetadata } from '../../../../platform/command
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
+import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { IWorkbenchContribution } from '../../../common/contributions.js';
 import { IssueReporterData, IWorkbenchIssueService } from './issue.js';
 
@@ -78,21 +80,21 @@ export class BaseIssueContribution extends Disposable implements IWorkbenchContr
 			return;
 		}
 
-		if (!productService.reportIssueUrl) {
+		const reportIssueUrl = productService.reportIssueUrl;
+		if (!reportIssueUrl) {
 			return;
 		}
 
+		// CLAWDIUS: "Report Issue" (Help menu + command palette) opens the GitHub issues page directly,
+		// rather than the in-product issue reporter (which collects diagnostics and uploads via a token this
+		// fork does not ship). Derive the issues LIST url by stripping a trailing /new from reportIssueUrl.
+		// The extension-facing `vscode.openIssueReporter` command below is left as the real reporter.
+		const issuesPageUrl = reportIssueUrl.replace(/\/new\/?$/, '');
+
 		this._register(CommandsRegistry.registerCommand({
 			id: OpenIssueReporterActionId,
-			handler: function (accessor, args?: string | [string] | OpenIssueReporterArgs) {
-				const data: Partial<IssueReporterData> =
-					typeof args === 'string'
-						? { extensionId: args }
-						: Array.isArray(args)
-							? { extensionId: args[0] }
-							: args ?? {};
-
-				return accessor.get(IWorkbenchIssueService).openReporter(data);
+			handler: function (accessor) {
+				return accessor.get(IOpenerService).open(URI.parse(issuesPageUrl));
 			},
 			metadata: OpenIssueReporterCommandMetadata
 		}));

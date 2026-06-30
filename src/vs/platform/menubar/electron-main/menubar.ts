@@ -148,7 +148,8 @@ export class Menubar extends Disposable {
 
 		const reportIssueUrl = this.productService.reportIssueUrl;
 		if (reportIssueUrl) {
-			this.fallbackMenuHandlers['workbench.action.openIssueReporter'] = () => this.openUrl(reportIssueUrl, 'openReportIssues');
+			// CLAWDIUS: open the GitHub issues LIST (strip a trailing /new), matching the renderer's Report Issue command.
+			this.fallbackMenuHandlers['workbench.action.openIssueReporter'] = () => this.openUrl(reportIssueUrl.replace(/\/new\/?$/, ''), 'openReportIssues');
 		}
 
 		const licenseUrl = this.productService.licenseUrl;

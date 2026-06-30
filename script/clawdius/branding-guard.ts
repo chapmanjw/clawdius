@@ -109,14 +109,15 @@ ok(!/this\.refreshCapacity\(/.test(capSvc), 'claudeUsageCapacityService: refresh
 
 // Same zero-egress backstop for the "Check for Updates" GitHub-releases check. The single GitHub request must
 // fire ONLY on the user action or the opt-in startup check - never on a timer. Assert the service carries NO
-// setInterval, and that the startup trigger GATES on the setting (the file contains both 'checkOnStartup' and
-// 'checkForUpdates', i.e. the startup contribution reads the gate before calling the check) rather than firing
-// unconditionally. Paired with the contribution.ts default-false assertion below, a regression to a timer or an
-// on-by-default startup check trips CI and breaks the zero-egress guarantee.
+// setInterval, and that the startup trigger gates on `getValue(...checkOnStartup...) === true` (the correct
+// DIRECTION - an inverted `!== true` or a dropped gate would not match, so it trips CI; a plain substring grep
+// could not tell the direction). The falsifiable behavioural backstop is clawdiusUpdate.test.ts (checkOnStartup
+// false -> 0 calls, true -> exactly 1); this grep is defense in depth. Paired with the contribution.ts
+// default-false assertion below, a regression to a timer or an on-by-default startup check trips CI.
 const updateSvc = fs.readFileSync('src/vs/workbench/contrib/clawdius/browser/update/clawdiusUpdateService.ts', 'utf8');
 ok(!/setInterval/.test(updateSvc), 'clawdiusUpdateService: the update check runs on a background timer (uninitiated egress)');
-ok(updateSvc.includes('checkOnStartup') && updateSvc.includes('checkForUpdates'),
-	'clawdiusUpdateService: the startup check no longer gates on checkOnStartup before calling checkForUpdates');
+ok(/getValue\([^)]*checkOnStartup[^)]*\)\s*===\s*true/.test(updateSvc),
+	'clawdiusUpdateService: the startup check must gate on getValue(...checkOnStartup...) === true (an inverted or dropped gate would fire an uninitiated launch request)');
 // The startup check defaults OFF: the `clawdius.update.checkOnStartup` property must register `default: false`,
 // so a regression to on-by-default (a single uninitiated GitHub request at every launch) trips this guard.
 const updateContrib = fs.readFileSync('src/vs/workbench/contrib/clawdius/browser/clawdius.contribution.ts', 'utf8');

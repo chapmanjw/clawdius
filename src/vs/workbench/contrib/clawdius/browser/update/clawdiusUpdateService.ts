@@ -42,7 +42,6 @@ export interface IGithubRelease {
 	html_url: string;
 	prerelease: boolean;
 	draft: boolean;
-	name?: string;
 }
 
 /** Release channel the user can pick. 'stable' = published, non-prerelease only; 'prerelease' = include both. */
@@ -122,10 +121,9 @@ export class ClawdiusUpdateService implements IClawdiusUpdateService {
 				this.notificationService.prompt(
 					Severity.Info,
 					localize('clawdius.update.available', "Clawdius {0} is available.", version),
-					[
-						{ label: localize('clawdius.update.download', "Download"), run: () => { void this.openerService.open(URI.parse(url)); } },
-						{ label: localize('clawdius.update.releaseNotes', "Release Notes"), run: () => { void this.openerService.open(URI.parse(url)); } },
-					],
+					// One action: the GitHub release page carries both the notes and the downloadable assets, so two
+					// buttons to the same URL would be redundant.
+					[{ label: localize('clawdius.update.viewRelease', "View Release"), run: () => { void this.openerService.open(URI.parse(url)); } }],
 				);
 				return;
 			}
@@ -154,7 +152,8 @@ export class ClawdiusUpdateService implements IClawdiusUpdateService {
 			'User-Agent': 'Clawdius',
 			'X-GitHub-Api-Version': '2022-11-28',
 		};
-		// A fresh token bounds this one request; the timeout caps a stalled network so the await cannot hang.
+		// The timeout caps a stalled network so the await cannot hang; the token is only passed to satisfy the
+		// request API (it is never cancelled) and is disposed in finally.
 		const source = new CancellationTokenSource();
 		try {
 			if (channel === 'prerelease') {
@@ -165,6 +164,12 @@ export class ClawdiusUpdateService implements IClawdiusUpdateService {
 			}
 			const url = `https://api.github.com/repos/${CLAWDIUS_REPO}/releases/latest`;
 			const context = await this.requestService.request({ type: 'GET', url, headers, timeout: 15000, callSite: 'clawdius.update.latest' }, source.token);
+			// A repo with only prereleases/drafts has no "latest" release - GitHub returns 404. Treat that as "no
+			// qualifying release" (-> up to date) rather than an error, so a Stable-channel check on a prerelease-
+			// only repo does not surface a scary failure. Other non-2xx still throws via asJson and is handled above.
+			if (context.res.statusCode === 404) {
+				return undefined;
+			}
 			const release = await asJson<IGithubRelease>(context);
 			return release ?? undefined;
 		} finally {

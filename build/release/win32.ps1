@@ -4,8 +4,8 @@
 #
 # Produces in <repo>/release-artifacts/:
 #   Clawdius-win32-<arch>-<version>.zip       portable archive (signed app inside)
-#   ClawdiusUserSetup-<arch>-<version>.exe     per-user installer (no admin)
-#   ClawdiusSystemSetup-<arch>-<version>.exe   system installer
+#   ClawdiusSetup-<arch>-<version>.exe         per-user installer (no admin) - the default Windows download
+#   ClawdiusSystemSetup-<arch>-<version>.exe   system / all-users installer (admin required)
 #   SHA256SUMS-win32-<arch>.txt
 #
 # Signing is applied to the app binaries (before packaging) and to the installers
@@ -72,7 +72,9 @@ foreach ($target in 'user', 'system') {
 	if ($LASTEXITCODE -ne 0) { throw "$target-setup failed ($LASTEXITCODE)" }
 	$built = Join-Path $repo ".build/win32-$Arch/$target-setup/ClawdiusSetup.exe"
 	if (-not (Test-Path $built)) { throw "installer not produced: $built" }
-	$label = if ($target -eq 'user') { 'User' } else { 'System' }
+	# The per-user installer (no admin) is the DEFAULT Windows download, so it ships WITHOUT a suffix
+	# ("ClawdiusSetup-..."); the all-users installer stays explicitly labeled "ClawdiusSystemSetup-...".
+	$label = if ($target -eq 'user') { '' } else { 'System' }
 	Copy-Item $built (Join-Path $out "Clawdius${label}Setup-$Arch-$Version.exe") -Force
 }
 

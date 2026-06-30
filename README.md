@@ -115,7 +115,7 @@ Grab the build for your platform from the [Releases](https://github.com/chapmanj
 
 Choose an installer (`<arch>` is `x64` or `arm64`):
 
-- `ClawdiusUserSetup-<arch>-<version>.exe` — installs for the current user, no administrator rights needed. Recommended.
+- `ClawdiusSetup-<arch>-<version>.exe` — the standard installer; installs for the current user, no administrator rights needed. Recommended.
 - `ClawdiusSystemSetup-<arch>-<version>.exe` — installs for all users (requires administrator).
 - `Clawdius-win32-<arch>-<version>.zip` — portable; unzip and run `Clawdius.exe`.
 

@@ -17,7 +17,6 @@ import { mainWindow } from '../../../../../base/browser/window.js';
 import { Disposable, MutableDisposable } from '../../../../../base/common/lifecycle.js';
 import { blockBar } from './claudeUsageCharts.js';
 import { localize } from '../../../../../nls.js';
-import { ICommandService } from '../../../../../platform/commands/common/commands.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import product from '../../../../../platform/product/common/product.js';
 import { IWorkbenchContribution } from '../../../../common/contributions.js';
@@ -26,9 +25,9 @@ import { IStatusbarEntry, IStatusbarEntryAccessor, IStatusbarService, StatusbarA
 import { URI } from '../../../../../base/common/uri.js';
 import {
 	appendClaudeLogo, capacityWindows, compact, IClaudeAccount, IClaudeCapacity, IClaudeStats, IUsageWindow,
-	providerHasLimits, providerLabel, readAccount, readCapacity, readStats,
-	REFRESH_CAPACITY_COMMAND_ID, resetLabel,
+	providerHasLimits, providerLabel, readAccount, readCapacity, readStats, resetLabel,
 } from './claudeUsageData.js';
+import { IClaudeUsageCapacityRefresh } from './claudeUsageCapacityRefresh.js';
 import { OPEN_CONTROL_CENTER_COMMAND_ID } from '../control/claudeControlCenterInput.js';
 
 /** Middle-dot separator, built via char code to keep the source ASCII-only. */
@@ -97,7 +96,7 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 		@IStatusbarService private readonly statusbarService: IStatusbarService,
 		@IFileService private readonly fileService: IFileService,
 		@IPathService private readonly pathService: IPathService,
-		@ICommandService private readonly commandService: ICommandService,
+		@IClaudeUsageCapacityRefresh private readonly capacityRefresh: IClaudeUsageCapacityRefresh,
 	) {
 		super();
 
@@ -128,7 +127,7 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 		}
 		this._refreshingOnDemand = true;
 		try {
-			await this.commandService.executeCommand(REFRESH_CAPACITY_COMMAND_ID);
+			await this.capacityRefresh.refresh(false);
 			await this.refresh();
 			// If the hover is still open, re-render it in place with the freshly fetched capacity (the first
 			// cold-cache hover would otherwise keep showing the local-only fallback until the next hover).

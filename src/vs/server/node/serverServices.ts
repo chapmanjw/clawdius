@@ -11,7 +11,7 @@ import * as path from '../../base/common/path.js';
 import { IURITransformer } from '../../base/common/uriIpc.js';
 import { getMachineId, getSqmMachineId, getDevDeviceId } from '../../base/node/id.js';
 import { Promises } from '../../base/node/pfs.js';
-import { ClientConnectionEvent, IMessagePassingProtocol, IPCServer, StaticRouter } from '../../base/parts/ipc/common/ipc.js';
+import { ClientConnectionEvent, IMessagePassingProtocol, IPCServer, ProxyChannel, StaticRouter } from '../../base/parts/ipc/common/ipc.js';
 import { ProtocolConstants } from '../../base/parts/ipc/common/ipc.net.js';
 import { IConfigurationService } from '../../platform/configuration/common/configuration.js';
 import { ConfigurationService } from '../../platform/configuration/common/configurationService.js';
@@ -103,6 +103,13 @@ import { IMcpGalleryManifestService } from '../../platform/mcp/common/mcpGallery
 import { McpGalleryManifestIPCService } from '../../platform/mcp/common/mcpGalleryManifestServiceIpc.js';
 import { SANDBOX_HELPER_CHANNEL_NAME, SandboxHelperChannel } from '../../platform/sandbox/common/sandboxHelperIpc.js';
 import { SandboxHelperService } from '../../platform/sandbox/node/sandboxHelper.js';
+// CLAWDIUS-BEGIN usage dashboard channels (#94): transcript stats + subscription-capacity services run on the
+// REH server so the Claude Code Usage dashboard works in WSL/SSH remote windows (against the remote ~/.claude).
+import { ClaudeUsageStatsService } from '../../platform/clawdius/node/claudeUsageStatsService.js';
+import { ClaudeUsageStatsChannelName } from '../../platform/clawdius/common/claudeUsageStats.js';
+import { ClaudeUsageCapacityService } from '../../platform/clawdius/node/claudeUsageCapacityService.js';
+import { ClaudeUsageCapacityChannelName } from '../../platform/clawdius/common/claudeUsageCapacity.js';
+// CLAWDIUS-END
 
 const eventPrefix = 'monacoworkbench';
 
@@ -307,6 +314,19 @@ export async function setupServerServices(connectionToken: ServerConnectionToken
 		socketServer.registerChannel(AgentHostIpcChannels.RemoteProxy, new UnavailableAgentHostChannel<RemoteAgentConnectionContext>());
 		logService.info(`[AgentHostChannel] Registered unavailable IPC channel '${AgentHostIpcChannels.RemoteProxy}': no --agent-host-bridge-port / --agent-host-bridge-path set.`);
 	}
+
+	// CLAWDIUS-BEGIN usage dashboard channels (#94)
+	// Register the transcript-stats aggregator and the subscription-capacity fetcher on the remote-agent
+	// connection so the Claude Code Usage dashboard works in WSL/SSH remote windows: both run HERE (on the remote
+	// host, against the remote ~/.claude) and the renderer reaches them via getConnection().getChannel(<name>).
+	// Registered UNCONDITIONALLY - independent of the agent host, which is NOT spawned on a standard remote (so
+	// this must not sit behind any --agent-host / --agent-host-bridge gate). Stats only reads local files;
+	// capacity additionally performs the single on-demand /api/oauth/usage fetch (zero uninitiated egress).
+	const usageStats = instantiationService.createInstance(ClaudeUsageStatsService);
+	socketServer.registerChannel(ClaudeUsageStatsChannelName, ProxyChannel.fromService<RemoteAgentConnectionContext>(usageStats, disposables));
+	const usageCapacity = instantiationService.createInstance(ClaudeUsageCapacityService);
+	socketServer.registerChannel(ClaudeUsageCapacityChannelName, ProxyChannel.fromService<RemoteAgentConnectionContext>(usageCapacity, disposables));
+	// CLAWDIUS-END
 
 	services.set(IAllowedMcpServersService, new SyncDescriptor(AllowedMcpServersService));
 	services.set(IMcpResourceScannerService, new SyncDescriptor(McpResourceScannerService));

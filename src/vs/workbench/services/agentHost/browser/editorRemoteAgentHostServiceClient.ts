@@ -9,8 +9,10 @@
 // can subscribe to `rootState` etc. immediately; the actual transport
 // connection (and AHP handshake) happens asynchronously in the background.
 
+import { timeout } from '../../../../base/common/async.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, IReference } from '../../../../base/common/lifecycle.js';
+import { ProxyChannel } from '../../../../base/parts/ipc/common/ipc.js';
 import { IObservable, ISettableObservable, observableValue } from '../../../../base/common/observable.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
@@ -20,7 +22,7 @@ import { AgentHostEnabledSettingId, AgentHostIpcChannels, IAgentCreateSessionCon
 import { AgentHostIpcChannelTransport } from '../../../../platform/agentHost/browser/agentHostIpcChannelTransport.js';
 import { RemoteAgentHostProtocolClient } from '../../../../platform/agentHost/browser/remoteAgentHostProtocolClient.js';
 import type { IClaudeMcpToolDiscoveryResult } from '../../../../platform/agentHost/common/claudeMcpToolDiscovery.js';
-import type { IClaudeUsageStatsResult } from '../../../../platform/clawdius/common/claudeUsageStats.js';
+import { ClaudeUsageStatsChannelName, IClaudeUsageStatsResult, IClaudeUsageStatsService } from '../../../../platform/clawdius/common/claudeUsageStats.js';
 import type { IActiveSubscriptionInfo, IAgentSubscription } from '../../../../platform/agentHost/common/state/agentSubscription.js';
 import type { CompletionsParams, CompletionsResult, CreateTerminalParams, ResolveSessionConfigResult, SessionConfigCompletionsResult } from '../../../../platform/agentHost/common/state/protocol/commands.js';
 import type { InvokeChangesetOperationParams, InvokeChangesetOperationResult } from '../../../../platform/agentHost/common/state/protocol/channels-changeset/commands.js';
@@ -64,6 +66,12 @@ export class EditorRemoteAgentHostServiceClient extends Disposable implements IA
 	};
 	private _connectStarted = false;
 
+	// CLAWDIUS-BEGIN transcript-derived usage stats (#94): proxy to the stats channel the REH server registers
+	// on the remote-agent connection. Built whenever a remote connection exists (the stats service is independent
+	// of the agent host, which is not spawned on a standard WSL/SSH remote).
+	private readonly _usageStatsProxy: IClaudeUsageStatsService | undefined;
+	// CLAWDIUS-END
+
 	constructor(
 		@IRemoteAgentService remoteAgentService: IRemoteAgentService,
 		@IConfigurationService configurationService: IConfigurationService,
@@ -75,6 +83,14 @@ export class EditorRemoteAgentHostServiceClient extends Disposable implements IA
 		const enabled = isAgentHostEnabled(configurationService);
 		const connection = remoteAgentService.getConnection();
 		this._logService.info(`${LOG_PREFIX} Initializing (enabled=${enabled}, remoteAuthority=${connection?.remoteAuthority ?? 'none'})`);
+
+		// CLAWDIUS-BEGIN transcript-derived usage stats (#94): wire the stats proxy unconditionally on the remote
+		// connection (the channel exists even when the agent host is disabled / not spawned), via the delayed
+		// channel getConnection().getChannel returns.
+		this._usageStatsProxy = connection
+			? ProxyChannel.toService<IClaudeUsageStatsService>(connection.getChannel(ClaudeUsageStatsChannelName))
+			: undefined;
+		// CLAWDIUS-END
 
 		if (!enabled) {
 			this._logService.info(`${LOG_PREFIX} Disabled via "${AgentHostEnabledSettingId}" or web runtime. Not connecting.`);
@@ -151,8 +167,23 @@ export class EditorRemoteAgentHostServiceClient extends Disposable implements IA
 	async discoverMcpServerTools(_serverName: string, _workingDirectoryPath: string): Promise<IClaudeMcpToolDiscoveryResult> {
 		return { status: 'error', tools: [], message: 'MCP tool discovery is only available with the local Agent Host.' };
 	}
-	async getUsageStats(_homeDirPath: string): Promise<IClaudeUsageStatsResult> {
-		return { status: 'unavailable', message: 'Usage stats are only available with the local Agent Host.' };
+	async getUsageStats(homeDirPath: string): Promise<IClaudeUsageStatsResult> {
+		if (!this._usageStatsProxy) {
+			return { status: 'unavailable', message: 'Usage stats require a remote connection.' };
+		}
+		// The channel is a delayed channel that queues until the remote-agent connection is established. Race the
+		// call against a timeout so a never-connecting remote degrades to 'unavailable' instead of hanging - mirror
+		// localAgentHostService.getUsageStats. The aggregation reads the remote's local files only (zero egress),
+		// so the cap is purely about not hanging, not an egress contract.
+		try {
+			const result = await Promise.race([
+				this._usageStatsProxy.getUsageStats(homeDirPath),
+				timeout(30_000).then(() => undefined),
+			]);
+			return result ?? { status: 'unavailable', message: 'Timed out reaching the remote usage stats service.' };
+		} catch (err) {
+			return { status: 'unavailable', message: err instanceof Error ? err.message : String(err) };
+		}
 	}
 	// CLAWDIUS-END
 

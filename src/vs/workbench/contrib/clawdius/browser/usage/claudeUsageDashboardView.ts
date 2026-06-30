@@ -23,10 +23,11 @@ import { CancellationToken, CancellationTokenSource } from '../../../../../base/
 import { VSBuffer } from '../../../../../base/common/buffer.js';
 import { Codicon } from '../../../../../base/common/codicons.js';
 import { Disposable, DisposableStore, MutableDisposable } from '../../../../../base/common/lifecycle.js';
+import { Schemas } from '../../../../../base/common/network.js';
 import { ThemeIcon } from '../../../../../base/common/themables.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { localize } from '../../../../../nls.js';
-import { ICommandService } from '../../../../../platform/commands/common/commands.js';
+import { IClaudeUsageCapacityRefresh } from './claudeUsageCapacityRefresh.js';
 import { IDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { IHoverService } from '../../../../../platform/hover/browser/hover.js';
@@ -39,7 +40,7 @@ import { classifySettings } from '../control/claudeControlCenterData.js';
 import {
 	capacityWindows, compact, computeStreaks, formatDuration, IClaudeAccount, IClaudeCapacity, IClaudeDailyActivity,
 	IClaudeDailyModelTokens, IClaudeModelStat, IClaudeStats, IWindowedStats, modelLabel, providerHasLimits, providerLabel,
-	readAccount, readCapacity, REFRESH_CAPACITY_COMMAND_ID, resetLabel, resolveModelRows, windowStats,
+	readAccount, readCapacity, resetLabel, resolveModelRows, windowStats,
 } from './claudeUsageData.js';
 
 /** Default transcript retention when `cleanupPeriodDays` is unset / invalid in ~/.claude/settings.json. */
@@ -257,7 +258,7 @@ export class ClaudeUsageDashboardView extends Disposable {
 		private readonly container: HTMLElement,
 		private readonly fileService: IFileService,
 		private readonly pathService: IPathService,
-		private readonly commandService: ICommandService,
+		private readonly capacityRefresh: IClaudeUsageCapacityRefresh,
 		private readonly agentHostService: IAgentHostService,
 		private readonly jsonEditingService: IJSONEditingService,
 		private readonly dialogService: IDialogService,
@@ -315,7 +316,11 @@ export class ClaudeUsageDashboardView extends Disposable {
 
 	/** Aggregate the raw transcripts (off the UI thread, via the agentHost) and swap in the accurate stats. */
 	private async loadTranscriptStats(token: CancellationToken): Promise<void> {
-		const home = (await this.pathService.userHome()).fsPath;
+		// CLAWDIUS (#94): scheme-aware home so the aggregator gets the right path on each host. Local Windows is a
+		// file:// URI (-> C:\Users\...); a WSL/SSH remote is a vscode-remote:// URI whose `.path` is the remote
+		// POSIX home (-> /home/user). `.fsPath` would mangle the remote URI, so only use it for the file scheme.
+		const homeUri = await this.pathService.userHome();
+		const home = homeUri.scheme === Schemas.file ? homeUri.fsPath : homeUri.path;
 		let result;
 		try {
 			result = await this.agentHostService.getUsageStats(home);
@@ -335,8 +340,8 @@ export class ClaudeUsageDashboardView extends Disposable {
 		this.refreshCts.value = cts;
 		try {
 			// force=true: the explicit Refresh button always pulls fresh limits, bypassing the freshness TTL that
-			// throttles the automatic open/hover refreshes.
-			await this.commandService.executeCommand(REFRESH_CAPACITY_COMMAND_ID, true);
+			// throttles the automatic open/hover refreshes. Routed by host (local command vs remote REH service).
+			await this.capacityRefresh.refresh(true);
 			if (cts.token.isCancellationRequested) { return; }
 			await this.load(cts.token);
 		} catch {

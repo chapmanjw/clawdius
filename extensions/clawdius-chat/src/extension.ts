@@ -333,6 +333,9 @@ function engineIsAnthropic(): boolean {
 const USAGE_CAPACITY_TTL_MS = 60_000;
 
 async function fetchUsageCapacity(force = false): Promise<void> {
+	// DELIBERATE MIRROR of ClaudeUsageCapacityService.refreshCapacity in src/vs/platform/clawdius/node (which
+	// serves WSL/SSH remote windows against the remote ~/.claude); this copy serves LOCAL windows. Extensions
+	// can't import src/vs, so the two must be kept in sync by hand. Both stay ON DEMAND ONLY (no timer/startup).
 	try {
 		const claudeDir = path.join(os.homedir(), '.claude');
 		// Provider gate: only Anthropic's own API exposes /api/oauth/usage. If the engine is pointed at Bedrock /
@@ -360,6 +363,9 @@ async function fetchUsageCapacity(force = false): Promise<void> {
 		}
 		const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
 			headers: { 'Authorization': `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20', 'Content-Type': 'application/json' },
+			// Bound the outbound call so a stalled api.anthropic.com connection can't hang the awaiting UI
+			// (mirrors ClaudeUsageCapacityService).
+			signal: AbortSignal.timeout(15_000),
 		});
 		if (!res.ok) {
 			return;

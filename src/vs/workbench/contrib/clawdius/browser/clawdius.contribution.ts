@@ -27,7 +27,6 @@ import { EditorInput } from '../../../common/editor/editorInput.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { Action2, MenuId, registerAction2 } from '../../../../platform/actions/common/actions.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
-import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ClaudeUsageStatusEntry } from './usage/claudeUsageStatusEntry.js';
@@ -35,7 +34,8 @@ import { ClawdiusPermissionModeStatusEntry, SetPermissionModeAction } from './cl
 import { ClawdiusEffortStatusEntry, SetEffortLevelAction } from './clawdiusEffortStatusEntry.js';
 import { ClaudeUsageDashboardEditor } from './usage/claudeUsageDashboardEditor.js';
 import { ClaudeUsageDashboardInput } from './usage/claudeUsageDashboardInput.js';
-import { OPEN_USAGE_DASHBOARD_COMMAND_ID, REFRESH_CAPACITY_COMMAND_ID } from './usage/claudeUsageData.js';
+import { OPEN_USAGE_DASHBOARD_COMMAND_ID } from './usage/claudeUsageData.js';
+import { ClaudeUsageCapacityRefresh, IClaudeUsageCapacityRefresh } from './usage/claudeUsageCapacityRefresh.js';
 import { ClaudeControlCenterEditor } from './control/claudeControlCenterEditor.js';
 import { ClaudeControlCenterInput, ControlTab, OPEN_CONTROL_CENTER_COMMAND_ID } from './control/claudeControlCenterInput.js';
 import { Codicon } from '../../../../base/common/codicons.js';
@@ -70,14 +70,14 @@ class OpenClaudeUsageDashboardAction extends Action2 {
 	override async run(accessor: ServicesAccessor): Promise<void> {
 		// IMPORTANT: a ServicesAccessor is only valid synchronously during this call; resolve every service
 		// BEFORE the first await (after an await, accessor.get throws "service accessor is only valid...").
-		const commandService = accessor.get(ICommandService);
+		const capacityRefresh = accessor.get(IClaudeUsageCapacityRefresh);
 		const editorService = accessor.get(IEditorService);
 		// A user explicitly opened the dashboard: this is the (sole, allowed) moment to refresh live capacity,
 		// so the limits are current before the pane reads the local cache. Restored editors never run this
 		// action, so a workbench restore at startup performs no network egress. Best-effort: offline / the
-		// extension not yet active just shows the last cached values.
+		// extension not yet active just shows the last cached values. Routed by host (local command vs remote REH).
 		try {
-			await commandService.executeCommand(REFRESH_CAPACITY_COMMAND_ID);
+			await capacityRefresh.refresh(false);
 		} catch { /* ignore - the dashboard still renders from cached + local data */ }
 		await editorService.openEditor(ClaudeUsageDashboardInput.instance, { pinned: true, revealIfOpened: true });
 	}
@@ -107,7 +107,7 @@ class OpenClaudeControlCenterAction extends Action2 {
 	override async run(accessor: ServicesAccessor, tab?: ControlTab): Promise<void> {
 		// IMPORTANT: resolve services BEFORE the first await (a ServicesAccessor is only valid synchronously).
 		const editorService = accessor.get(IEditorService);
-		const commandService = accessor.get(ICommandService);
+		const capacityRefresh = accessor.get(IClaudeUsageCapacityRefresh);
 		// Guard the arg: a menu invocation can pass its own context object as the first arg, which must never be
 		// mistaken for a tab.
 		const target: ControlTab | undefined = typeof tab === 'string' ? tab : undefined;
@@ -115,7 +115,7 @@ class OpenClaudeControlCenterAction extends Action2 {
 		// for the usage surface), so the bars are current before the view reads the local cache. This runs only on
 		// explicit open - a workbench restore never invokes this action - so startup stays zero-egress.
 		if (target === 'usage') {
-			try { await commandService.executeCommand(REFRESH_CAPACITY_COMMAND_ID); } catch { /* offline / extension inactive - show cached */ }
+			try { await capacityRefresh.refresh(false); } catch { /* offline / extension inactive - show cached */ }
 		}
 		const pane = await editorService.openEditor(ClaudeControlCenterInput.instance, { pinned: true, revealIfOpened: true });
 		// Land on the requested tab. Done after open (not via input state) so it also switches an already-open pane.
@@ -168,6 +168,11 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	// The shared config service: ONE scan + watcher set produces the typed snapshot the Control Center reads
 	// (configService.snapshot) for its Skills / MCP / Hooks / Plugins tabs, and re-renders on its onDidChange.
 	registerSingleton(IClawdiusConfigService, ClawdiusConfigStore, InstantiationType.Delayed);
+
+	// Usage-capacity refresh router: sends the single on-demand /api/oauth/usage refresh to the host that owns
+	// ~/.claude - the local clawdius-chat command in a local window, the REH server's capacity service in a
+	// WSL/SSH remote window - so the usage surfaces' "Refresh" works in remote windows too.
+	registerSingleton(IClaudeUsageCapacityRefresh, ClaudeUsageCapacityRefresh, InstantiationType.Delayed);
 
 	// Config-mutation commands (per-section create + delete) the Control Center invokes to scaffold a new skill
 	// or hook and to delete a skill. These are programmatic commands (no menu/view surface of their own).

@@ -60,6 +60,7 @@ import {
 import { INSTALL_CLAUDE_CODE_PLUGIN_COMMAND_ID, isClaudeCodePluginInstalled } from '../clawdiusPluginSetup.js';
 import { ClaudeControlCenterInput, ControlTab } from './claudeControlCenterInput.js';
 import { ClaudeUsageDashboardView } from '../usage/claudeUsageDashboardView.js';
+import { IClaudeUsageCapacityRefresh } from '../usage/claudeUsageCapacityRefresh.js';
 import { BUILTIN_TOOLS, IJsonWrite, IPermissionsState, PERMISSION_BUCKETS, PermissionBucket, builtinRule, mcpToolRule, parsePermissions, parseRule } from './claudePermissionsModel.js';
 import {
 	ControlScope, PermissionIntent, classifySettings, invertIntent, planPermissionIntent, resolvePermissionsSettingsUri,
@@ -256,6 +257,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		@IExtensionsWorkbenchService private readonly extensionsWorkbenchService: IExtensionsWorkbenchService,
 		@IAgentHostService private readonly agentHostService: IAgentHostService,
 		@ICommandService private readonly commandService: ICommandService,
+		@IClaudeUsageCapacityRefresh private readonly capacityRefresh: IClaudeUsageCapacityRefresh,
 		@IDialogService private readonly dialogService: IDialogService,
 		@ITerminalService private readonly terminalService: ITerminalService,
 		@ITerminalGroupService private readonly terminalGroupService: ITerminalGroupService,
@@ -587,7 +589,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		// .clawdius-usage-dashboard-inner into this host and owns its own range tabs + Refresh; we keep it alive
 		// while this tab shows and dispose it on tab switch. load() reads only local files (no startup egress).
 		const host = append(parent, h('.clawdius-control-usage'));
-		const view = new ClaudeUsageDashboardView(host, this.fileService, this.pathService, this.commandService, this.agentHostService, this.jsonEditing, this.dialogService, this.notificationService, this.quickInputService, this.hoverService);
+		const view = new ClaudeUsageDashboardView(host, this.fileService, this.pathService, this.capacityRefresh, this.agentHostService, this.jsonEditing, this.dialogService, this.notificationService, this.quickInputService, this.hoverService);
 		this.usageView.value = view;
 		void view.load(CancellationToken.None);
 	}

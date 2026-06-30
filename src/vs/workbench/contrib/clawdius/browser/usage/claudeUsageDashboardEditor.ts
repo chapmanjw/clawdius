@@ -13,7 +13,6 @@ import './media/claudeUsage.css';
 import { $ as h, append, Dimension, size } from '../../../../../base/browser/dom.js';
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { MutableDisposable } from '../../../../../base/common/lifecycle.js';
-import { ICommandService } from '../../../../../platform/commands/common/commands.js';
 import { IDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { IHoverService } from '../../../../../platform/hover/browser/hover.js';
@@ -31,6 +30,7 @@ import { IJSONEditingService } from '../../../../services/configuration/common/j
 import { IPathService } from '../../../../services/path/common/pathService.js';
 import { ClaudeUsageDashboardInput } from './claudeUsageDashboardInput.js';
 import { ClaudeUsageDashboardView } from './claudeUsageDashboardView.js';
+import { IClaudeUsageCapacityRefresh } from './claudeUsageCapacityRefresh.js';
 
 export class ClaudeUsageDashboardEditor extends EditorPane {
 
@@ -46,7 +46,7 @@ export class ClaudeUsageDashboardEditor extends EditorPane {
 		@IStorageService storageService: IStorageService,
 		@IFileService private readonly fileService: IFileService,
 		@IPathService private readonly pathService: IPathService,
-		@ICommandService private readonly commandService: ICommandService,
+		@IClaudeUsageCapacityRefresh private readonly capacityRefresh: IClaudeUsageCapacityRefresh,
 		@IAgentHostService private readonly agentHostService: IAgentHostService,
 		@IJSONEditingService private readonly jsonEditingService: IJSONEditingService,
 		@IDialogService private readonly dialogService: IDialogService,
@@ -64,7 +64,7 @@ export class ClaudeUsageDashboardEditor extends EditorPane {
 
 	override async setInput(input: ClaudeUsageDashboardInput, options: IEditorOptions | undefined, context: IEditorOpenContext, token: CancellationToken): Promise<void> {
 		await super.setInput(input, options, context, token);
-		const view = new ClaudeUsageDashboardView(this.container, this.fileService, this.pathService, this.commandService, this.agentHostService, this.jsonEditingService, this.dialogService, this.notificationService, this.quickInputService, this.hoverService);
+		const view = new ClaudeUsageDashboardView(this.container, this.fileService, this.pathService, this.capacityRefresh, this.agentHostService, this.jsonEditingService, this.dialogService, this.notificationService, this.quickInputService, this.hoverService);
 		this.view.value = view;
 		await view.load(token);
 	}

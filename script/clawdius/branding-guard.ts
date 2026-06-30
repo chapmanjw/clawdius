@@ -50,7 +50,9 @@ for (const k of ['entitlementUrl', 'entitlementSignupLimitedUrl', 'tokenEntitlem
 // upstream merge. The allowlist fails CLOSED: a newly merged host that isn't listed trips the guard. Templated
 // subdomains (e.g. {{uuid}}.vscode-cdn.net for webview content) match by registrable suffix. Update the list
 // deliberately when a new legitimate host is added.
-const ALLOWED_HOST_SUFFIXES = ['open-vsx.org', 'github.com', 'nodejs.org', 'vscode-cdn.net'];
+// claude.ai / claude.com are the deliberately-trusted plugin-login domains (product.json
+// linkProtectionTrustedDomains) - link-trust entries for the Claude Code sign-in flow, not egress endpoints.
+const ALLOWED_HOST_SUFFIXES = ['open-vsx.org', 'github.com', 'nodejs.org', 'vscode-cdn.net', 'claude.ai', 'claude.com'];
 const urlHostRe = /https?:\/\/([^/"'\s)]+)/gi;
 const badHosts: string[] = [];
 let hm: RegExpExecArray | null;
@@ -82,6 +84,15 @@ const chatExt = fs.readFileSync('extensions/clawdius-chat/src/extension.ts', 'ut
 ok(/registerCommand\('clawdius\.refreshUsageCapacity'/.test(chatExt), 'clawdius-chat: the on-demand usage-refresh command is missing');
 ok(!/setInterval\([^)]*fetchUsageCapacity/.test(chatExt), 'clawdius-chat: usage capacity is fetched on a background timer (uninitiated egress)');
 ok(!/^\s*fetchUsageCapacity\(\);\s*$/m.test(chatExt), 'clawdius-chat: fetchUsageCapacity() is called directly (likely at activation) - it must run on demand only');
+
+// Same zero-egress backstop for the REMOTE-side mirror of the capacity fetch: the REH server's capacity service
+// (which serves WSL/SSH windows against the remote ~/.claude) must be ON DEMAND only - invoked via its IPC
+// channel, with NO background timer and NO constructor/startup self-call. A regression to a timer or a self-call
+// trips this, exactly as for the clawdius-chat copy above.
+const capSvc = fs.readFileSync('src/vs/platform/clawdius/node/claudeUsageCapacityService.ts', 'utf8');
+ok(/refreshCapacity\s*\(/.test(capSvc), 'claudeUsageCapacityService: the on-demand refreshCapacity entry point is missing');
+ok(!/setInterval/.test(capSvc), 'claudeUsageCapacityService: usage capacity is fetched on a background timer (uninitiated egress)');
+ok(!/this\.refreshCapacity\(/.test(capSvc), 'claudeUsageCapacityService: refreshCapacity() is self-invoked - it must run on demand only, via the IPC channel');
 
 // CLAWDIUS-BEGIN cli backend resolution must stay file-existence-only (zero process spawn, zero network)
 const cliSvc = fs.readFileSync('src/vs/platform/clawdius/node/clawdiusCliConfigService.ts', 'utf8');

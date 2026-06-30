@@ -239,10 +239,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # arm64 builds on Apple Silicon (macos-14); x64 builds NATIVELY on the last Intel image (macos-13)
-        # so its native modules are genuine x64. If macos-13 is retired, switch x64 to cross-compile on macos-14.
+        # Both arches build on macOS 26 (Tahoe): arm64 on macos-26 (Apple Silicon), x64 NATIVELY on
+        # macos-26-intel. Tahoe is Apple's LAST Intel-supporting release, so macos-26-intel is the longest-lived
+        # native Intel runner (a native host keeps the x64 modules genuine - no cross-compile). macos-13, the
+        # old Intel image, was retired Dec 2025; Apple ends x86_64 support after Fall 2027, so x64 is finite.
         arch: [arm64, x64]
-    runs-on: ${{ matrix.arch == 'x64' && 'macos-13' || 'macos-14' }}
+    runs-on: ${{ matrix.arch == 'x64' && 'macos-26-intel' || 'macos-26' }}
     environment: release
     env:
       APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}

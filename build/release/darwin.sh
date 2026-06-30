@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
-# Build, sign, notarize, and package the Clawdius macOS (Apple Silicon / arm64) desktop app.
-# Runs on macOS (a macos-14 / Apple Silicon runner). Produces in <repo>/release-artifacts/:
-#   Clawdius-darwin-arm64-<version>.dmg
-#   Clawdius-darwin-arm64-<version>.zip
-#   SHA256SUMS-darwin-arm64.txt
+# Build, sign, notarize, and package the Clawdius macOS desktop app for the arch passed as $1
+# (arm64 or x64; defaults to arm64). Produces in <repo>/release-artifacts/:
+#   Clawdius-darwin-<arch>-<version>.dmg
+#   Clawdius-darwin-<arch>-<version>.zip
+#   SHA256SUMS-darwin-<arch>.txt
 #
-# Clawdius ships an arm64-only macOS build for now. The runner is Apple Silicon, so the app
-# gets genuine arm64 native modules. A true universal build needs real per-arch native modules
-# for the x64 slice - several @vscode/* prebuilts otherwise come out byte-identical across
-# arches (i.e. not actually x64), which would make a "universal" app broken on Intel. Building
-# those x64 native modules is separate work tracked for a later release.
+# Each arch builds NATIVELY on its matching runner (macos-14 for arm64, macos-13 for x64 Intel),
+# so the native modules are genuine per-arch. (A single UNIVERSAL fat binary is separate work - it
+# needs real x64 native modules built alongside arm64, since some @vscode/* prebuilts otherwise come
+# out byte-identical across arches; that is NOT what this per-arch build does.)
 #
 # Signing runs only when CODESIGN_IDENTITY is set (a Developer ID Application identity already
 # imported into a keychain at $AGENT_TEMPDIRECTORY/buildagent.keychain). Notarization runs only
@@ -17,10 +16,11 @@
 # APPLE_API_ISSUER_ID). Without these the .app/.dmg are produced UNSIGNED (Gatekeeper-blocked;
 # fine for pre-release validation).
 #
-# Usage: bash build/release/darwin.sh    (env SKIP_BUILD=1 reuses the arch build)
+# Usage: bash build/release/darwin.sh [arm64|x64]    (env SKIP_BUILD=1 reuses the arch build)
 set -euo pipefail
 
-arch="arm64"
+arch="${1:-arm64}"
+case "$arch" in arm64|x64) ;; *) echo "ERROR: unsupported arch '$arch' (expected arm64 or x64)" >&2; exit 1 ;; esac
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo"
 buildDir="$(dirname "$repo")"

@@ -107,6 +107,22 @@ ok(/refreshCapacity\s*\(/.test(capSvc), 'claudeUsageCapacityService: the on-dema
 ok(!/setInterval/.test(capSvc), 'claudeUsageCapacityService: usage capacity is fetched on a background timer (uninitiated egress)');
 ok(!/this\.refreshCapacity\(/.test(capSvc), 'claudeUsageCapacityService: refreshCapacity() is self-invoked - it must run on demand only, via the IPC channel');
 
+// Same zero-egress backstop for the "Check for Updates" GitHub-releases check. The single GitHub request must
+// fire ONLY on the user action or the opt-in startup check - never on a timer. Assert the service carries NO
+// setInterval, and that the startup trigger GATES on the setting (the file contains both 'checkOnStartup' and
+// 'checkForUpdates', i.e. the startup contribution reads the gate before calling the check) rather than firing
+// unconditionally. Paired with the contribution.ts default-false assertion below, a regression to a timer or an
+// on-by-default startup check trips CI and breaks the zero-egress guarantee.
+const updateSvc = fs.readFileSync('src/vs/workbench/contrib/clawdius/browser/update/clawdiusUpdateService.ts', 'utf8');
+ok(!/setInterval/.test(updateSvc), 'clawdiusUpdateService: the update check runs on a background timer (uninitiated egress)');
+ok(updateSvc.includes('checkOnStartup') && updateSvc.includes('checkForUpdates'),
+	'clawdiusUpdateService: the startup check no longer gates on checkOnStartup before calling checkForUpdates');
+// The startup check defaults OFF: the `clawdius.update.checkOnStartup` property must register `default: false`,
+// so a regression to on-by-default (a single uninitiated GitHub request at every launch) trips this guard.
+const updateContrib = fs.readFileSync('src/vs/workbench/contrib/clawdius/browser/clawdius.contribution.ts', 'utf8');
+ok(/checkOnStartup'\s*:\s*\{[^}]*default:\s*false/.test(updateContrib),
+	'clawdius.contribution: clawdius.update.checkOnStartup is not registered with default:false (startup zero-egress regression)');
+
 // CLAWDIUS-BEGIN cli backend resolution must stay file-existence-only (zero process spawn, zero network)
 const cliSvc = fs.readFileSync('src/vs/platform/clawdius/node/clawdiusCliConfigService.ts', 'utf8');
 ok(!/child_process/.test(cliSvc), 'clawdiusCliConfigService: must not import child_process - CLI resolution spawns no process');

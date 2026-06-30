@@ -148,6 +148,7 @@ jobs:
             "out/vs/workbench/contrib/clawdius/test/browser/claudeSkillValidation.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeUsageData.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeUsageProvider.test.js" \
+            "out/vs/workbench/contrib/clawdius/test/browser/clawdiusUpdate.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeUsageCapacityRefresh.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeControlTabsModel.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeControlCenterEditor.test.js" \

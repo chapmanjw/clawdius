@@ -46,6 +46,7 @@ import { ClawdiusContextBudgetStatusEntry, CONTEXT_BUDGET_WARN_TOKENS_SETTING, O
 import { LintContextAction } from './clawdiusContextBudgetLint.js';
 import { DisableConfirmedLoadsAction, EnableConfirmedLoadsAction } from './clawdiusContextBudgetConfirm.js';
 import { ConfigurationScope, Extensions as ConfigExtensions, IConfigurationRegistry } from '../../../../platform/configuration/common/configurationRegistry.js';
+import { ClawdiusUpdateService, ClawdiusUpdateStartupContribution, IClawdiusUpdateService } from './update/clawdiusUpdateService.js';
 
 // Singleton dashboard input round-trips with no state (everything is read live from local files on open).
 class ClaudeUsageDashboardInputSerializer implements IEditorSerializer {
@@ -123,12 +124,15 @@ class OpenClaudeControlCenterAction extends Action2 {
 	}
 }
 
-// Lightweight "Check for Updates": Clawdius has no auto-update server yet (product.json sets no updateUrl, so
-// the built-in updater is Disabled/MissingConfiguration), so this opens the GitHub releases page where testers
-// download the latest build. It lives in the Manage (gear) menu's `7_update` group - where the native update
-// item would sit - so the slot is not empty. Replace with the real IUpdateService flow once an update server +
-// signed release pipeline exist.
-const CLAWDIUS_RELEASES_URL = 'https://github.com/chapmanjw/clawdius/releases';
+// "Check for Updates": a NOTIFY-AND-LINK check powered by the GitHub Releases API (IClawdiusUpdateService).
+// Clawdius has no auto-update server (product.json sets no updateUrl, so the built-in updater is
+// Disabled/MissingConfiguration), so this never downloads or installs: it compares the running version against
+// the latest release on the configured channel and, when newer, shows a notification linking to the release.
+// The single GitHub request is user-initiated here; the only other trigger is the opt-in startup check
+// (`clawdius.update.checkOnStartup`, default false). It lives in the Manage (gear) menu's `7_update` group -
+// where the native update item would sit - so the slot is not empty. CLAWDIUS_RELEASES_URL stays exported as
+// the release-page link (the service falls back to it if a release object carries no html_url).
+export const CLAWDIUS_RELEASES_URL = 'https://github.com/chapmanjw/clawdius/releases';
 class ClawdiusCheckForUpdatesAction extends Action2 {
 	constructor() {
 		super({
@@ -140,7 +144,7 @@ class ClawdiusCheckForUpdatesAction extends Action2 {
 		});
 	}
 	override async run(accessor: ServicesAccessor): Promise<void> {
-		await accessor.get(IOpenerService).open(URI.parse(CLAWDIUS_RELEASES_URL));
+		await accessor.get(IClawdiusUpdateService).checkForUpdates('user');
 	}
 }
 
@@ -248,6 +252,9 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	registerAction2(LintContextAction);
 	registerAction2(EnableConfirmedLoadsAction);
 	registerAction2(DisableConfirmedLoadsAction);
+	// Default update channel is derived from THIS build: a prerelease build (version tagged -alpha/-beta/-rc)
+	// defaults to the prerelease channel so testers keep getting prereleases; a stable build defaults to stable.
+	const isPrereleaseBuild = /-(alpha|beta|rc)/i.test(product.version || '');
 	Registry.as<IConfigurationRegistry>(ConfigExtensions.Configuration).registerConfiguration({
 		id: 'clawdius',
 		order: 100,
@@ -261,10 +268,33 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 				scope: ConfigurationScope.RESOURCE,
 				description: localize('clawdius.warnTokens.desc', "The estimated always-on token total (memory + rules + skill menu) above which the Claude Context Budget status item turns a warning color. Set to 0 to disable."),
 			},
+			'clawdius.update.channel': {
+				type: 'string',
+				enum: ['stable', 'prerelease'],
+				default: isPrereleaseBuild ? 'prerelease' : 'stable',
+				scope: ConfigurationScope.APPLICATION,
+				enumDescriptions: [
+					localize('clawdius.update.channel.stable', "Only stable releases."),
+					localize('clawdius.update.channel.prerelease', "Pre-release and stable releases."),
+				],
+				description: localize('clawdius.update.channel.desc', "Which Clawdius release channel to check for updates."),
+			},
+			'clawdius.update.checkOnStartup': {
+				type: 'boolean',
+				default: false,
+				scope: ConfigurationScope.APPLICATION,
+				description: localize('clawdius.update.checkOnStartup.desc', "Automatically check for Clawdius updates on startup. Off by default; when on, Clawdius makes a single GitHub request at launch to compare your version against the latest release."),
+			},
 		},
 	});
 
-	// Manage-gear "Check for Updates..." -> opens the Clawdius releases page (no auto-update server yet).
+	// "Check for Updates" via the GitHub Releases API (notify-and-link only - no auto-download/install). The
+	// service holds the single on-demand GitHub request; the startup contribution is the ONLY automatic trigger
+	// and fires solely when `clawdius.update.checkOnStartup` is enabled (default false), so launch stays
+	// zero-egress out of the box. Registered at Eventually so the opt-in check never competes with startup.
+	registerSingleton(IClawdiusUpdateService, ClawdiusUpdateService, InstantiationType.Delayed);
+	registerWorkbenchContribution2(ClawdiusUpdateStartupContribution.ID, ClawdiusUpdateStartupContribution, WorkbenchPhase.Eventually);
+	// Manage-gear "Check for Updates..." -> runs the GitHub-releases check (user-initiated).
 	registerAction2(ClawdiusCheckForUpdatesAction);
 
 	// "Sponsor Clawdius" in the Help menu, just above About.

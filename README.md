@@ -121,15 +121,13 @@ Choose an installer (`<arch>` is `x64` or `arm64`):
 
 If SmartScreen warns about an unrecognized app, choose **More info → Run anyway**.
 
-### macOS (Apple Silicon)
+### macOS
 
-Download `Clawdius-darwin-arm64-<version>.dmg`, open it, and drag Clawdius into Applications. Until builds are notarized, Gatekeeper blocks the first launch — right-click the app and choose **Open**, or clear the quarantine flag:
+Apple Silicon: download `Clawdius-darwin-arm64-<version>.dmg`. Intel: download `Clawdius-darwin-x64-<version>.dmg`. Open the `.dmg` and drag Clawdius into Applications. The app is signed with an Apple Developer ID and notarized; if Gatekeeper still blocks the first launch, right-click the app and choose **Open**, or clear the quarantine flag:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/Clawdius.app
 ```
-
-Intel Macs are not built yet.
 
 ### Linux
 
@@ -151,10 +149,11 @@ Hosted apt and rpm repositories are coming with the first signed release.
 ### Snap
 
 ```bash
+# x64 (amd64) shown; arm64 users use ./clawdius_*_arm64.snap
 sudo snap install --classic --dangerous ./clawdius_*_amd64.snap
 ```
 
-The `--dangerous` flag is needed until the snap is published to the Snap Store. Snap is x64 only for now.
+The `--dangerous` flag is needed until the snap is published to the Snap Store (the store listing is in progress). Both x64 and arm64 snaps are built.
 
 ### Build from source
 

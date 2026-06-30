@@ -18,9 +18,9 @@ import product from '../../../../platform/product/common/product.js';
 import { Action2 } from '../../../../platform/actions/common/actions.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
+import { registerColor } from '../../../../platform/theme/common/colorRegistry.js';
 import { themeColorFromId } from '../../../../platform/theme/common/themeService.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
-import { STATUS_BAR_WARNING_ITEM_BACKGROUND, STATUS_BAR_WARNING_ITEM_FOREGROUND } from '../../../common/theme.js';
 import { IWorkbenchContribution } from '../../../common/contributions.js';
 import { EditorResourceAccessor, SideBySideEditor } from '../../../common/editor.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
@@ -35,6 +35,16 @@ export const OPEN_CONTEXT_BUDGET_COMMAND_ID = 'clawdius.openContextBudget';
 /** Setting: the always-on token total above which the pill turns a warning color (0 disables). */
 export const CONTEXT_BUDGET_WARN_TOKENS_SETTING = 'clawdius.contextBudget.warnTokens';
 const DEFAULT_WARN_TOKENS = 8000;
+
+// Self-contained over-budget warn colors. We do NOT use the upstream statusBarItem.warning* tokens: their
+// foreground defaults to white and third-party themes often override only the background (e.g. a pale yellow),
+// making white-on-yellow text unreadable. Amber needs a DARK foreground for contrast, so this pair pins one.
+const CONTEXT_BUDGET_WARN_BACKGROUND = registerColor('clawdius.contextBudgetWarnBackground', {
+	dark: '#D29200', light: '#C98A00', hcDark: '#E0A500', hcLight: '#9A6A00'
+}, localize('clawdius.ctxb.warnBackground', "Background of the Clawdius context-budget status item when the always-on token estimate is over budget."));
+const CONTEXT_BUDGET_WARN_FOREGROUND = registerColor('clawdius.contextBudgetWarnForeground', {
+	dark: '#1F1810', light: '#1F1810', hcDark: '#000000', hcLight: '#FFFFFF'
+}, localize('clawdius.ctxb.warnForeground', "Foreground of the Clawdius context-budget status item when over budget."));
 
 /** Opens (and focuses) the Context Budget Inspector panel. Wired to the status pill and the command palette. */
 export class OpenContextBudgetAction extends Action2 {
@@ -178,8 +188,8 @@ export class ClawdiusContextBudgetStatusEntry extends Disposable implements IWor
 			tooltip: new MarkdownString(this.tooltip(budget)),
 			command: OPEN_CONTEXT_BUDGET_COMMAND_ID,
 			// Warn color once the always-on estimate crosses the configurable budget.
-			backgroundColor: over ? themeColorFromId(STATUS_BAR_WARNING_ITEM_BACKGROUND) : undefined,
-			color: over ? themeColorFromId(STATUS_BAR_WARNING_ITEM_FOREGROUND) : undefined,
+			backgroundColor: over ? themeColorFromId(CONTEXT_BUDGET_WARN_BACKGROUND) : undefined,
+			color: over ? themeColorFromId(CONTEXT_BUDGET_WARN_FOREGROUND) : undefined,
 		};
 	}
 

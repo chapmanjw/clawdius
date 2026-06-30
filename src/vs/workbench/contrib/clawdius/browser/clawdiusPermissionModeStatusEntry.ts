@@ -41,7 +41,6 @@ import { IQuickInputService, IQuickPickItem, QuickPickInput } from '../../../../
 import { registerColor } from '../../../../platform/theme/common/colorRegistry.js';
 import { themeColorFromId } from '../../../../platform/theme/common/themeService.js';
 import { IWorkbenchContribution } from '../../../common/contributions.js';
-import { STATUS_BAR_ERROR_ITEM_BACKGROUND, STATUS_BAR_ERROR_ITEM_FOREGROUND, STATUS_BAR_WARNING_ITEM_BACKGROUND, STATUS_BAR_WARNING_ITEM_FOREGROUND } from '../../../common/theme.js';
 import { IStatusbarEntry, IStatusbarEntryAccessor, IStatusbarService, StatusbarAlignment } from '../../../services/statusbar/browser/statusbar.js';
 import { IExtensionService } from '../../../services/extensions/common/extensions.js';
 import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
@@ -63,6 +62,25 @@ const PERMISSION_PLAN_BACKGROUND = registerColor('clawdius.permissionPlanBackgro
 const PERMISSION_PLAN_FOREGROUND = registerColor('clawdius.permissionPlanForeground', {
 	dark: '#FFFFFF', light: '#FFFFFF', hcDark: '#FFFFFF', hcLight: '#FFFFFF'
 }, localize('clawdius.perm.planForeground', "Foreground of the Clawdius permission-mode status item when Plan mode is the default."));
+
+// Bypass permissions (the most dangerous mode) and Edit automatically (a cautionary mode) get SELF-CONTAINED
+// color pairs rather than deferring to the upstream statusBarItem.error*/warning* tokens. Those upstream pairs
+// default their foreground to white, and third-party themes (e.g. Dracula Pro) frequently override only the
+// *Background - to a bright red or a pale yellow - leaving white text on a light fill that is unreadable. A
+// fixed pair keeps these SAFETY signals both legible and recognizable on any theme. Amber demands a DARK
+// foreground (white-on-amber is the classic unreadable combination), so the warn pair uses near-black text.
+const PERMISSION_BYPASS_BACKGROUND = registerColor('clawdius.permissionBypassBackground', {
+	dark: '#C4341F', light: '#C4341F', hcDark: '#C4341F', hcLight: '#A11F0F'
+}, localize('clawdius.perm.bypassBackground', "Background of the Clawdius permission-mode status item when Bypass permissions (the most dangerous mode) is the default."));
+const PERMISSION_BYPASS_FOREGROUND = registerColor('clawdius.permissionBypassForeground', {
+	dark: '#FFFFFF', light: '#FFFFFF', hcDark: '#FFFFFF', hcLight: '#FFFFFF'
+}, localize('clawdius.perm.bypassForeground', "Foreground of the Clawdius permission-mode status item when Bypass permissions is the default."));
+const PERMISSION_ACCEPT_BACKGROUND = registerColor('clawdius.permissionAcceptEditsBackground', {
+	dark: '#D29200', light: '#C98A00', hcDark: '#E0A500', hcLight: '#9A6A00'
+}, localize('clawdius.perm.acceptBackground', "Background of the Clawdius permission-mode status item when Edit automatically is the default."));
+const PERMISSION_ACCEPT_FOREGROUND = registerColor('clawdius.permissionAcceptEditsForeground', {
+	dark: '#1F1810', light: '#1F1810', hcDark: '#000000', hcLight: '#FFFFFF'
+}, localize('clawdius.perm.acceptForeground', "Foreground of the Clawdius permission-mode status item when Edit automatically is the default."));
 
 /** Visual tone -> drives status-bar coloring. safe = green fill; none = plain; warn/danger = filled background. */
 export type ModeTone = 'safe' | 'none' | 'warn' | 'danger';
@@ -310,12 +328,12 @@ export class ClawdiusPermissionModeStatusEntry extends Disposable implements IWo
 		let color: IStatusbarEntry['color'];
 		switch (display.tone) {
 			case 'danger':
-				backgroundColor = themeColorFromId(STATUS_BAR_ERROR_ITEM_BACKGROUND);
-				color = themeColorFromId(STATUS_BAR_ERROR_ITEM_FOREGROUND);
+				backgroundColor = themeColorFromId(PERMISSION_BYPASS_BACKGROUND);
+				color = themeColorFromId(PERMISSION_BYPASS_FOREGROUND);
 				break;
 			case 'warn':
-				backgroundColor = themeColorFromId(STATUS_BAR_WARNING_ITEM_BACKGROUND);
-				color = themeColorFromId(STATUS_BAR_WARNING_ITEM_FOREGROUND);
+				backgroundColor = themeColorFromId(PERMISSION_ACCEPT_BACKGROUND);
+				color = themeColorFromId(PERMISSION_ACCEPT_FOREGROUND);
 				break;
 			case 'safe':
 				// Plan mode: filled green highlight (the safest mode stands out positively).

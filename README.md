@@ -8,7 +8,7 @@
 
 [![GitHub stars](https://img.shields.io/github/stars/chapmanjw/clawdius?style=social)](https://github.com/chapmanjw/clawdius/stargazers)
 
-[![Release](https://img.shields.io/github/v/release/chapmanjw/clawdius?include_prereleases&label=release)](https://github.com/chapmanjw/clawdius/releases)
+[![Release](https://img.shields.io/github/v/release/chapmanjw/clawdius?label=release)](https://github.com/chapmanjw/clawdius/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE.txt)
 [![Sponsor](https://img.shields.io/badge/sponsor-%E2%9D%A4-db61a2)](https://github.com/sponsors/chapmanjw)
 
@@ -107,9 +107,7 @@ For the file you are editing, the inspector lists what Claude actually loads —
 
 ## Install
 
-> **Alpha note:** the first signed release is in progress. Until then, builds on the [Releases](https://github.com/chapmanjw/clawdius/releases) page are unsigned, so your operating system may warn on first launch. The per-platform steps below cover how to proceed.
-
-Grab the build for your platform from the [Releases](https://github.com/chapmanjw/clawdius/releases) page.
+Grab the build for your platform from the [Releases](https://github.com/chapmanjw/clawdius/releases) page. Builds are signed (Windows via Azure Trusted Signing, macOS via Apple Developer ID + notarization, Linux via GPG); a new publisher still has little reputation, so your OS may warn on first launch — the per-platform steps below cover how to proceed.
 
 ### Windows
 
@@ -144,7 +142,7 @@ sudo dnf install ./clawdius-*.x86_64.rpm
 tar -xf Clawdius-linux-x64-*.tar.gz && ./VSCode-linux-x64/bin/clawdius
 ```
 
-Hosted apt and rpm repositories are coming with the first signed release.
+The `.deb` and `.rpm` packages are GPG-signed; hosted apt/rpm repositories are coming.
 
 ### Snap
 

@@ -189,6 +189,7 @@ export const copyrightFilter = Object.freeze<string[]>([
 	'!**/*.zsh',
 	'!**/*.fish',
 	'!**/*.txt',
+	'!UPSTREAM_VERSION', // CLAWDIUS: fork-base version tracker (plain data file, no copyright header)
 	'!**/*.xpm',
 	'!**/*.opts',
 	'!**/*.disabled',

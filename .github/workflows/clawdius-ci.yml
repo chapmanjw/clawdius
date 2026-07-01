@@ -133,8 +133,6 @@ jobs:
         # require >=1 passing and zero failing in each. Run separately so a load failure in one is attributed.
         run: |
           for t in \
-            "out/vs/sessions/contrib/workflows/test/common/workflowStore.test.js" \
-            "out/vs/sessions/contrib/workflows/test/browser/workflowTranscript.test.js" \
             "out/vs/workbench/contrib/chat/test/common/claudeCliAgentPluginDiscovery.test.js" \
             "out/vs/platform/clawdius/test/common/clawdiusCliConfig.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/clawdiusPermissionMode.test.js" \

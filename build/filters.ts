@@ -190,6 +190,7 @@ export const copyrightFilter = Object.freeze<string[]>([
 	'!**/*.fish',
 	'!**/*.txt',
 	'!UPSTREAM_VERSION', // CLAWDIUS: fork-base version tracker (plain data file, no copyright header)
+	'!test/clawdius-e2e/**', // CLAWDIUS: standalone local E2E harness (own header; exempt from src hygiene)
 	'!**/*.xpm',
 	'!**/*.opts',
 	'!**/*.disabled',

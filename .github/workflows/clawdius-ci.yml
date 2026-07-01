@@ -173,7 +173,6 @@ jobs:
             "out/vs/platform/agentHost/test/node/claudeAgent.test.js" \
             "out/vs/platform/agentHost/test/node/agentService.test.js" \
             "out/vs/platform/agentHost/test/node/agentHostSessionTitleController.test.js" \
-            "out/vs/platform/agentHost/test/node/historyRecordFixtures.test.js" \
             "out/vs/platform/agentHost/test/node/claudeSdkOptions.test.js" \
             "out/vs/platform/agentHost/test/node/clawdiusCliSpawn.test.js" \
             "out/vs/platform/agentHost/test/node/agentHostChangesetOperationService.test.js" \

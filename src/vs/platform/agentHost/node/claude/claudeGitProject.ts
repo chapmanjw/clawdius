@@ -9,7 +9,7 @@ import { URI } from '../../../../base/common/uri.js';
 import type { IAgentSessionProjectInfo } from '../../common/agentService.js';
 import type { IAgentHostGitService } from '../agentHostGitService.js';
 
-export interface ICopilotSessionContext {
+export interface IGitProjectContext {
 	readonly cwd?: string;
 	readonly gitRoot?: string;
 	readonly repository?: string;
@@ -39,7 +39,7 @@ export function projectFromRepository(repository: string): IAgentSessionProjectI
 	return { uri, displayName };
 }
 
-export async function projectFromCopilotContext(context: ICopilotSessionContext | undefined, gitService: IAgentHostGitService): Promise<IAgentSessionProjectInfo | undefined> {
+export async function projectFromContext(context: IGitProjectContext | undefined, gitService: IAgentHostGitService): Promise<IAgentSessionProjectInfo | undefined> {
 	const workingDirectory = typeof context?.cwd === 'string'
 		? URI.file(context.cwd)
 		: typeof context?.gitRoot === 'string'

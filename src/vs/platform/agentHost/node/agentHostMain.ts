@@ -72,7 +72,7 @@ import { AgentHostGitService, IAgentHostGitService } from './agentHostGitService
 import { AgentHostCheckpointService } from './agentHostCheckpointService.js';
 import { IAgentHostCheckpointService } from '../common/agentHostCheckpointService.js';
 import { AgentHostFileMonitorService, IAgentHostFileMonitorService } from './agentHostFileMonitorService.js';
-import { registerPendingEditContentProvider } from './copilot/pendingEditContentStore.js';
+import { registerPendingEditContentProvider } from './shared/pendingEditContentStore.js';
 import { join } from '../../../base/common/path.js';
 import { createAgentHostTelemetryService } from './agentHostTelemetryService.js';
 import { ITelemetryService } from '../../telemetry/common/telemetry.js';

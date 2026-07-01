@@ -6,7 +6,6 @@
 import assert from 'assert';
 import { mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
-import { fileURLToPath } from 'url';
 import { encodeBase64, VSBuffer } from '../../../../base/common/buffer.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { DisposableStore, IReference, toDisposable } from '../../../../base/common/lifecycle.js';
@@ -28,35 +27,9 @@ import { type MessageResourceAttachment, type ProtectedResourceMetadata } from '
 import { IProductService } from '../../../product/common/productService.js';
 import { AgentService } from '../../node/agentService.js';
 import { MockAgent, ScriptedMockAgent } from './mockAgent.js';
-import { mapSessionEventsToHistoryRecords } from './historyRecordFixtures.js';
-import { type ISessionEvent } from './copilotTestEvents.js';
 import { createNoopGitService, createSessionDataService } from '../common/sessionTestHelpers.js';
 import { NULL_CHECKPOINT_SERVICE } from '../../common/agentHostCheckpointService.js';
 import { buildSessionChangesetUri, buildUncommittedChangesetUri } from '../../common/changesetUri.js';
-
-/**
- * Loads a JSONL fixture of raw Copilot SDK events, runs them through
- * {@link mapSessionEventsToHistoryRecords}, and returns the result
- * suitable for setting on {@link MockAgent.sessionMessages}. Tests the
- * full pipeline: SDK events → IHistoryRecord → buildTurnsFromHistory →
- * Turn[].
- *
- * Fixture files live in `test-cases/` and are sanitized copies of real
- * `events.jsonl` files from `~/.copilot/session-state/`.
- */
-async function loadFixtureMessages(fixtureName: string, session: URI) {
-	// Resolve the fixture from the source tree (test-cases/ is not compiled to out/)
-	const thisFile = fileURLToPath(import.meta.url);
-	// Navigate from out/vs/... to src/vs/... by replacing the out/ prefix.
-	// Use a regex that handles both / and \ separators for Windows compat.
-	const srcFile = thisFile.replace(/[/\\]out[/\\]/, (m) => m.replace('out', 'src'));
-	const lastSep = Math.max(srcFile.lastIndexOf('/'), srcFile.lastIndexOf('\\'));
-	const fixtureDir = srcFile.substring(0, lastSep);
-	const sep = srcFile.includes('\\') ? '\\' : '/';
-	const raw = readFileSync(`${fixtureDir}${sep}test-cases${sep}${fixtureName}`, 'utf-8');
-	const events: ISessionEvent[] = raw.trim().split('\n').map(line => JSON.parse(line));
-	return mapSessionEventsToHistoryRecords(session, undefined, events);
-}
 
 suite('AgentService (node dispatcher)', () => {
 
@@ -1728,8 +1701,29 @@ suite('AgentService (node dispatcher)', () => {
 			const sessions = await stubAgent.listSessions();
 			const sessionResource = sessions[0].session;
 
-			// Load real SDK events from fixture (sanitized from ~/.copilot/session-state/)
-			stubAgent.sessionMessages = await loadFixtureMessages('subagent-session.jsonl', session);
+			// Reconstruct a subagent session: a `task` tool call that spawns a
+			// subagent, then inner tool calls AND an inner assistant message
+			// (both carrying parentToolCallId, so they belong to the child
+			// session), then a final assistant message in the same parent turn.
+			stubAgent.sessionMessages = [
+				{ type: 'message', session, role: 'user', messageId: 'msg-1', content: 'Run a sync subagent to do some searches, just testing subagent rendering', toolRequests: [] },
+				{ type: 'message', session, role: 'assistant', messageId: 'msg-2', content: '', toolRequests: [{ toolCallId: 'tc-task', name: 'task' }] },
+				{ type: 'tool_start', session, toolCallId: 'tc-task', toolName: 'task', displayName: 'Task', invocationMessage: 'Delegating...', toolKind: 'subagent' as const, subagentDescription: 'Fast codebase exploration', subagentAgentName: 'explore' },
+				{ type: 'subagent_started', session, toolCallId: 'tc-task', agentName: 'explore', agentDisplayName: 'Explore Agent', agentDescription: 'Fast codebase exploration' },
+				// Inner subagent activity — carries parentToolCallId, so it lands
+				// in the child session, not the parent turn.
+				{ type: 'tool_start', session, toolCallId: 'tc-inner-1', toolName: 'view', displayName: 'View File', invocationMessage: 'Reading file', parentToolCallId: 'tc-task' },
+				{ type: 'tool_complete', session, toolCallId: 'tc-inner-1', result: { success: true, pastTenseMessage: 'Read file' }, parentToolCallId: 'tc-task' },
+				{ type: 'tool_start', session, toolCallId: 'tc-inner-2', toolName: 'glob', displayName: 'Glob', invocationMessage: 'Globbing', parentToolCallId: 'tc-task' },
+				{ type: 'tool_complete', session, toolCallId: 'tc-inner-2', result: { success: true, pastTenseMessage: 'Globbed' }, parentToolCallId: 'tc-task' },
+				// Inner assistant message from the subagent — must NOT create an
+				// extra turn in the parent session.
+				{ type: 'message', session, role: 'assistant', messageId: 'msg-inner', content: 'Perfect! I now have enough information.', toolRequests: [], parentToolCallId: 'tc-task' },
+				// Parent task tool completes.
+				{ type: 'tool_complete', session, toolCallId: 'tc-task', result: { success: true, pastTenseMessage: 'Delegated task' } },
+				// Final assistant message lands in the same parent turn.
+				{ type: 'message', session, role: 'assistant', messageId: 'msg-3', content: 'Here\'s what the sync subagent found: repo overview.', toolRequests: [] },
+			];
 
 			await service.restoreSession(sessionResource);
 

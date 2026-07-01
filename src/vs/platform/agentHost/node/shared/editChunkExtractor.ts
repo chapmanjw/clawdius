@@ -5,13 +5,12 @@
 
 /*
  * Extracts the explicit AI-written text chunks from a file-edit tool's
- * input payload. Both Claude (via @anthropic-ai/claude-agent-sdk) and
- * Copilot CLI (via @github/copilot-sdk) accept canonical tool schemas
- * whose shapes we can read structurally — Claude uses PascalCase names
- * (`Write`, `Edit`, `MultiEdit`) with `_string` fields, Copilot uses
- * snake_case (`create`, `edit`, `str_replace`, `insert`,
+ * input payload. Claude (via @anthropic-ai/claude-agent-sdk) accepts
+ * canonical tool schemas whose shapes we can read structurally — it uses
+ * PascalCase names (`Write`, `Edit`, `MultiEdit`) with `_string` fields,
+ * while snake_case variants (`create`, `edit`, `str_replace`, `insert`,
  * `str_replace_editor` command-dispatched, `apply_patch` /
- * `git_apply_patch` V4A patch body) with `_str` / `file_text` fields.
+ * `git_apply_patch` V4A patch body) use `_str` / `file_text` fields.
  *
  * Returning an empty array means "we couldn't read this — fall back to
  * whole-file scoring." Defensive against malformed SDK input: every

@@ -19,8 +19,7 @@
  * **Authentication:** token from `GITHUB_TOKEN` (preferred) or `gh auth
  * token`. Either works — the agent host's `CopilotApiService` discovers the
  * user's CAPI endpoint via `GET /copilot_internal/user` and uses the GitHub
- * token directly as a Bearer credential, the same pattern as the
- * `@github/copilot` CLI.
+ * token directly as a Bearer credential.
  */
 
 import { existsSync } from 'fs';

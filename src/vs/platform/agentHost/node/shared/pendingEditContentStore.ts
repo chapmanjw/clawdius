@@ -45,4 +45,3 @@ export function registerPendingEditContentProvider(fileService: IFileService): I
 		},
 	};
 }
-

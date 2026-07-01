@@ -27,7 +27,7 @@ function minimalRequest(spans: unknown[], resourceAttrs?: unknown[]): IOtlpExpor
 		resourceSpans: [{
 			resource: resourceAttrs ? { attributes: resourceAttrs as never } : undefined,
 			scopeSpans: [{
-				scope: { name: '@github/copilot/sdk', version: '0.0.0' },
+				scope: { name: 'clawdius-agent-host', version: '0.0.0' },
 				spans: spans as never,
 			}],
 		}],

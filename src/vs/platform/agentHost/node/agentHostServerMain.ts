@@ -66,7 +66,7 @@ import { AGENT_CLIENT_SCHEME } from '../common/agentClientUri.js';
 import { resolveServerUrls } from './serverUrls.js';
 import { AgentPluginManager } from './agentPluginManager.js';
 import { IAgentPluginManager } from '../common/agentPluginManager.js';
-import { registerPendingEditContentProvider } from './copilot/pendingEditContentStore.js';
+import { registerPendingEditContentProvider } from './shared/pendingEditContentStore.js';
 import { AgentHostGitService, IAgentHostGitService } from './agentHostGitService.js';
 import { AgentHostCheckpointService } from './agentHostCheckpointService.js';
 import { IAgentHostCheckpointService } from '../common/agentHostCheckpointService.js';

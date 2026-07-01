@@ -1700,12 +1700,7 @@ export default defineConfig(
 						'@anthropic-ai/sdk', // used by agentHost for Anthropic API requests
 						'@anthropic-ai/claude-agent-sdk', // used by agentHost for Claude Agent SDK session enumeration / queries
 						'@modelcontextprotocol/sdk/**/*', // used by agentHost for Claude client-tool MCP result types (Phase 10)
-						'zod', // used by agentHost for Claude client-tool MCP input schemas
-						// CLAWDIUS: dead-copilot leftover - the orphaned node/copilot/** files upstream added for the
-						// unregistered CopilotAgent still import these. Allow-listed so hygiene passes; slated for removal in
-						// the de-Copilot cleanup (delete node/copilot/** + its tests, drop the @github/copilot* deps).
-						'@github/copilot-sdk',
-						'@github/copilot'
+						'zod' // used by agentHost for Claude client-tool MCP input schemas
 					]
 				},
 				{

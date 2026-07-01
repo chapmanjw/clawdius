@@ -30,7 +30,7 @@ import { isSubagentSession, parseSubagentSessionUri, ChatInputResponseKind, type
 import { IAgentConfigurationService } from '../agentConfigurationService.js';
 import { IAgentHostGitService } from '../agentHostGitService.js';
 import { PendingRequestRegistry } from '../../common/pendingRequestRegistry.js';
-import { projectFromCopilotContext } from '../copilot/copilotGitProject.js';
+import { projectFromContext } from './claudeGitProject.js';
 import { IClaudeAgentSdkService } from './claudeAgentSdkService.js';
 import { mapSessionMessagesToTurns } from './claudeReplayMapper.js';
 import { getSubagentTranscript } from './claudeSubagentResolver.js';
@@ -236,7 +236,7 @@ export class ClaudeAgent extends Disposable implements IAgent {
 		}
 
 		const project = config.workingDirectory
-			? await projectFromCopilotContext({ cwd: config.workingDirectory.fsPath }, this._gitService)
+			? await projectFromContext({ cwd: config.workingDirectory.fsPath }, this._gitService)
 			: undefined;
 
 		const permissionMode = this._resolvePermissionMode(config.config);
@@ -347,7 +347,7 @@ export class ClaudeAgent extends Disposable implements IAgent {
 			?? 'default';
 		let project: IAgentSessionProjectInfo | undefined;
 		try {
-			project = await projectFromCopilotContext({ cwd: workingDirectory.fsPath }, this._gitService);
+			project = await projectFromContext({ cwd: workingDirectory.fsPath }, this._gitService);
 		} catch (err) {
 			this._logService.warn(`[Claude:${sessionId}] project resolution failed during resume; continuing without project`, err);
 		}

@@ -13,7 +13,26 @@ import { IFileService } from '../../../files/common/files.js';
 import { IAgentPluginManager } from '../../common/agentPluginManager.js';
 import { customizationId, type ClientPluginCustomization } from '../../common/state/sessionState.js';
 import { CustomizationType, type URI as ProtocolURI } from '../../common/state/protocol/state.js';
-import { DiscoveredType, type IDiscoveredDirectory } from '../copilot/sessionCustomizationDiscovery.js';
+
+/** Category of a workspace/home customization directory discovered on disk. */
+const enum DiscoveredType {
+	Agent = 'agent',
+	Skill = 'skill',
+	Instruction = 'instruction',
+	Hook = 'hook',
+	AgentInstruction = 'agentInstruction',
+}
+
+interface IDiscoveredFile {
+	readonly uri: URI;
+	readonly etag: string;
+}
+
+interface IDiscoveredDirectory {
+	readonly uri: URI;
+	readonly type: DiscoveredType;
+	readonly files: readonly IDiscoveredFile[];
+}
 
 const DISPLAY_NAME = 'VS Code Synced Data';
 const HOST_DISCOVERY_DIR = 'host-discovery';

@@ -27,7 +27,7 @@ interface TelemetryConfig {
 
 
 /**
- * Lean service that wires the @github/copilot-sdk telemetry hook to either:
+ * Lean service that wires the agent SDK telemetry hook to either:
  *
  *  - **External-only mode**: pass user-configured exporter settings straight through
  *    so the SDK's spawned CLI exports OTel data directly to the user's sink.

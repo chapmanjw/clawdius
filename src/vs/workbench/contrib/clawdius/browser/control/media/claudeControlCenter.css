@@ -66,6 +66,10 @@ block titles, brand orange (#d97757) accents, lavender (#a78bfa) highlights, and
 	background-image: url('./clawd-dance.svg');
 	background-repeat: no-repeat; background-position: center; background-size: contain;
 }
+/* CLAWDIUS: static Clawd Crab for the tab-header mark when "Disable animations" is on (the same still art the high-contrast letterpress uses) instead of the animated dance. */
+.clawdius-control-hero-mark.static {
+	background-image: url('./clawd.svg');
+}
 .clawdius-control-hero-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .clawdius-control-hero-title { font-size: 17px; font-weight: 600; letter-spacing: 0.02em; }
 .clawdius-control-hero-sub { font-size: 12px; opacity: 0.65; max-width: 640px; }

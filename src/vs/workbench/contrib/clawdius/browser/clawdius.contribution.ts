@@ -47,6 +47,7 @@ import { LintContextAction } from './clawdiusContextBudgetLint.js';
 import { DisableConfirmedLoadsAction, EnableConfirmedLoadsAction } from './clawdiusContextBudgetConfirm.js';
 import { ConfigurationScope, Extensions as ConfigExtensions, IConfigurationRegistry } from '../../../../platform/configuration/common/configurationRegistry.js';
 import { ClawdiusUpdateService, ClawdiusUpdateStartupContribution, IClawdiusUpdateService } from './update/clawdiusUpdateService.js';
+import { CLAWDIUS_DISABLE_ANIMATIONS_SETTING, ClawdiusDisableAnimationsContribution } from './clawdiusDisableAnimations.js';
 
 // Singleton dashboard input round-trips with no state (everything is read live from local files on open).
 class ClaudeUsageDashboardInputSerializer implements IEditorSerializer {
@@ -285,8 +286,20 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 				scope: ConfigurationScope.APPLICATION,
 				description: localize('clawdius.update.checkOnStartup.desc', "Automatically check for Clawdius updates on startup. Off by default; when on, Clawdius makes a single GitHub request at launch to compare your version against the latest release."),
 			},
+			[CLAWDIUS_DISABLE_ANIMATIONS_SETTING]: {
+				type: 'boolean',
+				default: false,
+				scope: ConfigurationScope.APPLICATION,
+				title: localize('clawdius.disableAnimations.title', "Disable Animations"),
+				description: localize('clawdius.disableAnimations.desc', "Turn off Clawdius's animated brand art. When on, the empty-editor welcome art and the Control Center tab-header mark show the static Clawd artwork (the same stills used for high-contrast themes) instead of the animated versions."),
+			},
 		},
 	});
+
+	// Keeps the `clawdius-disable-animations` class on the workbench container(s) in sync with the setting, so the
+	// empty-editor letterpress swaps to its static high-contrast art (see clawdiusDisableAnimations.css). Registered
+	// at BlockRestore so the class is present before the empty editor first paints.
+	registerWorkbenchContribution2(ClawdiusDisableAnimationsContribution.ID, ClawdiusDisableAnimationsContribution, WorkbenchPhase.BlockRestore);
 
 	// "Check for Updates" via the GitHub Releases API (notify-and-link only - no auto-download/install). The
 	// service holds the single on-demand GitHub request; the startup contribution is the ONLY automatic trigger

@@ -58,6 +58,7 @@ import {
 	ALLOW_BYPASS_KEY, INITIAL_PERMISSION_MODE_KEY, PermissionMode, parsePermissionMode, permissionModeWrites, permissionModes,
 } from '../clawdiusPermissionModeStatusEntry.js';
 import { INSTALL_CLAUDE_CODE_PLUGIN_COMMAND_ID, isClaudeCodePluginInstalled } from '../clawdiusPluginSetup.js';
+import { CLAWDIUS_DISABLE_ANIMATIONS_SETTING } from '../clawdiusDisableAnimations.js';
 import { ClaudeControlCenterInput, ControlTab } from './claudeControlCenterInput.js';
 import { ClaudeUsageDashboardView } from '../usage/claudeUsageDashboardView.js';
 import { IClaudeUsageCapacityRefresh } from '../usage/claudeUsageCapacityRefresh.js';
@@ -205,6 +206,8 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	private mcpWritableProject: URI | undefined;
 	/** An open "add plugin" form on the Plugins tab. */
 	private pluginAddForm: { id: string } | undefined;
+	/** The installed-plugin row whose bundled-contents panel is expanded (keyed by plugin id; default collapsed). */
+	private expandedPlugin: string | undefined;
 	/** Plugins-tab local data (marketplaces + merged catalog + installed list), loaded lazily from
 	 *  ~/.claude/plugins. Cleared on a config change; reloads on the next render. */
 	private pluginsData: { marketplaces: IMarketplace[]; catalog: ICatalogPlugin[]; installed: IInstalledPlugin[] } | undefined;
@@ -269,6 +272,11 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		// in lockstep. Cheap: only the mode segment reads from config; the buckets come from the snapshot.
 		this._register(this.configurationService.onDidChangeConfiguration(e => {
 			if (e.affectsConfiguration(INITIAL_PERMISSION_MODE_KEY) || e.affectsConfiguration(ALLOW_BYPASS_KEY)) {
+				this.render();
+			}
+			// The tab-header mark swaps between the animated and static Clawd art on this setting; re-render so
+			// every tab's hero picks up the change live.
+			if (e.affectsConfiguration(CLAWDIUS_DISABLE_ANIMATIONS_SETTING)) {
 				this.render();
 			}
 		}));
@@ -576,7 +584,11 @@ export class ClaudeControlCenterEditor extends EditorPane {
 
 	private renderHero(parent: HTMLElement, title: string, sub: string): void {
 		const hero = append(parent, h('.clawdius-control-hero'));
-		append(hero, h('.clawdius-control-hero-mark'));
+		const mark = append(hero, h('.clawdius-control-hero-mark'));
+		// "Disable animations" swaps the animated dance mark for the static Clawd Crab (see the .static CSS rule).
+		if (this.configurationService.getValue<boolean>(CLAWDIUS_DISABLE_ANIMATIONS_SETTING) === true) {
+			mark.classList.add('static');
+		}
 		const text = append(hero, h('.clawdius-control-hero-text'));
 		append(text, h('.clawdius-control-hero-title')).textContent = title;
 		append(text, h('.clawdius-control-hero-sub')).textContent = sub;
@@ -1037,12 +1049,14 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	private collectSkills(state: ISkillsState): ISkillRow[] {
 		const map = new Map<string, { name: string; description?: string; origins: Set<string>; items: IConfigItem[] }>();
 		for (const scope of this.configService.snapshot.scopes) {
-			const origin = scope.scope === ConfigScope.Global
+			const scopeOrigin = scope.scope === ConfigScope.Global
 				? localize('clawdius.control.scope.global', "Global")
 				: (scope.folderName ?? localize('clawdius.control.scope.project', "Project (shared)"));
 			for (const sec of scope.sections) {
 				if (sec.section !== ConfigSection.Skills) { continue; }
 				for (const item of sec.items) {
+					// Provenance: a plugin-bundled skill shows its source plugin; a standalone skill shows its scope.
+					const origin = item.sourcePlugin ?? scopeOrigin;
 					const existing = map.get(item.label);
 					if (existing) {
 						existing.origins.add(origin);
@@ -1106,7 +1120,10 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const acts = append(row, h('.clawdius-control-cap-acts'));
 		if (item) {
 			this.iconButton(acts, Codicon.edit, localize('clawdius.control.skills.open', "Open SKILL.md"), () => void this.openSkill(item));
-			this.iconButton(acts, Codicon.trash, localize('clawdius.control.skills.delete', "Delete skill"), () => void this.deleteSkill(item), true);
+			// A plugin-bundled skill is read-only (canDelete === false): the plugin owns it, so offer Open but not Delete.
+			if (item.canDelete !== false) {
+				this.iconButton(acts, Codicon.trash, localize('clawdius.control.skills.delete', "Delete skill"), () => void this.deleteSkill(item), true);
+			}
 		}
 
 		if (expanded && folder) { this.renderSkillPanel(parent, folder); }
@@ -2654,27 +2671,125 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		await this.sendClaudeCommandToTerminal(`claude plugin install ${id}`);
 	}
 
-	/** Installed + configured plugins from the scanned config (global; the CLI scopes plugins globally). */
-	private collectPlugins(): { id: string; status: string }[] {
-		const map = new Map<string, string>();
+	/** Installed + configured plugins from the scanned config (global; the CLI scopes plugins globally). Each row
+	 *  carries the plugin's bundled contents (skills / agents / commands / hooks) for the expandable contents view. */
+	private collectPlugins(): { id: string; status: string; contents: readonly IConfigItem[] }[] {
+		const map = new Map<string, { status: string; contents: readonly IConfigItem[] }>();
 		for (const scope of this.configService.snapshot.scopes) {
 			for (const sec of scope.sections) {
 				if (sec.section !== ConfigSection.Plugins) { continue; }
-				for (const item of sec.items) { map.set(item.label, item.description ?? 'installed'); }
+				for (const item of sec.items) { map.set(item.label, { status: item.description ?? 'installed', contents: item.children ?? [] }); }
 			}
 		}
-		return [...map.entries()].map(([id, status]) => ({ id, status })).sort((a, b) => a.id.localeCompare(b.id));
+		return [...map.entries()].map(([id, v]) => ({ id, status: v.status, contents: v.contents })).sort((a, b) => a.id.localeCompare(b.id));
 	}
 
-	private renderPluginRow(parent: HTMLElement, plugin: { id: string; status: string }): void {
-		// Plugin ids are `plugin-id@marketplace-id`; show the plugin name with the marketplace + status as the hint.
+	private renderPluginRow(parent: HTMLElement, plugin: { id: string; status: string; contents: readonly IConfigItem[] }): void {
+		// Plugin ids are `plugin-id@marketplace-id`; show the plugin name, its marketplace as a muted origin, and the
+		// status + a contents summary as the description.
 		const at = plugin.id.indexOf('@');
 		const name = at > 0 ? plugin.id.slice(0, at) : plugin.id;
 		const marketplace = at > 0 ? plugin.id.slice(at + 1) : undefined;
 		const statusLabel = this.pluginStatusLabel(plugin.status);
-		const hint = marketplace ? localize('clawdius.control.plugins.fromStatus', "{0} - {1}", marketplace, statusLabel) : statusLabel;
+		const hasContents = plugin.contents.length > 0;
+		const expanded = hasContents && this.expandedPlugin === plugin.id;
+
+		const row = append(parent, h('.clawdius-control-caprow'));
+		// Expand chevron reveals the bundled contents; plugins with no scanned contents get an aligning spacer.
+		if (hasContents) {
+			const chevron = this.iconButton(row,
+				expanded ? Codicon.chevronDown : Codicon.chevronRight,
+				expanded ? localize('clawdius.control.plugins.hideContents', "Hide contents") : localize('clawdius.control.plugins.showContents', "Show contents"),
+				() => this.togglePluginExpand(plugin.id));
+			chevron.classList.add('clawdius-control-skill-chevron');
+		} else {
+			append(row, h('.clawdius-control-skill-chevron-spacer'));
+		}
+
+		const info = append(row, h('.clawdius-control-cap-info'));
+		const nameEl = append(info, h('.clawdius-control-cap-name'));
+		append(nameEl, h('span')).textContent = name;
+		if (marketplace) { append(nameEl, h('span.clawdius-control-cap-origin.muted')).textContent = marketplace; }
+		const summary = this.pluginContentsSummary(plugin.contents);
+		append(info, h('.clawdius-control-cap-desc')).textContent = summary
+			? localize('clawdius.control.plugins.statusContents', "{0} - {1}", statusLabel, summary)
+			: statusLabel;
+
+		append(row, h('.clawdius-control-spacer'));
 		// 'installed' (no explicit enabledPlugins entry) and 'enabled' both read as on; only 'disabled' is off.
-		this.renderToggleRow(parent, name, hint, plugin.status !== 'disabled', next => void this.setPluginEnabled(plugin.id, next));
+		this.appendToggle(row, plugin.status !== 'disabled', name, next => void this.setPluginEnabled(plugin.id, next));
+
+		if (expanded) { this.renderPluginContentsPanel(parent, plugin.contents); }
+	}
+
+	private togglePluginExpand(id: string): void {
+		this.expandedPlugin = this.expandedPlugin === id ? undefined : id;
+		this.render();
+	}
+
+	/** A short "13 skills - 1 agent - 7 commands" summary of a plugin's bundled contents (omits empty sections). */
+	private pluginContentsSummary(contents: readonly IConfigItem[]): string {
+		const n = (section: ConfigSection) => contents.filter(c => c.section === section).length;
+		const parts: string[] = [];
+		const nSkills = n(ConfigSection.Skills);
+		const nAgents = n(ConfigSection.Agents);
+		const nCommands = n(ConfigSection.Commands);
+		const nHooks = n(ConfigSection.Hooks);
+		if (nSkills > 0) { parts.push(nSkills === 1 ? localize('clawdius.control.plugins.oneSkill', "1 skill") : localize('clawdius.control.plugins.nSkills', "{0} skills", nSkills)); }
+		if (nAgents > 0) { parts.push(nAgents === 1 ? localize('clawdius.control.plugins.oneAgent', "1 agent") : localize('clawdius.control.plugins.nAgents', "{0} agents", nAgents)); }
+		if (nCommands > 0) { parts.push(nCommands === 1 ? localize('clawdius.control.plugins.oneCommand', "1 command") : localize('clawdius.control.plugins.nCommands', "{0} commands", nCommands)); }
+		if (nHooks > 0) { parts.push(nHooks === 1 ? localize('clawdius.control.plugins.oneHook', "1 hook") : localize('clawdius.control.plugins.nHooks', "{0} hooks", nHooks)); }
+		return parts.join(' - ');
+	}
+
+	/** The expanded plugin's bundled contents, grouped by kind (Skills / Agents / Commands / Hooks). Each entry opens
+	 *  its own file. Mirrors the skill-package file panel's look. */
+	private renderPluginContentsPanel(parent: HTMLElement, contents: readonly IConfigItem[]): void {
+		const panel = append(parent, h('.clawdius-control-skill-panel'));
+		const groups: { section: ConfigSection; title: string }[] = [
+			{ section: ConfigSection.Skills, title: localize('clawdius.control.plugins.contents.skills', "Skills") },
+			{ section: ConfigSection.Agents, title: localize('clawdius.control.plugins.contents.agents', "Agents") },
+			{ section: ConfigSection.Commands, title: localize('clawdius.control.plugins.contents.commands', "Commands") },
+			{ section: ConfigSection.Hooks, title: localize('clawdius.control.plugins.contents.hooks', "Hooks") },
+		];
+		let any = false;
+		for (const g of groups) {
+			const items = contents.filter(c => c.section === g.section);
+			if (items.length === 0) { continue; }
+			any = true;
+			append(panel, h('.clawdius-control-skill-files-title')).textContent = g.title;
+			const list = append(panel, h('.clawdius-control-skill-filelist'));
+			for (const item of items) { this.renderPluginContentRow(list, item); }
+		}
+		if (!any) {
+			append(panel, h('.clawdius-control-skill-emptyfiles')).textContent = localize('clawdius.control.plugins.contents.none', "This plugin bundles no skills, agents, commands, or hooks.");
+		}
+	}
+
+	private renderPluginContentRow(list: HTMLElement, item: IConfigItem): void {
+		const row = append(list, h('.clawdius-control-skill-file'));
+		append(row, h('.clawdius-control-skill-tree-twistyspace')); // align under the skill-panel folder icons
+		append(row, h('span.clawdius-control-skill-file-ico')).classList.add(...ThemeIcon.asClassNameArray(this.pluginContentIcon(item.section)));
+		append(row, h('span.clawdius-control-skill-file-name')).textContent = item.label;
+		if (item.section === ConfigSection.Hooks && item.description) {
+			append(row, h('span.clawdius-control-skill-file-count')).textContent = item.description;
+		}
+		append(row, h('.clawdius-control-spacer'));
+		if (item.resource) {
+			const resource = item.resource;
+			const acts = append(row, h('.clawdius-control-cap-acts'));
+			this.iconButton(acts, Codicon.goToFile, localize('clawdius.control.plugins.contents.open', "Open"), () => void this.editorService.openEditor({ resource, options: { pinned: true } }));
+		}
+	}
+
+	private pluginContentIcon(section: ConfigSection): ThemeIcon {
+		switch (section) {
+			case ConfigSection.Skills: return Codicon.lightbulb;
+			case ConfigSection.Agents: return Codicon.organization;
+			case ConfigSection.Commands: return Codicon.terminal;
+			case ConfigSection.Hooks: return Codicon.symbolEvent;
+			default: return Codicon.file;
+		}
 	}
 
 	private pluginStatusLabel(status: string): string {

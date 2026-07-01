@@ -1,0 +1,23 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) 2026 John Chapman (Clawdius). All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/*
+CLAWDIUS-BEGIN "Disable animations" letterpress override.
+When ClawdiusDisableAnimationsContribution puts `clawdius-disable-animations` on the workbench container, the
+empty-editor letterpress swaps its ANIMATED light/dark art for the STATIC high-contrast SVGs already shipped for
+hc themes (editorgroupview.css defines the animated defaults). Each rule qualifies on the theme-type class (`vs`
+/ `vs-dark`) so the hc themes - which are already static - are left untouched. The extra root class also makes
+these rules win on specificity over the base + dark letterpress rules regardless of stylesheet order.
+*/
+
+.monaco-workbench.clawdius-disable-animations.vs .part.editor > .content .editor-group-container > .editor-group-watermark-wrapper .editor-group-watermark .letterpress {
+	background-image: url('../../../../browser/parts/editor/media/letterpress-hcLight.svg');
+}
+
+.monaco-workbench.clawdius-disable-animations.vs-dark .part.editor > .content .editor-group-container > .editor-group-watermark-wrapper .editor-group-watermark .letterpress {
+	background-image: url('../../../../browser/parts/editor/media/letterpress-hcDark.svg');
+}
+
+/* CLAWDIUS-END */

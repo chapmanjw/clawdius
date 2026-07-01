@@ -49,7 +49,7 @@ import { Extensions as ConfigurationMigrationExtensions, IConfigurationMigration
 import { IsSessionsWindowContext, ResourceContextKey, WorkbenchStateContext } from '../../../common/contextkeys.js';
 import { IWorkbenchContribution, IWorkbenchContributionsRegistry, registerWorkbenchContribution2, Extensions as WorkbenchExtensions, WorkbenchPhase } from '../../../common/contributions.js';
 import { EditorExtensions } from '../../../common/editor.js';
-import { IViewContainersRegistry, Extensions as ViewContainerExtensions, ViewContainerLocation } from '../../../common/views.js';
+import { IViewContainersRegistry, Extensions as ViewContainerExtensions, ViewContainerLocation, IViewsRegistry, IViewDescriptor } from '../../../common/views.js';
 import { DEFAULT_ACCOUNT_SIGN_IN_COMMAND } from '../../../services/accounts/browser/defaultAccount.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { EnablementState, IExtensionManagementServerService, IPublisherInfo, IWorkbenchExtensionEnablementService, IWorkbenchExtensionManagementService } from '../../../services/extensionManagement/common/extensionManagement.js';
@@ -2096,6 +2096,51 @@ class ExtensionToolsContribution extends Disposable implements IWorkbenchContrib
 	}
 }
 
+// CLAWDIUS-BEGIN hide upstream "MCP Servers" and "Agent Plugins" sections from the Extensions pane
+// Clawdius manages MCP servers and agent plugins in its own Control Center, so the built-in Extensions
+// viewlet must not surface them. Upstream registers those view sections into THIS contrib's Extensions
+// view container (VIEW_CONTAINER) from the mcp contrib (mcpServersView.ts) and the chat contrib
+// (agentPluginsView.ts). Rather than fork those upstream files, we deregister the MCP / agent-plugin
+// view sections from this container while in Clawdius mode. Clawdius mode is detected the same way as
+// elsewhere in this contrib (see extensionRecommendationsService.ts): the upstream chat entitlement URL
+// is stripped from product.json.
+class ClawdiusHideMcpAndAgentPluginViewsContribution extends Disposable implements IWorkbenchContribution {
+
+	static readonly ID = 'workbench.contrib.clawdius.hideMcpAndAgentPluginExtensionViews';
+
+	// Upstream view-id namespaces contributed into VIEW_CONTAINER that Clawdius owns elsewhere. These do
+	// not overlap the core Extensions views (workbench.views.extensions.*, extensions.recommendedList, etc.).
+	private static readonly SUPPRESSED_VIEW_ID_PREFIXES = ['workbench.views.mcp.', 'workbench.views.agentPlugins.'];
+
+	constructor() {
+		super();
+
+		// Only suppress in Clawdius mode; a normal upstream build keeps its sections untouched.
+		if (product.defaultChatAgent?.entitlementUrl) {
+			return;
+		}
+
+		const viewsRegistry = Registry.as<IViewsRegistry>(ViewContainerExtensions.ViewsRegistry);
+		const deregister = (views: readonly IViewDescriptor[]) => {
+			const suppressed = views.filter(view => ClawdiusHideMcpAndAgentPluginViewsContribution.SUPPRESSED_VIEW_ID_PREFIXES.some(prefix => view.id.startsWith(prefix)));
+			if (suppressed.length) {
+				viewsRegistry.deregisterViews(suppressed, VIEW_CONTAINER);
+			}
+		};
+
+		// Remove any that are already registered, then keep removing any that register later.
+		deregister(viewsRegistry.getViews(VIEW_CONTAINER));
+		this._register(viewsRegistry.onViewsRegistered(added => {
+			for (const { views, viewContainer } of added) {
+				if (viewContainer === VIEW_CONTAINER) {
+					deregister(views);
+				}
+			}
+		}));
+	}
+}
+// CLAWDIUS-END
+
 const workbenchRegistry = Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench);
 workbenchRegistry.registerWorkbenchContribution(ExtensionsContributions, LifecyclePhase.Restored);
 workbenchRegistry.registerWorkbenchContribution(StatusUpdater, LifecyclePhase.Eventually);
@@ -2114,6 +2159,12 @@ if (isWeb) {
 }
 
 registerWorkbenchContribution2(ExtensionToolsContribution.ID, ExtensionToolsContribution, WorkbenchPhase.AfterRestored);
+
+// CLAWDIUS-BEGIN register the guard (defined above) that hides the upstream MCP / agent-plugin sections.
+// BlockRestore runs before the mcp/chat contribs (AfterRestored) so the subscription is active before
+// they register, and the initial sweep covers anything registered earlier.
+registerWorkbenchContribution2(ClawdiusHideMcpAndAgentPluginViewsContribution.ID, ClawdiusHideMcpAndAgentPluginViewsContribution, WorkbenchPhase.BlockRestore);
+// CLAWDIUS-END
 
 registerAction2(class ExtensionsGallerySignInAction extends Action2 {
 	constructor() {

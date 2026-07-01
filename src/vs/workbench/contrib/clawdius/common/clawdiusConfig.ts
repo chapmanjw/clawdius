@@ -135,6 +135,10 @@ export interface IConfigItem {
 	readonly reveal?: IConfigReveal;
 	/** A brand color (e.g. an agent's frontmatter `color`). */
 	readonly color?: string;
+	/** For an item that a plugin bundles (a plugin's own skill / agent / command / hook), the source plugin's name
+	 *  (e.g. `rutherford`). Absent for a standalone user/project item. Drives the Skills tab's provenance badge and
+	 *  the Plugins tab's per-plugin contents view; a plugin-bundled item is read-only (never deleted from here). */
+	readonly sourcePlugin?: string;
 	/** How this item is backed on disk - drives delete / move-scope. Absent = read-only (e.g. a heading). */
 	readonly backing?: ConfigBacking;
 	/** The file/folder to delete or copy for `File`/`Folder` backing, when it differs from `resource`

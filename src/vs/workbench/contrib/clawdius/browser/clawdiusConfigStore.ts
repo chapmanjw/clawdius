@@ -39,6 +39,32 @@ interface IScopeRoots {
 	readonly folderName?: string;
 }
 
+/** One installed plugin's bundled contents, scanned from its install directory. A plugin ships skills / agents /
+ *  commands / hooks in its own convention dirs (`skills/`, `agents/`, `commands/`, `hooks/hooks.json`). Its skills
+ *  fold into the Global Skills section (so the Skills tab lists them with plugin provenance); the full set hangs off
+ *  the plugin's row as children (the Plugins tab's contents view). */
+interface IPluginContentScan {
+	/** The plugin id (`plugin-name@marketplace`) - matches an installed_plugins.json / enabledPlugins key. */
+	readonly id: string;
+	/** The plugin name (the id up to `@`) - shown as the source on each bundled skill row. */
+	readonly pluginName: string;
+	readonly skills: IConfigItem[];
+	readonly agents: IConfigItem[];
+	readonly commands: IConfigItem[];
+	readonly hooks: IConfigItem[];
+}
+
+/** The install directory of an installed plugin, from its first install record's `installPath` (an absolute fs
+ *  path the CLI wrote, e.g. `<home>/.claude/plugins/cache/<marketplace>/<plugin>/<version>`). undefined when the
+ *  record shape is unexpected. Exported for direct testing. */
+export function firstInstallPath(recs: unknown): string | undefined {
+	if (Array.isArray(recs) && recs.length > 0 && recs[0] && typeof recs[0] === 'object') {
+		const p = (recs[0] as Record<string, unknown>)['installPath'];
+		if (typeof p === 'string' && p.length > 0) { return p; }
+	}
+	return undefined;
+}
+
 /** Extract a flat key/value map from a leading `--- ... ---` YAML frontmatter block (defensive, no deps). */
 function frontMatter(content: string): { readonly fields: Record<string, string>; readonly bodyLine: number } {
 	const m = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*\r?\n?/.exec(content);
@@ -303,6 +329,10 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 	 *  matching one is suppressed (Claude Code won't load it) so the inspector doesn't show it as loaded. */
 	private _claudeMdExcludes: string[] = [];
 
+	/** Installed plugins' bundled contents, scanned once per refresh (installed plugins are global). Consumed by
+	 *  the Global Skills scan (plugin skills fold in with provenance) and the Plugins scan (attached as children). */
+	private _pluginContents: IPluginContentScan[] = [];
+
 	private readonly _watchers = this._register(new DisposableStore());
 	private readonly _refreshScheduler = this._register(new RunOnceScheduler(() => void this.refresh(), 250));
 	/** Coalesces concurrent refreshes: all eight section views call refresh() on first render. */
@@ -361,6 +391,9 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 			this._readCache.clear();
 			const roots = await this.scopeRoots();
 			this._claudeMdExcludes = await this.gatherClaudeMdExcludes(roots);
+			// Scan installed plugins' bundled contents once (plugins are global); the per-scope scan reads this for
+			// the Global Skills section (plugin skills) and the Plugins section (each plugin's contents).
+			this._pluginContents = await this.scanInstalledPluginContents(await this.pathService.userHome());
 			const scopes = await Promise.all(roots.map(r => this.scanScope(r)));
 			this._snapshot = { scopes };
 			this.updateWatchers(roots);
@@ -568,7 +601,104 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 				},
 			});
 		}
+		// Plugin-bundled skills are global (the CLI installs plugins globally), so surface them alongside the user's
+		// own ~/.claude/skills. They carry `sourcePlugin` (the Skills tab shows it as the origin) and are read-only:
+		// no backing / no budget, so they never offer delete/move here and never shift the Context Budget totals.
+		// Appended AFTER the user skills so a name shared with a user skill keeps the user (deletable) item first.
+		if (r.scope === ConfigScope.Global) {
+			for (const p of this._pluginContents) { items.push(...p.skills); }
+		}
 		return items.sort((a, b) => a.label.localeCompare(b.label));
+	}
+
+	/** Scan every installed plugin's bundled contents (skills / agents / commands / hooks) from its install dir.
+	 *  Reads installed_plugins.json for the ids + install paths; a missing / malformed file yields []. Best-effort
+	 *  and bounded to the handful of installed plugins. */
+	private async scanInstalledPluginContents(home: URI): Promise<IPluginContentScan[]> {
+		const installedUri = URI.joinPath(home, '.claude', 'plugins', 'installed_plugins.json');
+		const plugins = (await this.readJsonc<{ plugins?: Record<string, unknown> }>(installedUri))?.plugins ?? {};
+		const scans = await Promise.all(Object.entries(plugins).map(async ([id, recs]): Promise<IPluginContentScan | undefined> => {
+			const installPath = firstInstallPath(recs);
+			if (!installPath) { return undefined; }
+			// Resolve the absolute install path on the SAME provider as home, so a remote (WSL/SSH) window reads the
+			// remote plugin dir rather than a local file: URI (mirrors resolveImportUri's absolute-path handling).
+			let dir: URI;
+			try { dir = home.with({ path: URI.file(installPath).path }); } catch { return undefined; }
+			const pluginName = id.includes('@') ? id.slice(0, id.indexOf('@')) : id;
+			const [skills, agents, commands, hooks] = await Promise.all([
+				this.scanPluginSkills(dir, id, pluginName),
+				this.scanPluginAgents(dir, id, pluginName),
+				this.scanPluginCommands(dir, id, pluginName),
+				this.scanPluginHooks(dir, id, pluginName),
+			]);
+			return { id, pluginName, skills, agents, commands, hooks };
+		}));
+		return scans.filter((s): s is IPluginContentScan => !!s);
+	}
+
+	/** Stable id for a plugin-bundled item; includes the plugin id so a name shared across plugins (or with a user
+	 *  item) never collides. */
+	private pluginItemId(pluginId: string, section: ConfigSection, name: string): string {
+		return `global:plugin:${pluginId}:${section}:${name}`;
+	}
+
+	private async scanPluginSkills(pluginDir: URI, pluginId: string, pluginName: string): Promise<IConfigItem[]> {
+		const folders = (await this.listDir(URI.joinPath(pluginDir, 'skills'))).filter(c => c.isDirectory);
+		const items: IConfigItem[] = [];
+		for (const folder of folders) {
+			const skillMd = URI.joinPath(folder.resource, 'SKILL.md');
+			const content = await this.readText(skillMd);
+			const fm = frontMatter(content ?? '');
+			items.push({
+				id: this.pluginItemId(pluginId, ConfigSection.Skills, folder.name),
+				scope: ConfigScope.Global, section: ConfigSection.Skills,
+				label: fm.fields['name'] || folder.name, description: fm.fields['description'],
+				resource: content !== undefined ? skillMd : folder.resource,
+				sourcePlugin: pluginName, canDelete: false, canMove: false,
+			});
+		}
+		return items.sort((a, b) => a.label.localeCompare(b.label));
+	}
+
+	private async scanPluginAgents(pluginDir: URI, pluginId: string, pluginName: string): Promise<IConfigItem[]> {
+		const files = (await this.listDir(URI.joinPath(pluginDir, 'agents'))).filter(c => !c.isDirectory && c.name.endsWith('.md'));
+		return files
+			.map(f => ({
+				id: this.pluginItemId(pluginId, ConfigSection.Agents, f.name),
+				scope: ConfigScope.Global, section: ConfigSection.Agents,
+				label: f.name.replace(/\.md$/, ''), resource: f.resource,
+				sourcePlugin: pluginName, canDelete: false, canMove: false,
+			}))
+			.sort((a, b) => a.label.localeCompare(b.label));
+	}
+
+	private async scanPluginCommands(pluginDir: URI, pluginId: string, pluginName: string): Promise<IConfigItem[]> {
+		const dir = URI.joinPath(pluginDir, 'commands');
+		const files = await this.walkMarkdown(dir, dir, 0);
+		return files
+			.map(f => ({
+				id: this.pluginItemId(pluginId, ConfigSection.Commands, f.rel),
+				scope: ConfigScope.Global, section: ConfigSection.Commands,
+				label: `/${f.rel.replace(/\.md$/, '').replace(/[\\/]/g, ':')}`, resource: f.resource,
+				sourcePlugin: pluginName, canDelete: false, canMove: false,
+			}))
+			.sort((a, b) => a.label.localeCompare(b.label));
+	}
+
+	private async scanPluginHooks(pluginDir: URI, pluginId: string, pluginName: string): Promise<IConfigItem[]> {
+		const resource = URI.joinPath(pluginDir, 'hooks', 'hooks.json');
+		const json = await this.readJsonc<{ hooks?: Record<string, unknown[]> }>(resource);
+		const out: IConfigItem[] = [];
+		for (const [event, entries] of Object.entries(json?.hooks ?? {})) {
+			const count = Array.isArray(entries) ? entries.length : 0;
+			out.push({
+				id: this.pluginItemId(pluginId, ConfigSection.Hooks, event),
+				scope: ConfigScope.Global, section: ConfigSection.Hooks,
+				label: event, description: count === 1 ? '1 hook' : `${count} hooks`, resource,
+				sourcePlugin: pluginName, canDelete: false, canMove: false,
+			});
+		}
+		return out;
 	}
 
 	private async scanCommands(r: IScopeRoots): Promise<IConfigItem[]> {
@@ -592,14 +722,22 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 		const installed = (await this.readJsonc<{ plugins?: Record<string, unknown> }>(installedUri))?.plugins ?? {};
 		const enabledPlugins = (await this.readJsonc<{ enabledPlugins?: Record<string, unknown> }>(settingsUri))?.enabledPlugins ?? {};
 		const names = new Set<string>([...Object.keys(installed), ...Object.keys(enabledPlugins)]);
-		return [...names].sort().map(name => ({
-			id: this.id(r.key, ConfigSection.Plugins, name),
-			scope: r.scope, section: ConfigSection.Plugins, label: name,
-			// Open the file the row actually comes from: the install registry if installed, else the
-			// settings.json that toggles it (an enabled/disabled-only row has no installed_plugins entry).
-			resource: Object.hasOwn(installed, name) ? installedUri : settingsUri,
-			description: enabledPlugins[name] === false ? 'disabled' : (Object.hasOwn(enabledPlugins, name) ? 'enabled' : 'installed'),
-		}));
+		// Attach each plugin's bundled contents (scanned once this refresh) as children, so the Plugins tab can show
+		// what a plugin ships. The scan is keyed by the same `plugin-name@marketplace` id used here.
+		const contentById = new Map(this._pluginContents.map(p => [p.id, p]));
+		return [...names].sort().map(name => {
+			const content = contentById.get(name);
+			const children = content ? [...content.skills, ...content.agents, ...content.commands, ...content.hooks] : [];
+			return {
+				id: this.id(r.key, ConfigSection.Plugins, name),
+				scope: r.scope, section: ConfigSection.Plugins, label: name,
+				// Open the file the row actually comes from: the install registry if installed, else the
+				// settings.json that toggles it (an enabled/disabled-only row has no installed_plugins entry).
+				resource: Object.hasOwn(installed, name) ? installedUri : settingsUri,
+				description: enabledPlugins[name] === false ? 'disabled' : (Object.hasOwn(enabledPlugins, name) ? 'enabled' : 'installed'),
+				children: children.length > 0 ? children : undefined,
+			};
+		});
 	}
 
 	private async scanMcp(r: IScopeRoots): Promise<IConfigItem[]> {

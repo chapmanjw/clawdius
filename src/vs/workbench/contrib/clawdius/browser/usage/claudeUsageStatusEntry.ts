@@ -19,6 +19,7 @@ import { blockBar } from './claudeUsageCharts.js';
 import { localize } from '../../../../../nls.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import product from '../../../../../platform/product/common/product.js';
+import { registerColor } from '../../../../../platform/theme/common/colorRegistry.js';
 import { IWorkbenchContribution } from '../../../../common/contributions.js';
 import { IPathService } from '../../../../services/path/common/pathService.js';
 import { IStatusbarEntry, IStatusbarEntryAccessor, IStatusbarService, StatusbarAlignment } from '../../../../services/statusbar/browser/statusbar.js';
@@ -39,6 +40,20 @@ const NUL = String.fromCharCode(0);
 
 /** Width (in block characters) of each inline bar in the status-bar label (two bars share the row, so narrow). */
 const STATUS_BAR_CELLS = 6;
+
+// Self-contained colors for the hover popup progress bars (the "Current session" / "Current week" capacity
+// bars). We deliberately do NOT derive the track/fill from --vscode- theme tokens: the old track used
+// statusBarItem.remoteBackground, which third-party themes (e.g. Dracula) paint a light purple nearly identical
+// to the lavender fill, so the fill level became unreadable. Pinning a brand-orange FILL over a neutral-gray
+// TRACK, with explicit dark/light/hcDark/hcLight values, guarantees fill-vs-track contrast on ANY theme. These
+// registrations emit the CSS variables --vscode-clawdius-usageBarFill / --vscode-clawdius-usageBarTrack that
+// media/claudeUsage.css consumes (every registered color becomes a --vscode-<id> variable via colorThemeCss).
+registerColor('clawdius.usageBarFill', {
+	dark: '#D97757', light: '#C15F3C', hcDark: '#FF9E7A', hcLight: '#8A3A1A'
+}, localize('clawdius.usage.barFill', "Fill color of the Claude Code Usage hover progress bars (session / weekly capacity)."));
+registerColor('clawdius.usageBarTrack', {
+	dark: '#4D4D4D', light: '#CDCDCD', hcDark: '#4D4D4D', hcLight: '#CDCDCD'
+}, localize('clawdius.usage.barTrack', "Track (unfilled) color of the Claude Code Usage hover progress bars."));
 
 /** Utilization thresholds for the bar color state. */
 export function utilState(util: number): 'ok' | 'warn' | 'crit' {

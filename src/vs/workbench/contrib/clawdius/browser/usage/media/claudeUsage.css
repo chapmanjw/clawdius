@@ -23,11 +23,15 @@ keeps its own font (.codicon sets font-family !important), so only the bar text 
 	font-family: var(--monaco-monospace-font, "SF Mono", Menlo, Consolas, monospace);
 }
 
+/* Track + fill use SELF-CONTAINED registered colors (clawdius.usageBarTrack / clawdius.usageBarFill, registered
+in claudeUsageStatusEntry.ts), NOT theme palette tokens: on third-party themes the old track token blended into
+the lavender fill and the fill level was unreadable. A neutral-gray track under a brand-orange fill stays legible
+on any theme. The fallbacks are theme-independent too, in case the vars are ever absent. */
 .clawdius-usage-bar {
 	position: relative;
 	height: 5px;
 	border-radius: 3px;
-	background: var(--vscode-statusBarItem-remoteBackground, rgba(127, 127, 127, 0.28));
+	background: var(--vscode-clawdius-usageBarTrack, #4d4d4d);
 	overflow: hidden;
 }
 
@@ -37,7 +41,7 @@ keeps its own font (.codicon sets font-family !important), so only the bar text 
 	top: 0;
 	height: 100%;
 	border-radius: 3px;
-	background: #a78bfa;
+	background: var(--vscode-clawdius-usageBarFill, #d97757);
 	transition: width 120ms ease-out;
 }
 

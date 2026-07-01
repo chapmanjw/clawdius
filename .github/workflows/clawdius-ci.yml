@@ -165,3 +165,28 @@ jobs:
             echo "ok: $t"
           done
           echo "Clawdius feature unit tests passed"
+      - name: Clawdius agent-host node tests (Claude agent + session lifecycle + merge-touched units)
+        # Node (mocha) runner for the Claude agent-host path + the units this fork touches (CLI backend
+        # resolution, the OTEL subprocess-env scrub, the commit changeset-operation removal). Same
+        # silent-green guards as above: `node ... | tee` masks the runner exit code, so the grep on
+        # passing/failing is the real gate - assert the file exists, require >=1 passing and zero failing.
+        run: |
+          for t in \
+            "out/vs/platform/agentHost/test/node/claudeAgent.test.js" \
+            "out/vs/platform/agentHost/test/node/agentService.test.js" \
+            "out/vs/platform/agentHost/test/node/agentHostSessionTitleController.test.js" \
+            "out/vs/platform/agentHost/test/node/historyRecordFixtures.test.js" \
+            "out/vs/platform/agentHost/test/node/claudeSdkOptions.test.js" \
+            "out/vs/platform/agentHost/test/node/clawdiusCliSpawn.test.js" \
+            "out/vs/platform/agentHost/test/node/agentHostChangesetOperationService.test.js" \
+            "out/vs/platform/agentHost/test/node/sessionPermissions.test.js" \
+            "out/vs/platform/agentHost/test/node/claudeMapSessionEvents.test.js" \
+            "out/vs/platform/agentHost/test/node/claudeSubagentResolver.test.js"; do
+            if [ ! -f "$t" ]; then echo "::error::compiled test missing ($t) — transpile path drift"; exit 1; fi
+            log="$(basename "$t").node.log"
+            node test/unit/node/index.js --run "$t" 2>&1 | tee "$log"
+            if ! grep -qE "[1-9][0-9]* passing" "$log"; then echo "::error::no tests ran in $t"; exit 1; fi
+            if grep -qE "[1-9][0-9]* failing" "$log"; then echo "::error::a Clawdius agent-host node test failed in $t"; exit 1; fi
+            echo "ok: $t"
+          done
+          echo "Clawdius agent-host node tests passed"

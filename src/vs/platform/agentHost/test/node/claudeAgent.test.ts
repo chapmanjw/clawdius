@@ -32,6 +32,7 @@ import { InstantiationService } from '../../../instantiation/common/instantiatio
 import { IInstantiationService } from '../../../instantiation/common/instantiation.js';
 import { ILogService, NullLogService } from '../../../log/common/log.js';
 import { IProductService } from '../../../product/common/productService.js';
+import { IClawdiusCliConfigService, projectCliResolution } from '../../../clawdius/common/clawdiusCliConfig.js';
 import { FileService } from '../../../files/common/fileService.js';
 import { IAgentMaterializeSessionEvent, AgentSession, AgentSignal } from '../../common/agentService.js';
 import { AgentFeedbackAttachmentDisplayKind } from '../../common/meta/agentFeedbackAttachments.js';
@@ -539,6 +540,8 @@ function createTestContext(
 		[IAgentHostGitService, createNoopGitService()],
 		[IAgentConfigurationService, configService],
 		[IProductService, overrides?.productService ?? FakeProductService],
+		// CLAWDIUS: the session materializes via IClawdiusCliConfigService.resolveCliBackend(); provide a bundled-default stub.
+		[IClawdiusCliConfigService, { _serviceBrand: undefined, resolveCliBackend: async () => projectCliResolution({}, { nodeCliPathExists: false, wrapperPathExists: false }) }],
 	);
 	const instantiationService: IInstantiationService = disposables.add(new InstantiationService(services));
 	const agent = disposables.add(instantiationService.createInstance(ClaudeAgent));
@@ -1519,6 +1522,7 @@ suite('ClaudeAgent', () => {
 			[IAgentHostGitService, createNoopGitService()],
 			[IAgentConfigurationService, configService],
 			[IProductService, FakeProductService],
+			[IClawdiusCliConfigService, { _serviceBrand: undefined, resolveCliBackend: async () => projectCliResolution({}, { nodeCliPathExists: false, wrapperPathExists: false }) }],
 		);
 		const instantiationService: IInstantiationService = disposables.add(new InstantiationService(services));
 		const agent: ClaudeAgent = disposables.add(instantiationService.createInstance(ClaudeAgent));
@@ -2104,6 +2108,7 @@ suite('ClaudeAgent', () => {
 			[IClaudeAgentSdkService, sdk],
 			[IAgentPluginManager, new FakeAgentPluginManager()],
 			[IProductService, FakeProductService],
+			[IClawdiusCliConfigService, { _serviceBrand: undefined, resolveCliBackend: async () => projectCliResolution({}, { nodeCliPathExists: false, wrapperPathExists: false }) }],
 		);
 		const instantiationService = disposables.add(new InstantiationService(services));
 		const agent = disposables.add(instantiationService.createInstance(ClaudeAgent));
@@ -2173,6 +2178,7 @@ suite('ClaudeAgent', () => {
 			[IClaudeAgentSdkService, sdk],
 			[IAgentPluginManager, new FakeAgentPluginManager()],
 			[IProductService, FakeProductService],
+			[IClawdiusCliConfigService, { _serviceBrand: undefined, resolveCliBackend: async () => projectCliResolution({}, { nodeCliPathExists: false, wrapperPathExists: false }) }],
 		);
 		const instantiationService = disposables.add(new InstantiationService(services));
 		const agent = disposables.add(instantiationService.createInstance(ClaudeAgent));
@@ -2254,6 +2260,7 @@ suite('ClaudeAgent', () => {
 			[IClaudeAgentSdkService, sdk],
 			[IAgentPluginManager, new FakeAgentPluginManager()],
 			[IProductService, FakeProductService],
+			[IClawdiusCliConfigService, { _serviceBrand: undefined, resolveCliBackend: async () => projectCliResolution({}, { nodeCliPathExists: false, wrapperPathExists: false }) }],
 		);
 		const instantiationService = disposables.add(new InstantiationService(services));
 		const agent = disposables.add(instantiationService.createInstance(ClaudeAgent));
@@ -2299,6 +2306,7 @@ suite('ClaudeAgent', () => {
 			[IClaudeAgentSdkService, sdk],
 			[IAgentPluginManager, new FakeAgentPluginManager()],
 			[IProductService, FakeProductService],
+			[IClawdiusCliConfigService, { _serviceBrand: undefined, resolveCliBackend: async () => projectCliResolution({}, { nodeCliPathExists: false, wrapperPathExists: false }) }],
 		);
 		const instantiationService = disposables.add(new InstantiationService(services));
 		const agent = disposables.add(instantiationService.createInstance(ClaudeAgent));
@@ -2557,7 +2565,7 @@ suite('ClaudeAgent', () => {
 			topLevelType: 'object',
 			propertyKeys: ['permissionMode', 'permissions'],
 			permissionModeType: 'string',
-			permissionModeEnum: ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto'],
+			permissionModeEnum: ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'],
 			permissionModeDefault: 'default',
 			permissionsType: 'object',
 			values: { permissionMode: 'default' },
@@ -2616,6 +2624,7 @@ suite('ClaudeAgent', () => {
 			[IAgentHostGitService, createNoopGitService()],
 			[IAgentConfigurationService, configService],
 			[IProductService, FakeProductService],
+			[IClawdiusCliConfigService, { _serviceBrand: undefined, resolveCliBackend: async () => projectCliResolution({}, { nodeCliPathExists: false, wrapperPathExists: false }) }],
 		);
 		const instantiationService: IInstantiationService = disposables.add(new InstantiationService(services));
 		const agent: ClaudeAgent = instantiationService.createInstance(ClaudeAgent);
@@ -2956,6 +2965,7 @@ suite('ClaudeAgentSession (Phase 7 §3.2)', () => {
 		const services = new ServiceCollection(
 			[ILogService, new NullLogService()],
 			[IAgentConfigurationService, fakeConfigService],
+			[IClawdiusCliConfigService, { _serviceBrand: undefined, resolveCliBackend: async () => projectCliResolution({}, { nodeCliPathExists: false, wrapperPathExists: false }) }],
 			[IClaudeAgentSdkService, sdk],
 			[IAgentPluginManager, new FakeAgentPluginManager()],
 			[ISessionDataService, sessionData],
@@ -4216,6 +4226,7 @@ suite('ClaudeAgent — Phase 11 customizations', () => {
 			[IAgentHostGitService, createNoopGitService()],
 			[IAgentConfigurationService, configService],
 			[IProductService, FakeProductService],
+			[IClawdiusCliConfigService, { _serviceBrand: undefined, resolveCliBackend: async () => projectCliResolution({}, { nodeCliPathExists: false, wrapperPathExists: false }) }],
 		);
 		const instantiationService: IInstantiationService = disposables.add(new InstantiationService(services));
 		const agent = disposables.add(instantiationService.createInstance(ClaudeAgent));

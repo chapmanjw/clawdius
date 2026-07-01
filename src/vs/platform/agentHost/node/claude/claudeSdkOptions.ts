@@ -205,6 +205,12 @@ export function buildSubprocessEnv(stripAnthropicApiKey: boolean = true): Record
 		if (key.startsWith('VSCODE_') || key.startsWith('ELECTRON_')) {
 			env[key] = undefined;
 		}
+		// CLAWDIUS-BEGIN zero egress: also strip OTEL_*/COPILOT_OTEL_* so the claude SDK subprocess cannot inherit
+		// an OTEL_EXPORTER_OTLP_ENDPOINT and export traces off-box (pairs with gating AgentHostOTelService in the mains)
+		if (key.startsWith('OTEL_') || key.startsWith('COPILOT_OTEL_')) {
+			env[key] = undefined;
+		}
+		// CLAWDIUS-END
 	}
 	return env;
 }

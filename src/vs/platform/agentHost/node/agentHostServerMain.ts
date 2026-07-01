@@ -56,6 +56,7 @@ import { Schemas } from '../../../base/common/network.js';
 import { ISessionDataService } from '../common/sessionDataService.js';
 import { IDiffComputeService } from '../common/diffComputeService.js';
 import { NodeWorkerDiffComputeService } from './diffComputeService.js';
+import { IEditSurvivalReporterFactory, EditSurvivalReporterFactory } from './shared/editSurvivalReporter.js';
 import { SessionDataService } from './sessionDataService.js';
 import { IWindowsMxcTerminalSandboxRuntime, WindowsMxcTerminalSandboxRuntime } from '../../sandbox/common/terminalSandboxMxcRuntime.js';
 import { ISandboxHelperService } from '../../sandbox/common/sandboxHelperService.js';
@@ -244,6 +245,7 @@ async function main(): Promise<void> {
 		const pluginManager = new AgentPluginManager(URI.file(environmentService.userDataPath), fileService, logService);
 		diServices.set(IAgentPluginManager, pluginManager);
 		diServices.set(IDiffComputeService, disposables.add(new NodeWorkerDiffComputeService(logService)));
+		diServices.set(IEditSurvivalReporterFactory, instantiationService.createInstance(EditSurvivalReporterFactory));
 		diServices.set(IAgentHostTerminalManager, agentService.terminalManager);
 		diServices.set(IAgentConfigurationService, agentService.configurationService);
 		diServices.set(IAgentHostCompletions, agentService.completionsService);
@@ -258,8 +260,12 @@ async function main(): Promise<void> {
 		diServices.set(IAgentSdkDownloader, agentSdkDownloader);
 		const claudeAgentSdkService = instantiationService.createInstance(ClaudeAgentSdkService);
 		diServices.set(IClaudeAgentSdkService, claudeAgentSdkService);
-		const agentHostOTelService = disposables.add(instantiationService.createInstance(AgentHostOTelService));
-		diServices.set(IAgentHostOTelService, agentHostOTelService);
+		// CLAWDIUS-BEGIN no agent-host OTEL exporter in clawdius (zero egress) - see agentHostMain.ts
+		if (product.defaultChatAgent?.entitlementUrl) {
+			const agentHostOTelService = disposables.add(instantiationService.createInstance(AgentHostOTelService));
+			diServices.set(IAgentHostOTelService, agentHostOTelService);
+		}
+		// CLAWDIUS-END
 		// The Claude provider is gated on two things:
 		//  1. The user-facing enable toggle (`chat.agentHost.claudeAgent.enabled`,
 		//     forwarded as an env var by the renderer-side starters; the remote

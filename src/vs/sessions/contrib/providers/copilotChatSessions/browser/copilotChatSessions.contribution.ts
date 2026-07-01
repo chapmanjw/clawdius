@@ -31,6 +31,10 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 			// CLAWDIUS-BEGIN claude branding (drop false copilot-subscription claim)
 			description: localize('sessions.chat.claudeAgent.enabled', "Enable Claude Agent sessions in the Agents window. Start and resume agentic coding sessions powered by Anthropic's Claude."),
 			// CLAWDIUS-END
+			// References the `Claude3PIntegration` policy (owned by `github.copilot.chat.claudeAgent.enabled`) so the Agents window is gated like the editor.
+			policyReference: {
+				name: 'Claude3PIntegration',
+			},
 		},
 	},
 });

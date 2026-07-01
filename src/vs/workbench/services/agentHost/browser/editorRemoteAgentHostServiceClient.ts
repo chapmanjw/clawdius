@@ -18,7 +18,7 @@ import { URI } from '../../../../base/common/uri.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
-import { AgentHostEnabledSettingId, AgentHostIpcChannels, IAgentCreateSessionConfig, IAgentHostInspectInfo, IAgentHostService, IAgentHostSocketInfo, IAgentResolveSessionConfigParams, IAgentSessionConfigCompletionsParams, IAgentSessionMetadata, AuthenticateParams, AuthenticateResult, isAgentHostEnabled, IMcpNotification } from '../../../../platform/agentHost/common/agentService.js';
+import { AgentHostEnabledSettingId, AgentHostIpcChannels, IAgentCreateChatOptions, IAgentCreateSessionConfig, IAgentHostInspectInfo, IAgentHostService, IAgentHostSocketInfo, IAgentResolveSessionConfigParams, IAgentSessionConfigCompletionsParams, IAgentSessionMetadata, AuthenticateParams, AuthenticateResult, isAgentHostEnabled, IMcpNotification } from '../../../../platform/agentHost/common/agentService.js';
 import { AgentHostIpcChannelTransport } from '../../../../platform/agentHost/browser/agentHostIpcChannelTransport.js';
 import { RemoteAgentHostProtocolClient } from '../../../../platform/agentHost/browser/remoteAgentHostProtocolClient.js';
 import type { IClaudeMcpToolDiscoveryResult } from '../../../../platform/agentHost/common/claudeMcpToolDiscovery.js';
@@ -219,6 +219,10 @@ export class EditorRemoteAgentHostServiceClient extends Disposable implements IA
 		return this._protocolClient?.getSubscriptionUnmanaged<ComponentToState[T]>(kind, resource);
 	}
 
+	getInflightSessionCreate(resource: URI): Promise<unknown> | undefined {
+		return this._protocolClient?.getInflightSessionCreate(resource);
+	}
+
 	getActiveSubscriptions(): readonly IActiveSubscriptionInfo[] {
 		return this._protocolClient?.getActiveSubscriptions() ?? [];
 	}
@@ -257,6 +261,14 @@ export class EditorRemoteAgentHostServiceClient extends Disposable implements IA
 
 	disposeSession(session: URI): Promise<void> {
 		return this._requireClient().disposeSession(session);
+	}
+
+	createChat(session: URI, chat: URI, options?: IAgentCreateChatOptions): Promise<void> {
+		return this._requireClient().createChat(session, chat, options);
+	}
+
+	disposeChat(chat: URI): Promise<void> {
+		return this._requireClient().disposeChat(chat);
 	}
 
 	createTerminal(params: CreateTerminalParams): Promise<void> {

@@ -62,6 +62,7 @@ import { ISandboxHelperService } from '../../sandbox/common/sandboxHelperService
 import { SandboxHelperService } from '../../sandbox/node/sandboxHelper.js';
 import { IDiffComputeService } from '../common/diffComputeService.js';
 import { NodeWorkerDiffComputeService } from './diffComputeService.js';
+import { IEditSurvivalReporterFactory, EditSurvivalReporterFactory } from './shared/editSurvivalReporter.js';
 import { AgentHostClientFileSystemProvider } from '../common/agentHostClientFileSystemProvider.js';
 import { AGENT_CLIENT_SCHEME } from '../common/agentClientUri.js';
 import { AGENT_HOST_CLIENT_RESOURCE_CHANNEL, createAgentHostClientResourceConnection } from '../common/agentHostClientResourceChannel.js';
@@ -180,14 +181,22 @@ async function startAgentHost(): Promise<void> {
 		diServices.set(IClaudeUsageStatsService, usageStatsService);
 		server.registerChannel(ClaudeUsageStatsChannelName, ProxyChannel.fromService(usageStatsService, disposables));
 		// CLAWDIUS-END
-		const agentHostOTelService = disposables.add(instantiationService.createInstance(AgentHostOTelService));
-		diServices.set(IAgentHostOTelService, agentHostOTelService);
+		// CLAWDIUS-BEGIN no agent-host OTEL exporter in clawdius (zero egress)
+		// Upstream constructs this unconditionally and it does NOT route through ITelemetryService, so
+		// enableTelemetry:false does not suppress it; a stray OTEL_EXPORTER_OTLP_ENDPOINT env var would
+		// make the first turn POST traces off-box. Gate on Clawdius mode (empty entitlementUrl).
+		if (productService.defaultChatAgent?.entitlementUrl) {
+			const agentHostOTelService = disposables.add(instantiationService.createInstance(AgentHostOTelService));
+			diServices.set(IAgentHostOTelService, agentHostOTelService);
+		}
+		// CLAWDIUS-END
 		agentService = new AgentService(logService, fileService, sessionDataService, productService, gitService, checkpointService, rootConfigResource, telemetryService, fileMonitorService);
 		diServices.set(IAgentService, agentService);
 		const pluginManager = new AgentPluginManager(URI.file(environmentService.userDataPath), fileService, logService);
 		diServices.set(IAgentPluginManager, pluginManager);
 		const diffComputeService = disposables.add(new NodeWorkerDiffComputeService(logService));
 		diServices.set(IDiffComputeService, diffComputeService);
+		diServices.set(IEditSurvivalReporterFactory, instantiationService.createInstance(EditSurvivalReporterFactory));
 
 		diServices.set(IAgentHostTerminalManager, agentService.terminalManager);
 		diServices.set(IAgentConfigurationService, agentService.configurationService);

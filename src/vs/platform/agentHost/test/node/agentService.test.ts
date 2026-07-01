@@ -29,7 +29,7 @@ import { IProductService } from '../../../product/common/productService.js';
 import { AgentService } from '../../node/agentService.js';
 import { MockAgent, ScriptedMockAgent } from './mockAgent.js';
 import { mapSessionEventsToHistoryRecords } from './historyRecordFixtures.js';
-import { type ISessionEvent } from '../../node/copilot/mapSessionEvents.js';
+import { type ISessionEvent } from './copilotTestEvents.js';
 import { createNoopGitService, createSessionDataService } from '../common/sessionTestHelpers.js';
 import { NULL_CHECKPOINT_SERVICE } from '../../common/agentHostCheckpointService.js';
 import { buildSessionChangesetUri, buildUncommittedChangesetUri } from '../../common/changesetUri.js';
@@ -117,7 +117,7 @@ suite('AgentService (node dispatcher)', () => {
 			// Start a turn so there's an active turn to map events to
 			service.dispatchAction(
 				session.toString(),
-				{ type: ActionType.SessionTurnStarted, turnId: 'turn-1', message: { text: 'hello', origin: { kind: MessageKind.User } } },
+				{ type: ActionType.ChatTurnStarted, turnId: 'turn-1', message: { text: 'hello', origin: { kind: MessageKind.User } } },
 				'test-client', 1,
 			);
 
@@ -126,9 +126,9 @@ suite('AgentService (node dispatcher)', () => {
 
 			stubAgent.fireProgress({
 				kind: 'action', session,
-				action: { type: ActionType.SessionResponsePart, turnId: 'turn-1', part: { kind: ResponsePartKind.Markdown, id: 'msg-1', content: 'hello' } },
+				action: { type: ActionType.ChatResponsePart, turnId: 'turn-1', part: { kind: ResponsePartKind.Markdown, id: 'msg-1', content: 'hello' } },
 			});
-			assert.ok(envelopes.some(e => e.action.type === ActionType.SessionResponsePart));
+			assert.ok(envelopes.some(e => e.action.type === ActionType.ChatResponsePart));
 		});
 	});
 
@@ -227,7 +227,7 @@ suite('AgentService (node dispatcher)', () => {
 			svc.dispatchAction(
 				session.toString(),
 				{
-					type: ActionType.SessionTurnStarted,
+					type: ActionType.ChatTurnStarted,
 					turnId: 'turn-1',
 					message: { text: 'hello', origin: { kind: MessageKind.User }, attachments: attachments as never },
 				},
@@ -622,7 +622,7 @@ suite('AgentService (node dispatcher)', () => {
 			// renderer-side caches don't evict the in-flight session.
 			service.dispatchAction(
 				session.toString(),
-				{ type: ActionType.SessionTurnStarted, turnId: 'turn-1', message: { text: 'hello', origin: { kind: MessageKind.User } } },
+				{ type: ActionType.ChatTurnStarted, turnId: 'turn-1', message: { text: 'hello', origin: { kind: MessageKind.User } } },
 				'test-client', 1,
 			);
 			const activeListed = await service.listSessions();
@@ -638,7 +638,7 @@ suite('AgentService (node dispatcher)', () => {
 			// session, reintroducing #321269's sibling eviction bug).
 			service.dispatchAction(
 				session.toString(),
-				{ type: ActionType.SessionTurnComplete, turnId: 'turn-1' },
+				{ type: ActionType.ChatTurnComplete, turnId: 'turn-1' },
 				'test-client', 2,
 			);
 			const stateAfterTurn = service.stateManager.getSessionState(session.toString());
@@ -1001,6 +1001,7 @@ suite('AgentService (node dispatcher)', () => {
 				commitAll: async () => { },
 				hasUpstream: async () => false,
 				pushBranch: async () => { },
+				restore: async () => { },
 				getSessionGitState: async (uri: URI) => { calls.push(uri.fsPath); return gitState; },
 				computeSessionFileDiffs: async () => undefined,
 				showBlob: async () => undefined,
@@ -1094,6 +1095,7 @@ suite('AgentService (node dispatcher)', () => {
 				commitAll: async () => { },
 				hasUpstream: async () => false,
 				pushBranch: async () => { },
+				restore: async () => { },
 				getSessionGitState: async () => undefined,
 				computeSessionFileDiffs: async () => undefined,
 				showBlob: async () => undefined,
@@ -1792,7 +1794,7 @@ suite('AgentService (node dispatcher)', () => {
 			// mid-response.
 			service.dispatchAction(
 				sessionResource.toString(),
-				{ type: ActionType.SessionTurnStarted, turnId: 'turn-1', message: { text: 'hello', origin: { kind: MessageKind.User } } },
+				{ type: ActionType.ChatTurnStarted, turnId: 'turn-1', message: { text: 'hello', origin: { kind: MessageKind.User } } },
 				'client-1', 1,
 			);
 
@@ -2100,12 +2102,12 @@ suite('AgentService (node dispatcher)', () => {
 				service.addSubscriber(sessionResource, 'client-1');
 				service.dispatchAction(
 					sessionResource.toString(),
-					{ type: ActionType.SessionTurnStarted, turnId: 'turn-1', message: { text: 'hello', origin: { kind: MessageKind.User } } },
+					{ type: ActionType.ChatTurnStarted, turnId: 'turn-1', message: { text: 'hello', origin: { kind: MessageKind.User } } },
 					'client-1', 1,
 				);
 				service.dispatchAction(
 					sessionResource.toString(),
-					{ type: ActionType.SessionTurnComplete, turnId: 'turn-1' },
+					{ type: ActionType.ChatTurnComplete, turnId: 'turn-1' },
 					'client-1', 2,
 				);
 

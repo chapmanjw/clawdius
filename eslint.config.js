@@ -377,6 +377,30 @@ export default defineConfig(
 			'local/code-no-in-operator': 'warn',
 		}
 	},
+	// Guard the agent host protocol `_meta` bag: no untyped field access or casts.
+	{
+		files: [
+			'src/vs/platform/agentHost/**/*.ts',
+			'src/vs/workbench/contrib/chat/browser/agentSessions/**/*.ts',
+			'src/vs/workbench/services/agentHost/**/*.ts',
+			'src/vs/sessions/**/*.ts',
+		],
+		ignores: [
+			// Tests assert on the raw `_meta` wire shape on purpose (verifying
+			// producers); routing them through readers would weaken them.
+			'**/test/**',
+			'**/*.test.ts',
+			'**/*.integrationTest.ts',
+			// Codex's own generated app-server protocol (not AHP `_meta`).
+			'src/vs/platform/agentHost/node/codex/protocol/**',
+		],
+		plugins: {
+			'local': pluginLocal,
+		},
+		rules: {
+			'local/code-no-untyped-meta-access': 'warn',
+		}
+	},
 	// Strict no explicit `any`
 	{
 		files: [
@@ -1547,6 +1571,7 @@ export default defineConfig(
 						'console',
 						'cookie',
 						'crypto',
+						'detect-libc',
 						'dns',
 						'events',
 						'fs',
@@ -1675,7 +1700,12 @@ export default defineConfig(
 						'@anthropic-ai/sdk', // used by agentHost for Anthropic API requests
 						'@anthropic-ai/claude-agent-sdk', // used by agentHost for Claude Agent SDK session enumeration / queries
 						'@modelcontextprotocol/sdk/**/*', // used by agentHost for Claude client-tool MCP result types (Phase 10)
-						'zod' // used by agentHost for Claude client-tool MCP input schemas
+						'zod', // used by agentHost for Claude client-tool MCP input schemas
+						// CLAWDIUS: dead-copilot leftover - the orphaned node/copilot/** files upstream added for the
+						// unregistered CopilotAgent still import these. Allow-listed so hygiene passes; slated for removal in
+						// the de-Copilot cleanup (delete node/copilot/** + its tests, drop the @github/copilot* deps).
+						'@github/copilot-sdk',
+						'@github/copilot'
 					]
 				},
 				{

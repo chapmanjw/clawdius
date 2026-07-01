@@ -34,11 +34,10 @@ import { ILogService, NullLogService } from '../../../log/common/log.js';
 import { IProductService } from '../../../product/common/productService.js';
 import { FileService } from '../../../files/common/fileService.js';
 import { IAgentMaterializeSessionEvent, AgentSession, AgentSignal } from '../../common/agentService.js';
-import { AgentFeedbackAttachmentDisplayKind } from '../../common/agentFeedbackAttachments.js';
+import { AgentFeedbackAttachmentDisplayKind } from '../../common/meta/agentFeedbackAttachments.js';
 import { ActionType } from '../../common/state/sessionActions.js';
-import { CustomizationLoadStatus, CustomizationType, MessageAttachmentKind, MessageKind, ResponsePartKind, SessionInputResponseKind, SessionStatus, ToolResultContentType, buildSubagentSessionUri, customizationId, type ClientPluginCustomization, type PluginCustomization } from '../../common/state/sessionState.js';
+import { CustomizationLoadStatus, CustomizationType, MessageAttachmentKind, MessageKind, ResponsePartKind, SessionInputAnswerState, SessionInputAnswerValueKind, SessionInputResponseKind, SessionStatus, ToolCallStatus, ToolResultContentType, buildSubagentSessionUri, customizationId, type ClientPluginCustomization, type PluginCustomization, type SessionConfigState, type SessionInputRequest, type ToolDefinition } from '../../common/state/sessionState.js';
 import { ISessionDataService } from '../../common/sessionDataService.js';
-import { SessionInputAnswerState, SessionInputAnswerValueKind, ToolCallStatus, type SessionConfigState, type SessionInputRequest, type ToolDefinition } from '../../common/state/protocol/state.js';
 import { IAgentHostGitService } from '../../node/agentHostGitService.js';
 import { AgentConfigurationService, IAgentConfigurationService } from '../../node/agentConfigurationService.js';
 import { AgentHostStateManager } from '../../node/agentHostStateManager.js';
@@ -1062,21 +1061,21 @@ suite('ClaudeAgent', () => {
 		const actionSignals = signals.filter(s => s.kind === 'action');
 		const partActions = actionSignals
 			.map((s, i) => ({ s, i }))
-			.filter(({ s }) => s.kind === 'action' && s.action.type === ActionType.SessionResponsePart);
+			.filter(({ s }) => s.kind === 'action' && s.action.type === ActionType.ChatResponsePart);
 		const deltaActions = actionSignals
 			.map((s, i) => ({ s, i }))
-			.filter(({ s }) => s.kind === 'action' && s.action.type === ActionType.SessionDelta);
+			.filter(({ s }) => s.kind === 'action' && s.action.type === ActionType.ChatDelta);
 
 		assert.strictEqual(partActions.length, 1, 'exactly one Markdown response part');
 		assert.strictEqual(deltaActions.length, 2, 'two text deltas');
 
-		const part = partActions[0].s.kind === 'action' && partActions[0].s.action.type === ActionType.SessionResponsePart
+		const part = partActions[0].s.kind === 'action' && partActions[0].s.action.type === ActionType.ChatResponsePart
 			? partActions[0].s.action
 			: undefined;
-		const firstDelta = deltaActions[0].s.kind === 'action' && deltaActions[0].s.action.type === ActionType.SessionDelta
+		const firstDelta = deltaActions[0].s.kind === 'action' && deltaActions[0].s.action.type === ActionType.ChatDelta
 			? deltaActions[0].s.action
 			: undefined;
-		const secondDelta = deltaActions[1].s.kind === 'action' && deltaActions[1].s.action.type === ActionType.SessionDelta
+		const secondDelta = deltaActions[1].s.kind === 'action' && deltaActions[1].s.action.type === ActionType.ChatDelta
 			? deltaActions[1].s.action
 			: undefined;
 
@@ -1130,18 +1129,18 @@ suite('ClaudeAgent', () => {
 		const actionSignals = signals.filter(s => s.kind === 'action');
 		const partActions = actionSignals
 			.map((s, i) => ({ s, i }))
-			.filter(({ s }) => s.kind === 'action' && s.action.type === ActionType.SessionResponsePart);
+			.filter(({ s }) => s.kind === 'action' && s.action.type === ActionType.ChatResponsePart);
 		const reasoningActions = actionSignals
 			.map((s, i) => ({ s, i }))
-			.filter(({ s }) => s.kind === 'action' && s.action.type === ActionType.SessionReasoning);
+			.filter(({ s }) => s.kind === 'action' && s.action.type === ActionType.ChatReasoning);
 
-		const part = partActions[0]?.s.kind === 'action' && partActions[0].s.action.type === ActionType.SessionResponsePart
+		const part = partActions[0]?.s.kind === 'action' && partActions[0].s.action.type === ActionType.ChatResponsePart
 			? partActions[0].s.action
 			: undefined;
-		const firstReasoning = reasoningActions[0]?.s.kind === 'action' && reasoningActions[0].s.action.type === ActionType.SessionReasoning
+		const firstReasoning = reasoningActions[0]?.s.kind === 'action' && reasoningActions[0].s.action.type === ActionType.ChatReasoning
 			? reasoningActions[0].s.action
 			: undefined;
-		const secondReasoning = reasoningActions[1]?.s.kind === 'action' && reasoningActions[1].s.action.type === ActionType.SessionReasoning
+		const secondReasoning = reasoningActions[1]?.s.kind === 'action' && reasoningActions[1].s.action.type === ActionType.ChatReasoning
 			? reasoningActions[1].s.action
 			: undefined;
 
@@ -1208,10 +1207,10 @@ suite('ClaudeAgent', () => {
 		const tail = signals
 			.map(s => s.kind === 'action' ? s.action : undefined)
 			.filter((a): a is NonNullable<typeof a> =>
-				a?.type === ActionType.SessionUsage || a?.type === ActionType.SessionTurnComplete);
+				a?.type === ActionType.ChatUsage || a?.type === ActionType.ChatTurnComplete);
 
-		const usage = tail[0]?.type === ActionType.SessionUsage ? tail[0] : undefined;
-		const complete = tail[1]?.type === ActionType.SessionTurnComplete ? tail[1] : undefined;
+		const usage = tail[0]?.type === ActionType.ChatUsage ? tail[0] : undefined;
+		const complete = tail[1]?.type === ActionType.ChatTurnComplete ? tail[1] : undefined;
 
 		assert.ok(usage, 'first action in tail is SessionUsage');
 		assert.ok(complete, 'second action in tail is SessionTurnComplete');
@@ -1228,8 +1227,8 @@ suite('ClaudeAgent', () => {
 			model: usage.usage.model,
 		}, {
 			tailLength: 2,
-			usageType: ActionType.SessionUsage,
-			completeType: ActionType.SessionTurnComplete,
+			usageType: ActionType.ChatUsage,
+			completeType: ActionType.ChatTurnComplete,
 			usageTurnId: 'turn-1',
 			completeTurnId: 'turn-1',
 			inputTokens: 17,
@@ -1272,15 +1271,15 @@ suite('ClaudeAgent', () => {
 
 		const partActions = signals
 			.map(s => s.kind === 'action' ? s.action : undefined)
-			.filter(a => a?.type === ActionType.SessionResponsePart);
+			.filter(a => a?.type === ActionType.ChatResponsePart);
 		const deltaActions = signals
 			.map(s => s.kind === 'action' ? s.action : undefined)
-			.filter(a => a?.type === ActionType.SessionDelta);
+			.filter(a => a?.type === ActionType.ChatDelta);
 
-		const part0 = partActions[0]?.type === ActionType.SessionResponsePart ? partActions[0] : undefined;
-		const part1 = partActions[1]?.type === ActionType.SessionResponsePart ? partActions[1] : undefined;
-		const delta0 = deltaActions[0]?.type === ActionType.SessionDelta ? deltaActions[0] : undefined;
-		const delta1 = deltaActions[1]?.type === ActionType.SessionDelta ? deltaActions[1] : undefined;
+		const part0 = partActions[0]?.type === ActionType.ChatResponsePart ? partActions[0] : undefined;
+		const part1 = partActions[1]?.type === ActionType.ChatResponsePart ? partActions[1] : undefined;
+		const delta0 = deltaActions[0]?.type === ActionType.ChatDelta ? deltaActions[0] : undefined;
+		const delta1 = deltaActions[1]?.type === ActionType.ChatDelta ? deltaActions[1] : undefined;
 
 		assert.ok(part0 && part1, 'two SessionResponsePart actions present');
 		assert.ok(delta0 && delta1, 'two SessionDelta actions present');
@@ -1334,7 +1333,7 @@ suite('ClaudeAgent', () => {
 
 		const responsePartCount = signals
 			.map(s => s.kind === 'action' ? s.action : undefined)
-			.filter(a => a?.type === ActionType.SessionResponsePart).length;
+			.filter(a => a?.type === ActionType.ChatResponsePart).length;
 
 		assert.deepStrictEqual({
 			responsePartCount,
@@ -1377,12 +1376,12 @@ suite('ClaudeAgent', () => {
 
 		const partActions = signals
 			.map(s => s.kind === 'action' ? s.action : undefined)
-			.filter(a => a?.type === ActionType.SessionResponsePart);
+			.filter(a => a?.type === ActionType.ChatResponsePart);
 		const deltaActions = signals
 			.map(s => s.kind === 'action' ? s.action : undefined)
-			.filter(a => a?.type === ActionType.SessionDelta);
+			.filter(a => a?.type === ActionType.ChatDelta);
 
-		const delta0 = deltaActions[0]?.type === ActionType.SessionDelta ? deltaActions[0] : undefined;
+		const delta0 = deltaActions[0]?.type === ActionType.ChatDelta ? deltaActions[0] : undefined;
 
 		assert.deepStrictEqual({
 			partCount: partActions.length,
@@ -1858,11 +1857,11 @@ suite('ClaudeAgent', () => {
 		await agent.sendMessage(created.session, 'hi', undefined, 'turn-1');
 
 		const deltas = observed.flatMap(s =>
-			s.kind === 'action' && s.action.type === ActionType.SessionDelta
+			s.kind === 'action' && s.action.type === ActionType.ChatDelta
 				? [s.action.content]
 				: []);
 		const turnCompletes = observed.filter(s =>
-			s.kind === 'action' && s.action.type === ActionType.SessionTurnComplete);
+			s.kind === 'action' && s.action.type === ActionType.ChatTurnComplete);
 
 		assert.deepStrictEqual({
 			deltas,
@@ -3263,7 +3262,7 @@ suite('ClaudeAgent (Phase 7 §3.4 — _handleCanUseTool)', () => {
 		ctx.agent.respondToPermissionRequest('toolu_inner_plan', false);
 		await planPromise;
 
-		const askAction = signals.find(s => s.kind === 'action' && s.action.type === ActionType.SessionInputRequested);
+		const askAction = signals.find(s => s.kind === 'action' && s.action.type === ActionType.ChatInputRequested);
 		const planConfirm = signals.find(s => s.kind === 'pending_confirmation' && s.state.toolName === 'ExitPlanMode');
 
 		assert.deepStrictEqual({
@@ -3320,7 +3319,7 @@ suite('ClaudeAgent (Phase 7 §3.5 — INTERACTIVE_CLAUDE_TOOLS)', () => {
 
 		const inputRequests: SessionInputRequest[] = [];
 		disposables.add(ctx.agent.onDidSessionProgress(s => {
-			if (s.kind === 'action' && s.action.type === ActionType.SessionInputRequested) {
+			if (s.kind === 'action' && s.action.type === ActionType.ChatInputRequested) {
 				inputRequests.push(s.action.request);
 			}
 		}));
@@ -4010,7 +4009,7 @@ suite('ClaudeAgent (Phase 9 — runtime mutation surface)', () => {
 
 		// Exactly one SessionTurnComplete fires (the final result), and
 		// steering_consumed fires for the echo.
-		const turnCompletes = signals.filter(s => s.kind === 'action' && s.action.type === ActionType.SessionTurnComplete);
+		const turnCompletes = signals.filter(s => s.kind === 'action' && s.action.type === ActionType.ChatTurnComplete);
 		const consumed = signals.filter(s => s.kind === 'steering_consumed');
 		assert.deepStrictEqual({
 			turnCompleteCount: turnCompletes.length,

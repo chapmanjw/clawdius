@@ -41,6 +41,7 @@ export class NullAgentHostService implements IAgentHostService {
 
 	getSubscription<T extends StateComponents>(_kind: T, _resource: URI, _owner: string): IReference<IAgentSubscription<ComponentToState[T]>> { return notSupported(); }
 	getSubscriptionUnmanaged<T extends StateComponents>(_kind: T, _resource: URI): IAgentSubscription<ComponentToState[T]> | undefined { return undefined; }
+	getInflightSessionCreate(_resource: URI): Promise<unknown> | undefined { return undefined; }
 	getActiveSubscriptions(): readonly IActiveSubscriptionInfo[] { return []; }
 	dispatch(_channel: string, _action: SessionAction | TerminalAction | ClientAnnotationsAction | IRootConfigChangedAction): void { notSupported(); }
 
@@ -57,6 +58,8 @@ export class NullAgentHostService implements IAgentHostService {
 	async discoverMcpServerTools(_serverName: string, _workingDirectoryPath: string): Promise<IClaudeMcpToolDiscoveryResult> { return { status: 'disabled', tools: [], message: 'The Agent Host is not available in this context.' }; }
 	async getUsageStats(_homeDirPath: string): Promise<IClaudeUsageStatsResult> { return { status: 'unavailable', message: 'The Agent Host is not available in this context.' }; }
 	async disposeSession(_session: URI): Promise<void> { }
+	async createChat(_session: URI, _chat: URI): Promise<void> { notSupported(); }
+	async disposeChat(_chat: URI): Promise<void> { }
 	async createTerminal(_params: CreateTerminalParams): Promise<void> { notSupported(); }
 	async disposeTerminal(_terminal: URI): Promise<void> { }
 	async invokeChangesetOperation(_params: InvokeChangesetOperationParams): Promise<InvokeChangesetOperationResult> { return notSupported(); }

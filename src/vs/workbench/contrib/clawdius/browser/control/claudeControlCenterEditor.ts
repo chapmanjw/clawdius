@@ -1116,7 +1116,13 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			append(info, h('.clawdius-control-cap-desc')).textContent = skill.description;
 		}
 		append(row, h('.clawdius-control-spacer'));
-		this.renderSkillStateControl(row, skill.name, current);
+		// A plugin-only skill is read-only: the plugin owns it, and the on/off override is keyed by bare name
+		// (which does not reliably apply to plugin skills), so it is display-only - no toggle. A name that also
+		// has a standalone/user skill, or an override-only key with no backing item, keeps its working toggle.
+		const isPluginOnlySkill = skill.items.length > 0 && skill.items.every(i => !!i.sourcePlugin);
+		if (!isPluginOnlySkill) {
+			this.renderSkillStateControl(row, skill.name, current);
+		}
 		const acts = append(row, h('.clawdius-control-cap-acts'));
 		if (item) {
 			this.iconButton(acts, Codicon.edit, localize('clawdius.control.skills.open', "Open SKILL.md"), () => void this.openSkill(item));

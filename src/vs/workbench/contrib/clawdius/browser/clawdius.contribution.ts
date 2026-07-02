@@ -48,6 +48,7 @@ import { DisableConfirmedLoadsAction, EnableConfirmedLoadsAction } from './clawd
 import { ConfigurationScope, Extensions as ConfigExtensions, IConfigurationRegistry } from '../../../../platform/configuration/common/configurationRegistry.js';
 import { ClawdiusUpdateService, ClawdiusUpdateStartupContribution, IClawdiusUpdateService } from './update/clawdiusUpdateService.js';
 import { CLAWDIUS_DISABLE_ANIMATIONS_SETTING, ClawdiusDisableAnimationsContribution } from './clawdiusDisableAnimations.js';
+import { ClawdiusHiddenSettingsContribution } from './clawdiusHiddenSettings.js';
 
 // Singleton dashboard input round-trips with no state (everything is read live from local files on open).
 class ClaudeUsageDashboardInputSerializer implements IEditorSerializer {
@@ -300,6 +301,13 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	// empty-editor letterpress swaps to its static high-contrast art (see clawdiusDisableAnimations.css). Registered
 	// at BlockRestore so the class is present before the empty editor first paints.
 	registerWorkbenchContribution2(ClawdiusDisableAnimationsContribution.ID, ClawdiusDisableAnimationsContribution, WorkbenchPhase.BlockRestore);
+
+	// Hide the handful of upstream chat/Copilot settings whose only UI surface Clawdius suppresses (the built-in
+	// chat sign-in / setup chrome + the GitHub Copilot CLI entries in the session pickers), so the Settings editor
+	// lists only settings that can actually do something in Clawdius mode. They still work if set in settings.json -
+	// included:false removes them from the Settings UI + schema, not the value. Gated on Clawdius mode by this block,
+	// so a non-Clawdius (entitlementUrl present) build leaves every one of them visible.
+	registerWorkbenchContribution2(ClawdiusHiddenSettingsContribution.ID, ClawdiusHiddenSettingsContribution, WorkbenchPhase.BlockRestore);
 
 	// "Check for Updates" via the GitHub Releases API (notify-and-link only - no auto-download/install). The
 	// service holds the single on-demand GitHub request; the startup contribution is the ONLY automatic trigger

@@ -153,7 +153,8 @@ jobs:
             "out/vs/workbench/contrib/clawdius/test/browser/claudeUsageDashboardView.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/clawdiusConfigActions.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/clawdiusPluginSetup.test.js" \
-            "out/vs/workbench/contrib/clawdius/test/browser/claudeUsageStatusEntry.test.js"; do
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeUsageStatusEntry.test.js" \
+            "out/vs/workbench/contrib/clawdius/test/browser/clawdiusHiddenSettings.test.js"; do
             if [ ! -f "$t" ]; then echo "::error::compiled test missing ($t) — transpile path drift"; exit 1; fi
             log="$(basename "$t").log"
             node test/unit/browser/index.js --run "$t" --browser chromium 2>&1 | tee "$log"

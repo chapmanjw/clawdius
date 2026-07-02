@@ -197,6 +197,8 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 	background-position: center;
 	background-size: contain;
 }
+/* CLAWDIUS: "Disable animations" swaps the usage-dashboard mark to the static rest-pose Clawd (container class set by clawdiusDisableAnimations.ts). */
+.clawdius-disable-animations .clawdius-usage-hero-mark { background-image: url('./clawd-static.svg'); }
 
 .clawdius-usage-hero-text {
 	display: flex;

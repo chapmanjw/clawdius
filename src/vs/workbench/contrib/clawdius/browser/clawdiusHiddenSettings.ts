@@ -8,9 +8,9 @@ import { Registry } from '../../../../platform/registry/common/platform.js';
 import { Extensions as ConfigExtensions, IConfigurationNode, IConfigurationPropertySchema, IConfigurationRegistry } from '../../../../platform/configuration/common/configurationRegistry.js';
 import { IWorkbenchContribution } from '../../../common/contributions.js';
 
-// Clawdius hides a small set of upstream chat/Copilot settings from the Settings editor because the ONLY UI
+// Clawdius hides a small set of upstream chat settings from the Settings editor because the ONLY UI
 // surface that reads each one is a surface Clawdius suppresses (the built-in chat sign-in / setup chrome, and the
-// GitHub Copilot CLI entries in the session pickers). They keep working if a user sets them in settings.json -
+// upstream CLI entries in the session pickers). They keep working if a user sets them in settings.json -
 // `included: false` only removes a property from the Settings-editor list and the settings.json schema, it does
 // not delete the value - but they stop cluttering the UI with toggles that can never do anything in Clawdius mode.
 //
@@ -24,10 +24,10 @@ export const CLAWDIUS_HIDDEN_UPSTREAM_SETTINGS: readonly string[] = [
 	// registerActions() never registers the sign-in title-bar action; and ChatStatusBarEntry early-returns its
 	// constructor before it reads this key. There is no IDE sign-in in Clawdius.
 	'chat.titleBar.signIn.enabled',
-	// The Copilot-setup "growth" nudge shown in the sessions view. Its sole reader is ChatSetupContribution's
+	// The setup "growth" nudge shown in the sessions view. Its sole reader is ChatSetupContribution's
 	// registerGrowthSession(), which never runs once ChatSetupContribution short-circuits in Clawdius mode.
 	'chat.growthNotification.enabled',
-	// Toggle to hide the "Extension Host Copilot CLI" entry from the Agents-window picker. In Clawdius that entry
+	// Toggle to hide the "Extension Host CLI" entry from the Agents-window picker. In Clawdius that entry
 	// is unconditionally absent - copilotChatSessionsProvider._isCopilotCliAvailable() returns false before this
 	// toggle is ever consulted - so the toggle can never change anything.
 	'chat.agents.copilotCli.hideExtensionHost',

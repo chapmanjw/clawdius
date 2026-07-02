@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS hidden-settings unit tests. Verifies the registry mutation that hides the inert upstream chat/Copilot
+// CLAWDIUS hidden-settings unit tests. Verifies the registry mutation that hides the inert upstream chat
 // settings from the Settings editor in Clawdius mode: each still-registered target is DEREGISTERED and then
 // re-ADDED with `included: false` (the registry routes that to the excluded set the Settings editor never shows),
 // and a target that is not registered is skipped. The registry's own routing of `included: false` is upstream
@@ -44,7 +44,7 @@ suite('Clawdius hidden settings', () => {
 
 	ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('every listed key is a chat/Copilot setting (guards against an over-broad list)', () => {
+	test('every listed key is a chat setting (guards against an over-broad list)', () => {
 		assert.ok(CLAWDIUS_HIDDEN_UPSTREAM_SETTINGS.length > 0);
 		for (const key of CLAWDIUS_HIDDEN_UPSTREAM_SETTINGS) {
 			assert.ok(key.startsWith('chat.'), `hidden setting "${key}" is not a chat.* setting`);

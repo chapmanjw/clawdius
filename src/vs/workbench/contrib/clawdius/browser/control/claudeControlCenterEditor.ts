@@ -171,6 +171,8 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	// Skills tab package state (keyed by the skill folder fsPath). Caches are cleared on a config change; the
 	// generation counter bumps on every clear so a slower in-flight read never writes a stale result back.
 	private expandedSkill: string | undefined;
+	/** Plugin names whose skill group is collapsed on the Skills tab (default: expanded). */
+	private readonly collapsedSkillPlugins = new Set<string>();
 	private cacheGeneration = 0;
 	private isPaneDisposed = false;
 	private readonly skillValidations = new Map<string, ISkillValidation>();
@@ -1039,8 +1041,45 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		// Validate every on-disk skill's SKILL.md off the paint path; the batch re-renders once for the badges.
 		const folders = skills.map(s => this.representativeSkillItem(s)?.targetResource).filter((u): u is URI => !!u);
 		void this.ensureSkillValidations(folders);
+		// Standalone skills render flat; plugin-bundled skills are grouped under a collapsible header per plugin.
+		const standalone: ISkillRow[] = [];
+		const byPlugin = new Map<string, ISkillRow[]>();
 		for (const skill of skills) {
+			const pluginOnly = skill.items.length > 0 && skill.items.every(i => !!i.sourcePlugin);
+			if (pluginOnly) {
+				const plugin = this.representativeSkillItem(skill)?.sourcePlugin ?? skill.items[0].sourcePlugin!;
+				const arr = byPlugin.get(plugin);
+				if (arr) { arr.push(skill); } else { byPlugin.set(plugin, [skill]); }
+			} else {
+				standalone.push(skill);
+			}
+		}
+		for (const skill of standalone) {
 			this.renderSkillRow(block, skill, state.overrides[skill.name] ?? 'on');
+		}
+		for (const plugin of [...byPlugin.keys()].sort((a, b) => a.localeCompare(b))) {
+			const group = byPlugin.get(plugin)!;
+			const collapsed = this.collapsedSkillPlugins.has(plugin);
+			const header = append(block, h('.clawdius-control-caprow.clawdius-control-skill-group'));
+			const chevron = this.iconButton(header,
+				collapsed ? Codicon.chevronRight : Codicon.chevronDown,
+				collapsed ? localize('clawdius.control.skills.groupExpand', "Show skills from {0}", plugin) : localize('clawdius.control.skills.groupCollapse', "Hide skills from {0}", plugin),
+				() => this.toggleSkillPluginCollapse(plugin));
+			chevron.classList.add('clawdius-control-skill-chevron');
+			const info = append(header, h('.clawdius-control-cap-info'));
+			const nameEl = append(info, h('.clawdius-control-cap-name'));
+			append(nameEl, h('span')).textContent = plugin;
+			const count = append(nameEl, h('span.clawdius-control-cap-origin'));
+			count.classList.add('muted');
+			count.textContent = group.length === 1
+				? localize('clawdius.control.skills.groupOne', "1 skill")
+				: localize('clawdius.control.skills.groupN', "{0} skills", group.length);
+			if (!collapsed) {
+				const body = append(block, h('.clawdius-control-skill-group-body'));
+				for (const skill of group) {
+					this.renderSkillRow(body, skill, state.overrides[skill.name] ?? 'on');
+				}
+			}
 		}
 	}
 
@@ -1181,6 +1220,13 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		this.expandedSkill = this.expandedSkill === fp ? undefined : fp;
 		this.skillFileForm = undefined;
 		if (this.expandedSkill === fp) { void this.ensureSkillFiles(folder); }
+		this.render();
+	}
+
+	/** Collapse or expand a plugin's skill group on the Skills tab. */
+	private toggleSkillPluginCollapse(plugin: string): void {
+		if (this.collapsedSkillPlugins.has(plugin)) { this.collapsedSkillPlugins.delete(plugin); }
+		else { this.collapsedSkillPlugins.add(plugin); }
 		this.render();
 	}
 

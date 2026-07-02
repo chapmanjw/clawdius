@@ -247,6 +247,8 @@ block titles, brand orange (#d97757) accents, lavender (#a78bfa) highlights, and
 /* Skills package: expand chevron, spec-validation badge, and the expanded file/validation panel */
 .clawdius-control-skill-chevron { padding: 2px 4px; }
 .clawdius-control-skill-chevron-spacer { width: 26px; flex: none; }
+.clawdius-control-skill-group .clawdius-control-cap-name > span:first-child { font-weight: 600; }
+.clawdius-control-skill-group-body { margin-left: 12px; border-left: 1px solid var(--vscode-panel-border, #333); padding-left: 6px; }
 
 .clawdius-control-skill-badge {
 	display: inline-flex; align-items: center; height: 16px; box-sizing: border-box; gap: 4px; flex: none;

@@ -4,7 +4,8 @@ The authoritative record of every in-place edit to an upstream microsoft/vscode 
 should be able to read this and know the entire fork surface area. New files in new directories are
 NOT listed here (they never conflict); only edits to files that exist upstream.
 
-Base: microsoft/vscode `1.125.0` (see `UPSTREAM_VERSION`).
+Base: microsoft/vscode `1.126.0` (see `UPSTREAM_VERSION`). Rebased from `1.125.0`; see the
+"Rebase onto VS Code 1.126.0" section at the end.
 
 ## In-place edits
 
@@ -361,3 +362,59 @@ packaging templates.
 - A Clawdius dmg-background tiff (no background for the no-quality fork until added).
 - arm64, snap, and the whole macOS leg are unproven until a runner pass.
 - The operational signing/cert setup lives in the private docs repo, not here.
+
+## Rebase onto VS Code 1.126.0 (2026-07)
+
+Base moved microsoft/vscode `1.125.0` -> `1.126.0` (`UPSTREAM_VERSION`). `product.json` was byte-identical
+between the two tags, so the branding/privacy overlay carried through untouched; most conflicts were
+mechanical (the already-deleted `extensions/copilot/**` tree, the removed upstream CI). Grouped by kind.
+
+### Agent-host de-Copilot: removed the vendored Copilot SDK type-deps
+- `package.json`, `remote/package.json`, `eslint.config.js`: removed the three `import type`-only Copilot
+  SDK packages the fork no longer uses - `@github/copilot`, `@github/copilot-sdk`, `@vscode/copilot-api` -
+  as dependencies and from the ESLint restricted-import allowlist. They were type-only (no runtime
+  require), so removal is a compile-surface change, not a behavior change.
+- Deleted the now-orphaned agent-host `copilot` directory those type-deps fed. Generic helpers it
+  exported that live agent-host code imported by RELATIVE path were relocated first (a `git grep` on the
+  absolute import path misses `./copilot/` importers). One fixture test was re-expressed against the plain
+  history-record model to drop its Copilot-SDK type import.
+- `package-lock.json` + `remote/package-lock.json` regenerated for the dependency drop, with the `ssh2`
+  `cpu-features` optional stub re-grafted afterward (Windows `npm install` prunes it; a Linux `npm ci`
+  needs it - see `docs/MERGING.md`).
+
+### In-place edits to upstream files
+- `src/vs/platform/agentHost/node/agentHostMain.ts`, `.../agentHostServerMain.ts`: NEW zero-egress gate.
+  1.126 adds an agent-host OpenTelemetry exporter (`AgentHostOTelService`) constructed UNCONDITIONALLY in
+  both the desktop and server agent-host entrypoints, and it does not route through `ITelemetryService`,
+  so `enableTelemetry:false` does not suppress it - a standard `OTEL_EXPORTER_OTLP_ENDPOINT` in the
+  inherited env would make the first Claude turn POST traces (optionally including prompt/response text).
+  Both the `createInstance` and service-set blocks are now gated on a non-empty
+  `defaultChatAgent.entitlementUrl` (Clawdius empties it), mirroring the existing agent-registration gates;
+  the Claude SDK subprocess env scrub also drops `OTEL_*` / `COPILOT_OTEL_*`. | `// CLAWDIUS-BEGIN no agent-host OTEL exporter in clawdius (zero egress)`
+- `src/vs/workbench/contrib/extensions/browser/extensions.contribution.ts`: hide the upstream
+  "MCP Servers" and "Agent Plugins" sections from the Extensions pane in Clawdius mode - Clawdius manages
+  MCP servers and agent plugins in its own Control Center, so the built-in Extensions-viewlet sections are
+  redundant. A `BlockRestore` guard removes them before the mcp/chat contribs (`AfterRestored`) register.
+  | `// CLAWDIUS-BEGIN hide upstream "MCP Servers" and "Agent Plugins" sections from the Extensions pane`
+
+### New Clawdius-mode UX (alpha prep)
+- `src/vs/workbench/contrib/clawdius/browser/clawdiusHiddenSettings.ts` (new) + registration in
+  `clawdius.contribution.ts`: hides a small set of inapplicable upstream chat settings from the Settings
+  editor via an `included:false` re-registration (`chat.titleBar.signIn.enabled`,
+  `chat.growthNotification.enabled`, `chat.agents.copilotCli.hideExtensionHost`,
+  `chat.editor.copilotCli.hideExtensionHost`). Each key's only reader is a surface Clawdius already
+  suppresses, so hiding them removes dead toggles without changing behavior - a value set in
+  `settings.json` is still honored. Clawdius-mode only (empty `entitlementUrl`).
+- `src/vs/workbench/contrib/clawdius/browser/clawdiusDisableAnimations.ts` +
+  `media/clawdiusDisableAnimations.css` (new) + registration: a `clawdius.disableAnimations` boolean that
+  swaps the animated brand art for the static stills - the empty-editor letterpress (via a
+  `clawdius-disable-animations` container class the CSS keys off, applied to the main and every auxiliary
+  window) and the Control Center header mark (`clawd-dance.svg` -> static `clawd.svg`). Pure CSS swap, no
+  reflow.
+- `src/vs/workbench/contrib/clawdius/browser/control/claudeControlCenterEditor.ts`: the Control Center
+  Skills tab now groups plugin-bundled skills under a collapsible per-plugin header (standalone skills
+  still render flat). A plugin-bundled skill is read-only (Open, no Delete or on/off toggle) because the
+  plugin owns it and the name-keyed override does not reliably apply to plugin skills.
+- `src/vs/workbench/contrib/clawdius/browser/usage/media/claudeUsage.css`: usage hover-popup contrast fix -
+  the capacity bar's low-contrast lavender fill made the fill level unreadable; it now uses a neutral-gray
+  track under the brand-orange fill so the filled portion stays legible.

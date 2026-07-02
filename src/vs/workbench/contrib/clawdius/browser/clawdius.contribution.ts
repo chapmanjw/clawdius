@@ -302,8 +302,8 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	// at BlockRestore so the class is present before the empty editor first paints.
 	registerWorkbenchContribution2(ClawdiusDisableAnimationsContribution.ID, ClawdiusDisableAnimationsContribution, WorkbenchPhase.BlockRestore);
 
-	// Hide the handful of upstream chat/Copilot settings whose only UI surface Clawdius suppresses (the built-in
-	// chat sign-in / setup chrome + the GitHub Copilot CLI entries in the session pickers), so the Settings editor
+	// Hide the handful of upstream chat settings whose only UI surface Clawdius suppresses (the built-in
+	// chat sign-in / setup chrome + the CLI entries in the session pickers), so the Settings editor
 	// lists only settings that can actually do something in Clawdius mode. They still work if set in settings.json -
 	// included:false removes them from the Settings UI + schema, not the value. Gated on Clawdius mode by this block,
 	// so a non-Clawdius (entitlementUrl present) build leaves every one of them visible.

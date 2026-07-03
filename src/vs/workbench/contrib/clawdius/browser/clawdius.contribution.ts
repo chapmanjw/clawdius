@@ -32,6 +32,7 @@ import { URI } from '../../../../base/common/uri.js';
 import { ClaudeUsageStatusEntry } from './usage/claudeUsageStatusEntry.js';
 import { ClawdiusPermissionModeStatusEntry, SetPermissionModeAction } from './clawdiusPermissionModeStatusEntry.js';
 import { ClawdiusEffortStatusEntry, SetEffortLevelAction } from './clawdiusEffortStatusEntry.js';
+import { ClawdiusModelStatusEntry, SetModelAction } from './clawdiusModelStatusEntry.js';
 import { ClaudeUsageDashboardEditor } from './usage/claudeUsageDashboardEditor.js';
 import { ClaudeUsageDashboardInput } from './usage/claudeUsageDashboardInput.js';
 import { OPEN_USAGE_DASHBOARD_COMMAND_ID } from './usage/claudeUsageData.js';
@@ -210,6 +211,13 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	// ~/.claude/settings.json (effortLevel + the ultracode flag) - the same file the plugin's chat selector uses.
 	registerWorkbenchContribution2(ClawdiusEffortStatusEntry.ID, ClawdiusEffortStatusEntry, WorkbenchPhase.BlockRestore);
 	registerAction2(SetEffortLevelAction);
+
+	// Model status pill: shows + sets the DEFAULT model for new Claude conversations, backed by the
+	// ~/.claude/settings.json `model` key. The list is a union of local, egress-free sources (the live
+	// agent-host catalog via ILanguageModelsService + the configured/proxied ids in settings.json/env), so a
+	// Bedrock/Vertex/local model shows up; unrecognised ids render name-only. Sits just left of the effort pill.
+	registerWorkbenchContribution2(ClawdiusModelStatusEntry.ID, ClawdiusModelStatusEntry, WorkbenchPhase.BlockRestore);
+	registerAction2(SetModelAction);
 
 	Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
 		EditorPaneDescriptor.create(ClaudeUsageDashboardEditor, ClaudeUsageDashboardEditor.ID, localize('clawdius.usage.dashboardPane', "Claude Code Usage")),

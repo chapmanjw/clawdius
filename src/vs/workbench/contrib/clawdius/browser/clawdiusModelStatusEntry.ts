@@ -70,6 +70,35 @@ const ELLIPSIS = String.fromCharCode(0x2026);
  */
 const CLAWDIUS_MODEL_VENDOR = 'clawdius';
 
+/**
+ * Strip control characters and ANSI SGR text remnants from a model id, then trim. Some writers of
+ * ~/.claude/settings.json (notably a terminal /model flow) can leave formatting junk in the `model` value -
+ * e.g. the literal "[1m" / "[22m" / "[1m]" left behind when an ANSI escape's ESC byte was dropped, or a stray
+ * ESC itself. A model id is a plain token, so cleaning this keeps the pill's DISPLAY and DE-DUPLICATION
+ * honest: "opus[1m]" -> "opus", which then matches the catalog's "opus" instead of rendering a garbled
+ * duplicate marked Current. Real ids (aliases, `claude-*`, Bedrock ARNs, Vertex `projects/.../models/x`,
+ * local names) contain no "[<digits>m]" SGR pattern, so they pass through untouched. The control-char strip
+ * is done with a loop rather than a regex literal to avoid a control-character regex (no-control-regex).
+ */
+export function sanitizeModelId(raw: string): string {
+	let s = '';
+	for (const ch of raw) {
+		if (ch.charCodeAt(0) >= 0x20) {
+			s += ch;
+		}
+	}
+	return s.replace(/\[[0-9;]*m\]?/g, '').trim();
+}
+
+/** Coerce an arbitrary settings value to a cleaned model id, or undefined when absent/blank/junk-only. */
+export function cleanModelId(value: unknown): string | undefined {
+	if (typeof value !== 'string') {
+		return undefined;
+	}
+	const cleaned = sanitizeModelId(value);
+	return cleaned === '' ? undefined : cleaned;
+}
+
 /** A model row offered in the pill/picker. `detail` is a blurb (known families only); undefined otherwise. */
 export interface IModelInfo {
 	/** The value written to `model` and passed as `claude --model` (an alias like `opus`, a full id, or a proxied id). */
@@ -292,9 +321,9 @@ export function envModelIdsFrom(env: unknown): string[] {
 	const rec = env as Record<string, unknown>;
 	const out: string[] = [];
 	for (const key of ['ANTHROPIC_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL']) {
-		const v = rec[key];
-		if (typeof v === 'string' && v.trim() !== '') {
-			out.push(v.trim());
+		const cleaned = cleanModelId(rec[key]);
+		if (cleaned) {
+			out.push(cleaned);
 		}
 	}
 	return out;
@@ -310,7 +339,7 @@ export function parseSettingsState(raw: string | undefined): SettingsReadState {
 		return {
 			kind: 'ok',
 			settings: {
-				model: typeof obj?.model === 'string' && obj.model.trim() !== '' ? obj.model.trim() : undefined,
+				model: cleanModelId(obj?.model),
 				envModelIds: envModelIdsFrom(obj?.env),
 			},
 			needsSeed: false,
@@ -374,11 +403,12 @@ export function readClawdiusCatalog(languageModelsService: ILanguageModelsServic
 	const seen = new Set<string>();
 	for (const identifier of languageModelsService.getLanguageModelIds()) {
 		const md = languageModelsService.lookupLanguageModel(identifier);
-		if (!md || md.vendor !== CLAWDIUS_MODEL_VENDOR || !md.id || seen.has(md.id)) {
+		const id = md ? sanitizeModelId(md.id || '') : '';
+		if (!md || md.vendor !== CLAWDIUS_MODEL_VENDOR || !id || seen.has(id)) {
 			continue;
 		}
-		seen.add(md.id);
-		out.push({ id: md.id, name: md.name || md.id, maxContextWindow: md.maxInputTokens || undefined });
+		seen.add(id);
+		out.push({ id, name: md.name || id, maxContextWindow: md.maxInputTokens || undefined });
 	}
 	return out;
 }

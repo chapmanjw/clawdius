@@ -17,6 +17,7 @@ import {
 	ICatalogModel,
 	IModelWrite,
 	buildModelList,
+	cleanModelId,
 	envModelIdsFrom,
 	modelDisplay,
 	modelPicks,
@@ -24,6 +25,7 @@ import {
 	normalizeFamily,
 	parseSettingsState,
 	planModelEdit,
+	sanitizeModelId,
 	shortModelLabel,
 } from '../../browser/clawdiusModelStatusEntry.js';
 
@@ -117,6 +119,44 @@ suite('Clawdius model pill', () => {
 		assert.deepStrictEqual(envModelIdsFrom({ ANTHROPIC_MODEL: 42 }), []);
 		assert.deepStrictEqual(envModelIdsFrom(undefined), []);
 		assert.deepStrictEqual(envModelIdsFrom('nope'), []);
+	});
+
+	test('sanitizeModelId strips ANSI SGR text remnants + control chars, leaves real ids untouched', () => {
+		// The real corruption seen in the wild: a terminal /model flow left the literal "[1m]" (an ESC-less
+		// bold-code remnant) in the value. It must clean back to the plain alias so it matches the catalog.
+		assert.strictEqual(sanitizeModelId('opus[1m]'), 'opus');
+		assert.strictEqual(sanitizeModelId('sonnet[22m'), 'sonnet');
+		assert.strictEqual(sanitizeModelId('[1mhaiku[22m'), 'haiku');
+		// A stray ESC (U+001B) control byte is stripped too.
+		assert.strictEqual(sanitizeModelId(String.fromCharCode(27) + '[1mopus'), 'opus');
+		// Real ids pass through unchanged - no "[<digits>m]" SGR pattern in any of them.
+		assert.strictEqual(sanitizeModelId('opus'), 'opus');
+		assert.strictEqual(sanitizeModelId('claude-opus-4.7'), 'claude-opus-4.7');
+		assert.strictEqual(sanitizeModelId('arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-x'), 'arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-x');
+		assert.strictEqual(sanitizeModelId('projects/p/locations/l/models/claude'), 'projects/p/locations/l/models/claude');
+		// A bracketed non-SGR token (no trailing "m") is preserved.
+		assert.strictEqual(sanitizeModelId('gpt-4[preview]'), 'gpt-4[preview]');
+	});
+
+	test('cleanModelId: junk-only or blank -> undefined; non-string -> undefined', () => {
+		assert.strictEqual(cleanModelId('opus[1m]'), 'opus');
+		assert.strictEqual(cleanModelId('[1m]'), undefined); // nothing left after cleaning
+		assert.strictEqual(cleanModelId('   '), undefined);
+		assert.strictEqual(cleanModelId(''), undefined);
+		assert.strictEqual(cleanModelId(42), undefined);
+		assert.strictEqual(cleanModelId(undefined), undefined);
+	});
+
+	test('parseSettingsState sanitizes a polluted model value so it de-dupes against the catalog', () => {
+		const st = parseSettingsState('{ "model": "opus[1m]" }');
+		assert.strictEqual(st.kind, 'ok');
+		if (st.kind === 'ok') {
+			assert.strictEqual(st.settings.model, 'opus', 'polluted "opus[1m]" cleaned to "opus"');
+		}
+		// End-to-end: the cleaned current now matches the catalog "opus" -> ONE row, not a garbled duplicate.
+		const list = buildModelList(CATALOG, 'opus', []);
+		assert.strictEqual(list.filter(m => m.id === 'opus').length, 1, 'no duplicate opus row');
+		assert.ok(!list.some(m => m.id.includes('[1m')), 'no garbled id survives into the list');
 	});
 
 	test('parseSettingsState: reads the model key + env-declared ids, classifies seed/invalid', () => {

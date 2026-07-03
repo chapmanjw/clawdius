@@ -78,7 +78,7 @@ jobs:
       - name: Build, package, sign
         shell: pwsh
         run: ./build/release/win32.ps1 -Arch ${{ matrix.arch }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: clawdius-win32-${{ matrix.arch }}
           path: release-artifacts/*
@@ -130,7 +130,7 @@ jobs:
           shopt -s nullglob
           for f in release-artifacts/*.deb; do cloudsmith push deb chapmanjw/clawdius/any-distro/any-version "$f"; done
           for f in release-artifacts/*.rpm; do cloudsmith push rpm chapmanjw/clawdius/any-distro/any-version "$f"; done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: clawdius-linux-${{ matrix.arch }}
           path: release-artifacts/*
@@ -173,7 +173,7 @@ jobs:
           gpgconf --reload gpg-agent || true
       - name: Build + tar REH server
         run: bash ./build/release/reh.sh ${{ matrix.arch }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: clawdius-reh-linux-${{ matrix.arch }}
           path: release-artifacts/*
@@ -228,7 +228,7 @@ jobs:
         with:
           snap: ${{ steps.snapbuild.outputs.snap }}
           release: edge
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: clawdius-snap-${{ matrix.arch }}
           path: release-artifacts/*
@@ -282,7 +282,7 @@ jobs:
           rm -f "$RUNNER_TEMP/cert.p12"
       - name: Build, sign, notarize, package
         run: bash ./build/release/darwin.sh ${{ matrix.arch }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: clawdius-darwin-${{ matrix.arch }}
           path: release-artifacts/*

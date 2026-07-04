@@ -78,6 +78,42 @@ suite('claudeSdkOptions / buildSubprocessEnv', () => {
 
 		assert.strictEqual(env.ELECTRON_RUN_AS_NODE, '1');
 	});
+
+	test('native mode (proxied=false) inherits auth vars + PATH (SDK replace semantics) while still stripping VSCODE_*/ELECTRON_*/NODE_OPTIONS', () => {
+		clearAndSet({
+			VSCODE_PID: '1234',
+			ELECTRON_NO_ATTACH_CONSOLE: '1',
+			NODE_OPTIONS: '--inspect',
+			ANTHROPIC_API_KEY: 'sk-user-key',
+			CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat-user',
+			PATH: '/usr/bin',
+			HOME: '/Users/test',
+		});
+
+		const env = buildSubprocessEnv(false);
+
+		assert.deepStrictEqual({
+			// Inherited so the user's own credentials reach the `claude` subprocess.
+			anthropicKey: env.ANTHROPIC_API_KEY,
+			oauthToken: env.CLAUDE_CODE_OAUTH_TOKEN,
+			path: env.PATH,
+			home: env.HOME,
+			// Still stripped — these break the Electron-node subprocess.
+			vscodePid: env.VSCODE_PID,
+			electronOther: env.ELECTRON_NO_ATTACH_CONSOLE,
+			nodeOptions: env.NODE_OPTIONS,
+			runAsNode: env.ELECTRON_RUN_AS_NODE,
+		}, {
+			anthropicKey: 'sk-user-key',
+			oauthToken: 'sk-ant-oat-user',
+			path: '/usr/bin',
+			home: '/Users/test',
+			vscodePid: undefined,
+			electronOther: undefined,
+			nodeOptions: undefined,
+			runAsNode: '1',
+		});
+	});
 });
 
 suite('claudeSdkOptions / buildOptions plugins projection', () => {

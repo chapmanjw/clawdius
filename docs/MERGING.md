@@ -10,7 +10,7 @@ keeps that tractable.
 - `git rerere` is enabled so conflict resolutions are recorded and replayed on the next merge.
 
 ## Current base
-`UPSTREAM_VERSION` = `1.126.0`, the newest stable upstream tag taken. Bump that file and this doc as
+`UPSTREAM_VERSION` = `1.127.0`, the newest stable upstream tag taken. Bump that file and this doc as
 part of every merge.
 
 ## History and LFS notes
@@ -123,7 +123,77 @@ Two fork invariants drift with upstream and must be re-checked each merge:
 - The zero-egress gate on the agent-host OpenTelemetry exporter. Upstream constructs it unconditionally
   in both the desktop and server agent-host entrypoints; keep it gated on a non-empty
   `defaultChatAgent.entitlementUrl` (Clawdius empties that), and keep scrubbing `OTEL_*` env from the
-  Claude SDK subprocess so an inherited endpoint cannot flip it on at fork time.
+  Claude SDK subprocess so an inherited endpoint cannot flip it on at fork time. Scrub the whole `OTEL_*`
+  prefix, not just the endpoint var: 1.127 added `OTEL_EXPORTER_OTLP_HEADERS/_PROTOCOL`,
+  `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`.
 - Agent-host protocol renames. Upstream periodically renames the agent-host action/part types (for
   example a `Session*` -> `Chat*` sweep) and adds or drops session-provider ids; re-anchor the fork's
   gates and update any stale test expectations rather than treating the rename as a regression.
+
+### New egress surfaces hunt: this is the heart of every merge, not a footnote
+Each upstream drop tends to introduce a NEW automatic off-box surface that must be found and gated/removed.
+The pattern repeats: 1.126 = the auto-constructed agent-host OTEL exporter; 1.127 = automatic GitHub API
+calls. Diff the retained (non-copilot) tree and grep for new network constructs. The 1.127 surfaces and
+their fixes, for reference:
+- `claudeAgent.getProtectedResources()` MUST return `[]`. Upstream added a `return
+  [GITHUB_REPO_PROTECTED_RESOURCE]` branch; keeping `[]` leaves the agent-host token store empty, which
+  transitively closes the new post-turn `attachSessionGitHubPullRequest` -> `api.github.com` lookup and
+  the create-PR/auto-merge changeset op. This is a MERGE hazard (a marked-conflict file), not a missing
+  gate - resolve it wrong and the first turn of any branch-with-PR session POSTs to GitHub.
+- The create-PR / enable-auto-merge changeset operation (`agentHostPullRequestOperation*`): remove
+  entirely (delete the provider/handler, drop the registration) - it is a GitHub write surface.
+- The sessions-window GitHub PR-polling contribution (`sessions/contrib/github/github.contribution`) and
+  the "Allow Remote Connections" tunnel host (`chat/electron-browser/tunnelHost.contribution` +
+  `sessions/contrib/tunnelHost/...`): not registered - comment out their side-effect imports.
+
+### The proxy/transport refactor: the fork is native-only, no proxy module
+`claudeProxyService.ts` is deleted in the fork. When upstream refactors the Claude path (e.g. the 1.127
+proxy-handle -> `ClaudeTransport` sweep), resolve toward the native no-proxy path and keep zero references
+to the deleted module / `@vscode/copilot-api` / `CCAModel` / CAPI pricing. The claude/* files
+(`claudeAgent`, `claudeAgentSession`, `claudeSdkOptions`) + their tests reconcile as ONE unit.
+
+### Codex is stripped; upstream keeps re-introducing it
+The Codex agent and `node/codex/` module are deleted in the fork, but upstream keeps `CodexAgent` /
+`*Codex*` setting-ids in retained agent-host files (mains, starters, `localAgentHostService`,
+`remoteAgentHostProtocolClient`). Recon that recommends "take upstream's Codex block" is wrong - taking it
+references the deleted module and breaks the build. Strip every `*Codex*` symbol; rerere may even pull a
+stray one back into a clean region, so grep the resolved files for `Codex`.
+
+### Typecheck (`compile-check-ts-native`) is the honest post-merge signal
+`node_modules` from the prior build is enough to run `npm run compile-check-ts-native` (native `tsgo`,
+`--noEmit`) without a fresh `npm ci`. Run it after resolving all conflicts: it surfaces every dangling
+reference (a deleted-module import, a stale API call, a renamed method). Expect the bulk of errors in test
+files after a big merge; get production to zero first, then fix or trim the tests.
+
+### The branding-guard catches leaks typecheck cannot
+`extensions/**` compile under their own tsconfigs, so `compile-check-ts-native` (the `src/` project) does
+NOT see them. Upstream regularly ADDS new files under `extensions/copilot/**` (e.g. new model prompts, the
+simulation-workbench harness); those are pure additions, so they are NOT modify/delete conflicts and slip
+into the merge tree unnoticed. `node script/clawdius/branding-guard.ts` is the net: it fails on any
+re-introduced `extensions/copilot`. After a merge, run it and `git rm` the leaked files (they are always
+upstream `discarded`-tier features). Same class: a new `build/lib/test/copilot.test.ts` can arrive testing
+the copilot packaging helpers the fork removed from `build/lib/copilot.ts` — delete it.
+
+### Native-module build on Windows needs the MSVC Spectre libraries
+The fork's native deps (`native-keymap`, `@vscode/windows-registry`, `@vscode/spdlog`, ...) set
+`SpectreMitigation: Spectre` in their `binding.gyp`, so MSBuild fails with `error MSB8040: Spectre-mitigated
+libraries are required` unless the VS toolset has them. A prior working `node_modules` hides this (prebuilt
+binaries); the first fresh `npm ci` after wiping them exposes it. Fix: install the MSVC Spectre-mitigated
+libs component for the toolset node-gyp uses (Individual Components → search "Spectre"; component id is
+`Microsoft.VisualStudio.Component.VC.<toolset>.x86.x64.Spectre`, e.g. `14.51` for VS2026 — the version
+segment is dropped for VS2026). The silent installer CLI (`setup.exe modify --quiet`) exits 1 when the VS
+Installer itself has a pending self-update, so use the GUI. If the libs land on a different VS instance than
+node-gyp auto-selects (it picks the highest build number), point node-gyp at the right MSBuild with
+`export npm_config_msbuild_path=".../<instance>/MSBuild/Current/Bin/amd64/MSBuild.exe"` before `npm ci`.
+
+### `npm install` re-prunes the ssh2 stub; restore the committed lock, don't regenerate
+Recovering from a broken `node_modules` with `npm install` re-prunes the `ssh2/cpu-features` stub from the
+root lock (the same Windows behavior as regen). If the correct lock is already committed, `git checkout HEAD
+-- package-lock.json remote/package-lock.json` to restore it rather than regenerating + re-grafting. `npm ci`
+does not mutate the lock, so it is safe once the lock is right.
+
+### The agent-harness symlink postinstall must be idempotent
+`build/npm/postinstall.ts` `ensureAgentHarnessLink` used `fs.existsSync`, which follows the link and reports
+a DANGLING symlink (e.g. a pre-rename `.claude/CLAUDE.md` -> `copilot-instructions.md`) as absent, then
+EEXISTs on `symlinkSync` during a re-install. It now uses `fs.lstatSync` and replaces a stale/wrong-target
+link so `npm ci` re-installs self-heal.

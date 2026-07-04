@@ -184,6 +184,10 @@ import './contrib/remoteTunnel/electron-browser/remoteTunnel.contribution.js';
 
 // Chat
 import './contrib/chat/electron-browser/chat.contribution.js';
+// CLAWDIUS: the "Allow Remote Connections" tunnel host shares an agent-host session over a
+// Microsoft/GitHub-authenticated tunnel and depends on the IDE account Clawdius removes. Not imported,
+// so its chat-input toggle, actions, and TunnelHostService never register (zero egress, no account).
+// import './contrib/chat/electron-browser/tunnelHost.contribution.js';
 
 // Copilot Voice
 import './contrib/agentsVoice/electron-browser/agentsVoiceNativeCommands.js';

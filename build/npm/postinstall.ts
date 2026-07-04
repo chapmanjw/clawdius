@@ -79,7 +79,7 @@ async function npmInstallAsync(dir: string, opts?: child_process.SpawnOptions): 
 			'docker', 'run',
 			'-e', 'GITHUB_TOKEN',
 			'-v', `${process.env['VSCODE_HOST_MOUNT']}:/root/vscode`,
-			'-v', `${process.env['VSCODE_HOST_MOUNT']}/.build/.netrc:/root/.netrc`,
+			'-v', `${process.env['VSCODE_HOST_MOUNT']}/.build/.gitconfig-distro:/root/.gitconfig`,
 			'-v', `${process.env['VSCODE_NPMRC_PATH']}:/root/.npmrc`,
 			'-w', path.resolve('/root/vscode', dir),
 			process.env['VSCODE_REMOTE_DEPENDENCIES_CONTAINER_NAME'],
@@ -187,8 +187,21 @@ function clearInheritedNpmrcConfig(dir: string, env: NodeJS.ProcessEnv): void {
 }
 
 function ensureAgentHarnessLink(sourceRelativePath: string, linkPath: string): 'existing' | 'junction' | 'symlink' | 'hard link' {
-	if (fs.existsSync(linkPath)) {
-		return 'existing';
+	// Use lstat, not existsSync: existsSync follows the link and reports a DANGLING symlink
+	// (e.g. a pre-rename `.claude/CLAUDE.md` -> `copilot-instructions.md`) as absent, which then
+	// EEXISTs on symlinkSync during a re-install. Detect an existing link by its own stat, keep it
+	// when it already points at the intended relative target, and otherwise replace the stale link
+	// so `npm ci` re-installs self-heal.
+	const existingStat = fs.lstatSync(linkPath, { throwIfNoEntry: false });
+	if (existingStat) {
+		if (existingStat.isSymbolicLink()) {
+			try {
+				if (fs.readlinkSync(linkPath) === sourceRelativePath) {
+					return 'existing';
+				}
+			} catch { /* unreadable link: fall through and replace it */ }
+		}
+		fs.rmSync(linkPath, { force: true, recursive: true });
 	}
 
 	const sourcePath = path.resolve(path.dirname(linkPath), sourceRelativePath);

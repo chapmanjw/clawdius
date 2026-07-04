@@ -22,6 +22,9 @@ import './sessions.common.main.js';
 import './electron-browser/sessions.main.js';
 import '../workbench/electron-browser/desktop.contribution.js';
 
+// Per-session layout controller (desktop / web desktop layout).
+import './contrib/layout/browser/sessions.layout.contribution.js';
+
 //#endregion
 
 
@@ -230,7 +233,8 @@ import './contrib/providers/agentHost/browser/agentHostSkillButtons.js';
 import './contrib/providers/agentHost/electron-browser/agentHost.contribution.js';
 
 // Tunnel Host (allow remote connections to local agent host)
-import './contrib/tunnelHost/electron-browser/tunnelHost.contribution.js';
+// CLAWDIUS: remote-connections tunnel host removed - Microsoft/GitHub-authenticated tunnel, no IDE account.
+// import './contrib/tunnelHost/electron-browser/tunnelHost.contribution.js';
 
 //#endregion
 

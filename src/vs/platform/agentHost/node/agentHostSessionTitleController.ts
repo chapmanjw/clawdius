@@ -5,7 +5,7 @@
 
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { ActionType } from '../common/state/sessionActions.js';
-import { isAhpChatChannel, isDefaultChatUri, type URI as ProtocolURI } from '../common/state/sessionState.js';
+import { isAhpChatChannel, isDefaultChatUri, type Turn, type URI as ProtocolURI } from '../common/state/sessionState.js';
 import { AgentHostStateManager } from './agentHostStateManager.js';
 
 const MAX_TITLE_LENGTH = 200;
@@ -44,7 +44,7 @@ export class AgentHostSessionTitleController extends Disposable {
 		}
 
 		const state = this._stateManager.getSessionState(channel);
-		if (!state || state.turns.length !== 0 || state.summary.title) {
+		if (!state || state.turns.length !== 0 || state.title) {
 			return;
 		}
 
@@ -58,6 +58,14 @@ export class AgentHostSessionTitleController extends Disposable {
 		// Fallback-only titles in Clawdius mode: there is no CAPI utility model to
 		// refine the seeded title from the first turn's fuller context, so this is
 		// a no-op. The Claude SDK's own session summaries supersede it once available.
+	}
+
+	generateForkedTitle(_channel: ProtocolURI, _chatChannel: ProtocolURI | undefined, _turns: readonly Turn[], _fallbackTitle: string, _sourceTitle?: string): void {
+		// Fallback-only titles in Clawdius mode: the caller already applied the
+		// placeholder `Forked: …` title when creating the forked session/chat, and
+		// there is no CAPI utility model to refine it from the inherited
+		// conversation, so this is a no-op. The Claude SDK's own session summaries
+		// supersede it once available.
 	}
 
 	cancelTitleGeneration(_session: ProtocolURI): void {

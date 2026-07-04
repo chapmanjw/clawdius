@@ -18,7 +18,7 @@ import { IEditorService } from '../../../../services/editor/common/editorService
 import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
 import { getCodeEditor } from '../../../../../editor/browser/editorBrowser.js';
 import { IInlineCompletionsService } from '../../../../../editor/browser/services/inlineCompletionsService.js';
-import { IChatSessionsService } from '../../common/chatSessionsService.js';
+
 import { ChatStatusDashboard } from './chatStatusDashboard.js';
 import { mainWindow } from '../../../../../base/browser/window.js';
 import { $ as h, disposableWindowInterval } from '../../../../../base/browser/dom.js';
@@ -118,8 +118,6 @@ export class ChatStatusBarEntry extends Disposable implements IWorkbenchContribu
 	private readonly entryAnchor = h('span');
 	private readonly dashboardTooltip: IStatusbarEntry['tooltip'];
 
-	private runningSessionsCount: number = 0; // CLAWDIUS: default-initialized (the entitlementUrl early-return can skip the constructor assignment)
-
 	private quotaResumeState!: ChatQuotaResumeState; // CLAWDIUS: definite-assignment - the entitlementUrl early-return skips this assignment (and all use of it) in Clawdius mode
 	private readonly quotaResetTimer = this._register(new MutableDisposable());
 	private readonly quotaRefresh = this._register(new MutableDisposable());
@@ -132,7 +130,6 @@ export class ChatStatusBarEntry extends Disposable implements IWorkbenchContribu
 		@IEditorService private readonly editorService: IEditorService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@IInlineCompletionsService private readonly completionsService: IInlineCompletionsService,
-		@IChatSessionsService private readonly chatSessionsService: IChatSessionsService,
 		@IContextKeyService private readonly contextKeyService: IContextKeyService,
 		@IProductService private readonly productService: IProductService,
 		@IStorageService private readonly storageService: IStorageService,
@@ -146,9 +143,6 @@ export class ChatStatusBarEntry extends Disposable implements IWorkbenchContribu
 			return;
 		}
 		// CLAWDIUS-END
-
-		this.runningSessionsCount = this.chatSessionsService.getInProgress().reduce((total, item) => total + item.count, 0);
-
 		this.quotaResumeState = this.readPersistedQuotaResumeState();
 
 		this.dashboardTooltip = {
@@ -206,14 +200,6 @@ export class ChatStatusBarEntry extends Disposable implements IWorkbenchContribu
 		}));
 
 		this._register(this.completionsService.onDidChangeIsSnoozing(() => this.update()));
-
-		this._register(this.chatSessionsService.onDidChangeInProgress(() => {
-			const oldSessionsCount = this.runningSessionsCount;
-			this.runningSessionsCount = this.chatSessionsService.getInProgress().reduce((total, item) => total + item.count, 0);
-			if (this.runningSessionsCount !== oldSessionsCount) {
-				this.update();
-			}
-		}));
 
 		this._register(this.editorService.onDidActiveEditorChange(() => this.onDidActiveEditorChange()));
 
@@ -376,16 +362,6 @@ export class ChatStatusBarEntry extends Disposable implements IWorkbenchContribu
 			if (this.chatEntitlementService.sentiment.disabled || this.chatEntitlementService.sentiment.untrusted) {
 				text = '$(copilot-unavailable)';
 				ariaLabel = localize('copilotDisabledStatus', "Copilot disabled");
-			}
-
-			// Sessions in progress
-			else if (this.runningSessionsCount > 0) {
-				text = '$(copilot-in-progress)';
-				if (this.runningSessionsCount > 1) {
-					ariaLabel = localize('chatSessionsInProgressStatus', "{0} agent sessions in progress", this.runningSessionsCount);
-				} else {
-					ariaLabel = localize('chatSessionInProgressStatus', "1 agent session in progress");
-				}
 			}
 
 			// Signed out — keep showing Sign-in affordance even when BYOK models are present

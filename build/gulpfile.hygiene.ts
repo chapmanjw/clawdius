@@ -6,10 +6,13 @@ import { gulp } from './lib/gulp/facade.ts';
 import es from 'event-stream';
 import path from 'path';
 import fs from 'fs';
+import { fileURLToPath } from 'url';
 import * as task from './lib/gulp/task.ts';
 import { checkCopilotEnginesVersion, checkNoNewJavaScriptFiles, hygiene } from './hygiene.ts';
 
-const dirName = path.dirname(new URL(import.meta.url).pathname);
+// CLAWDIUS: fileURLToPath, not `new URL(import.meta.url).pathname` - the latter yields a leading-slash
+// `/C:/...` on Windows that path.join mangles into `C:\C:\...`, so hygiene ENOENTs on remote/package.json.
+const dirName = path.dirname(fileURLToPath(import.meta.url));
 
 function checkPackageJSON(this: NodeJS.ReadWriteStream, actualPath: string) {
 	const actual = JSON.parse(fs.readFileSync(path.join(dirName, '..', actualPath), 'utf8'));

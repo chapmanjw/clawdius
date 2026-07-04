@@ -25,8 +25,8 @@ suite('AgentHostSessionTitleController', () => {
 			provider: 'claude',
 			title,
 			status: SessionStatus.Idle,
-			createdAt: 1,
-			modifiedAt: 1,
+			createdAt: new Date(1).toISOString(),
+			modifiedAt: new Date(1).toISOString(),
 		};
 	}
 
@@ -56,7 +56,7 @@ suite('AgentHostSessionTitleController', () => {
 
 		assert.deepStrictEqual({
 			titles: titleActions,
-			title: stateManager.getSessionState(session.toString())?.summary.title,
+			title: stateManager.getSessionState(session.toString())?.title,
 		}, {
 			titles: ['Please explain title generation'],
 			title: 'Please explain title generation',
@@ -70,7 +70,7 @@ suite('AgentHostSessionTitleController', () => {
 
 		assert.deepStrictEqual({
 			titles: titleActions,
-			title: stateManager.getSessionState(session.toString())?.summary.title,
+			title: stateManager.getSessionState(session.toString())?.title,
 		}, {
 			titles: [],
 			title: 'Forked: Source title',

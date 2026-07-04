@@ -44,10 +44,11 @@ configurationRegistry.registerConfiguration({
 			default: !isWeb && (!product.defaultChatAgent?.entitlementUrl || product.quality !== 'stable'),
 			// CLAWDIUS-END
 			tags: ['experimental', 'advanced'],
+			experiment: { mode: 'startup' },
 		},
 		'chat.agents.copilotCli.hideExtensionHost': {
 			type: 'boolean',
-			description: nls.localize('chat.agents.copilotCli.hideExtensionHost', "When enabled, hides the Extension Host Copilot CLI entry from the Agents window picker."),
+			markdownDescription: nls.localize('chat.agents.copilotCli.hideExtensionHost', "When enabled, hides the Extension Host Copilot CLI entry from the Agents window picker. Requires `#{0}#`.", AgentHostEnabledSettingId),
 			default: false,
 			tags: ['experimental'],
 			experiment: { mode: 'startup' },

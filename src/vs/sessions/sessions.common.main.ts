@@ -463,17 +463,18 @@ import './contrib/providers/copilotChatSessions/browser/copilotChatSessions.cont
 import './contrib/providers/localChatSessions/browser/localChatSessions.contribution.js';
 import './contrib/sessions/browser/sessions.contribution.js';
 import './services/sessions/browser/sessionsListModelService.js';
+import './services/sessions/browser/sessionGroupsService.js';
+import './services/sessions/browser/sessionSectionOrderService.js';
 import './services/agentHostFilter/browser/agentHostFilterService.js';
 import './contrib/sessions/browser/customizationsToolbar.contribution.js';
 import './contrib/changes/browser/changes.contribution.js';
-// CLAWDIUS-BEGIN ultracode workflows view moved to the MAIN workbench (src/vs/workbench/contrib/clawdius/);
-// the sessions-window pane is intentionally no longer registered here. The old contrib/workflows/** tree has
-// since been deleted from disk.
-// CLAWDIUS-END
-import './contrib/layout/browser/sessionLayout.contribution.js';
+// CLAWDIUS: the ultracode workflows view moved to the MAIN workbench (src/vs/workbench/contrib/clawdius/);
+// the sessions-window pane is intentionally not registered here, and upstream's sessionLayout.contribution
+// was deleted this cycle, so neither import remains.
 import './contrib/codeReview/browser/codeReview.contributions.js';
 import './contrib/files/browser/files.contribution.js';
-import './contrib/github/browser/github.contribution.js';
+// CLAWDIUS: GitHub PR polling + PR/CI actions (api.github.com) not registered - no IDE account, zero egress.
+// import './contrib/github/browser/github.contribution.js';
 import './contrib/applyCommitsToParentRepo/browser/applyChangesToParentRepo.js';
 import './contrib/fileTreeView/browser/fileTreeView.contribution.js'; // view registration disabled; filesystem provider still needed
 import './contrib/configuration/browser/configuration.contribution.js';
@@ -485,6 +486,11 @@ import './contrib/chatDebug/browser/chatDebug.contribution.js';
 import './contrib/workspace/browser/workspace.contribution.js';
 import './contrib/aquarium/browser/aquarium.contribution.js';
 import './contrib/policyBlocked/browser/policyBlocked.contribution.js';
+
+// Onboarding: the engine + spotlight presentation (from the workbench layer) and
+// the Agents window scenario data.
+import '../workbench/contrib/onboarding/browser/onboarding.contribution.js';
+import './contrib/onboardingTours/browser/onboardingTours.contribution.js';
 
 import './services/sessions/browser/sessionsManagementService.js';
 //#endregion

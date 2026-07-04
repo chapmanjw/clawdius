@@ -3,9 +3,10 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { Options, SDKSessionInfo, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { ModelInfo, Options, SDKSessionInfo, SDKUserMessage, WarmQuery } from '@anthropic-ai/claude-agent-sdk';
+import { homedir } from 'os';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { SequencerByKey } from '../../../../base/common/async.js';
+import { raceTimeout, SequencerByKey } from '../../../../base/common/async.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { CancellationError } from '../../../../base/common/errors.js';
 import { Emitter } from '../../../../base/common/event.js';
@@ -40,6 +41,10 @@ import type { IAgentServerToolHost } from '../../common/agentServerTools.js';
 import { resolvePromptToContentBlocks } from './claudePromptResolver.js';
 import { readClaudePermissionMode } from './claudeSessionPermissionMode.js';
 import { ClaudeSessionMetadataStore, IClaudeSessionOverlay } from './claudeSessionMetadataStore.js';
+// CLAWDIUS-BEGIN live model discovery
+import { buildOptions } from './claudeSdkOptions.js';
+import { IClawdiusCliConfigService } from '../../../clawdius/common/clawdiusCliConfig.js';
+// CLAWDIUS-END
 
 // CLAWDIUS-BEGIN static claude catalog
 // Published by _refreshModels in Clawdius mode (empty entitlementUrl). Ids are family aliases that are valid
@@ -50,6 +55,48 @@ const CLAWDIUS_STATIC_CLAUDE_MODELS: readonly Omit<IAgentModelInfo, 'provider'>[
 	{ id: 'sonnet', name: 'Claude Sonnet', maxContextWindow: 1_000_000, supportsVision: true, configSchema: createClaudeThinkingLevelSchema(['low', 'medium', 'high', 'xhigh', 'max']) },
 	{ id: 'haiku', name: 'Claude Haiku', maxContextWindow: 200_000, supportsVision: true, configSchema: createClaudeThinkingLevelSchema(['low', 'medium', 'high', 'xhigh', 'max']) },
 ];
+// CLAWDIUS-END
+
+// CLAWDIUS-BEGIN live model discovery
+// The static catalog above is only a FALLBACK shown instantly at construction. The real, versioned catalog
+// (e.g. "Opus 4.8", "Sonnet 5", "Fable 5", "Haiku 4.5" + descriptions + effort levels) is fetched from the
+// SDK via `Query.supportedModels()` - the SAME source the official Claude Code chat picker uses - and
+// republished once it resolves. This is egress-free: the control request runs over the local subprocess
+// stdio, never a network /models call.
+
+/** Overall wall-clock budget for a model-discovery attempt (startup + supportedModels control request). */
+const DISCOVERY_TIMEOUT_MS = 20_000;
+
+/**
+ * Project the SDK's {@link ModelInfo} onto the agent host's {@link IAgentModelInfo}. `displayName` carries
+ * the versioned name; `description` is stashed in `_meta` for the renderer/pill; `supportedEffortLevels`
+ * (when the model supports effort) builds the thinking-level config schema. `provider` is stamped by the
+ * caller. `ModelInfo` has no context-window field, so `maxContextWindow` is omitted - the description
+ * conveys capability where it matters, and we do not invent a number.
+ */
+function modelInfoToAgentModel(m: ModelInfo): Omit<IAgentModelInfo, 'provider'> {
+	const effortLevels = m.supportsEffort && m.supportedEffortLevels && m.supportedEffortLevels.length > 0
+		? m.supportedEffortLevels
+		: undefined;
+	return {
+		id: m.value,
+		name: m.displayName,
+		supportsVision: true,
+		...(effortLevels ? { configSchema: createClaudeThinkingLevelSchema(effortLevels) } : {}),
+		_meta: { description: m.description },
+	};
+}
+
+/**
+ * A streaming input that yields NO user message: the discovery query only needs the control channel
+ * (`supportedModels()`), never a prompt. It stays suspended (keeping the input stream open so the query
+ * stays live) until `signal` aborts, then returns - ending the stream so the subprocess can close.
+ */
+async function* discoveryInput(signal: AbortSignal): AsyncIterable<SDKUserMessage> {
+	if (!signal.aborted) {
+		await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }));
+	}
+}
 // CLAWDIUS-END
 
 // Single source of truth for narrowing an arbitrary runtime value to
@@ -87,6 +134,11 @@ export class ClaudeAgent extends Disposable implements IAgent {
 
 	private readonly _models = observableValue<readonly IAgentModelInfo[]>(this, []);
 	readonly models: IObservable<readonly IAgentModelInfo[]> = this._models;
+
+	// CLAWDIUS-BEGIN live model discovery
+	/** Aborts an in-flight model-discovery query when the agent disposes. */
+	private readonly _discoveryAbort = new AbortController();
+	// CLAWDIUS-END
 
 	private _serverToolHost: IAgentServerToolHost | undefined;
 
@@ -167,14 +219,20 @@ export class ClaudeAgent extends Disposable implements IAgent {
 		@IInstantiationService private readonly _instantiationService: IInstantiationService,
 		@IAgentPluginManager private readonly _pluginManager: IAgentPluginManager,
 		@IProductService private readonly _productService: IProductService,
+		// CLAWDIUS-BEGIN live model discovery
+		@IClawdiusCliConfigService private readonly _cliConfigService: IClawdiusCliConfigService,
+		// CLAWDIUS-END
 	) {
 		super();
 		this._metadataStore = _instantiationService.createInstance(ClaudeSessionMetadataStore, this.id);
 		// CLAWDIUS-BEGIN static claude catalog
 		// No CAPI /models in Clawdius mode (empty entitlementUrl), so publish the static Claude catalog at
-		// construction; otherwise the model picker would be empty.
+		// construction so the picker is never empty, then asynchronously replace it with the SDK's real
+		// versioned catalog (Query.supportedModels() - see _discoverModels). Discovery is best-effort: any
+		// failure leaves the static family names in place.
 		if (!this._productService.defaultChatAgent?.entitlementUrl) {
 			void this._refreshModels();
+			void this._discoverModels();
 		}
 		// CLAWDIUS-END
 	}
@@ -210,6 +268,84 @@ export class ClaudeAgent extends Disposable implements IAgent {
 		this._models.set(CLAWDIUS_STATIC_CLAUDE_MODELS.map(m => ({ ...m, provider: this.id })), undefined);
 		// CLAWDIUS-END
 	}
+
+	// CLAWDIUS-BEGIN live model discovery
+	/**
+	 * Fetch the REAL model catalog from the SDK - `Query.supportedModels()`, the exact source the official
+	 * Claude Code chat picker uses - and republish {@link models} with versioned display names, descriptions,
+	 * and per-model effort levels. Egress-free: the control request runs over the local subprocess stdio, not
+	 * a network /models call.
+	 *
+	 * Best-effort and fully guarded. The static family catalog is already published, so any failure (not
+	 * signed in, CLI missing, timeout, offline) simply leaves the plain names in place. The whole attempt is
+	 * bounded by {@link DISCOVERY_TIMEOUT_MS} and every subprocess is torn down in `finally`; a racing
+	 * {@link dispose} aborts through {@link _discoveryAbort}. Discovery never runs a tool - it only uses the
+	 * control channel - and its input stream yields no prompt, so nothing is ever sent to the model.
+	 */
+	private async _discoverModels(): Promise<void> {
+		if (this._discoveryAbort.signal.aborted) {
+			return;
+		}
+		// A per-attempt controller chained to agent dispose, so shutdown mid-discovery unwinds startup()/query.
+		const controller = new AbortController();
+		const onAbort = () => controller.abort();
+		this._discoveryAbort.signal.addEventListener('abort', onAbort, { once: true });
+		let warm: WarmQuery | undefined;
+		try {
+			const cliResolution = await this._cliConfigService.resolveCliBackend();
+			if (controller.signal.aborted) {
+				return;
+			}
+			const options = await buildOptions(
+				{
+					sessionId: generateUuid(),
+					workingDirectory: URI.file(homedir()),
+					model: undefined,
+					abortController: controller,
+					permissionMode: 'default',
+					// Discovery never runs a tool; the deny-all stub satisfies the required `canUseTool` type but
+					// is never invoked (no prompt is ever sent).
+					canUseTool: async () => ({ behavior: 'deny', message: 'model discovery: tools disabled', interrupt: true }),
+					isResume: false,
+					mcpServers: undefined,
+					allowedTools: undefined,
+					plugins: undefined,
+					agent: undefined,
+					cliResolution,
+				},
+				() => { /* discovery stderr is not user-facing */ },
+				() => { /* no elicitation during discovery */ },
+			);
+			warm = await this._sdkService.startup({ options, initializeTimeoutMs: DISCOVERY_TIMEOUT_MS });
+			if (controller.signal.aborted) {
+				return;
+			}
+			const query = warm.query(discoveryInput(controller.signal));
+			// Drain the message stream in the background so the query's init progresses (mirrors the plugin's
+			// readSdkMessages()). We never send a prompt, so nothing meaningful arrives; it ends when the warm
+			// query is disposed in `finally`. Fire-and-forget - never awaited (it would block on an idle query).
+			void (async () => { try { for await (const _m of query) { /* ignore */ } } catch { /* torn down */ } })();
+			const models = await raceTimeout(query.supportedModels(), DISCOVERY_TIMEOUT_MS);
+			if (!models || models.length === 0 || this._discoveryAbort.signal.aborted) {
+				return;
+			}
+			this._models.set(models.map(m => ({ ...modelInfoToAgentModel(m), provider: this.id })), undefined);
+			this._logService.info(`[Claude] model discovery published ${models.length} model(s) from the SDK catalog`);
+		} catch (err) {
+			this._logService.info(`[Claude] model discovery failed; keeping the static family catalog: ${err}`);
+		} finally {
+			controller.abort();
+			if (warm) {
+				try {
+					await warm[Symbol.asyncDispose]();
+				} catch {
+					/* ignore dispose error */
+				}
+			}
+			this._discoveryAbort.signal.removeEventListener('abort', onAbort);
+		}
+	}
+	// CLAWDIUS-END
 
 	// #endregion
 

@@ -63,22 +63,22 @@ export const DEFAULT_MODEL = '';
 const ELLIPSIS = String.fromCharCode(0x2026);
 
 /**
- * The vendor id the built-in Claude agent-host language-model provider registers its models under (see
- * agentHostLanguageModelProvider). Kept as a local literal so this fork does not re-introduce an upstream
- * vendor identifier by name; the value matches the chat stack's default vendor and is verified live (the
- * opus/sonnet/haiku catalog resolves under it).
+ * The vendor id the agent-host chat contribution registers the LIVE Claude model catalog under -
+ * `agent-host-${provider}` for provider 'claude' (agentHostChatContribution: `const vendor = sessionType`).
+ * This provider receives the SDK-discovered catalog (real display names, versions, the 1M-context variants,
+ * Fable). The default `clawdius` vendor carries only a stale static fallback list, so we deliberately read
+ * the agent-host vendor to mirror exactly what the plugin's chat picker shows.
  */
-const CLAWDIUS_MODEL_VENDOR = 'clawdius';
+const CLAWDIUS_MODEL_VENDOR = 'agent-host-claude';
 
 /**
- * Strip control characters and ANSI SGR text remnants from a model id, then trim. Some writers of
- * ~/.claude/settings.json (notably a terminal /model flow) can leave formatting junk in the `model` value -
- * e.g. the literal "[1m" / "[22m" / "[1m]" left behind when an ANSI escape's ESC byte was dropped, or a stray
- * ESC itself. A model id is a plain token, so cleaning this keeps the pill's DISPLAY and DE-DUPLICATION
- * honest: "opus[1m]" -> "opus", which then matches the catalog's "opus" instead of rendering a garbled
- * duplicate marked Current. Real ids (aliases, `claude-*`, Bedrock ARNs, Vertex `projects/.../models/x`,
- * local names) contain no "[<digits>m]" SGR pattern, so they pass through untouched. The control-char strip
- * is done with a loop rather than a regex literal to avoid a control-character regex (no-control-regex).
+ * Strip only genuine C0 control characters (e.g. a stray ESC byte) from a model id, then trim. Done with a
+ * loop rather than a regex literal to avoid a control-character regex (no-control-regex).
+ *
+ * IMPORTANT: a trailing "[1m]" is NOT junk - it is a REAL model-id suffix for the 1-million-context variant
+ * (the CLI's own catalog lists `opus[1m]` -> "Opus (1M context)", `sonnet[1m]` -> "Sonnet (1M context)"). So
+ * we must NOT strip "[<digits>m]"; doing so would corrupt a legitimately-selected 1M model into the wrong
+ * (or a non-existent) id. Only unprintable control bytes are removed.
  */
 export function sanitizeModelId(raw: string): string {
 	let s = '';
@@ -87,7 +87,7 @@ export function sanitizeModelId(raw: string): string {
 			s += ch;
 		}
 	}
-	return s.replace(/\[[0-9;]*m\]?/g, '').trim();
+	return s.trim();
 }
 
 /** Coerce an arbitrary settings value to a cleaned model id, or undefined when absent/blank/junk-only. */
@@ -149,58 +149,76 @@ export function normalizeFamily(id: string | undefined): KnownFamily | undefined
 	return KNOWN_FAMILIES.find(f => s === f || s.includes(f));
 }
 
-/** Fallback catalog (used only when the live LM service has not resolved any Clawdius models yet). */
-function fallbackFamilies(): IModelInfo[] {
-	return KNOWN_FAMILIES.map(f => ({ id: f, label: familyLabel(f), detail: familyBlurb(f), maxContextWindow: undefined }));
-}
-
-/** A raw (id, name, contextWindow) triple read from the live catalog, before blurb resolution. */
+/** A model as read from the live SDK catalog: id (value), display name, description, and context window. */
 export interface ICatalogModel {
 	readonly id: string;
 	readonly name: string;
 	readonly maxContextWindow: number | undefined;
+	/** The SDK's own capability description (e.g. "Opus 4.8 with 1M context - Best for ..."), when present. */
+	readonly description: string | undefined;
+}
+
+/** Authored blurb fallback for a known family id - used ONLY when the live catalog gave no description. */
+function blurbFor(id: string): string | undefined {
+	const fam = normalizeFamily(id);
+	return fam ? familyBlurb(fam) : undefined;
 }
 
 /**
- * Build the ordered, de-duplicated model list from the union of local sources. Pure + testable.
- *  - `catalog`     : live agent-host models (vendor clawdius), or [] if unresolved.
- *  - `configured`  : the settings.json `model` value (or DEFAULT_MODEL if unset).
+ * Build the model list. Pure + testable.
+ *  - `catalog`     : the LIVE SDK catalog (real display names, descriptions, 1M variants, Fable), or [] if the
+ *                    agent host has not resolved it yet.
+ *  - `configured`  : the settings.json `model` value ('' if unset).
  *  - `extraEnvIds` : proxied ids from env (ANTHROPIC_MODEL etc.); may be empty.
- * A "Default" row is always first. Catalog rows follow (known families ordered opus/sonnet/haiku first).
- * Any configured/env id not already present is appended as a NAME-ONLY row (no blurb for unknown ids).
+ *
+ * When the live catalog is present we render EXACTLY what it reported, in its own order, with its own
+ * descriptions - so the pill mirrors the plugin's chat picker (which reads the same SDK catalog). The catalog
+ * already includes a "Default (recommended)" entry, so no synthetic Default row is added. Only when the
+ * catalog is empty (agent host still starting) do we fall back to the authored family names + a synthetic
+ * Default. Any configured/env id the catalog did not list is appended name-only (a live blurb if it is a
+ * recognised family, else none - we never invent a description for an unknown/proxied id).
  */
 export function buildModelList(catalog: readonly ICatalogModel[], configured: string, extraEnvIds: readonly string[]): IModelInfo[] {
-	const out: IModelInfo[] = [{ id: DEFAULT_MODEL, label: localize('clawdius.model.default', "Default"), detail: localize('clawdius.model.default.detail', "Let Claude Code pick the model (no explicit default set)."), maxContextWindow: undefined, isDefault: true }];
-	const seen = new Set<string>([DEFAULT_MODEL]);
+	const out: IModelInfo[] = [];
+	const seen = new Set<string>();
 
-	const base: ICatalogModel[] = catalog.length ? [...catalog] : fallbackFamilies().map(m => ({ id: m.id, name: m.label, maxContextWindow: m.maxContextWindow }));
-	// Known families first (in canonical order), then the rest in catalog order.
-	base.sort((a, b) => familyRank(a.id) - familyRank(b.id));
-	for (const m of base) {
-		if (seen.has(m.id)) {
-			continue;
+	if (catalog.length) {
+		for (const m of catalog) {
+			if (seen.has(m.id)) {
+				continue;
+			}
+			seen.add(m.id);
+			out.push({ id: m.id, label: m.name, detail: m.description ?? blurbFor(m.id), maxContextWindow: m.maxContextWindow });
 		}
-		seen.add(m.id);
-		const fam = normalizeFamily(m.id);
-		out.push({ id: m.id, label: m.name, detail: fam ? familyBlurb(fam) : undefined, maxContextWindow: m.maxContextWindow });
+	} else {
+		out.push({ id: DEFAULT_MODEL, label: localize('clawdius.model.default', "Default"), detail: localize('clawdius.model.default.detail', "Let Claude Code pick the model (no explicit default set)."), maxContextWindow: undefined, isDefault: true });
+		seen.add(DEFAULT_MODEL);
+		for (const f of KNOWN_FAMILIES) {
+			seen.add(f);
+			out.push({ id: f, label: familyLabel(f), detail: familyBlurb(f), maxContextWindow: undefined });
+		}
 	}
 
-	// Union the user's configured default + any proxied env ids that the catalog did not already list.
 	for (const id of [configured, ...extraEnvIds]) {
 		if (!id || seen.has(id)) {
 			continue;
 		}
 		seen.add(id);
-		const fam = normalizeFamily(id);
-		out.push({ id, label: id, detail: fam ? familyBlurb(fam) : undefined, maxContextWindow: undefined });
+		out.push({ id, label: id, detail: blurbFor(id), maxContextWindow: undefined });
 	}
 	return out;
 }
 
-/** Canonical ordering weight: opus < sonnet < haiku < everything else, so the picker reads high->low capability. */
-function familyRank(id: string): number {
-	const fam = normalizeFamily(id);
-	return fam ? KNOWN_FAMILIES.indexOf(fam) : KNOWN_FAMILIES.length;
+/**
+ * Resolve the effective current selection for marking. An unset `model` key ('') means the CLI uses its
+ * recommended default, so mark the catalog's "default" row (which the plugin labels "Default (recommended)")
+ * when present. Otherwise the raw configured id is the selection.
+ */
+export function resolveCurrent(current: string, models: readonly IModelInfo[]): string {
+	if (current) {
+		return current;
+	}
+	return models.some(m => m.id === 'default') ? 'default' : current;
 }
 
 /** A short, status-bar-safe label for an id (proxied ARNs/paths can be very long). Full id stays in the tooltip. */
@@ -248,21 +266,22 @@ function appliesNote(): string {
 
 /** Resolve what the pill shows for the persisted `model` value, given the current known list + provider note. */
 export function modelDisplay(current: string, models: readonly IModelInfo[], providerPreset: string | undefined): IModelDisplay {
-	const info = models.find(m => m.id === current) ?? models.find(m => m.isDefault)!;
-	const shortLabel = shortModelLabel(info);
-	const fullName = info.isDefault ? localize('clawdius.model.defaultName', "Default (Claude Code decides)") : info.label;
+	const eff = resolveCurrent(current, models);
+	const info = models.find(m => m.id === eff) ?? models[0];
+	const shortLabel = info ? shortModelLabel(info) : localize('clawdius.model.defaultShort', "Default");
+	const fullName = info ? info.label : localize('clawdius.model.defaultName', "Default");
 	const provider = providerNote(providerPreset);
-	const ctx = info.maxContextWindow ? localize('clawdius.model.ctx', "Context window: {0} tokens.", info.maxContextWindow.toLocaleString()) : undefined;
+	const ctx = info?.maxContextWindow ? localize('clawdius.model.ctx', "Context window: {0} tokens.", info.maxContextWindow.toLocaleString()) : undefined;
 	const parts = [
 		localize('clawdius.model.tooltip.head', "**Default model** for new Claude conversations: **{0}**", fullName),
-		info.detail,
+		info?.detail,
 		ctx,
 		provider,
 		appliesNote(),
 		localize('clawdius.model.tooltip.click', "Click to change."),
 	].filter((p): p is string => !!p);
 	return {
-		current,
+		current: eff,
 		text: `$(sparkle) ${shortLabel}`,
 		ariaLabel: localize('clawdius.model.aria', "Claude default model: {0}", fullName),
 		tooltip: parts.join('\n\n'),
@@ -275,11 +294,12 @@ export interface IModelPick extends IQuickPickItem {
 
 /** The quick-pick items. The current selection is marked. `description` carries the id for non-default rows. */
 export function modelPicks(models: readonly IModelInfo[], current: string): IModelPick[] {
+	const eff = resolveCurrent(current, models);
 	return models.map(m => ({
 		label: m.isDefault ? m.label : shortModelLabel(m),
 		detail: m.detail,
 		// description carries the raw id (load-bearing for proxied models) + "Current" marker when selected.
-		description: m.id === current
+		description: m.id === eff
 			? (m.isDefault ? localize('clawdius.model.current', "Current") : localize('clawdius.model.currentId', "{0} - Current", m.id))
 			: (m.isDefault ? undefined : m.id),
 		id: m.id,
@@ -397,7 +417,8 @@ export function planModelEdit(
 	return { action: 'write', seed: writeState.needsSeed, writes: modelWrites(chosen.id) };
 }
 
-/** Read the live agent-host model catalog (vendor 'clawdius') from the renderer LM service. De-duped by id. */
+/** Read the LIVE agent-host model catalog (vendor {@link CLAWDIUS_MODEL_VENDOR}) from the renderer LM service.
+ * Carries the SDK display name, description (metadata.detail), and context window. De-duped by id. */
 export function readClawdiusCatalog(languageModelsService: ILanguageModelsService): ICatalogModel[] {
 	const out: ICatalogModel[] = [];
 	const seen = new Set<string>();
@@ -408,7 +429,12 @@ export function readClawdiusCatalog(languageModelsService: ILanguageModelsServic
 			continue;
 		}
 		seen.add(id);
-		out.push({ id, name: md.name || id, maxContextWindow: md.maxInputTokens || undefined });
+		out.push({
+			id,
+			name: md.name || id,
+			maxContextWindow: md.maxInputTokens || undefined,
+			description: typeof md.detail === 'string' && md.detail.trim() !== '' ? md.detail : undefined,
+		});
 	}
 	return out;
 }
@@ -462,9 +488,11 @@ export class SetModelAction extends Action2 {
 		const catalog = readClawdiusCatalog(languageModelsService);
 		const extraEnvIds = [...configEnvModelIds(configurationService), ...state.settings.envModelIds];
 		const models = buildModelList(catalog, current, extraEnvIds);
+		// An unset `model` resolves to the catalog's "default" row; highlight + no-op against that effective id.
+		const eff = resolveCurrent(current, models);
 
 		const basePicks = modelPicks(models, current);
-		const activeItem = basePicks.find(p => p.id === current);
+		const activeItem = basePicks.find(p => p.id === eff);
 		const picks: QuickPickInput<IModelPick>[] = [
 			...basePicks,
 			{ type: 'separator', label: localize('clawdius.model.reloadNote', "Changing the default model reloads the open Claude chat to apply it.") },
@@ -477,8 +505,8 @@ export class SetModelAction extends Action2 {
 			activeItem,
 		});
 		// Re-classify right before writing: the file may have appeared or changed during the pick.
-		const writeState = (chosen && chosen.id !== current) ? await readSettingsState(fileService, settingsUri) : undefined;
-		const plan = planModelEdit(state, chosen, current, writeState);
+		const writeState = (chosen && chosen.id !== eff) ? await readSettingsState(fileService, settingsUri) : undefined;
+		const plan = planModelEdit(state, chosen, eff, writeState);
 		switch (plan.action) {
 			case 'invalid':
 				notifyInvalid();

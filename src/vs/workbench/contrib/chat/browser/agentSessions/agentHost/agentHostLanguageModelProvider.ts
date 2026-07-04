@@ -7,7 +7,7 @@ import { CancellationToken } from '../../../../../../base/common/cancellation.js
 import { Emitter } from '../../../../../../base/common/event.js';
 import { Disposable } from '../../../../../../base/common/lifecycle.js';
 import { ConfigSchema, SessionModelInfo } from '../../../../../../platform/agentHost/common/state/sessionState.js';
-import { readAgentModelPricingMeta } from '../../../../../../platform/agentHost/common/agentModelPricing.js';
+import { readAgentModelDescriptionMeta, readAgentModelPricingMeta } from '../../../../../../platform/agentHost/common/agentModelPricing.js';
 import { nullExtensionDescription } from '../../../../../services/extensions/common/extensions.js';
 import { ILanguageModelChatMetadataAndIdentifier, ILanguageModelChatProvider, ILanguageModelConfigurationSchema } from '../../../common/languageModels.js';
 
@@ -68,6 +68,9 @@ export class AgentHostLanguageModelProvider extends Disposable implements ILangu
 					metadata: {
 						extension: nullExtensionDescription.identifier,
 						name: m.name,
+						// CLAWDIUS: surface the SDK model description (e.g. "Opus 4.8 with 1M context - Best for
+						// everyday, complex tasks") carried on _meta so the native model picker matches the plugin.
+						detail: readAgentModelDescriptionMeta(m),
 						id: m.id,
 						vendor: this._vendor,
 						version: '1.0',

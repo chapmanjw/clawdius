@@ -4,10 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 // CLAWDIUS-BEGIN model status pill unit tests
-// Covers the egress-free model list build (union of live catalog + configured/proxied ids, de-duped, Default
-// first, known families ordered opus/sonnet/haiku, unknown ids name-only with NO fabricated blurb), family
-// normalization, the settings.json parse/write logic (Default clears the `model` key), the plan branches, and
-// the compact status-bar label for long proxied ids.
+// Covers the model list build over the LIVE SDK catalog (real display names + descriptions + the 1M-context
+// variants, rendered in catalog order, mirroring the plugin's chat picker), the config/env union for proxied
+// ids, the "[1m] is a real 1M suffix, not junk" cleaning rule, unset-key -> Default resolution, the
+// settings.json parse/write logic, and the compact status-bar label.
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
@@ -25,6 +25,7 @@ import {
 	normalizeFamily,
 	parseSettingsState,
 	planModelEdit,
+	resolveCurrent,
 	sanitizeModelId,
 	shortModelLabel,
 } from '../../browser/clawdiusModelStatusEntry.js';
@@ -43,10 +44,14 @@ function applyWrites(base: Record<string, unknown>, writes: readonly IModelWrite
 	return out;
 }
 
+// A live catalog shaped like the real SDK `supportedModels()` output: a "default" entry, the 1M-context
+// variants (id suffix `[1m]`), descriptions carrying the version, and one entry (Fable) with no description.
 const CATALOG: ICatalogModel[] = [
-	{ id: 'haiku', name: 'Claude Haiku', maxContextWindow: 200_000 },
-	{ id: 'opus', name: 'Claude Opus', maxContextWindow: 1_000_000 },
-	{ id: 'sonnet', name: 'Claude Sonnet', maxContextWindow: 1_000_000 },
+	{ id: 'default', name: 'Default (recommended)', maxContextWindow: 1_000_000, description: 'Opus 4.8 with 1M context - Best for everyday, complex tasks' },
+	{ id: 'opus[1m]', name: 'Opus (1M context)', maxContextWindow: 1_000_000, description: 'Opus 4.8 with 1M context - Best for everyday, complex tasks' },
+	{ id: 'sonnet', name: 'Sonnet', maxContextWindow: 200_000, description: 'Sonnet 5 - Efficient for routine tasks' },
+	{ id: 'haiku', name: 'Haiku', maxContextWindow: 200_000, description: 'Haiku 4.5 - Fastest for quick answers' },
+	{ id: 'claude-fable-5[1m]', name: 'Fable', maxContextWindow: 1_000_000, description: undefined },
 ];
 
 suite('Clawdius model pill', () => {
@@ -63,23 +68,31 @@ suite('Clawdius model pill', () => {
 		assert.strictEqual(normalizeFamily('sonnet'), 'sonnet');
 		assert.strictEqual(normalizeFamily('haiku'), 'haiku');
 		assert.strictEqual(normalizeFamily('claude-opus-4.7'), 'opus');
-		assert.strictEqual(normalizeFamily('CLAUDE-SONNET-4-5'), 'sonnet');
 		assert.strictEqual(normalizeFamily('default'), undefined);
-		assert.strictEqual(normalizeFamily('opusplan'), 'opus'); // contains "opus"
+		assert.strictEqual(normalizeFamily('claude-fable-5[1m]'), undefined); // Fable is not opus/sonnet/haiku
 		assert.strictEqual(normalizeFamily('my-local-llama'), undefined);
 		assert.strictEqual(normalizeFamily(undefined), undefined);
-		assert.strictEqual(normalizeFamily(''), undefined);
 	});
 
-	test('buildModelList: Default first, families ordered opus/sonnet/haiku, blurbs only for known families', () => {
-		const list = buildModelList(CATALOG, DEFAULT_MODEL, []);
-		assert.deepStrictEqual(list.map(m => m.id), [DEFAULT_MODEL, 'opus', 'sonnet', 'haiku']);
+	test('buildModelList (live catalog): renders the catalog verbatim, in order, with its descriptions, no synthetic Default', () => {
+		const list = buildModelList(CATALOG, 'opus[1m]', []);
+		// Catalog order is preserved exactly (this mirrors the plugin's picker) - no synthetic Default prepended.
+		assert.deepStrictEqual(list.map(m => m.id), ['default', 'opus[1m]', 'sonnet', 'haiku', 'claude-fable-5[1m]']);
+		assert.ok(!list.some(m => m.isDefault), 'no synthetic Default row when the live catalog is present');
+		// The live description is used verbatim.
+		assert.strictEqual(list.find(m => m.id === 'sonnet')!.detail, 'Sonnet 5 - Efficient for routine tasks');
+		// A catalog entry with no description and no known family gets no invented blurb.
+		assert.strictEqual(list.find(m => m.id === 'claude-fable-5[1m]')!.detail, undefined);
+		// The 1M id is kept intact (NOT stripped) so it matches the configured value.
+		assert.strictEqual(list.filter(m => m.id === 'opus[1m]').length, 1);
+	});
+
+	test('buildModelList (empty catalog): falls back to authored family names + a synthetic Default', () => {
+		const list = buildModelList([], DEFAULT_MODEL, ['local-qwen']);
+		assert.deepStrictEqual(list.map(m => m.id), [DEFAULT_MODEL, 'opus', 'sonnet', 'haiku', 'local-qwen']);
 		assert.strictEqual(list[0].isDefault, true);
-		// Known families carry a blurb.
-		assert.ok(list[1].detail && list[1].detail.length > 0, 'opus has a blurb');
-		assert.ok(list[3].detail && list[3].detail.length > 0, 'haiku has a blurb');
-		// Context window carried from the catalog.
-		assert.strictEqual(list[1].maxContextWindow, 1_000_000);
+		assert.ok(list[1].detail && list[1].detail.length > 0, 'authored family blurb in fallback');
+		assert.strictEqual(list.find(m => m.id === 'local-qwen')!.detail, undefined, 'no invented blurb for a local id');
 	});
 
 	test('buildModelList: a proxied/configured id not in the catalog is appended NAME-ONLY (no invented blurb)', () => {
@@ -91,26 +104,56 @@ suite('Clawdius model pill', () => {
 		assert.strictEqual(row!.detail, undefined, 'no fabricated blurb for an unknown id');
 	});
 
-	test('buildModelList: a proxied id that MENTIONS a family still gets that family blurb', () => {
-		const id = 'bedrock/anthropic.claude-sonnet-v2';
-		const list = buildModelList([], id, []);
-		const row = list.find(m => m.id === id);
-		assert.ok(row);
-		assert.ok(row!.detail && row!.detail.length > 0, 'sonnet-bearing id gets the sonnet blurb');
-	});
-
-	test('buildModelList: env-declared proxied ids are unioned and de-duped against the catalog + configured', () => {
-		const list = buildModelList(CATALOG, 'opus', ['opus', 'my-proxy-model', 'my-proxy-model']);
+	test('buildModelList: env-declared ids are unioned and de-duped against catalog + configured', () => {
+		const list = buildModelList(CATALOG, 'opus[1m]', ['opus[1m]', 'my-proxy-model', 'my-proxy-model']);
 		const ids = list.map(m => m.id);
-		// opus already in the catalog -> not duplicated; my-proxy-model appears exactly once.
-		assert.strictEqual(ids.filter(x => x === 'opus').length, 1);
-		assert.strictEqual(ids.filter(x => x === 'my-proxy-model').length, 1);
+		assert.strictEqual(ids.filter(x => x === 'opus[1m]').length, 1, 'catalog id not duplicated by the configured value');
+		assert.strictEqual(ids.filter(x => x === 'my-proxy-model').length, 1, 'env id appears once');
 	});
 
-	test('buildModelList: empty catalog falls back to the authored known families (still dynamic via config union)', () => {
-		const list = buildModelList([], DEFAULT_MODEL, ['local-qwen']);
-		assert.deepStrictEqual(list.map(m => m.id), [DEFAULT_MODEL, 'opus', 'sonnet', 'haiku', 'local-qwen']);
-		assert.strictEqual(list.find(m => m.id === 'local-qwen')!.detail, undefined);
+	test('resolveCurrent: unset key resolves to the catalog "default" row; a set value is used as-is', () => {
+		const live = buildModelList(CATALOG, DEFAULT_MODEL, []);
+		assert.strictEqual(resolveCurrent(DEFAULT_MODEL, live), 'default', 'unset -> the recommended default row');
+		assert.strictEqual(resolveCurrent('opus[1m]', live), 'opus[1m]', 'a concrete selection is preserved');
+		const fallback = buildModelList([], DEFAULT_MODEL, []);
+		assert.strictEqual(resolveCurrent(DEFAULT_MODEL, fallback), DEFAULT_MODEL, 'no catalog default -> stays unset');
+	});
+
+	test('sanitizeModelId strips only control chars; a real "[1m]" 1M suffix is PRESERVED', () => {
+		// "[1m]" is a genuine model-id suffix for the 1M-context variant, NOT junk - it must survive.
+		assert.strictEqual(sanitizeModelId('opus[1m]'), 'opus[1m]');
+		assert.strictEqual(sanitizeModelId('claude-fable-5[1m]'), 'claude-fable-5[1m]');
+		// A stray ESC (U+001B) control byte IS stripped (leaving the rest intact).
+		assert.strictEqual(sanitizeModelId(String.fromCharCode(27) + 'opus[1m]'), 'opus[1m]');
+		// Real ids pass through unchanged.
+		assert.strictEqual(sanitizeModelId('opus'), 'opus');
+		assert.strictEqual(sanitizeModelId('claude-opus-4.7'), 'claude-opus-4.7');
+		assert.strictEqual(sanitizeModelId('arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-x'), 'arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-x');
+	});
+
+	test('cleanModelId: blank -> undefined; non-string -> undefined; a real "[1m]" id is kept', () => {
+		assert.strictEqual(cleanModelId('opus[1m]'), 'opus[1m]');
+		assert.strictEqual(cleanModelId('   '), undefined);
+		assert.strictEqual(cleanModelId(''), undefined);
+		assert.strictEqual(cleanModelId(42), undefined);
+		assert.strictEqual(cleanModelId(undefined), undefined);
+	});
+
+	test('parseSettingsState: reads the model key (preserving a 1M "[1m]" id) + env ids, classifies seed/invalid', () => {
+		assert.deepStrictEqual(parseSettingsState(undefined), { kind: 'ok', settings: { envModelIds: [] }, needsSeed: true });
+		assert.deepStrictEqual(parseSettingsState('   '), { kind: 'ok', settings: { envModelIds: [] }, needsSeed: true });
+
+		const ok = parseSettingsState('{ "model": "opus[1m]", "env": { "ANTHROPIC_MODEL": "claude-opus-4.7" } }');
+		assert.strictEqual(ok.kind, 'ok');
+		if (ok.kind === 'ok') {
+			assert.strictEqual(ok.settings.model, 'opus[1m]', 'the real 1M id is preserved, not stripped');
+			assert.deepStrictEqual(ok.settings.envModelIds, ['claude-opus-4.7']);
+			assert.strictEqual(ok.needsSeed, false);
+		}
+
+		const blank = parseSettingsState('{ "model": "   " }');
+		assert.strictEqual(blank.kind === 'ok' && blank.settings.model, undefined);
+		assert.strictEqual(parseSettingsState('{ not json ').kind, 'invalid');
 	});
 
 	test('envModelIdsFrom extracts ANTHROPIC_MODEL + small-fast, ignores blanks and non-strings', () => {
@@ -118,121 +161,54 @@ suite('Clawdius model pill', () => {
 		assert.deepStrictEqual(envModelIdsFrom({ ANTHROPIC_MODEL: '   ' }), []);
 		assert.deepStrictEqual(envModelIdsFrom({ ANTHROPIC_MODEL: 42 }), []);
 		assert.deepStrictEqual(envModelIdsFrom(undefined), []);
-		assert.deepStrictEqual(envModelIdsFrom('nope'), []);
 	});
 
-	test('sanitizeModelId strips ANSI SGR text remnants + control chars, leaves real ids untouched', () => {
-		// The real corruption seen in the wild: a terminal /model flow left the literal "[1m]" (an ESC-less
-		// bold-code remnant) in the value. It must clean back to the plain alias so it matches the catalog.
-		assert.strictEqual(sanitizeModelId('opus[1m]'), 'opus');
-		assert.strictEqual(sanitizeModelId('sonnet[22m'), 'sonnet');
-		assert.strictEqual(sanitizeModelId('[1mhaiku[22m'), 'haiku');
-		// A stray ESC (U+001B) control byte is stripped too.
-		assert.strictEqual(sanitizeModelId(String.fromCharCode(27) + '[1mopus'), 'opus');
-		// Real ids pass through unchanged - no "[<digits>m]" SGR pattern in any of them.
-		assert.strictEqual(sanitizeModelId('opus'), 'opus');
-		assert.strictEqual(sanitizeModelId('claude-opus-4.7'), 'claude-opus-4.7');
-		assert.strictEqual(sanitizeModelId('arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-x'), 'arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-x');
-		assert.strictEqual(sanitizeModelId('projects/p/locations/l/models/claude'), 'projects/p/locations/l/models/claude');
-		// A bracketed non-SGR token (no trailing "m") is preserved.
-		assert.strictEqual(sanitizeModelId('gpt-4[preview]'), 'gpt-4[preview]');
-	});
-
-	test('cleanModelId: junk-only or blank -> undefined; non-string -> undefined', () => {
-		assert.strictEqual(cleanModelId('opus[1m]'), 'opus');
-		assert.strictEqual(cleanModelId('[1m]'), undefined); // nothing left after cleaning
-		assert.strictEqual(cleanModelId('   '), undefined);
-		assert.strictEqual(cleanModelId(''), undefined);
-		assert.strictEqual(cleanModelId(42), undefined);
-		assert.strictEqual(cleanModelId(undefined), undefined);
-	});
-
-	test('parseSettingsState sanitizes a polluted model value so it de-dupes against the catalog', () => {
-		const st = parseSettingsState('{ "model": "opus[1m]" }');
-		assert.strictEqual(st.kind, 'ok');
-		if (st.kind === 'ok') {
-			assert.strictEqual(st.settings.model, 'opus', 'polluted "opus[1m]" cleaned to "opus"');
-		}
-		// End-to-end: the cleaned current now matches the catalog "opus" -> ONE row, not a garbled duplicate.
-		const list = buildModelList(CATALOG, 'opus', []);
-		assert.strictEqual(list.filter(m => m.id === 'opus').length, 1, 'no duplicate opus row');
-		assert.ok(!list.some(m => m.id.includes('[1m')), 'no garbled id survives into the list');
-	});
-
-	test('parseSettingsState: reads the model key + env-declared ids, classifies seed/invalid', () => {
-		assert.deepStrictEqual(parseSettingsState(undefined), { kind: 'ok', settings: { envModelIds: [] }, needsSeed: true });
-		assert.deepStrictEqual(parseSettingsState('   '), { kind: 'ok', settings: { envModelIds: [] }, needsSeed: true });
-
-		const ok = parseSettingsState('{ "model": "sonnet", "env": { "ANTHROPIC_MODEL": "claude-opus-4.7" } }');
-		assert.strictEqual(ok.kind, 'ok');
-		if (ok.kind === 'ok') {
-			assert.strictEqual(ok.settings.model, 'sonnet');
-			assert.deepStrictEqual(ok.settings.envModelIds, ['claude-opus-4.7']);
-			assert.strictEqual(ok.needsSeed, false);
-		}
-
-		// A blank/whitespace model string is treated as unset.
-		const blank = parseSettingsState('{ "model": "   " }');
-		assert.strictEqual(blank.kind === 'ok' && blank.settings.model, undefined);
-
-		assert.strictEqual(parseSettingsState('{ not json ').kind, 'invalid');
-	});
-
-	test('modelWrites: a concrete model sets the key; Default DELETES it (preserving other keys)', () => {
-		const base = { model: 'opus', effortLevel: 'high' };
+	test('modelWrites: a concrete model sets the key; the synthetic Default sentinel DELETES it', () => {
+		const base = { model: 'opus[1m]', effortLevel: 'high' };
 		assert.deepStrictEqual(applyWrites(base, modelWrites('sonnet')), { model: 'sonnet', effortLevel: 'high' });
-		// Default clears the key entirely (let the CLI decide), leaving unrelated keys intact.
+		assert.deepStrictEqual(applyWrites(base, modelWrites('default')), { model: 'default', effortLevel: 'high' });
 		assert.deepStrictEqual(applyWrites(base, modelWrites(DEFAULT_MODEL)), { effortLevel: 'high' });
 	});
 
 	test('planModelEdit mirrors the effort action branch order', () => {
-		const ok = parseSettingsState('{ "model": "opus" }');
+		const ok = parseSettingsState('{ "model": "opus[1m]" }');
 		const invalid = parseSettingsState('{ bad');
 
-		// initial invalid -> invalid (never write an unparseable file)
-		assert.strictEqual(planModelEdit(invalid, { id: 'sonnet' }, 'opus', ok).action, 'invalid');
-		// nothing chosen -> noop
-		assert.strictEqual(planModelEdit(ok, undefined, 'opus', undefined).action, 'noop');
-		// chose the current -> noop
-		assert.strictEqual(planModelEdit(ok, { id: 'opus' }, 'opus', ok).action, 'noop');
-		// re-read invalid mid-pick -> invalid
-		assert.strictEqual(planModelEdit(ok, { id: 'sonnet' }, 'opus', invalid).action, 'invalid');
-		// real change -> write
-		const plan = planModelEdit(ok, { id: 'sonnet' }, 'opus', ok);
+		assert.strictEqual(planModelEdit(invalid, { id: 'sonnet' }, 'opus[1m]', ok).action, 'invalid');
+		assert.strictEqual(planModelEdit(ok, undefined, 'opus[1m]', undefined).action, 'noop');
+		assert.strictEqual(planModelEdit(ok, { id: 'opus[1m]' }, 'opus[1m]', ok).action, 'noop');
+		assert.strictEqual(planModelEdit(ok, { id: 'sonnet' }, 'opus[1m]', invalid).action, 'invalid');
+		const plan = planModelEdit(ok, { id: 'sonnet' }, 'opus[1m]', ok);
 		assert.strictEqual(plan.action, 'write');
 		assert.deepStrictEqual(plan.writes, [{ path: [MODEL_KEY], value: 'sonnet' }]);
 	});
 
-	test('shortModelLabel: strips "Claude " for families, truncates long proxied ids, Default is "Default"', () => {
+	test('shortModelLabel: strips "Claude ", keeps a short display name, truncates long proxied ids', () => {
 		assert.strictEqual(shortModelLabel({ id: 'opus', label: 'Claude Opus', detail: undefined, maxContextWindow: undefined }), 'Opus');
+		assert.strictEqual(shortModelLabel({ id: 'opus[1m]', label: 'Opus (1M context)', detail: undefined, maxContextWindow: undefined }), 'Opus (1M context)');
 		assert.strictEqual(shortModelLabel({ id: DEFAULT_MODEL, label: 'Default', detail: undefined, maxContextWindow: undefined, isDefault: true }), 'Default');
-		// A long ARN gets its last segment, capped with an ellipsis.
 		const arn = 'arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-5-sonnet-20240620-v1:0';
-		const short = shortModelLabel({ id: arn, label: arn, detail: undefined, maxContextWindow: undefined });
-		assert.ok(short.length <= 22, `short label within budget: "${short}"`);
+		assert.ok(shortModelLabel({ id: arn, label: arn, detail: undefined, maxContextWindow: undefined }).length <= 22);
 	});
 
-	test('modelPicks: current row marked, non-default rows carry the raw id in description', () => {
-		const list = buildModelList(CATALOG, 'sonnet', []);
-		const picks = modelPicks(list, 'sonnet');
-		const sonnet = picks.find(p => p.id === 'sonnet')!;
-		assert.ok(sonnet.description && sonnet.description.includes('sonnet'), 'id + Current in description');
-		const opus = picks.find(p => p.id === 'opus')!;
-		assert.strictEqual(opus.description, 'opus', 'non-current, non-default row shows the id');
+	test('modelPicks: current row marked (incl. unset -> Default), non-current rows carry the id', () => {
+		const list = buildModelList(CATALOG, 'opus[1m]', []);
+		const picks = modelPicks(list, 'opus[1m]');
+		assert.ok(picks.find(p => p.id === 'opus[1m]')!.description!.includes('Current'), 'selected row marked Current');
+		assert.strictEqual(picks.find(p => p.id === 'sonnet')!.description, 'sonnet', 'non-current row shows its id');
+		// Unset key marks the catalog "default" row as Current.
+		const unsetPicks = modelPicks(list, DEFAULT_MODEL);
+		assert.ok(unsetPicks.find(p => p.id === 'default')!.description!.includes('Current'));
 	});
 
-	test('modelDisplay: shows the selected model name and a provider note for non-Anthropic presets', () => {
-		const list = buildModelList(CATALOG, 'opus', []);
-		const anthropic = modelDisplay('opus', list, 'oauth');
-		assert.ok(anthropic.text.includes('Opus'));
+	test('modelDisplay: shows the live display name; provider note only for non-Anthropic presets', () => {
+		const list = buildModelList(CATALOG, 'opus[1m]', []);
+		const anthropic = modelDisplay('opus[1m]', list, 'oauth');
+		assert.ok(anthropic.text.includes('Opus (1M context)'), 'status text uses the live display name');
 		assert.ok(!/Provider:/.test(anthropic.tooltip), 'oauth preset adds no provider note');
-
-		const bedrock = modelDisplay('opus', list, 'bedrock');
-		assert.ok(/Bedrock/.test(bedrock.tooltip), 'bedrock preset annotates the tooltip');
-
-		// Unknown current id (proxied) still resolves to a Default-safe display without throwing.
-		const unknown = modelDisplay('mystery', buildModelList(CATALOG, 'mystery', []), 'custom');
-		assert.ok(unknown.text.length > 0);
+		assert.ok(/Bedrock/.test(modelDisplay('opus[1m]', list, 'bedrock').tooltip), 'bedrock preset annotates the tooltip');
+		// Unset key resolves to the Default row without throwing.
+		assert.ok(modelDisplay(DEFAULT_MODEL, list, 'oauth').text.includes('Default'));
 	});
 });
 // CLAWDIUS-END

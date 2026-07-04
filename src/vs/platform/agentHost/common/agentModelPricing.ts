@@ -73,6 +73,21 @@ export function readAgentModelPricingMeta(model: IAgentModelInfo | SessionModelI
 }
 
 /**
+ * Reads the well-known `description` string a model carries under its open `_meta` bag - the SDK model
+ * capability blurb (e.g. "Opus 4.8 with 1M context - Best for everyday, complex tasks") that the native model
+ * picker surfaces as the row detail. Returns `undefined` when absent, blank, or the wrong type. Goes through
+ * this validating reader (not a direct `_meta.description` access) per the `code-no-untyped-meta-access` rule.
+ */
+export function readAgentModelDescriptionMeta(model: IAgentModelInfo | SessionModelInfo): string | undefined {
+	const meta = model._meta;
+	if (!meta) {
+		return undefined;
+	}
+	const value = meta.description;
+	return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+}
+
+/**
  * Builds a `_meta` payload from {@link IAgentModelPricingMeta}, dropping `undefined` entries. Returns `undefined` when
  * no pricing fields are known so callers can avoid attaching an empty `_meta` object.
  */

@@ -16,6 +16,9 @@ import { ThemeIcon } from '../../../../base/common/themables.js';
 import { index } from '../../../../base/common/arrays.js';
 import { isProposedApiEnabled } from '../../extensions/common/extensions.js';
 import { ILocalizedString } from '../../../../platform/action/common/action.js';
+// CLAWDIUS-BEGIN product sentinel for the Clawdius-mode "Open" -> "Open Chat" editor-title rebrand
+import product from '../../../../platform/product/common/product.js';
+// CLAWDIUS-END
 import { IExtensionFeatureTableRenderer, IExtensionFeaturesRegistry, IRenderedData, IRowData, ITableData, Extensions as ExtensionFeaturesExtensions } from '../../extensionManagement/common/extensionFeatures.js';
 import { IExtensionManifest, IKeyBinding } from '../../../../platform/extensions/common/extensions.js';
 import { Registry } from '../../../../platform/registry/common/platform.js';
@@ -1088,6 +1091,19 @@ menusExtensionPoint.setHandler(extensions => {
 			}
 
 			for (const menuItem of entry[1]) {
+				// CLAWDIUS-BEGIN suppress the claude-code extension's editor-title "Open"/"Open in Terminal" buttons
+				// In Clawdius mode the fork registers its own contiguous editor-title cluster (Open Chat | New
+				// Session | New Terminal, see clawdiusEditorTitleActions.ts). Skipping the extension's own
+				// editor/title items here avoids a duplicate button and stops them from splitting the fork cluster.
+				// Tightly scoped: only this extension id, only the editor/title menu, only these two commands.
+				if (!product.defaultChatAgent?.entitlementUrl
+					&& menu.id === MenuId.EditorTitle
+					&& extension.description.identifier.value.toLowerCase() === 'anthropic.claude-code'
+					&& schema.isMenuItem(menuItem)
+					&& (menuItem.command === 'claude-vscode.editor.openLast' || menuItem.command === 'claude-vscode.terminal.open')) {
+					continue;
+				}
+				// CLAWDIUS-END
 				let item: IMenuItem | ISubmenuItem;
 
 				if (schema.isMenuItem(menuItem)) {

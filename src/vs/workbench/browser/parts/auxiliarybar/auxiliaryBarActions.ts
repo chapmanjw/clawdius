@@ -28,10 +28,16 @@ const closeIcon = registerIcon('auxiliarybar-close', Codicon.close, localize('cl
 // mark (a chat affordance, Kiro-style) rather than a generic right-pane layout glyph. Upstream (entitlementUrl
 // present) keeps the layout icons unchanged.
 const clawdiusChatToggle = !product.defaultChatAgent?.entitlementUrl;
-const auxiliaryBarRightIcon = registerIcon('auxiliarybar-right-layout-icon', clawdiusChatToggle ? Codicon.claude : Codicon.layoutSidebarRight, localize('toggleAuxiliaryIconRight', 'Icon to toggle the secondary side bar off in its right position.'));
-const auxiliaryBarRightOffIcon = registerIcon('auxiliarybar-right-off-layout-icon', clawdiusChatToggle ? Codicon.claude : Codicon.layoutSidebarRightOff, localize('toggleAuxiliaryIconRightOn', 'Icon to toggle the secondary side bar on in its right position.'));
-const auxiliaryBarLeftIcon = registerIcon('auxiliarybar-left-layout-icon', clawdiusChatToggle ? Codicon.claude : Codicon.layoutSidebarLeft, localize('toggleAuxiliaryIconLeft', 'Icon to toggle the secondary side bar in its left position.'));
-const auxiliaryBarLeftOffIcon = registerIcon('auxiliarybar-left-off-layout-icon', clawdiusChatToggle ? Codicon.claude : Codicon.layoutSidebarLeftOff, localize('toggleAuxiliaryIconLeftOn', 'Icon to toggle the secondary side bar on in its left position.'));
+// In Clawdius the toggle wears the bespoke Claude Code chat SVG (chat bubble + Claude mark), themed via a CSS
+// mask so it follows the toolbar foreground in light + dark - instead of the flat Codicon.claude font glyph.
+// registerIcon is idempotent, so this returns the SAME ThemeIcon the clawdius contrib registers; the id
+// 'clawdius-claude-code-chat' is the cross-layer contract and its mask CSS ships with that contrib. Using a
+// real ThemeIcon (not a {light,dark} URI) means the Customize Layout quick pick renders it via `$(id)` too.
+export const clawdiusChatToggleIcon = registerIcon('clawdius-claude-code-chat', Codicon.commentDiscussion, localize('clawdiusAuxBarChatIcon', 'Claude Code chat icon.'));
+const auxiliaryBarRightIcon = clawdiusChatToggle ? clawdiusChatToggleIcon : registerIcon('auxiliarybar-right-layout-icon', Codicon.layoutSidebarRight, localize('toggleAuxiliaryIconRight', 'Icon to toggle the secondary side bar off in its right position.'));
+const auxiliaryBarRightOffIcon = clawdiusChatToggle ? clawdiusChatToggleIcon : registerIcon('auxiliarybar-right-off-layout-icon', Codicon.layoutSidebarRightOff, localize('toggleAuxiliaryIconRightOn', 'Icon to toggle the secondary side bar on in its right position.'));
+const auxiliaryBarLeftIcon = clawdiusChatToggle ? clawdiusChatToggleIcon : registerIcon('auxiliarybar-left-layout-icon', Codicon.layoutSidebarLeft, localize('toggleAuxiliaryIconLeft', 'Icon to toggle the secondary side bar in its left position.'));
+const auxiliaryBarLeftOffIcon = clawdiusChatToggle ? clawdiusChatToggleIcon : registerIcon('auxiliarybar-left-off-layout-icon', Codicon.layoutSidebarLeftOff, localize('toggleAuxiliaryIconLeftOn', 'Icon to toggle the secondary side bar on in its left position.'));
 // In Clawdius the secondary side bar IS the native Claude chat, so its show/hide toggle reads "Claude Code
 // Chat" everywhere it surfaces (top-bar tooltip, Customize Layout, command palette, pane title) rather than
 // the generic "Secondary Side Bar". Both localize keys are static; only one is selected at runtime.

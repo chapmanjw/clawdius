@@ -1,0 +1,101 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) 2026 John Chapman (Clawdius). All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/* CLAWDIUS-BEGIN first-run plugin-install overlay
+ * A floating, NON-BLOCKING card centered over the workbench. The overlay layer is pointer-events:none so the
+ * IDE behind it stays fully interactive; only the card (and its dismiss button) take clicks. Visual language
+ * mirrors the Control Center (editor-widget surface, the Clawd hero mark). The hero art is the SAME shared SVG
+ * the Control Center uses (../control/media/clawd-dance.svg), resolved by the CSS bundler - not duplicated.
+ */
+
+.clawdius-startup-overlay {
+	position: absolute;
+	inset: 0;
+	z-index: 2600; /* above the workbench; below native dialogs / context menus */
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	pointer-events: none; /* non-blocking: clicks fall through everywhere except the card */
+}
+
+.clawdius-startup-card {
+	pointer-events: auto;
+	display: flex;
+	align-items: center;
+	gap: 18px;
+	max-width: 520px;
+	padding: 20px 22px;
+	border: 1px solid var(--vscode-widget-border, rgba(217, 119, 87, 0.35));
+	border-radius: 12px;
+	background: var(--vscode-editorWidget-background, #1e1e1e);
+	color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+	box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.clawdius-startup-hero-mark {
+	flex: none;
+	width: 58px;
+	height: 47px;
+	background-image: url('../control/media/clawd-dance.svg');
+	background-repeat: no-repeat;
+	background-position: center;
+	background-size: contain;
+}
+
+.clawdius-startup-hero-mark.static {
+	background-image: url('../control/media/clawd-static.svg');
+}
+
+.clawdius-startup-body {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	min-width: 0;
+	flex: 1;
+}
+
+.clawdius-startup-title {
+	font-size: 15px;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+}
+
+.clawdius-startup-desc {
+	font-size: 12px;
+	opacity: 0.75;
+}
+
+.clawdius-startup-progress {
+	position: relative;
+	height: 5px;
+	margin-top: 2px;
+	overflow: hidden;
+}
+
+.clawdius-startup-actions {
+	flex: none;
+	display: flex;
+	align-items: center;
+}
+
+.clawdius-startup-dismiss {
+	pointer-events: auto;
+	background: transparent;
+	color: var(--vscode-foreground);
+	opacity: 0.7;
+	border: 1px solid var(--vscode-widget-border, rgba(127, 127, 127, 0.3));
+	border-radius: 6px;
+	padding: 4px 10px;
+	font-size: 11px;
+	font-family: inherit;
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.clawdius-startup-dismiss:hover {
+	opacity: 1;
+	background: var(--vscode-toolbar-hoverBackground, rgba(127, 127, 127, 0.15));
+}
+/* CLAWDIUS-END */

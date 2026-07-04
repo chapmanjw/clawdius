@@ -1,0 +1,46 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) 2026 John Chapman (Clawdius). All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/* CLAWDIUS-BEGIN custom Claude Code chat / session / terminal toolbar icons
+ * Monochrome SVGs (single opaque fill) themed via CSS mask-image + background-color:currentColor, so
+ * they follow the toolbar foreground in light AND dark - exactly how VS Code renders a codicon glyph,
+ * but from a bespoke SVG. The icons are registered as ThemeIcons in clawdiusCustomIcons.ts; here we
+ * override the fallback codicon glyph on ::before (content:'' kills the font glyph) and paint the SVG.
+ * Double-class specificity (.codicon.codicon-...) beats the theme service's generated glyph rule.
+ * url() is resolved by the CSS bundler in dev AND built (no build resource-allowlist entry needed,
+ * unlike a FileAccess runtime fetch). The .svg assets live next to this file in ./.
+ */
+
+.codicon.codicon-clawdius-claude-code-chat::before,
+.codicon.codicon-clawdius-claude-code-session::before,
+.codicon.codicon-clawdius-claude-code-terminal::before {
+	content: '';
+	display: inline-block;
+	width: 1em;
+	height: 1em;
+	background-color: currentColor;
+	-webkit-mask-repeat: no-repeat;
+	mask-repeat: no-repeat;
+	-webkit-mask-position: center;
+	mask-position: center;
+	-webkit-mask-size: contain;
+	mask-size: contain;
+}
+
+.codicon.codicon-clawdius-claude-code-chat::before {
+	-webkit-mask-image: url('./claude-code-chat.svg');
+	mask-image: url('./claude-code-chat.svg');
+}
+
+.codicon.codicon-clawdius-claude-code-session::before {
+	-webkit-mask-image: url('./claude-code-session.svg');
+	mask-image: url('./claude-code-session.svg');
+}
+
+.codicon.codicon-clawdius-claude-code-terminal::before {
+	-webkit-mask-image: url('./claude-code-terminal.svg');
+	mask-image: url('./claude-code-terminal.svg');
+}
+/* CLAWDIUS-END */

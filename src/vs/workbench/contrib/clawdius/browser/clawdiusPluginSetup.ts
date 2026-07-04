@@ -40,6 +40,9 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
 import { IWorkbenchContribution } from '../../../common/contributions.js';
 import { IExtensionsWorkbenchService } from '../../extensions/common/extensions.js';
 import { IExtensionManagementServerService } from '../../../services/extensionManagement/common/extensionManagement.js';
+import { ILayoutService } from '../../../../platform/layout/browser/layoutService.js';
+import { ClawdiusStartupInstallOverlay } from './clawdiusStartupInstallOverlay.js';
+import { CLAWDIUS_DISABLE_ANIMATIONS_SETTING } from './clawdiusDisableAnimations.js';
 
 /** Open VSX / marketplace id of the official Anthropic Claude Code extension. Module-level (not a static class
  *  field) so the EXTENSIONS list below can reference it without touching the class binding during its own static
@@ -149,6 +152,16 @@ export function shouldInstallExtension(ext: { critical?: boolean; when?: () => b
 	return true;
 }
 
+/** Friendly label for a default extension id, shown in the first-run install overlay's description line. */
+function claudeExtensionLabel(id: string): string {
+	switch (id) {
+		case CLAUDE_CODE_EXTENSION_ID: return localize('clawdius.startup.label.engine', "the Claude Code engine");
+		case 'jeanp413.open-remote-ssh': return localize('clawdius.startup.label.ssh', "Remote - SSH");
+		case 'jeanp413.open-remote-wsl': return localize('clawdius.startup.label.wsl', "Remote - WSL");
+		default: return id;
+	}
+}
+
 /** Installs (or reinstalls) the official Claude Code plugin from the gallery, surfacing a failure to the user.
  *  Backs the status-bar entry, the Control Center absence banner, and the command palette. */
 export class InstallClaudeCodePluginAction extends Action2 {
@@ -208,6 +221,7 @@ export class ClawdiusPluginSetupContribution extends Disposable implements IWork
 		@INotificationService private readonly _notificationService: INotificationService,
 		@ICommandService private readonly _commandService: ICommandService,
 		@IContextKeyService contextKeyService: IContextKeyService,
+		@ILayoutService private readonly _layoutService: ILayoutService,
 	) {
 		super();
 
@@ -287,24 +301,51 @@ export class ClawdiusPluginSetupContribution extends Disposable implements IWork
 	 *  convenience and are never reinstalled after the user may have removed them on purpose. */
 	private async _ensureInstalled(done: boolean): Promise<void> {
 		const installed = await this._extensionsWorkbenchService.queryLocal();
-		for (const ext of ClawdiusPluginSetupContribution.EXTENSIONS) {
+		// Compute the to-install set up front, using the SAME predicate the loop uses, so the overlay reflects the
+		// real step count and never appears when there is nothing to install.
+		const todo = ClawdiusPluginSetupContribution.EXTENSIONS.filter(ext => {
 			// The critical plugin must be present on the remote too (a workspace extension), so use the
 			// everywhere-aware check; the optional remotes are local-only first-run conveniences.
 			const isInstalled = ext.id === CLAUDE_CODE_EXTENSION_ID
 				? this._isClaudeCodePresentEverywhere()
 				: isExtensionInstalled(installed, ext.id);
-			if (!shouldInstallExtension(ext, done, isInstalled)) {
-				continue;
-			}
-			try {
-				await installClaudeGalleryExtension(this._extensionsWorkbenchService, this._logService, ext.id);
-			} catch (err) {
-				if (ext.critical) {
-					throw err; // critical (the Claude Code engine): fail the setup so it retries next launch
-				}
-				this._logService.warn(`[clawdius] optional first-run install of ${ext.id} failed; skipping`, err);
-			}
+			return shouldInstallExtension(ext, done, isInstalled);
+		});
+		if (todo.length === 0) {
+			return;
 		}
+
+		// Non-blocking, dismissible install overlay (the IDE stays interactive behind it). Best-effort: if the
+		// main container is unavailable it installs silently. Disposed in the finally so it can never leak - and
+		// even a leak would not lock the IDE, since the overlay layer is pointer-events:none.
+		const overlay = this._createInstallOverlay();
+		try {
+			for (let i = 0; i < todo.length; i++) {
+				const ext = todo[i];
+				overlay?.setStep(claudeExtensionLabel(ext.id), i, todo.length);
+				try {
+					await installClaudeGalleryExtension(this._extensionsWorkbenchService, this._logService, ext.id);
+				} catch (err) {
+					if (ext.critical) {
+						throw err; // critical (the Claude Code engine): fail the setup so it retries next launch
+					}
+					this._logService.warn(`[clawdius] optional first-run install of ${ext.id} failed; skipping`, err);
+				}
+			}
+		} finally {
+			overlay?.dispose();
+		}
+	}
+
+	/** Create the first-run install overlay on the workbench main container, or undefined if unavailable. */
+	private _createInstallOverlay(): ClawdiusStartupInstallOverlay | undefined {
+		const container = this._layoutService.mainContainer;
+		if (!container) {
+			return undefined;
+		}
+		const staticMark = this._configurationService.getValue<boolean>(CLAWDIUS_DISABLE_ANIMATIONS_SETTING) === true;
+		const overlay = new ClawdiusStartupInstallOverlay(container, staticMark, () => overlay.dispose());
+		return overlay;
 	}
 
 	/** Point the plugin at the secondary sidebar + its bundled engine, without clobbering user overrides. */

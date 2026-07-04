@@ -287,11 +287,19 @@ export class AccountsActivityActionViewItem extends AbstractGlobalActivityAction
 		@IInstantiationService instantiationService: IInstantiationService,
 		@ICommandService private readonly commandService: ICommandService
 	) {
+		// CLAWDIUS-BEGIN account button presents the Control Center identity (dashboard icon + label)
+		// In Clawdius mode the bottom-left Account button opens the Claude Code Control Center (see the run()
+		// override below), so it wears that identity: the `dashboard` glyph (matching the Effort status widget)
+		// and a "Claude Code Control Center" hover, instead of the stock person icon + "Accounts". Read the
+		// `productService` PARAMETER here, NOT `this.productService` - `this` is not available before super().
+		// Upstream builds (entitlementUrl present) keep the stock accounts icon + label untouched.
+		const isClawdiusAccount = !productService.defaultChatAgent?.entitlementUrl;
 		const action = instantiationService.createInstance(CompositeBarAction, {
 			id: ACCOUNTS_ACTIVITY_ID,
-			name: localize('accounts', "Accounts"),
-			classNames: ThemeIcon.asClassNameArray(GlobalCompositeBar.ACCOUNTS_ICON)
+			name: isClawdiusAccount ? localize('clawdius.accounts.controlCenter', "Claude Code Control Center") : localize('accounts', "Accounts"),
+			classNames: ThemeIcon.asClassNameArray(isClawdiusAccount ? Codicon.dashboard : GlobalCompositeBar.ACCOUNTS_ICON)
 		});
+		// CLAWDIUS-END
 		super(MenuId.AccountsContext, action, options, contextMenuActionsProvider, contextMenuAlignmentOptions, themeService, hoverService, menuService, contextMenuService, contextKeyService, configurationService, keybindingService, activityService);
 		this._register(action);
 		this.registerListeners();

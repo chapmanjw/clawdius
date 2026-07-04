@@ -20,6 +20,10 @@ import { IClawdiusConfigService } from '../common/clawdiusConfig.js';
 import { ClawdiusConfigStore } from './clawdiusConfigStore.js';
 import { registerClawdiusConfigActions } from './clawdiusConfigActions.js';
 import { ClawdiusPluginSetupContribution, InstallClaudeCodePluginAction } from './clawdiusPluginSetup.js';
+// CLAWDIUS-BEGIN load custom Claude Code icon registrations + their mask CSS (chat/session/terminal)
+import './clawdiusCustomIcons.js';
+import { registerClawdiusEditorTitleActions } from './clawdiusEditorTitleActions.js';
+// CLAWDIUS-END
 import { ClawdiusMissingPluginStatusEntry } from './clawdiusMissingPluginStatusEntry.js';
 import { EditorPaneDescriptor, IEditorPaneRegistry } from '../../../browser/editor.js';
 import { EditorExtensions, IEditorFactoryRegistry, IEditorSerializer } from '../../../common/editor.js';
@@ -184,6 +188,10 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	// Config-mutation commands (per-section create + delete) the Control Center invokes to scaffold a new skill
 	// or hook and to delete a skill. These are programmatic commands (no menu/view surface of their own).
 	registerClawdiusConfigActions();
+
+	// Editor-title toolbar cluster next to the Claude Code extension's "Open Chat" button: "New Session" (opens
+	// a new Claude chat as an editor tab) and "New Terminal Session" (runs claude in a new editor-area terminal).
+	registerClawdiusEditorTitleActions();
 
 	// First run: install + configure the official Claude Code plugin (it owns the visible chat pane). Runs at
 	// `Eventually` (idle, a few seconds after restore) so the ~225 MB first-run extension download does not

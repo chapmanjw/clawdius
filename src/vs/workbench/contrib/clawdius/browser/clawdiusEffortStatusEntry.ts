@@ -455,7 +455,7 @@ export class ClawdiusEffortStatusEntry extends Disposable implements IWorkbenchC
 		// sentinel so the label renderer emits per-cell spans the CSS animates. Ultracode keeps its purple pill.
 		return {
 			name: localize('clawdius.effort.name', "Claude Effort Level"),
-			text: `$(dashboard) ${meterMarkup(display)} ${display.label}`,
+			text: `$(chip) ${meterMarkup(display)} ${display.label}`,
 			ariaLabel: display.ariaLabel,
 			tooltip: new MarkdownString(display.tooltip),
 			command: SET_EFFORT_COMMAND_ID,

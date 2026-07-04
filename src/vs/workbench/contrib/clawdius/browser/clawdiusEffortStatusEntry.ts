@@ -41,6 +41,8 @@ import { IWorkbenchContribution } from '../../../common/contributions.js';
 import { IJSONEditingService } from '../../../services/configuration/common/jsonEditing.js';
 import { IPathService } from '../../../services/path/common/pathService.js';
 import { IStatusbarEntry, IStatusbarEntryAccessor, IStatusbarService, StatusbarAlignment } from '../../../services/statusbar/browser/statusbar.js';
+import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+import { CLAWDIUS_STATUS_BAR_ENABLED_SETTING, isClawdiusStatusBarEnabled } from '../common/clawdiusStatusBar.js';
 import { IExtensionService } from '../../../services/extensions/common/extensions.js';
 import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 import { blockBar } from './usage/claudeUsageCharts.js';
@@ -407,6 +409,7 @@ export class ClawdiusEffortStatusEntry extends Disposable implements IWorkbenchC
 		@IStatusbarService private readonly statusbarService: IStatusbarService,
 		@IFileService private readonly fileService: IFileService,
 		@IPathService private readonly pathService: IPathService,
+		@IConfigurationService private readonly configurationService: IConfigurationService,
 	) {
 		super();
 
@@ -414,6 +417,10 @@ export class ClawdiusEffortStatusEntry extends Disposable implements IWorkbenchC
 		if (product.defaultChatAgent?.entitlementUrl) {
 			return;
 		}
+		// React to the master status-bar toggle (show or hide this widget without a reload).
+		this._register(this.configurationService.onDidChangeConfiguration(e => {
+			if (e.affectsConfiguration(CLAWDIUS_STATUS_BAR_ENABLED_SETTING)) { this.update(); }
+		}));
 		void this.init();
 	}
 
@@ -438,6 +445,11 @@ export class ClawdiusEffortStatusEntry extends Disposable implements IWorkbenchC
 	}
 
 	private update(): void {
+		// Master toggle: when off, drop the entry entirely (kept orthogonal to VS Code's own right-click hide).
+		if (!isClawdiusStatusBarEnabled(this.configurationService)) {
+			this.entry.clear();
+			return;
+		}
 		const display = effortDisplay(this.settings.effortLevel, this.settings.ultracode === true);
 		const props = this.getProps(display);
 		if (this.entry.value) {

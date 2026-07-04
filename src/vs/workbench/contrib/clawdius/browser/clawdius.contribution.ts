@@ -17,6 +17,7 @@ import product from '../../../../platform/product/common/product.js';
 import { Registry } from '../../../../platform/registry/common/platform.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { IClawdiusConfigService } from '../common/clawdiusConfig.js';
+import { CLAWDIUS_STATUS_BAR_ENABLED_SETTING } from '../common/clawdiusStatusBar.js';
 import { ClawdiusConfigStore } from './clawdiusConfigStore.js';
 import { registerClawdiusConfigActions } from './clawdiusConfigActions.js';
 import { ClawdiusPluginSetupContribution, InstallClaudeCodePluginAction } from './clawdiusPluginSetup.js';
@@ -309,6 +310,13 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 				scope: ConfigurationScope.APPLICATION,
 				title: localize('clawdius.disableAnimations.title', "Disable Animations"),
 				description: localize('clawdius.disableAnimations.desc', "Turn off Clawdius's animated brand art. When on, the empty-editor welcome art and the Control Center tab-header mark show the static Clawd artwork (the same stills used for high-contrast themes) instead of the animated versions."),
+			},
+			[CLAWDIUS_STATUS_BAR_ENABLED_SETTING]: {
+				type: 'boolean',
+				default: true,
+				scope: ConfigurationScope.APPLICATION,
+				title: localize('clawdius.statusBar.enabled.title', "Status Bar Widgets"),
+				description: localize('clawdius.statusBar.enabled.desc', "Show Clawdius's Claude Code status-bar widgets (effort level, model, permission mode, context budget, and usage). Turn this off to hide them all. The prompt to install the Claude Code plugin is always shown regardless of this setting."),
 			},
 		},
 	});

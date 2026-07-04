@@ -23,6 +23,8 @@ import { registerColor } from '../../../../../platform/theme/common/colorRegistr
 import { IWorkbenchContribution } from '../../../../common/contributions.js';
 import { IPathService } from '../../../../services/path/common/pathService.js';
 import { IStatusbarEntry, IStatusbarEntryAccessor, IStatusbarService, StatusbarAlignment } from '../../../../services/statusbar/browser/statusbar.js';
+import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
+import { CLAWDIUS_STATUS_BAR_ENABLED_SETTING, isClawdiusStatusBarEnabled } from '../../common/clawdiusStatusBar.js';
 import { URI } from '../../../../../base/common/uri.js';
 import {
 	appendClaudeLogo, capacityWindows, compact, IClaudeAccount, IClaudeCapacity, IClaudeStats, IUsageWindow,
@@ -112,6 +114,7 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 		@IFileService private readonly fileService: IFileService,
 		@IPathService private readonly pathService: IPathService,
 		@IClaudeUsageCapacityRefresh private readonly capacityRefresh: IClaudeUsageCapacityRefresh,
+		@IConfigurationService private readonly configurationService: IConfigurationService,
 	) {
 		super();
 
@@ -125,6 +128,10 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 		// Both data sources are LOCAL files (no network): stats-cache.json and the on-demand capacity cache.
 		// Polling them every 15s is cheap and picks up the capacity cache promptly after a user-initiated fetch.
 		this._register(disposableWindowInterval(mainWindow, () => this.refresh(), 15_000));
+		// React to the master status-bar toggle (show or hide this widget without a reload).
+		this._register(this.configurationService.onDidChangeConfiguration(e => {
+			if (e.affectsConfiguration(CLAWDIUS_STATUS_BAR_ENABLED_SETTING)) { this.update(); }
+		}));
 	}
 
 	private async claudeDir(): Promise<URI> {
@@ -166,6 +173,11 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 	}
 
 	private update(): void {
+		// Master toggle: when off, drop the entry entirely (kept orthogonal to VS Code's own right-click hide).
+		if (!isClawdiusStatusBarEnabled(this.configurationService)) {
+			this.entry.clear();
+			return;
+		}
 		const props = this.getProps();
 		if (this.entry.value) {
 			this.entry.value.update(props);

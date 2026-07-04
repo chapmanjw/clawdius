@@ -34,6 +34,7 @@ import { ThemeIcon } from '../../../../base/common/themables.js';
 import { localize, localize2 } from '../../../../nls.js';
 import product from '../../../../platform/product/common/product.js';
 import { ConfigurationTarget, IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+import { CLAWDIUS_STATUS_BAR_ENABLED_SETTING, isClawdiusStatusBarEnabled } from '../common/clawdiusStatusBar.js';
 import { Action2 } from '../../../../platform/actions/common/actions.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
@@ -304,13 +305,18 @@ export class ClawdiusPermissionModeStatusEntry extends Disposable implements IWo
 		// Re-render when the configured default changes (Settings editor, or our own write), and re-evaluate the
 		// Bypass gate when the allow-bypass setting flips.
 		this._register(this.configurationService.onDidChangeConfiguration(e => {
-			if (e.affectsConfiguration(INITIAL_PERMISSION_MODE_KEY) || e.affectsConfiguration(ALLOW_BYPASS_KEY)) {
+			if (e.affectsConfiguration(INITIAL_PERMISSION_MODE_KEY) || e.affectsConfiguration(ALLOW_BYPASS_KEY) || e.affectsConfiguration(CLAWDIUS_STATUS_BAR_ENABLED_SETTING)) {
 				this.update();
 			}
 		}));
 	}
 
 	private update(): void {
+		// Master toggle: when off, drop the entry entirely (kept orthogonal to VS Code's own right-click hide).
+		if (!isClawdiusStatusBarEnabled(this.configurationService)) {
+			this.entry.clear();
+			return;
+		}
 		const props = this.getProps();
 		if (this.entry.value) {
 			this.entry.value.update(props);

@@ -37,6 +37,7 @@ import product from '../../../../platform/product/common/product.js';
 import { Action2 } from '../../../../platform/actions/common/actions.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+import { CLAWDIUS_STATUS_BAR_ENABLED_SETTING, isClawdiusStatusBarEnabled } from '../common/clawdiusStatusBar.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
@@ -570,7 +571,7 @@ export class ClawdiusModelStatusEntry extends Disposable implements IWorkbenchCo
 		this.watch.add(this.languageModelsService.onDidChangeLanguageModels(() => this.update()));
 		// Track proxied-model config edits (clawdius.cli.environmentVariables / providerPreset).
 		this.watch.add(this.configurationService.onDidChangeConfiguration(e => {
-			if (e.affectsConfiguration(CLI_ENV_VARS_KEY) || e.affectsConfiguration(CLI_PROVIDER_PRESET_KEY)) {
+			if (e.affectsConfiguration(CLI_ENV_VARS_KEY) || e.affectsConfiguration(CLI_PROVIDER_PRESET_KEY) || e.affectsConfiguration(CLAWDIUS_STATUS_BAR_ENABLED_SETTING)) {
 				this.update();
 			}
 		}));
@@ -586,6 +587,11 @@ export class ClawdiusModelStatusEntry extends Disposable implements IWorkbenchCo
 	}
 
 	private update(): void {
+		// Master toggle: when off, drop the entry entirely (kept orthogonal to VS Code's own right-click hide).
+		if (!isClawdiusStatusBarEnabled(this.configurationService)) {
+			this.entry.clear();
+			return;
+		}
 		const current = this.settings.model ?? DEFAULT_MODEL;
 		const catalog = readClawdiusCatalog(this.languageModelsService);
 		const extraEnvIds = [...configEnvModelIds(this.configurationService), ...this.settings.envModelIds];

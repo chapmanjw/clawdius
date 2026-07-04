@@ -17,6 +17,7 @@ import { localize, localize2 } from '../../../../nls.js';
 import product from '../../../../platform/product/common/product.js';
 import { Action2 } from '../../../../platform/actions/common/actions.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+import { CLAWDIUS_STATUS_BAR_ENABLED_SETTING, isClawdiusStatusBarEnabled } from '../common/clawdiusStatusBar.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { registerColor } from '../../../../platform/theme/common/colorRegistry.js';
 import { themeColorFromId } from '../../../../platform/theme/common/themeService.js';
@@ -95,7 +96,7 @@ export class ClawdiusContextBudgetStatusEntry extends Disposable implements IWor
 		this._register(this.editorService.onDidActiveEditorChange(() => this.update()));
 		this._register(this.configService.onDidChange(() => { this.nestedCache.clear(); this.update(); }));
 		this._register(this.configurationService.onDidChangeConfiguration(e => {
-			if (e.affectsConfiguration(CONTEXT_BUDGET_WARN_TOKENS_SETTING)) { this.update(); }
+			if (e.affectsConfiguration(CONTEXT_BUDGET_WARN_TOKENS_SETTING) || e.affectsConfiguration(CLAWDIUS_STATUS_BAR_ENABLED_SETTING)) { this.update(); }
 		}));
 		this.update();
 		// The snapshot is empty until the first refresh (coalesced in the store).
@@ -140,6 +141,11 @@ export class ClawdiusContextBudgetStatusEntry extends Disposable implements IWor
 	}
 
 	private update(): void {
+		// Master toggle: when off, drop the entry entirely (kept orthogonal to VS Code's own right-click hide).
+		if (!isClawdiusStatusBarEnabled(this.configurationService)) {
+			this.entry.clear();
+			return;
+		}
 		// Until the first scan resolves, show a neutral "scanning" pill rather than a definitive ~0.
 		if (!this.configService.hasResolved) {
 			this.set({

@@ -45,7 +45,9 @@ function createConfirmationRow(tc: IPendingToolConfirmation, onOpenSession: Tool
 	} else {
 		const openBtn = dom.$('button');
 		openBtn.style.cssText = `${btnStyle}background:var(--vscode-button-background);`;
-		openBtn.textContent = localize('agentsVoice.openInVSCode', "Open in VS Code");
+		// CLAWDIUS-BEGIN brand sweep (voice-mode open-in-editor label)
+		openBtn.textContent = localize('agentsVoice.openInVSCode', "Open in Clawdius");
+		// CLAWDIUS-END
 		openBtn.addEventListener('click', () => onOpenSession(tc.sessionResource));
 
 		btnRow.append(openBtn);

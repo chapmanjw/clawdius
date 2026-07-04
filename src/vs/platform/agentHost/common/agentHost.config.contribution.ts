@@ -103,10 +103,16 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 		title: nls.localize('clawdiusCliConfigurationTitle', "Clawdius CLI"),
 		type: 'object',
 		properties: {
+			'clawdius.cli.preferInstalledCli': {
+				type: 'boolean',
+				default: true,
+				markdownDescription: nls.localize('clawdius.cli.preferInstalledCli', "When enabled (the default), Clawdius auto-detects your installed Claude Code engine - the native binary at `~/.local/bin/claude` from the official installer, or `claude` on your `PATH` - and launches it instead of the bundled one, so the available models and behavior always match your own, self-updating install. Set `#clawdius.cli.nodeCliPath#` to pin a specific engine (that takes precedence), or turn this off to always use the bundled engine. Ignored when an enterprise `#clawdius.cli.wrapperPath#` is set."),
+				tags: ['clawdius'],
+			},
 			'clawdius.cli.nodeCliPath': {
 				type: 'string',
 				default: '',
-				markdownDescription: nls.localize('clawdius.cli.nodeCliPath', "Absolute path to your installed Claude Code `cli.js` (a JavaScript entrypoint). When set and valid, Clawdius launches the Claude Code engine from your own install instead of the bundled one. Leave empty to use the bundled engine."),
+				markdownDescription: nls.localize('clawdius.cli.nodeCliPath', "Absolute path to a specific Claude Code engine to launch - a native binary (e.g. `~/.local/bin/claude`) or a `cli.js` JavaScript entrypoint. When set and valid, Clawdius launches this engine and it takes precedence over `#clawdius.cli.preferInstalledCli#` auto-detection. Leave empty to auto-detect your install (or fall back to the bundled engine)."),
 				tags: ['clawdius'],
 			},
 			'clawdius.cli.wrapperPath': {

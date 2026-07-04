@@ -39,17 +39,25 @@ suite('Clawdius CLI resolution', () => {
 		assert.strictEqual(r.unsupportedReason, undefined);
 	});
 
+	test('nodeCliPath that is an absolute existing NATIVE binary (no .js) -> userCli (SDK spawns it directly)', () => {
+		const r = resolve({ nodeCliPath: '/usr/local/bin/claude' }, NODE_CLI_PRESENT);
+		assert.strictEqual(r.mode, 'userCli');
+		assert.strictEqual(r.pathToClaudeCodeExecutable, '/usr/local/bin/claude');
+		assert.strictEqual(r.unsupportedReason, undefined);
+	});
+
+	test('nodeCliPath native binary on Windows (.exe) -> userCli', () => {
+		const r = resolve({ nodeCliPath: 'C:/Users/me/.local/bin/claude.exe' }, NODE_CLI_PRESENT);
+		assert.strictEqual(r.mode, 'userCli');
+		assert.strictEqual(r.pathToClaudeCodeExecutable, 'C:/Users/me/.local/bin/claude.exe');
+		assert.strictEqual(r.unsupportedReason, undefined);
+	});
+
 	test('nodeCliPath that does not exist -> bundled with an unsupportedReason', () => {
 		const r = resolve({ nodeCliPath: '/nope/cli.js' }, NONE);
 		assert.strictEqual(r.mode, 'bundled');
 		assert.strictEqual(r.pathToClaudeCodeExecutable, undefined);
-		assert.ok(r.unsupportedReason && /not be|not found|JS entrypoint/i.test(r.unsupportedReason));
-	});
-
-	test('nodeCliPath that exists but is not a JS entrypoint -> bundled with an unsupportedReason', () => {
-		const r = resolve({ nodeCliPath: '/usr/local/bin/claude' }, NODE_CLI_PRESENT);
-		assert.strictEqual(r.mode, 'bundled');
-		assert.ok(r.unsupportedReason);
+		assert.ok(r.unsupportedReason && /absolute path to an existing/i.test(r.unsupportedReason));
 	});
 
 	test('valid wrapperPath (absolute + exists) -> wrapper mode targeting bundled, no unsupportedReason', () => {

@@ -8,3 +8,15 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+  # Keep ONLY the Claude Agent SDK current - it bundles the fallback agent-host engine used when no installed
+  # Claude Code is auto-detected. Scoped with `allow` so this does NOT open PRs across VS Code's huge npm tree,
+  # just the one dependency whose staleness would drift the bundled model catalog from the user's install. Each
+  # bump is gated by the compile-time SDK drift check + the agent-host test suite.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    allow:
+      - dependency-name: "@anthropic-ai/claude-agent-sdk"
+    commit-message:
+      prefix: "deps"

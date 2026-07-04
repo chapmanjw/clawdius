@@ -19,8 +19,12 @@ export type ClawdiusCliProviderPreset = 'oauth' | 'bedrock' | 'vertex' | 'foundr
  * Which Claude Code engine the agent-host SDK should launch.
  *  - `bundled` : the Agent SDK's own vendored `cli.js`, run via Electron-as-node. The default
  *                (`executable:'node'`, no `pathToClaudeCodeExecutable`).
- *  - `userCli` : the user's installed Claude Code `cli.js` (an ABSOLUTE JS path), passed as
- *                `pathToClaudeCodeExecutable` (true one-shared-config).
+ *  - `userCli` : the user's installed Claude Code engine (an ABSOLUTE path to either a native binary - e.g.
+ *                `~/.local/bin/claude` from the official installer - or a `cli.js` JS entrypoint), passed as
+ *                `pathToClaudeCodeExecutable`. The Agent SDK spawns a native binary directly and only prepends
+ *                the JS runtime for a `.js`/`.mjs`/`.cjs`/`.ts`/`.tsx`/`.jsx` entrypoint. This is what lets the
+ *                model catalog and behavior track the user's own (self-updating) install - see
+ *                `clawdius.cli.preferInstalledCli`, which auto-detects it.
  *  - `wrapper` : an ENTERPRISE wrapper — a process launcher (`clawdius.cli.wrapperPath`) that injects
  *                auth / proxy / Bedrock / Vertex / policy around the real CLI, like the official extension's
  *                `claudeProcessWrapper`. Launched via the SDK's `spawnClaudeCodeProcess` (the wrapper receives
@@ -41,7 +45,11 @@ export interface IClawdiusCliSettings {
 	 * When set, selects `wrapper` mode and is never silently bypassed.
 	 */
 	readonly wrapperPath?: string;
-	/** ABSOLUTE path to the user's installed Claude Code `cli.js` (a JS entrypoint). Selects `userCli` mode. */
+	/**
+	 * ABSOLUTE path to the user's installed Claude Code engine - a native binary (e.g. `~/.local/bin/claude`)
+	 * or a `cli.js` JS entrypoint. Selects `userCli` mode. When unset, {@link IClawdiusCliConfigService} may
+	 * auto-detect one (see `clawdius.cli.preferInstalledCli`) and supply it here as the effective value.
+	 */
 	readonly nodeCliPath?: string;
 	/** Extra environment variables overlaid onto the Claude subprocess env. */
 	readonly environmentVariables?: Readonly<Record<string, string>>;
@@ -96,8 +104,6 @@ export interface IClawdiusCliResolution {
 	readonly unsupportedReason?: string;
 }
 
-const JS_ENTRYPOINT = /\.(?:js|mjs|cjs)$/i;
-
 /** Provider-preset environment overlay. Bedrock/Vertex set their documented flags; the rest defer to
  * `environmentVariables` (we do not invent env var names we are not sure of). */
 function providerPresetEnv(preset: ClawdiusCliProviderPreset): Record<string, string | undefined> {
@@ -129,8 +135,8 @@ function isAbsolutePath(p: string): boolean {
  *     + `wrapperTarget:'userCli'`); else it targets the bundled cli. An INVALID `wrapperPath` (not an
  *     absolute existing executable) STILL resolves to `wrapper` mode with an `unsupportedReason` — a wrapper
  *     is never silently bypassed (that would skip the enterprise policy layer); launch fails visibly instead.
- *  2. no wrapper, `nodeCliPath` absolute + JS entrypoint + exists -> `userCli`.
- *  3. no wrapper, `nodeCliPath` set but not an absolute existing JS entrypoint -> `bundled` + reason.
+ *  2. no wrapper, `nodeCliPath` absolute + exists (native binary or JS entrypoint) -> `userCli`.
+ *  3. no wrapper, `nodeCliPath` set but not an absolute existing executable -> `bundled` + reason.
  *  4. otherwise -> `bundled` (the default; SDK runs its vendored cli.js via Electron-as-node).
  */
 export function projectCliResolution(settings: IClawdiusCliSettings, existence: IClawdiusCliPathExistence): IClawdiusCliResolution {
@@ -148,9 +154,12 @@ export function projectCliResolution(settings: IClawdiusCliSettings, existence: 
 	const wrapperPath = settings.wrapperPath?.trim();
 	const nodeCliPath = settings.nodeCliPath?.trim();
 
-	// A user cli.js is valid only as an ABSOLUTE path to an existing JS entrypoint — the SDK does not
-	// PATH-resolve `pathToClaudeCodeExecutable`, so a bare `claude` must never resolve to a real engine.
-	const userCliValid = !!nodeCliPath && isAbsolutePath(nodeCliPath) && JS_ENTRYPOINT.test(nodeCliPath) && existence.nodeCliPathExists;
+	// A user engine is valid only as an ABSOLUTE path to an existing file — the SDK does not PATH-resolve
+	// `pathToClaudeCodeExecutable`, so a bare `claude` must never resolve to a real engine (the resolver
+	// service turns a detected `claude` into its absolute path before it reaches here). The Agent SDK accepts
+	// EITHER a native binary (spawned directly) or a JS entrypoint (run under the JS runtime), so we do not
+	// require a `.js` extension.
+	const userCliValid = !!nodeCliPath && isAbsolutePath(nodeCliPath) && existence.nodeCliPathExists;
 
 	if (wrapperPath) {
 		const wrapperValid = isAbsolutePath(wrapperPath) && existence.wrapperPathExists;
@@ -162,7 +171,7 @@ export function projectCliResolution(settings: IClawdiusCliSettings, existence: 
 			reasons.push(`clawdius.cli.wrapperPath ('${wrapperPath}') must be an absolute path to an existing executable. The wrapper is still applied (the enterprise policy layer is never silently bypassed) — fix the path or launch will fail.`);
 		}
 		if (nodeCliPath && !userCliValid) {
-			reasons.push(`clawdius.cli.nodeCliPath ('${nodeCliPath}') is not an absolute existing JS entrypoint, so the wrapper targets the bundled cli instead of your install.`);
+			reasons.push(`clawdius.cli.nodeCliPath ('${nodeCliPath}') is not an absolute path to an existing Claude Code executable, so the wrapper targets the bundled cli instead of your install.`);
 		}
 		return {
 			...base,
@@ -182,7 +191,7 @@ export function projectCliResolution(settings: IClawdiusCliSettings, existence: 
 		return {
 			...base,
 			mode: 'bundled',
-			unsupportedReason: `clawdius.cli.nodeCliPath ('${nodeCliPath}') must be an absolute path to an existing JS entrypoint (.js/.mjs/.cjs); using the bundled engine.`,
+			unsupportedReason: `clawdius.cli.nodeCliPath ('${nodeCliPath}') must be an absolute path to an existing Claude Code executable (a native binary or a .js/.mjs/.cjs entrypoint); using the bundled engine.`,
 		};
 	}
 

@@ -71,6 +71,8 @@ class ImmediatelyDoneQuery implements Query {
 	supportedModels(): never { throw new Error('not modeled'); }
 	supportedAgents(): never { throw new Error('not modeled'); }
 	mcpServerStatus(): never { throw new Error('not modeled'); }
+	setMcpPermissionModeOverride(): never { throw new Error('not modeled'); }
+	reinitialize(): never { throw new Error('not modeled'); }
 	getContextUsage(): never { throw new Error('not modeled'); }
 	usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(): never { throw new Error('not modeled'); }
 	reloadPlugins(): never { throw new Error('not modeled'); }

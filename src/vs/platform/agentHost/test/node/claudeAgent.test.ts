@@ -422,6 +422,8 @@ class FakeQuery implements AsyncGenerator<SDKMessage, void> {
 		return Promise.resolve([]) as never;
 	}
 	supportedModels(): never { throw new Error('FakeQuery: supportedModels not modeled'); }
+	setMcpPermissionModeOverride(): never { throw new Error('FakeQuery: setMcpPermissionModeOverride not modeled'); }
+	reinitialize(): never { throw new Error('FakeQuery: reinitialize not modeled'); }
 	supportedAgents(): never { throw new Error('FakeQuery: supportedAgents not modeled'); }
 	mcpServerStatus(): never { throw new Error('FakeQuery: mcpServerStatus not modeled'); }
 	getContextUsage(): never { throw new Error('FakeQuery: getContextUsage not modeled'); }
@@ -3068,6 +3070,7 @@ suite('ClaudeAgent (Phase 7 §3.4 — _handleCanUseTool)', () => {
 		return {
 			signal: new AbortController().signal,
 			toolUseID,
+			requestId: `req_${toolUseID}`,
 			...(overrides?.blockedPath !== undefined ? { blockedPath: overrides.blockedPath } : {}),
 		};
 	}
@@ -3172,6 +3175,7 @@ suite('ClaudeAgent (Phase 7 §3.4 — _handleCanUseTool)', () => {
 		const options: Parameters<NonNullable<Options['canUseTool']>>[2] = {
 			signal: ac.signal,
 			toolUseID: 'tu_aborted',
+			requestId: 'req_aborted',
 		};
 
 		const promise = canUseTool('Read', { file_path: '/tmp/x' }, options);
@@ -3194,6 +3198,7 @@ suite('ClaudeAgent (Phase 7 §3.4 — _handleCanUseTool)', () => {
 		const result = await canUseTool('Read', { file_path: '/tmp/y' }, {
 			signal: ac.signal,
 			toolUseID: 'tu_pre_aborted',
+			requestId: 'req_pre_aborted',
 		});
 
 		assert.deepStrictEqual(result, { behavior: 'deny', message: 'SDK aborted the tool request' });
@@ -3349,7 +3354,7 @@ suite('ClaudeAgent (Phase 7 §3.5 — INTERACTIVE_CLAUDE_TOOLS)', () => {
 				question: 'Pick one?',
 				options: [{ label: 'Apple' }, { label: 'Banana' }],
 			}],
-		}, { signal: new AbortController().signal, toolUseID: 'tu_ask' });
+		}, { signal: new AbortController().signal, toolUseID: 'tu_ask', requestId: 'req_ask' });
 		await tick();
 
 		const inputRequest = inputRequests.at(-1)!;
@@ -3387,7 +3392,7 @@ suite('ClaudeAgent (Phase 7 §3.5 — INTERACTIVE_CLAUDE_TOOLS)', () => {
 
 		const promise = canUseTool('AskUserQuestion', {
 			questions: [{ header: 'q1', question: 'Pick one?', options: [{ label: 'Apple' }] }],
-		}, { signal: new AbortController().signal, toolUseID: 'tu_ask_cancel' });
+		}, { signal: new AbortController().signal, toolUseID: 'tu_ask_cancel', requestId: 'req_ask_cancel' });
 		await tick();
 
 		ctx.agent.respondToUserInputRequest('tu_ask_cancel', SessionInputResponseKind.Cancel);
@@ -3412,6 +3417,7 @@ suite('ClaudeAgent (Phase 7 §3.5 — INTERACTIVE_CLAUDE_TOOLS)', () => {
 		const promise = canUseTool('ExitPlanMode', { plan: '1. Read foo\n2. Edit foo' }, {
 			signal: new AbortController().signal,
 			toolUseID: 'tu_plan_ok',
+			requestId: 'req_plan_ok',
 		});
 		await tick();
 
@@ -3457,6 +3463,7 @@ suite('ClaudeAgent (Phase 7 §3.5 — INTERACTIVE_CLAUDE_TOOLS)', () => {
 		const promise = canUseTool('ExitPlanMode', { plan: 'just plan' }, {
 			signal: new AbortController().signal,
 			toolUseID: 'tu_plan_deny',
+			requestId: 'req_plan_deny',
 		});
 		await tick();
 
@@ -3490,6 +3497,7 @@ suite('ClaudeAgent (Phase 7 §3.5 — INTERACTIVE_CLAUDE_TOOLS)', () => {
 		const result = await canUseTool('ExitPlanMode', { plan: 'sync test' }, {
 			signal: new AbortController().signal,
 			toolUseID: 'tu_plan_race',
+			requestId: 'req_plan_race',
 		});
 		assert.deepStrictEqual(result, { behavior: 'allow', updatedInput: { plan: 'sync test' } });
 	});
@@ -3908,6 +3916,7 @@ suite('ClaudeAgent (Phase 9 — runtime mutation surface)', () => {
 		const permissionPromise = canUseTool('Read', { file_path: '/tmp/foo.txt' }, {
 			signal: new AbortController().signal,
 			toolUseID: 'tu_pending',
+			requestId: 'req_pending',
 		});
 		await tick();
 

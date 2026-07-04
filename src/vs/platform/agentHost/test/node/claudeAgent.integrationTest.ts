@@ -246,8 +246,11 @@ class RoundTripQuery implements AsyncGenerator<SDKMessage, void> {
 				const result = await startup.canUseTool(item.toolName, item.input, {
 					signal: new AbortController().signal,
 					toolUseID: item.toolUseID,
+					requestId: `req_${item.toolUseID}`,
 				});
-				this._sdk.canUseToolResults.push(result);
+				if (result) {
+					this._sdk.canUseToolResults.push(result);
+				}
 				continue;
 			}
 			return { done: false, value: item };
@@ -275,6 +278,8 @@ class RoundTripQuery implements AsyncGenerator<SDKMessage, void> {
 	supportedModels(): never { throw new Error('not modeled'); }
 	supportedAgents(): never { throw new Error('not modeled'); }
 	mcpServerStatus(): never { throw new Error('not modeled'); }
+	setMcpPermissionModeOverride(): never { throw new Error('not modeled'); }
+	reinitialize(): never { throw new Error('not modeled'); }
 	getContextUsage(): never { throw new Error('not modeled'); }
 	usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(): never { throw new Error('not modeled'); }
 	reloadPlugins(): never { throw new Error('not modeled'); }

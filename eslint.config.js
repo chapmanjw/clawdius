@@ -165,6 +165,7 @@ export default defineConfig(
 			]
 		},
 	},
+	// CLAWDIUS-END
 	// TS
 	{
 		files: [

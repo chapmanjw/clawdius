@@ -38,6 +38,7 @@ const clawdiusAuthoredDirs = [
 	'clawdius/',
 	'script/clawdius/',
 ];
+// CLAWDIUS-END
 
 interface VinylFileWithLines extends VinylFile {
 	__lines: string[];

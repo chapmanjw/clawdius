@@ -4,8 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 // CLAWDIUS-BEGIN Claude Code Control Center editor input
-// A singleton EditorInput for the interactive Control Center (Usage / Permissions / Skills tabs built; MCP /
-// Plugins / Hooks land later). The selected tab + scope are in-pane state, so a single input suffices. NOT
+// A singleton EditorInput for the interactive Control Center (Usage / Permissions / MCP / Skills / Plugins /
+// Hooks tabs). The selected tab + scope are in-pane state, so a single input suffices. NOT
 // readonly: the pane writes the user's ~/.claude settings.json. Opened from the config sidebar, the bottom-left
 // account button, the usage status-bar widget, and the command palette.
 

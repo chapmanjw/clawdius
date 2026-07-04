@@ -467,8 +467,8 @@ import './services/agentHostFilter/browser/agentHostFilterService.js';
 import './contrib/sessions/browser/customizationsToolbar.contribution.js';
 import './contrib/changes/browser/changes.contribution.js';
 // CLAWDIUS-BEGIN ultracode workflows view moved to the MAIN workbench (src/vs/workbench/contrib/clawdius/);
-// the sessions-window pane is intentionally no longer registered here. The old contrib/workflows/** files
-// remain on disk until a cleanup pass (their agent-host control half becomes a Phase 3 control provider).
+// the sessions-window pane is intentionally no longer registered here. The old contrib/workflows/** tree has
+// since been deleted from disk.
 // CLAWDIUS-END
 import './contrib/layout/browser/sessionLayout.contribution.js';
 import './contrib/codeReview/browser/codeReview.contributions.js';

@@ -44,7 +44,9 @@ export class OpenInVSCodeTitleBarWidget extends BaseActionViewItem {
 		}
 
 		const label = this.action.label;
-		const hoverText = this.keybindingService.appendKeybinding(localize('openInVSCodeHover', "Open in VS Code Editor Window"), this.keybindingCommandId);
+		// CLAWDIUS-BEGIN brand sweep (open-in-editor hover)
+		const hoverText = this.keybindingService.appendKeybinding(localize('openInVSCodeHover', "Open in Clawdius Editor Window"), this.keybindingCommandId);
+		// CLAWDIUS-END
 		container.setAttribute('aria-label', hoverText);
 		this._register(this.hoverService.setupManagedHover(getDefaultHoverDelegate('element'), container, hoverText));
 

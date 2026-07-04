@@ -16,8 +16,8 @@
 //     stale render-time snapshot.
 // Visual language mirrors the Claude Code Usage dashboard (monospace base, clawd hero mark, "> SECTION" block
 // titles, brand-orange accents). Tabs share one pane shell + one scope selector over the same settings.json;
-// `this.tab` dispatches the body. Permissions + Skills are built; MCP/Plugins/Hooks are "soon" stubs that land
-// in later increments. Per-tab parse/write logic lives in pure models (claudePermissionsModel,
+// `this.tab` dispatches the body. All six tabs (Usage, Permissions, MCP, Skills, Plugins, Hooks) are built;
+// some advanced editors (e.g. full hook add/edit forms) are still incremental. Per-tab parse/write logic lives in pure models (claudePermissionsModel,
 // claudeControlTabsModel) so the pane only does file IO, IJSONEditingService.write, and DOM.
 
 import './media/claudeControlCenter.css';

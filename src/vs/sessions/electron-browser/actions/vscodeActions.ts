@@ -97,7 +97,9 @@ export class OpenVSCodeWindowAction extends Action2 {
 	constructor() {
 		super({
 			id: OpenVSCodeWindowAction.ID,
-			title: localize2('openVSCodeWindow', 'Open VS Code Window'),
+			// CLAWDIUS-BEGIN brand sweep (open-window command title)
+			title: localize2('openVSCodeWindow', 'Open Clawdius Window'),
+			// CLAWDIUS-END
 			f1: true,
 			keybinding: {
 				primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KeyA,

@@ -100,7 +100,9 @@ export class SessionsPolicyBlockedOverlay extends Disposable {
 		}));
 
 		const button = this._register(new Button(card, { ...defaultButtonStyles, secondary: true }));
-		button.label = localize('policyBlocked.openVSCode', "Open VS Code");
+		// CLAWDIUS-BEGIN brand sweep (policy-blocked open-editor button)
+		button.label = localize('policyBlocked.openVSCode', "Open Clawdius");
+		// CLAWDIUS-END
 		this._register(button.onDidClick(() => this._openVSCode()));
 	}
 

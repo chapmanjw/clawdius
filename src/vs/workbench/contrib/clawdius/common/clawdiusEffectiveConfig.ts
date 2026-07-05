@@ -228,8 +228,9 @@ function resolveManagedBand(ordered: readonly ITierInput[]): IManagedResolution 
 
 // --- merge -----------------------------------------------------------------------------------------------------
 
-/** Which managed-lock key, if any, gates a given dotted path (so a locked key drops the non-managed contributors). */
-function lockForPath(path: string): ManagedLockKey | undefined {
+/** Which managed-lock key, if any, gates a given dotted path (so a locked key drops the non-managed contributors).
+ *  Exported so the write-preflight can attribute a suppressed write to the responsible managed lock. */
+export function lockForPath(path: string): ManagedLockKey | undefined {
 	if (path === 'permissions.allow' || path === 'permissions.deny' || path === 'permissions.ask') {
 		return 'allowManagedPermissionRulesOnly';
 	}

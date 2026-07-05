@@ -79,7 +79,9 @@ configurationRegistry.registerConfiguration({
 		},
 		'chat.editor.localAgent.enabled': {
 			type: 'boolean',
-			description: nls.localize('chat.editor.localAgent.enabled', "When enabled, shows the VS Code local chat harness in the chat picker."),
+			// CLAWDIUS-BEGIN brand sweep (local agent harness setting description)
+			description: nls.localize('chat.editor.localAgent.enabled', "When enabled, shows the Clawdius local chat harness in the chat picker."),
+			// CLAWDIUS-END
 			default: true,
 			tags: ['experimental'],
 			experiment: { mode: 'startup' },

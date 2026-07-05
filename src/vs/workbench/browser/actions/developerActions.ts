@@ -739,7 +739,9 @@ class PolicyDiagnosticsAction extends Action2 {
 
 		const configurationRegistry = Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration);
 
-		let content = '# VS Code Policy Diagnostics\n\n';
+		// CLAWDIUS-BEGIN brand sweep (generated diagnostics report heading self-reference)
+		let content = '# Clawdius Policy Diagnostics\n\n';
+		// CLAWDIUS-END
 		content += '*WARNING: This file may contain sensitive information.*\n\n';
 		content += '## System Information\n\n';
 		content += PROPERTY_VALUE_TABLE_HEADER;

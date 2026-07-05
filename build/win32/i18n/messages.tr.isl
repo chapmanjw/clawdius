@@ -7,4 +7,6 @@ RunAfter=Kurulumdan sonra %1 uygulamasını çalıştır.
 Other=Diğer:
 SourceFile=%1 Kaynak Dosyası
 OpenWithCodeContextMenu=%1 İle Aç
-UpdatingVisualStudioCode=Visual Studio Code güncelleniyor...
+; CLAWDIUS-BEGIN brand sweep (installer update caption)
+UpdatingVisualStudioCode=Clawdius güncelleniyor...
+; CLAWDIUS-END

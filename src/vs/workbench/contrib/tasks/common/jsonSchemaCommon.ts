@@ -191,7 +191,9 @@ const schema: IJSONSchema = {
 				},
 				promptOnClose: {
 					type: 'boolean',
-					description: nls.localize('JsonSchema.tasks.promptOnClose', 'Whether the user is prompted when VS Code closes with a running task.'),
+					// CLAWDIUS-BEGIN brand sweep (tasks schema description self-reference)
+					description: nls.localize('JsonSchema.tasks.promptOnClose', 'Whether the user is prompted when Clawdius closes with a running task.'),
+					// CLAWDIUS-END
 					default: false
 				},
 				isBuildCommand: {
@@ -245,7 +247,9 @@ const schema: IJSONSchema = {
 				},
 				promptOnClose: {
 					type: 'boolean',
-					description: nls.localize('JsonSchema.promptOnClose', 'Whether the user is prompted when VS Code closes with a running background task.'),
+					// CLAWDIUS-BEGIN brand sweep (tasks schema description self-reference)
+					description: nls.localize('JsonSchema.promptOnClose', 'Whether the user is prompted when Clawdius closes with a running background task.'),
+					// CLAWDIUS-END
 					default: false
 				},
 				echoCommand: {

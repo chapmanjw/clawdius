@@ -54,16 +54,18 @@ function isVersionAtLeast(current: string, required: string): boolean {
 function getUpdateHoverContent(updateState: StateType): MarkdownString {
 	const hoverContent = new MarkdownString('', { isTrusted: true, supportThemeIcons: true });
 	switch (updateState) {
+		// CLAWDIUS-BEGIN brand sweep (model picker update hovers)
 		case StateType.AvailableForDownload:
-			hoverContent.appendMarkdown(localize('chat.modelPicker.downloadUpdateHover', "This model requires a newer version of VS Code. [Download Update](command:update.downloadUpdate) to access it."));
+			hoverContent.appendMarkdown(localize('chat.modelPicker.downloadUpdateHover', "This model requires a newer version of Clawdius. [Download Update](command:update.downloadUpdate) to access it."));
 			break;
 		case StateType.Downloaded:
 		case StateType.Ready:
-			hoverContent.appendMarkdown(localize('chat.modelPicker.restartUpdateHover', "This model requires a newer version of VS Code. [Restart to Update](command:update.restartToUpdate) to access it."));
+			hoverContent.appendMarkdown(localize('chat.modelPicker.restartUpdateHover', "This model requires a newer version of Clawdius. [Restart to Update](command:update.restartToUpdate) to access it."));
 			break;
 		default:
-			hoverContent.appendMarkdown(localize('chat.modelPicker.checkUpdateHover', "This model requires a newer version of VS Code. [Update VS Code](command:update.checkForUpdate) to access it."));
+			hoverContent.appendMarkdown(localize('chat.modelPicker.checkUpdateHover', "This model requires a newer version of Clawdius. [Update Clawdius](command:update.checkForUpdate) to access it."));
 			break;
+		// CLAWDIUS-END
 	}
 	return hoverContent;
 }
@@ -948,7 +950,9 @@ function createUnavailableModelItem(
 	if (reason === 'upgrade') {
 		description = new MarkdownString(localize('chat.modelPicker.upgradeLink', "[Upgrade](command:workbench.action.chat.upgradePlan \" \")"), { isTrusted: true });
 	} else if (reason === 'update') {
-		description = localize('chat.modelPicker.updateDescription', "Update VS Code");
+		// CLAWDIUS-BEGIN brand sweep (model picker update description)
+		description = localize('chat.modelPicker.updateDescription', "Update Clawdius");
+		// CLAWDIUS-END
 	} else {
 		description = manageSettingsUrl
 			? new MarkdownString(localize('chat.modelPicker.adminLink', "[Contact your admin]({0})", manageSettingsUrl), { isTrusted: true })

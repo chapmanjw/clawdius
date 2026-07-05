@@ -68,7 +68,9 @@ configurationRegistry.registerConfiguration({
 			default: true,
 			scope: ConfigurationScope.APPLICATION,
 			title: localize('enableWindowsBackgroundUpdatesTitle', "Enable Background Updates"),
-			description: localize('enableWindowsBackgroundUpdates', "Enable to download and install new VS Code versions in the background."),
+			// CLAWDIUS-BEGIN brand sweep (background-updates setting description)
+			description: localize('enableWindowsBackgroundUpdates', "Enable to download and install new Clawdius versions in the background."),
+			// CLAWDIUS-END
 			included: isWindows && !isWeb
 		},
 		'update.showReleaseNotes': {

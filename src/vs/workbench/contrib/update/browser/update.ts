@@ -391,9 +391,11 @@ export class SwitchProductQualityContribution extends Disposable implements IWor
 						const res = await dialogService.confirm({
 							type: 'info',
 							message: nls.localize('relaunchMessage', "Changing the version requires a reload to take effect"),
+							// CLAWDIUS-BEGIN brand sweep (relaunch dialog self-reference)
 							detail: newQuality === 'insider' ?
-								nls.localize('relaunchDetailInsiders', "Press the reload button to switch to the Insiders version of VS Code.") :
-								nls.localize('relaunchDetailStable', "Press the reload button to switch to the Stable version of VS Code."),
+								nls.localize('relaunchDetailInsiders', "Press the reload button to switch to the Insiders version of Clawdius.") :
+								nls.localize('relaunchDetailStable', "Press the reload button to switch to the Stable version of Clawdius."),
+							// CLAWDIUS-END
 							primaryButton: nls.localize({ key: 'reload', comment: ['&& denotes a mnemonic'] }, "&&Reload")
 						});
 
@@ -428,7 +430,9 @@ export class SwitchProductQualityContribution extends Disposable implements IWor
 					const { result } = await dialogService.prompt<UserDataSyncStoreType>({
 						type: Severity.Info,
 						message: nls.localize('selectSyncService.message', "Choose the settings sync service to use after changing the version"),
-						detail: nls.localize('selectSyncService.detail', "The Insiders version of VS Code will synchronize your settings, keybindings, extensions, snippets and UI State using separate insiders settings sync service by default."),
+						// CLAWDIUS-BEGIN brand sweep (sync-service prompt self-reference)
+						detail: nls.localize('selectSyncService.detail', "The Insiders version of Clawdius will synchronize your settings, keybindings, extensions, snippets and UI State using separate insiders settings sync service by default."),
+						// CLAWDIUS-END
 						buttons: [
 							{
 								label: nls.localize({ key: 'use insiders', comment: ['&& denotes a mnemonic'] }, "&&Insiders"),

@@ -871,7 +871,9 @@ class SetBrowserUserAgentAction extends Action2 {
 		}
 		const quickInputService = accessor.get(IQuickInputService);
 		const value = await quickInputService.input({
-			prompt: localize('browser.userAgent.prompt', "User agent string (leave empty for VS Code default)"),
+			// CLAWDIUS-BEGIN brand sweep (prompt self-reference)
+			prompt: localize('browser.userAgent.prompt', "User agent string (leave empty for Clawdius default)"),
+			// CLAWDIUS-END
 			value: support.userAgent ?? '',
 		});
 		if (value === undefined) {

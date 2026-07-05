@@ -151,7 +151,9 @@ export class ExtensionManagementService extends AbstractExtensionManagementServi
 			const manifest = await getManifest(path.resolve(location.fsPath));
 			const extensionId = getGalleryExtensionId(manifest.publisher, manifest.name);
 			if (manifest.engines && manifest.engines.vscode && !isEngineValid(manifest.engines.vscode, this.productService.version, this.productService.date)) {
-				throw new Error(nls.localize('incompatible', "Unable to install extension '{0}' as it is not compatible with VS Code '{1}'.", extensionId, this.productService.version));
+				// CLAWDIUS-BEGIN brand sweep (install-incompatible error)
+				throw new Error(nls.localize('incompatible', "Unable to install extension '{0}' as it is not compatible with Clawdius '{1}'.", extensionId, this.productService.version));
+				// CLAWDIUS-END
 			}
 
 			const allowedToInstall = this.allowedExtensionsService.isAllowed({ id: extensionId, version: manifest.version, publisherDisplayName: undefined });
@@ -1105,7 +1107,9 @@ class InstallExtensionInProfileTask extends AbstractExtensionTask<ILocalExtensio
 					try {
 						await this.extensionsScanner.deleteExtension(existingExtension, 'existing');
 					} catch (e) {
-						throw new Error(nls.localize('restartCode', "Please restart VS Code before reinstalling {0}.", this.manifest.displayName || this.manifest.name));
+						// CLAWDIUS-BEGIN brand sweep (restart-before-reinstall)
+						throw new Error(nls.localize('restartCode', "Please restart Clawdius before reinstalling {0}.", this.manifest.displayName || this.manifest.name));
+						// CLAWDIUS-END
 					}
 				}
 			}
@@ -1117,7 +1121,9 @@ class InstallExtensionInProfileTask extends AbstractExtensionTask<ILocalExtensio
 				try {
 					await this.extensionsScanner.deleteExtension(existingWithSameVersion, 'existing');
 				} catch (e) {
-					throw new Error(nls.localize('restartCode', "Please restart VS Code before reinstalling {0}.", this.manifest.displayName || this.manifest.name));
+					// CLAWDIUS-BEGIN brand sweep (restart-before-reinstall)
+					throw new Error(nls.localize('restartCode', "Please restart Clawdius before reinstalling {0}.", this.manifest.displayName || this.manifest.name));
+					// CLAWDIUS-END
 				}
 			}
 

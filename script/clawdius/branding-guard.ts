@@ -228,6 +228,26 @@ const brandSites: { file: string; present: RegExp; absent: RegExp; what: string 
 		present: /localize\('Language Models', "Claude"\)/, absent: /localize\('Language Models', "Copilot"\)/, what: 'extension Features-tab label' },
 	{ file: 'src/vs/workbench/contrib/chat/browser/actions/createPluginAction.ts',
 		present: /localize\('agents', "Agents"\), Codicon\.claude/, absent: /localize\('agents', "Agents"\), Codicon\.copilot/, what: 'create-plugin Agents group icon' },
+	// The 1.127 deep "VS Code" -> "Clawdius" display-text sweep. These are the most prominent user-visible
+	// product self-references (update flow, install/reinstall errors, model-picker, getting-started); pin them
+	// so an upstream merge cannot silently reintroduce "VS Code" in shipped UI. Full list: docs ledger row.
+	{ file: 'src/vs/platform/update/common/update.config.contribution.ts',
+		present: /download and install new Clawdius versions/, absent: /download and install new VS Code versions/, what: 'Windows background-update setting' },
+	{ file: 'src/vs/platform/extensionManagement/node/extensionManagementService.ts',
+		present: /not compatible with Clawdius/, absent: /not compatible with VS Code/, what: 'extension-incompatible install error' },
+	{ file: 'src/vs/platform/extensionManagement/node/extensionManagementService.ts',
+		present: /restart Clawdius before reinstalling/, absent: /restart VS Code before reinstalling/, what: 'reinstall restart error' },
+	{ file: 'src/vs/workbench/contrib/chat/browser/widget/input/chatModelPicker.ts',
+		present: /Update Clawdius\]\(command:update\.checkForUpdate\)/, absent: /Update VS Code\]\(command:update\.checkForUpdate\)/, what: 'model-picker update prompt' },
+	// The OAuth/loopback sign-in pages: the `class="branding"` wordmark link must point at the fork, not
+	// code.visualstudio.com (an upstream merge silently reverts these, and the wordmark text is a variable so a
+	// name-only sweep misses the URL leak).
+	{ file: 'src/vs/workbench/api/node/loopbackServer.ts',
+		present: /class="branding" href="https:\/\/github\.com\/chapmanjw\/clawdius"/, absent: /class="branding" href="https:\/\/code\.visualstudio\.com/, what: 'github-auth sign-in page branding href' },
+	{ file: 'extensions/microsoft-authentication/src/node/loopbackTemplate.ts',
+		present: /class="branding" href="https:\/\/github\.com\/chapmanjw\/clawdius"/, absent: /class="branding" href="https:\/\/code\.visualstudio\.com/, what: 'ms-auth loopback page branding href' },
+	{ file: 'extensions/microsoft-authentication/media/index.html',
+		present: /class="branding" href="https:\/\/github\.com\/chapmanjw\/clawdius"/, absent: /class="branding" href="https:\/\/code\.visualstudio\.com/, what: 'ms-auth landing page branding href' },
 ];
 for (const s of brandSites) {
 	let src = '';

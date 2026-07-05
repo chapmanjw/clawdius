@@ -62,8 +62,10 @@ export class ClientToolSetsContribution extends Disposable implements IWorkbench
 			id: 'vscode-general',
 			referenceName: 'vscodeGeneral',
 			icon: Codicon.vscode,
-			description: localize('clientToolSet.vscode.description', "VS Code"),
-			detail: localize('clientToolSet.vscode.detail', "Navigate code, manage extensions, and run built-in VS Code commands."),
+			// CLAWDIUS-BEGIN brand sweep (vscode-general tool set label + detail)
+			description: localize('clientToolSet.vscode.description', "Clawdius"),
+			detail: localize('clientToolSet.vscode.detail', "Navigate code, manage extensions, and run built-in Clawdius commands."),
+			// CLAWDIUS-END
 			members: [
 				'runTests',
 				'testFailure',

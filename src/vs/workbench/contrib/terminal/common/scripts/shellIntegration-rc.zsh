@@ -76,7 +76,9 @@ if [ -z "${VSCODE_PYTHON_AUTOACTIVATE_GUARD:-}" ]; then
 		# Prevent crashing by negating exit code
 		if ! builtin eval "$VSCODE_PYTHON_ZSH_ACTIVATE"; then
 			__vsc_activation_status=$?
-			builtin printf '\x1b[0m\x1b[7m * \x1b[0;103m VS Code Python zsh activation failed with exit code %d \x1b[0m' "$__vsc_activation_status"
+			# CLAWDIUS-BEGIN brand sweep (python activation failure message self-reference)
+			builtin printf '\x1b[0m\x1b[7m * \x1b[0;103m Clawdius Python zsh activation failed with exit code %d \x1b[0m' "$__vsc_activation_status"
+			# CLAWDIUS-END
 		fi
 	fi
 	# Remove any leftover Python activation env vars.

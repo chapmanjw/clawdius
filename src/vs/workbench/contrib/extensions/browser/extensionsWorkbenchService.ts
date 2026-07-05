@@ -476,11 +476,13 @@ export class Extension implements IExtension {
 		}
 
 		if (this.type === ExtensionType.System) {
+			// CLAWDIUS-BEGIN brand sweep (built-in extension README self-reference)
 			return Promise.resolve(`# ${this.displayName || this.name}
-**Notice:** This extension is bundled with Visual Studio Code. It can be disabled but not uninstalled.
+**Notice:** This extension is bundled with Clawdius. It can be disabled but not uninstalled.
 ## Features
 ${this.description}
 `);
+			// CLAWDIUS-END
 		}
 
 		if (this.resourceExtension?.readmeUri) {
@@ -515,7 +517,9 @@ ${this.description}
 		}
 
 		if (this.type === ExtensionType.System) {
-			return Promise.resolve(`Please check the [VS Code Release Notes](command:${ShowCurrentReleaseNotesActionId}) for changes to the built-in extensions.`);
+			// CLAWDIUS-BEGIN brand sweep (built-in extension changelog self-reference)
+			return Promise.resolve(`Please check the [Clawdius Release Notes](command:${ShowCurrentReleaseNotesActionId}) for changes to the built-in extensions.`);
+			// CLAWDIUS-END
 		}
 
 		return Promise.reject(new Error('not available'));

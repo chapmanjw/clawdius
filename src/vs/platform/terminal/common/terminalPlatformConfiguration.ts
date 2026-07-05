@@ -394,7 +394,9 @@ const terminalPlatformConfiguration: IConfigurationNode = {
 		},
 		[TerminalSettingId.InheritEnv]: {
 			scope: ConfigurationScope.APPLICATION,
-			description: localize('terminal.integrated.inheritEnv', "Whether new shells should inherit their environment from VS Code, which may source a login shell to ensure $PATH and other development variables are initialized. This has no effect on Windows."),
+			// CLAWDIUS-BEGIN brand sweep (inheritEnv setting description)
+			description: localize('terminal.integrated.inheritEnv', "Whether new shells should inherit their environment from Clawdius, which may source a login shell to ensure $PATH and other development variables are initialized. This has no effect on Windows."),
+			// CLAWDIUS-END
 			type: 'boolean',
 			default: true
 		},

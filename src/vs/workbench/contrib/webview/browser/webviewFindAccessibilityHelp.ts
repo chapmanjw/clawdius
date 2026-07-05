@@ -81,7 +81,9 @@ class WebviewFindAccessibilityHelpProvider extends Disposable implements IAccess
 
 		// Important About Webviews
 		content.push(localize('webview.importantHeader', "Important About Webviews:"));
-		content.push(localize('webview.importantDesc', "Some webviews intercept keyboard input before VS Code's Find can use it. If Enter or Shift+Enter do not navigate matches, the webview may be handling those keys. Try clicking or tabbing into the webview content first to ensure the webview has focus, then reopen Find and try navigation again."));
+		// CLAWDIUS-BEGIN brand sweep (accessible help self-reference)
+		content.push(localize('webview.importantDesc', "Some webviews intercept keyboard input before Clawdius Find can use it. If Enter or Shift+Enter do not navigate matches, the webview may be handling those keys. Try clicking or tabbing into the webview content first to ensure the webview has focus, then reopen Find and try navigation again."));
+		// CLAWDIUS-END
 		content.push('');
 
 		// Settings

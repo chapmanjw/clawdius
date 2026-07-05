@@ -674,13 +674,17 @@ export const platformRootSchema = createSchema({
 	[AgentHostGlobalAutoApproveEnabledConfigKey]: schemaProperty<boolean>({
 		type: 'boolean',
 		title: localize('agentHost.config.globalAutoApproveEnabled.title', "Global Auto Approve"),
-		description: localize('agentHost.config.globalAutoApproveEnabled.description', "Whether VS Code's global auto-approve setting is enabled. When `true`, every tool call is auto-approved, equivalent to a session using Bypass Approvals."),
+		// CLAWDIUS-BEGIN brand sweep (globalAutoApprove description; possessive reworded to avoid "Clawdius's")
+		description: localize('agentHost.config.globalAutoApproveEnabled.description', "Whether the Clawdius global auto-approve setting is enabled. When `true`, every tool call is auto-approved, equivalent to a session using Bypass Approvals."),
+		// CLAWDIUS-END
 		default: false,
 	}),
 	[AgentHostAutoReplyEnabledConfigKey]: schemaProperty<boolean>({
 		type: 'boolean',
 		title: localize('agentHost.config.autoReplyEnabled.title', "Auto Reply"),
-		description: localize('agentHost.config.autoReplyEnabled.description', "Whether VS Code's auto-reply setting is enabled. When `true`, `ask_user` questions are auto-answered instead of blocking on the user, mirroring autopilot mode."),
+		// CLAWDIUS-BEGIN brand sweep (autoReply description; possessive reworded to avoid "Clawdius's")
+		description: localize('agentHost.config.autoReplyEnabled.description', "Whether the Clawdius auto-reply setting is enabled. When `true`, `ask_user` questions are auto-answered instead of blocking on the user, mirroring autopilot mode."),
+		// CLAWDIUS-END
 		default: false,
 	}),
 	[AgentHostTerminalAutoApproveRulesConfigKey]: schemaProperty<AgentHostTerminalAutoApproveRules>({

@@ -53,12 +53,16 @@ function computeTrustedDomainContent(defaultTrustedDomains: string[], trustedDom
 	let content = CONFIG_HELP_TEXT_PRE;
 
 	if (defaultTrustedDomains.length > 0) {
-		content += `// By default, VS Code trusts "localhost" as well as the following domains:\n`;
+		// CLAWDIUS-BEGIN brand sweep (generated trusted-domains file comment self-reference)
+		content += `// By default, Clawdius trusts "localhost" as well as the following domains:\n`;
+		// CLAWDIUS-END
 		defaultTrustedDomains.forEach(d => {
 			content += `// - "${d}"\n`;
 		});
 	} else {
-		content += `// By default, VS Code trusts "localhost".\n`;
+		// CLAWDIUS-BEGIN brand sweep (generated trusted-domains file comment self-reference)
+		content += `// By default, Clawdius trusts "localhost".\n`;
+		// CLAWDIUS-END
 	}
 
 	content += CONFIG_HELP_TEXT_AFTER;

@@ -159,7 +159,9 @@ export const walkthroughsExtensionPoint = ExtensionsRegistry.registerExtensionPo
 									defaultSnippets: [
 										{
 											label: 'onCommand',
-											description: localize('walkthroughs.steps.completionEvents.onCommand', 'Check off step when a given command is executed anywhere in VS Code.'),
+											// CLAWDIUS-BEGIN brand sweep (walkthrough completion-event schema self-reference)
+											description: localize('walkthroughs.steps.completionEvents.onCommand', 'Check off step when a given command is executed anywhere in Clawdius.'),
+											// CLAWDIUS-END
 											body: 'onCommand:${1:commandId}'
 										},
 										{

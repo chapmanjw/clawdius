@@ -147,11 +147,13 @@ class ReportExtensionSlowAction extends Action {
 		const title = encodeURIComponent('Extension causes high cpu load');
 		const osVersion = `${os.type} ${os.arch} ${os.release}`;
 		const message = `:warning: Make sure to **attach** this file from your *home*-directory:\n:warning:\`${path}\`\n\nFind more details here: https://github.com/microsoft/vscode/wiki/Explain-extension-causes-high-cpu-load`;
+		// CLAWDIUS-BEGIN brand sweep (generated GitHub issue body version label self-reference)
 		const body = encodeURIComponent(`- Issue Type: \`Performance\`
 - Extension Name: \`${this.extension.name}\`
 - Extension Version: \`${this.extension.version}\`
 - OS Version: \`${osVersion}\`
-- VS Code version: \`${this._productService.version}\`\n\n${message}`);
+- Clawdius version: \`${this._productService.version}\`\n\n${message}`);
+		// CLAWDIUS-END
 
 		const url = `${this.repoInfo.base}/${this.repoInfo.owner}/${this.repoInfo.repo}/issues/new/?body=${body}&title=${title}`;
 		this._openerService.open(URI.parse(url));

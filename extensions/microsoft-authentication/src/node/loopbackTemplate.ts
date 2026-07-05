@@ -111,9 +111,11 @@ export const loopbackTemplate = `
 </head>
 
 <body>
-	<a class="branding" href="https://code.visualstudio.com/">
-		Visual Studio Code
+	<!-- CLAWDIUS-BEGIN brand sweep (auth loopback page) -->
+	<a class="branding" href="https://github.com/chapmanjw/clawdius">
+		Clawdius
 	</a>
+	<!-- CLAWDIUS-END -->
 	<div class="message-container">
 		<div class="message">
 			You are signed in now and can close this page.

@@ -91,7 +91,9 @@ const cliStdInFilePath = process.env['VSCODE_STDIN_FILE_PATH'] as string;
 
 export async function main(desc: ProductDescription, args: string[]): Promise<void> {
 	if (!cliPipe && !cliCommand) {
-		console.log('Command is only available in WSL or inside a Visual Studio Code terminal.');
+		// CLAWDIUS-BEGIN brand sweep (CLI availability message)
+		console.log('Command is only available in WSL or inside a Clawdius terminal.');
+		// CLAWDIUS-END
 		return;
 	}
 
@@ -473,7 +475,9 @@ function asExtensionIdOrVSIX(inputs: string[] | undefined) {
 }
 
 function fatal(message: string, err: unknown): void {
-	console.error('Unable to connect to VS Code server: ' + message);
+	// CLAWDIUS-BEGIN brand sweep (server connect error)
+	console.error('Unable to connect to Clawdius server: ' + message);
+	// CLAWDIUS-END
 	console.error(err);
 	process.exit(1);
 }

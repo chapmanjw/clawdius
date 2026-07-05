@@ -426,7 +426,9 @@ export const schema: IJSONSchema = {
 					},
 					{
 						label: '*',
-						description: nls.localize('vscode.extension.activationEvents.star', 'An activation event emitted on VS Code startup. To ensure a great end user experience, please use this activation event in your extension only when no other activation events combination works in your use-case.'),
+						// CLAWDIUS-BEGIN brand sweep (activationEvents schema hover self-reference)
+						description: nls.localize('vscode.extension.activationEvents.star', 'An activation event emitted on Clawdius startup. To ensure a great end user experience, please use this activation event in your extension only when no other activation events combination works in your use-case.'),
+						// CLAWDIUS-END
 						body: '*'
 					}
 				],

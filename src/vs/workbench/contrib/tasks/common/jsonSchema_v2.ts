@@ -437,7 +437,9 @@ const taskConfiguration: IJSONSchema = {
 		},
 		promptOnClose: {
 			type: 'boolean',
-			description: nls.localize('JsonSchema.tasks.promptOnClose', 'Whether the user is prompted when VS Code closes with a running task.'),
+			// CLAWDIUS-BEGIN brand sweep (tasks schema description self-reference)
+			description: nls.localize('JsonSchema.tasks.promptOnClose', 'Whether the user is prompted when Clawdius closes with a running task.'),
+			// CLAWDIUS-END
 			default: false
 		},
 		presentation: Objects.deepClone(presentation),

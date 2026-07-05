@@ -7,4 +7,6 @@ RunAfter=%1 indítása a telepítés után
 Other=Egyéb:
 SourceFile=%1 forrásfájl
 OpenWithCodeContextMenu=Megnyitás a következővel: %1
-UpdatingVisualStudioCode=A Visual Studio Code frissítése...
+; CLAWDIUS-BEGIN brand sweep (installer update caption)
+UpdatingVisualStudioCode=A Clawdius frissítése...
+; CLAWDIUS-END

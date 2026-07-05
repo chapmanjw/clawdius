@@ -81,7 +81,9 @@ export const agentHostCustomizationConfigSchema = createSchema({
 	[AgentHostConfigKey.DefaultShell]: schemaProperty<string>({
 		type: 'string',
 		title: localize('agentHost.config.defaultShell.title', "Default Shell"),
-		description: localize('agentHost.config.defaultShell.description', "Absolute path to the shell executable used by host-managed terminals. Normally pushed by the connected VS Code client from `terminal.integrated.agentHostProfile.<os>` (falling back to `terminal.integrated.defaultProfile.<os>`); when unset, the agent host falls back to the system shell. Only the path is supported; `args` and `env` from the workbench profile are not piped through yet. The workbench only pushes this for the local agent host — remote agent host operators should set this directly in the remote machine's `agent-host-config.json`."),
+		// CLAWDIUS-BEGIN brand sweep (defaultShell schema description)
+		description: localize('agentHost.config.defaultShell.description', "Absolute path to the shell executable used by host-managed terminals. Normally pushed by the connected Clawdius client from `terminal.integrated.agentHostProfile.<os>` (falling back to `terminal.integrated.defaultProfile.<os>`); when unset, the agent host falls back to the system shell. Only the path is supported; `args` and `env` from the workbench profile are not piped through yet. The workbench only pushes this for the local agent host — remote agent host operators should set this directly in the remote machine's `agent-host-config.json`."),
+		// CLAWDIUS-END
 	}),
 	[AgentHostConfigKey.EnableCustomTerminalTool]: schemaProperty<boolean>({
 		type: 'boolean',

@@ -151,7 +151,9 @@ export class McpSandboxService extends Disposable implements IMcpSandboxService 
 		return {
 			message: localize(
 				'mcpSandboxSuggestion.message',
-				"The MCP server {0} reported potential sandbox blocks. VS Code found possible sandbox configuration updates:\n{1}",
+				// CLAWDIUS-BEGIN brand sweep (sandbox suggestion message self-reference)
+				"The MCP server {0} reported potential sandbox blocks. Clawdius found possible sandbox configuration updates:\n{1}",
+				// CLAWDIUS-END
 				serverLabel,
 				suggestionLines.join('\n')
 			),

@@ -300,9 +300,11 @@ export class LoopbackAuthServer implements ILoopbackServer {
 </head>
 
 <body>
-	<a class="branding" href="https://code.visualstudio.com/">
+	<!-- CLAWDIUS-BEGIN brand sweep (auth branding href -> fork) -->
+	<a class="branding" href="https://github.com/chapmanjw/clawdius">
 		${this._appName}
 	</a>
+	<!-- CLAWDIUS-END -->
 	<div class="message-container">
 		<div class="message">
 			Sign-in successful! Returning to ${this._appName}...

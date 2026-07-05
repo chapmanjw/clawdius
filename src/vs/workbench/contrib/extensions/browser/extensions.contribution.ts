@@ -415,24 +415,32 @@ CommandsRegistry.registerCommand({
 			{
 				name: 'options',
 				description: '(optional) Options for installing the extension. Object with the following properties: ' +
-					'`installOnlyNewlyAddedFromExtensionPackVSIX`: When enabled, VS Code installs only newly added extensions from the extension pack VSIX. This option is considered only when installing VSIX. ',
+					// CLAWDIUS-BEGIN brand sweep (command-arg metadata self-reference)
+					'`installOnlyNewlyAddedFromExtensionPackVSIX`: When enabled, Clawdius installs only newly added extensions from the extension pack VSIX. This option is considered only when installing VSIX. ',
+				// CLAWDIUS-END
 				isOptional: true,
 				schema: {
 					'type': 'object',
 					'properties': {
 						'installOnlyNewlyAddedFromExtensionPackVSIX': {
 							'type': 'boolean',
-							'description': localize('workbench.extensions.installExtension.option.installOnlyNewlyAddedFromExtensionPackVSIX', "When enabled, VS Code installs only newly added extensions from the extension pack VSIX. This option is considered only while installing a VSIX."),
+							// CLAWDIUS-BEGIN brand sweep (option schema description self-reference)
+							'description': localize('workbench.extensions.installExtension.option.installOnlyNewlyAddedFromExtensionPackVSIX', "When enabled, Clawdius installs only newly added extensions from the extension pack VSIX. This option is considered only while installing a VSIX."),
+							// CLAWDIUS-END
 							default: false
 						},
 						'installPreReleaseVersion': {
 							'type': 'boolean',
-							'description': localize('workbench.extensions.installExtension.option.installPreReleaseVersion', "When enabled, VS Code installs the pre-release version of the extension if available."),
+							// CLAWDIUS-BEGIN brand sweep (option schema description self-reference)
+							'description': localize('workbench.extensions.installExtension.option.installPreReleaseVersion', "When enabled, Clawdius installs the pre-release version of the extension if available."),
+							// CLAWDIUS-END
 							default: false
 						},
 						'donotSync': {
 							'type': 'boolean',
-							'description': localize('workbench.extensions.installExtension.option.donotSync', "When enabled, VS Code do not sync this extension when Settings Sync is on."),
+							// CLAWDIUS-BEGIN brand sweep (option schema description self-reference; grammar do not->does not)
+							'description': localize('workbench.extensions.installExtension.option.donotSync', "When enabled, Clawdius does not sync this extension when Settings Sync is on."),
+							// CLAWDIUS-END
 							default: false
 						},
 						'justification': {

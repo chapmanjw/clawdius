@@ -7,4 +7,6 @@ RunAfter=Ejecutar %1 después de la instalación
 Other=Otros:
 SourceFile=Archivo de origen %1
 OpenWithCodeContextMenu=Abrir &con %1
-UpdatingVisualStudioCode=Actualizando Visual Studio Code...
+; CLAWDIUS-BEGIN brand sweep (installer update caption)
+UpdatingVisualStudioCode=Actualizando Clawdius...
+; CLAWDIUS-END

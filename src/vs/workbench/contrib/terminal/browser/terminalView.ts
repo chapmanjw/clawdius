@@ -208,7 +208,9 @@ export class TerminalViewPane extends ViewPane {
 						label: nls.localize('terminal.useMonospace', "Use 'monospace'"),
 						run: () => this.configurationService.updateValue(TerminalSettingId.FontFamily, 'monospace'),
 					}];
-					this._notificationService.prompt(Severity.Warning, nls.localize('terminal.monospaceOnly', "The terminal only supports monospace fonts. Be sure to restart VS Code if this is a newly installed font."), choices);
+					// CLAWDIUS-BEGIN brand sweep (terminal monospace-only warning self-reference)
+					this._notificationService.prompt(Severity.Warning, nls.localize('terminal.monospaceOnly', "The terminal only supports monospace fonts. Be sure to restart Clawdius if this is a newly installed font."), choices);
+					// CLAWDIUS-END
 				}
 			}
 		}));

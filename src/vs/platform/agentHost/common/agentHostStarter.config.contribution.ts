@@ -96,7 +96,9 @@ configurationRegistry.registerConfiguration({
 				localization: {
 					description: {
 						key: 'chat.agentHost.claudeAgent.enabled.policy',
-						value: nls.localize('chat.agentHost.claudeAgent.enabled.policy', "Enable Claude Agent sessions in VS Code. Start and resume agentic coding sessions powered by Anthropic Claude Agent SDK directly in the editor. Uses your existing Copilot subscription."),
+						// CLAWDIUS-BEGIN brand sweep (Claude Agent policy description; drop false Copilot-subscription claim)
+						value: nls.localize('chat.agentHost.claudeAgent.enabled.policy', "Enable Claude Agent sessions in Clawdius. Start and resume agentic coding sessions powered by Anthropic Claude Agent SDK directly in the editor."),
+						// CLAWDIUS-END
 					}
 				}
 			},

@@ -93,8 +93,10 @@ interface IUnknownLayout {
 }
 
 const DEFAULT_CONTENT: string = [
-	`// ${nls.localize('displayLanguage', 'Defines the keyboard layout used in VS Code in the browser environment.')}`,
-	`// ${nls.localize('doc', 'Open VS Code and run "Developer: Inspect Key Mappings (JSON)" from Command Palette.')}`,
+	// CLAWDIUS-BEGIN brand sweep (generated keyboard-layout file comment self-reference)
+	`// ${nls.localize('displayLanguage', 'Defines the keyboard layout used in Clawdius in the browser environment.')}`,
+	`// ${nls.localize('doc', 'Open Clawdius and run "Developer: Inspect Key Mappings (JSON)" from Command Palette.')}`,
+	// CLAWDIUS-END
 	``,
 	`// Once you have the keyboard layout info, please paste it below.`,
 	'\n'

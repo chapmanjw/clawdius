@@ -355,7 +355,7 @@ export const troubleshootingOptions = (cliName: string): Fig.Option[] => [
 	},
 	{
 		name: '--telemetry',
-		description: 'Shows all telemetry events which VS code collects',
+		description: 'Shows all telemetry events which Clawdius collects',
 	},
 	{
 		name: '--transient',

@@ -85,7 +85,9 @@ if (-not $env:VSCODE_PYTHON_AUTOACTIVATE_GUARD) {
 		}
 		catch {
 			$activationError = $_
-			Write-Host "`e[0m`e[7m * `e[0;103m VS Code Python powershell activation failed with exit code $($activationError.Exception.Message) `e[0m"
+			# CLAWDIUS-BEGIN brand sweep (python activation failure message self-reference)
+			Write-Host "`e[0m`e[7m * `e[0;103m Clawdius Python powershell activation failed with exit code $($activationError.Exception.Message) `e[0m"
+			# CLAWDIUS-END
 		}
 	}
 	# Remove any leftover Python activation env vars.

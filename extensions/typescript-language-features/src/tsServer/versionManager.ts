@@ -110,7 +110,7 @@ export class TypeScriptVersionManager extends Disposable {
 		return {
 			label: (!this.useWorkspaceTsdkSetting || !vscode.workspace.isTrusted
 				? '• '
-				: '') + vscode.l10n.t("Use VS Code's Version"),
+				: '') + vscode.l10n.t("Use the Clawdius Version"),
 			description: bundledVersion.displayName,
 			detail: bundledVersion.pathLabel,
 			run: async () => {

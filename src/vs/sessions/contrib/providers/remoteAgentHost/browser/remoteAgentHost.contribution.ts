@@ -1044,7 +1044,9 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 				},
 				required: ['address', 'name'],
 			},
-			description: nls.localize('chat.remoteAgentHosts', "A list of WebSocket remote agent host addresses to connect to (e.g. \"localhost:3000\"). SSH remote agent host details are managed by VS Code."),
+			// CLAWDIUS-BEGIN brand sweep (settings description self-reference)
+			description: nls.localize('chat.remoteAgentHosts', "A list of WebSocket remote agent host addresses to connect to (e.g. \"localhost:3000\"). SSH remote agent host details are managed by Clawdius."),
+			// CLAWDIUS-END
 			default: [],
 			scope: ConfigurationScope.APPLICATION,
 			tags: ['experimental', 'advanced'],

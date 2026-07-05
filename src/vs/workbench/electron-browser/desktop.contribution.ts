@@ -451,11 +451,15 @@ import product from '../../platform/product/common/product.js';
 			},
 			'disable-chromium-sandbox': {
 				type: 'boolean',
-				description: localize('argv.disableChromiumSandbox', "Disables the Chromium sandbox. This is useful when running VS Code as elevated on Linux and running under Applocker on Windows.")
+				// CLAWDIUS-BEGIN brand sweep (argv.json schema description self-reference)
+				description: localize('argv.disableChromiumSandbox', "Disables the Chromium sandbox. This is useful when running Clawdius as elevated on Linux and running under Applocker on Windows.")
+				// CLAWDIUS-END
 			},
 			'use-inmemory-secretstorage': {
 				type: 'boolean',
-				description: localize('argv.useInMemorySecretStorage', "Ensures that an in-memory store will be used for secret storage instead of using the OS's credential store. This is often used when running VS Code extension tests or when you're experiencing difficulties with the credential store.")
+				// CLAWDIUS-BEGIN brand sweep (argv.json schema description self-reference)
+				description: localize('argv.useInMemorySecretStorage', "Ensures that an in-memory store will be used for secret storage instead of using the OS's credential store. This is often used when running Clawdius extension tests or when you're experiencing difficulties with the credential store.")
+				// CLAWDIUS-END
 			},
 			'remote-debugging-port': {
 				type: 'string',

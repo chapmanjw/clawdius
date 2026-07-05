@@ -27,7 +27,9 @@ export const ExtensionsConfigurationSchema: IJSONSchema = {
 		},
 		unwantedRecommendations: {
 			type: 'array',
-			description: localize('app.extensions.json.unwantedRecommendations', "List of extensions recommended by VS Code that should not be recommended for users of this workspace. The identifier of an extension is always '${publisher}.${name}'. For example: 'vscode.csharp'."),
+			// CLAWDIUS-BEGIN brand sweep (schema description self-reference)
+			description: localize('app.extensions.json.unwantedRecommendations', "List of extensions recommended by Clawdius that should not be recommended for users of this workspace. The identifier of an extension is always '${publisher}.${name}'. For example: 'vscode.csharp'."),
+			// CLAWDIUS-END
 			items: {
 				type: 'string',
 				pattern: EXTENSION_IDENTIFIER_PATTERN,
@@ -46,7 +48,9 @@ export const ExtensionsConfigurationInitialContent: string = [
 	'\t"recommendations": [',
 	'\t\t',
 	'\t],',
-	'\t// List of extensions recommended by VS Code that should not be recommended for users of this workspace.',
+	// CLAWDIUS-BEGIN brand sweep (generated-file comment self-reference)
+	'\t// List of extensions recommended by Clawdius that should not be recommended for users of this workspace.',
+	// CLAWDIUS-END
 	'\t"unwantedRecommendations": [',
 	'\t\t',
 	'\t]',

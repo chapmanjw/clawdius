@@ -7,7 +7,7 @@
 	"config.title": "Mermaid",
 	"config.markdown-mermaid.lightModeTheme.description": "Default Mermaid theme for light mode.",
 	"config.markdown-mermaid.darkModeTheme.description": "Default Mermaid theme for dark mode.",
-	"config.markdown-mermaid.theme.vscode.description": "Mermaid theme derived from the current VS Code color theme.",
+	"config.markdown-mermaid.theme.vscode.description": "Mermaid theme derived from the current Clawdius color theme.",
 	"config.markdown-mermaid.theme.base.description": "Built-in Mermaid theme. The only Mermaid theme that can be customized with theme variables.",
 	"config.markdown-mermaid.theme.forest.description": "Built-in Mermaid theme using shades of green.",
 	"config.markdown-mermaid.theme.dark.description": "Built-in Mermaid theme for dark backgrounds.",

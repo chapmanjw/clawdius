@@ -7,4 +7,6 @@ RunAfter=安装后运行 %1
 Other=其他:
 SourceFile=%1 源文件
 OpenWithCodeContextMenu=通过 %1 打开
-UpdatingVisualStudioCode=正在更新 Visual Studio Code...
+; CLAWDIUS-BEGIN brand sweep (installer update caption)
+UpdatingVisualStudioCode=正在更新 Clawdius...
+; CLAWDIUS-END

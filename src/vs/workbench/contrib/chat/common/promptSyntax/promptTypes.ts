@@ -164,7 +164,9 @@ export function getSourceDescription(source: PromptFileSource): string | undefin
 		case PromptFileSource.ClaudePersonal:
 			return localize('source.claudePersonal', "Global (only used by Claude agents)");
 		case PromptFileSource.UserData:
-			return localize('source.userData', "Global (roams with Settings Sync, only used by VS Code)");
+			// CLAWDIUS-BEGIN brand sweep (prompt source userData label)
+			return localize('source.userData', "Global (roams with Settings Sync, only used by Clawdius)");
+		// CLAWDIUS-END
 		case PromptFileSource.ConfigWorkspace:
 			return localize('source.configWorkspace', "Workspace (contributed from settings)");
 		case PromptFileSource.ConfigPersonal:

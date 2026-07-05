@@ -26,7 +26,7 @@ import { disposableTimeout } from '../../../../../base/common/async.js';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { Codicon } from '../../../../../base/common/codicons.js';
-import { DisposableStore, MutableDisposable } from '../../../../../base/common/lifecycle.js';
+import { DisposableStore, MutableDisposable, toDisposable } from '../../../../../base/common/lifecycle.js';
 import { ThemeIcon } from '../../../../../base/common/themables.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { localize } from '../../../../../nls.js';
@@ -157,10 +157,12 @@ export class ClaudeControlCenterEditor extends EditorPane {
 
 	private container!: HTMLElement;
 	private content: HTMLElement | undefined;
-	private toastEl: HTMLElement | undefined;
 	private readonly renderStore = this._register(new DisposableStore());
-	private readonly toastStore = this._register(new DisposableStore());
-	private readonly toastTimer = this._register(new MutableDisposable());
+	/** Active toasts, oldest first. Each is its OWN store so a rapid second action never eats a prior toast's
+	 *  Undo (the self-clobber bug); each dismisses on its own 5s timer or when its Undo is clicked. Capped so a
+	 *  burst of quick actions (commitAdd is optimised for rapid multi-add) can't pile up unbounded. */
+	private static readonly MAX_TOASTS = 3;
+	private readonly toasts: DisposableStore[] = [];
 
 	private scope: ControlScope = 'global';
 	private tab: ControlTab = 'usage';
@@ -270,6 +272,8 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		@IHoverService private readonly hoverService: IHoverService,
 	) {
 		super(ClaudeControlCenterEditor.ID, group, telemetryService, themeService, storageService);
+		// Dispose any toasts still on screen when the pane closes (each toast owns its DOM + timer + Undo listener).
+		this._register(toDisposable(() => { for (const s of this.toasts.splice(0)) { s.dispose(); } }));
 		// Re-render when the default-mode setting changes anywhere (e.g. the status-bar pill), so the two stay
 		// in lockstep. Cheap: only the mode segment reads from config; the buckets come from the snapshot.
 		this._register(this.configurationService.onDidChangeConfiguration(e => {
@@ -2863,17 +2867,30 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	}
 
 	private toast(message: string, onUndo?: () => void): void {
-		this.toastStore.clear();
-		this.toastEl?.remove();
-		const toast = append(this.container, h('.clawdius-control-toast'));
-		this.toastEl = toast;
-		append(toast, h('span')).textContent = message;
-		if (onUndo) {
-			const undoBtn = append(toast, h('button.clawdius-control-undo')) as HTMLButtonElement;
-			undoBtn.textContent = localize('clawdius.control.undo', "Undo");
-			this.toastStore.add(addDisposableListener(undoBtn, EventType.CLICK, () => { toast.remove(); onUndo(); }));
+		// Stack, don't clobber: a rapid second action must not erase the first action's Undo before the user can
+		// reach it. Cap the stack so a burst can't pile up unbounded - drop the oldest to make room.
+		while (this.toasts.length >= ClaudeControlCenterEditor.MAX_TOASTS) {
+			this.dismissToast(this.toasts[0]);
 		}
-		this.toastTimer.value = disposableTimeout(() => toast.remove(), 5000);
+		const store = new DisposableStore();
+		this.toasts.push(store);
+		const el = append(this.container, h('.clawdius-control-toast'));
+		store.add(toDisposable(() => el.remove()));
+		append(el, h('span')).textContent = message;
+		if (onUndo) {
+			const undoBtn = append(el, h('button.clawdius-control-undo')) as HTMLButtonElement;
+			undoBtn.textContent = localize('clawdius.control.undo', "Undo");
+			store.add(addDisposableListener(undoBtn, EventType.CLICK, () => { this.dismissToast(store); onUndo(); }));
+		}
+		store.add(disposableTimeout(() => this.dismissToast(store), 5000));
+	}
+
+	/** Remove a single toast (its DOM, Undo listener, and timer) without touching the others in the stack. */
+	private dismissToast(store: DisposableStore): void {
+		const i = this.toasts.indexOf(store);
+		if (i < 0) { return; }
+		this.toasts.splice(i, 1);
+		store.dispose();
 	}
 
 	private async openSettings(): Promise<void> {

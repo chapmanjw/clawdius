@@ -19,6 +19,7 @@ import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/
 import { IClawdiusConfigService } from '../common/clawdiusConfig.js';
 import { CLAWDIUS_STATUS_BAR_ENABLED_SETTING } from '../common/clawdiusStatusBar.js';
 import { ClawdiusConfigStore } from './clawdiusConfigStore.js';
+import { ClawdiusEffectiveConfigService, IClawdiusEffectiveConfigService } from './control/clawdiusEffectiveConfigService.js';
 import { registerClawdiusConfigActions } from './clawdiusConfigActions.js';
 import { ClawdiusPluginSetupContribution, InstallClaudeCodePluginAction } from './clawdiusPluginSetup.js';
 // CLAWDIUS-BEGIN load custom Claude Code icon registrations + their mask CSS (chat/session/terminal)
@@ -180,6 +181,10 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	// The shared config service: ONE scan + watcher set produces the typed snapshot the Control Center reads
 	// (configService.snapshot) for its Skills / MCP / Hooks / Plugins tabs, and re-renders on its onDidChange.
 	registerSingleton(IClawdiusConfigService, ClawdiusConfigStore, InstantiationType.Delayed);
+
+	// The effective-config assembly service: reads every local settings tier for a folder and runs the precedence
+	// resolver, for the Control Center's merged EFFECTIVE view.
+	registerSingleton(IClawdiusEffectiveConfigService, ClawdiusEffectiveConfigService, InstantiationType.Delayed);
 
 	// Usage-capacity refresh router: sends the single on-demand /api/oauth/usage refresh to the host that owns
 	// ~/.claude - the local clawdius-chat command in a local window, the REH server's capacity service in a

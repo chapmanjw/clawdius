@@ -111,6 +111,10 @@ export interface IResolvedSetting {
 	readonly contributions: readonly IContribution[];
 	/** True when a managed-only lock forced this key to the managed allowlist (lower tiers were dropped, not merged). */
 	readonly locked: boolean;
+	/** True when an OPAQUE managed policy (a policyHelper we do not execute, or an unreadable admin source) outranks
+	 *  this value: the shown value is the best-effort lower-tier result, and the hidden managed policy may override
+	 *  it. The UI must NOT present a provisional value as a definitive effective value. */
+	readonly provisional: boolean;
 }
 
 /** The full resolution: every leaf + the managed-band summary the UI needs for badging. */
@@ -122,6 +126,9 @@ export interface IEffectiveConfig {
 	readonly activeLocks: readonly ManagedLockKey[];
 	/** Tiers that are present but whose body is opaque (shown as "managed, value hidden"). */
 	readonly opaqueTiers: readonly SettingsTier[];
+	/** True when the WINNING managed tier is opaque (its body is unknown): the managed policy is active but its
+	 *  values are hidden, so every resolved setting below is `provisional` and must be qualified in the UI. */
+	readonly managedOpaque: boolean;
 }
 
 // --- helpers ---------------------------------------------------------------------------------------------------
@@ -146,8 +153,9 @@ function readPath(body: JsonObject | undefined, dotted: string): JsonValue | und
 	return cur;
 }
 
-/** Stable key for array de-dupe: primitives by value, objects/arrays by canonical JSON. */
-function dedupeKey(v: JsonValue): string {
+/** Stable key for array de-dupe: primitives by value, objects/arrays by canonical JSON. Exported so the managed
+ *  drop-in merge shares one de-dupe rule with the resolver's array-union. */
+export function dedupeKey(v: JsonValue): string {
 	return typeof v === 'object' && v !== null ? JSON.stringify(v) : `${typeof v}:${String(v)}`;
 }
 
@@ -239,6 +247,8 @@ function lockForPath(path: string): ManagedLockKey | undefined {
 interface IMergeCtx {
 	readonly managedWinner: SettingsTier | undefined;
 	readonly locks: ReadonlySet<ManagedLockKey>;
+	/** True when the managed winner's body is unknown - every emitted leaf is provisional (see IResolvedSetting). */
+	readonly managedOpaque: boolean;
 	readonly out: IResolvedSetting[];
 }
 
@@ -306,7 +316,7 @@ function resolveNode(path: string, views: readonly INodeView[], ctx: IMergeCtx):
 			}
 			contributions.push({ tier: v.tier, value: v.value, winning: added });
 		}
-		ctx.out.push({ path, effective: merged, kind: 'array-union', winner: undefined, contributions, locked });
+		ctx.out.push({ path, effective: merged, kind: 'array-union', winner: undefined, contributions, locked, provisional: ctx.managedOpaque });
 		return;
 	}
 
@@ -318,6 +328,7 @@ function resolveNode(path: string, views: readonly INodeView[], ctx: IMergeCtx):
 		winner: gated[0].tier,
 		contributions: gated.map((v, i) => ({ tier: v.tier, value: v.value, winning: i === 0 })),
 		locked,
+		provisional: ctx.managedOpaque,
 	});
 }
 
@@ -341,7 +352,11 @@ export function resolveEffectiveConfig(inputs: readonly ITierInput[]): IEffectiv
 		if (!isManagedTier(t.tier) && isObject(t.body)) { rootViews.push({ tier: t.tier, value: t.body }); }
 	}
 
-	const ctx: IMergeCtx = { managedWinner: managed.winner, locks: managed.locks, out: [] };
+	// The managed band is opaque when a tier won it but delivered no readable body (an unexecuted policyHelper, or
+	// - later - an unreadable registry/managed source). Then the hidden policy outranks every value below.
+	const managedOpaque = managed.winner !== undefined && managed.body === undefined;
+
+	const ctx: IMergeCtx = { managedWinner: managed.winner, locks: managed.locks, managedOpaque, out: [] };
 	resolveNode('', rootViews, ctx);
 	ctx.out.sort((a, b) => a.path.localeCompare(b.path));
 
@@ -350,6 +365,7 @@ export function resolveEffectiveConfig(inputs: readonly ITierInput[]): IEffectiv
 		managedWinner: managed.winner,
 		activeLocks: [...managed.locks],
 		opaqueTiers: managed.opaque,
+		managedOpaque,
 	};
 }
 // CLAWDIUS-END

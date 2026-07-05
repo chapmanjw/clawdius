@@ -42,6 +42,8 @@ suite('Clawdius effective-config resolver', () => {
 		const s = at(r, 'model');
 		assert.strictEqual(s.effective, 'haiku');
 		assert.strictEqual(s.winner, SettingsTier.ProjectLocal);
+		assert.strictEqual(s.provisional, false); // no managed band -> definitive
+		assert.strictEqual(r.managedOpaque, false);
 		// Contributions are highest-first, with the winner flagged.
 		assert.deepStrictEqual(s.contributions.map(c => [c.tier, c.value, c.winning]), [
 			[SettingsTier.ProjectLocal, 'haiku', true],
@@ -160,15 +162,19 @@ suite('Clawdius effective-config resolver', () => {
 		assert.deepStrictEqual(at(r, 'permissions.allow').effective, ['Bash(*)']);
 	});
 
-	test('an opaque managed tier (e.g. an unexecuted policyHelper) wins the band with a hidden body', () => {
+	test('an opaque managed tier makes every lower value PROVISIONAL, not definitive', () => {
 		const r = resolveEffectiveConfig([
 			tier(SettingsTier.User, { model: 'user' }),
 			tier(SettingsTier.PolicyHelper, undefined, /*opaque*/ true),
 		]);
 		assert.strictEqual(r.managedWinner, SettingsTier.PolicyHelper);
 		assert.deepStrictEqual(r.opaqueTiers, [SettingsTier.PolicyHelper]);
-		// The body is unknown, so the user's value still shows through (nothing to override it with).
-		assert.strictEqual(at(r, 'model').effective, 'user');
+		assert.strictEqual(r.managedOpaque, true);
+		// The hidden policy could override any key, so the user's value shows as best-effort but PROVISIONAL - the
+		// UI must not present it as a definitive effective value.
+		const model = at(r, 'model');
+		assert.strictEqual(model.effective, 'user');
+		assert.strictEqual(model.provisional, true);
 	});
 
 	// --- regressions from the adversarial resolver review ---

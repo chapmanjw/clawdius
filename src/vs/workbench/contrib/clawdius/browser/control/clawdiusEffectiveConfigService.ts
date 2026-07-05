@@ -23,7 +23,8 @@ import { IPathService } from '../../../../services/path/common/pathService.js';
 import {
 	IEffectiveConfig, ITierInput, JsonObject, SettingsTier, resolveEffectiveConfig,
 } from '../../common/clawdiusEffectiveConfig.js';
-import { detectPolicyHelper, mergeSettingsChain } from '../../common/clawdiusSettingsMerge.js';
+import { detectPolicyHelper, mergeSettingsChain, parsePolicySettings } from '../../common/clawdiusSettingsMerge.js';
+import { IClawdiusRegistryReader } from '../../common/clawdiusRegistryReader.js';
 import {
 	CLAUDE_DIR, MANAGED_SETTINGS_DROPIN_DIR, MANAGED_SETTINGS_JSON, REMOTE_SETTINGS_JSON,
 	SETTINGS_JSON, SETTINGS_LOCAL_JSON, managedSettingsRoot,
@@ -60,6 +61,7 @@ export class ClawdiusEffectiveConfigService implements IClawdiusEffectiveConfigS
 		@IFileService private readonly fileService: IFileService,
 		@IPathService private readonly pathService: IPathService,
 		@ILogService private readonly logService: ILogService,
+		@IClawdiusRegistryReader private readonly registryReader: IClawdiusRegistryReader,
 	) { }
 
 	async resolve(workspaceFolder: URI | undefined): Promise<IEffectiveConfigResult> {
@@ -87,18 +89,25 @@ export class ClawdiusEffectiveConfigService implements IClawdiusEffectiveConfigS
 		if (isLocal) {
 			const managedBody = await this.readManagedFile(diagnostics);
 			if (managedBody !== undefined) { inputs.push({ tier: SettingsTier.ManagedFile, body: managedBody }); }
-			// policyHelper is never executed - if the managed FILE declares one, surface it as an opaque top tier.
-			// Only MDM / a system managed-settings.json honor policyHelper (NOT server-managed), so the remote body
-			// is deliberately excluded from this check; the MDM/HKLM registry sources join it when they land.
-			if (detectPolicyHelper([managedBody])) { inputs.push({ tier: SettingsTier.PolicyHelper, body: undefined, opaque: true }); }
+
+			// Windows registry managed tiers (HKLM = admin/MDM, HKCU = user-writable fallback), read over the
+			// native host when this desktop provides the reader. Without it (web) on Windows the managed band is
+			// still incomplete, so warn rather than imply completeness.
+			let mdmBody: JsonObject | undefined;
+			if (this.registryReader.available) {
+				mdmBody = await this.readRegistryTier('HKLM', SettingsTier.MdmRegistry, diagnostics);
+				if (mdmBody !== undefined) { inputs.push({ tier: SettingsTier.MdmRegistry, body: mdmBody }); }
+				const hkcuBody = await this.readRegistryTier('HKCU', SettingsTier.HkcuRegistry, diagnostics);
+				if (hkcuBody !== undefined) { inputs.push({ tier: SettingsTier.HkcuRegistry, body: hkcuBody }); }
+			} else if (isWindows) {
+				diagnostics.push({ tier: SettingsTier.MdmRegistry, kind: 'unevaluated', detail: localize('clawdius.eff.registryPending', "Windows registry managed policy (HKLM/HKCU) could not be evaluated; the managed band may be incomplete.") });
+			}
+
+			// policyHelper is never executed - if an ADMIN source (the managed FILE or the MDM/HKLM registry, but
+			// NOT server-managed or the user-writable HKCU) declares one, surface it as an opaque top tier.
+			if (detectPolicyHelper([managedBody, mdmBody])) { inputs.push({ tier: SettingsTier.PolicyHelper, body: undefined, opaque: true }); }
 		} else {
 			diagnostics.push({ tier: SettingsTier.ManagedFile, kind: 'unevaluated', detail: localize('clawdius.eff.managedRemote', "Managed settings are not evaluated in remote windows yet.") });
-		}
-
-		// The Windows registry managed tiers (HKLM/HKCU) are a later increment. On Windows they can be the winning
-		// admin body and can set lock keys, so warn that the managed band may be incomplete rather than imply it.
-		if (isLocal && isWindows) {
-			diagnostics.push({ tier: SettingsTier.MdmRegistry, kind: 'unevaluated', detail: localize('clawdius.eff.registryPending', "Windows registry managed policy (HKLM/HKCU) is not evaluated yet; the managed band may be incomplete.") });
 		}
 
 		return { config: resolveEffectiveConfig(inputs), diagnostics, tiers: inputs };
@@ -130,6 +139,19 @@ export class ClawdiusEffectiveConfigService implements IClawdiusEffectiveConfigS
 			diagnostics.push({ tier, resource, kind: 'malformed', detail: localize('clawdius.eff.parse', "Could not parse {0}.", resource.path) });
 			return undefined;
 		}
+	}
+
+	/** Read one registry policy tier. Absent (no key / empty value) => undefined with no diagnostic; present but
+	 *  unparseable => a `malformed` diagnostic, matching how the file tiers treat unparseable content, so a broken
+	 *  managed policy is never silently presented as absent. */
+	private async readRegistryTier(hive: 'HKLM' | 'HKCU', tier: SettingsTier, diagnostics: ITierReadDiagnostic[]): Promise<JsonObject | undefined> {
+		const raw = await this.registryReader.readPolicySettings(hive);
+		if (raw === undefined || raw.trim().length === 0) { return undefined; }
+		const body = parsePolicySettings(raw);
+		if (body === undefined) {
+			diagnostics.push({ tier, kind: 'malformed', detail: localize('clawdius.eff.registryMalformed', "The {0} registry managed-policy value is not valid JSON.", hive) });
+		}
+		return body;
 	}
 
 	/** The local system directory that holds managed-settings.json for THIS host's OS. A test seam so the managed

@@ -21,14 +21,15 @@ import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { IPathService } from '../../../../services/path/common/pathService.js';
 import { TestPathService } from '../../../../test/browser/workbenchTestServices.js';
 import { SettingsTier } from '../../common/clawdiusEffectiveConfig.js';
+import { ClawdiusNoopRegistryReader, IClawdiusRegistryReader } from '../../common/clawdiusRegistryReader.js';
 import { CLAUDE_DIR, MANAGED_SETTINGS_JSON, SETTINGS_JSON, SETTINGS_LOCAL_JSON } from '../../common/clawdiusTierPaths.js';
 import { ClawdiusEffectiveConfigService } from '../../browser/control/clawdiusEffectiveConfigService.js';
 
 /** Overrides the managed system root with a fake-filesystem-friendly POSIX path so the managed fold can be
  *  exercised without a real drive-letter system path (which the in-memory provider cannot host). */
 class TestEffectiveConfigService extends ClawdiusEffectiveConfigService {
-	constructor(private readonly managedRoot: URI, fileService: IFileService, pathService: IPathService) {
-		super(fileService, pathService, new NullLogService());
+	constructor(private readonly managedRoot: URI, fileService: IFileService, pathService: IPathService, registry: IClawdiusRegistryReader) {
+		super(fileService, pathService, new NullLogService(), registry);
 	}
 	protected override managedRootUri(): URI { return this.managedRoot; }
 }
@@ -48,11 +49,11 @@ suite('Clawdius effective-config service', () => {
 		return fileService;
 	}
 
-	function makeService(fileService: FileService, home: URI, managedRoot?: URI): ClawdiusEffectiveConfigService {
+	function makeService(fileService: FileService, home: URI, managedRoot?: URI, registry: IClawdiusRegistryReader = new ClawdiusNoopRegistryReader()): ClawdiusEffectiveConfigService {
 		const pathService = new TestPathService(home, home.scheme);
 		return managedRoot
-			? new TestEffectiveConfigService(managedRoot, fileService, pathService)
-			: new ClawdiusEffectiveConfigService(fileService, pathService, new NullLogService());
+			? new TestEffectiveConfigService(managedRoot, fileService, pathService, registry)
+			: new ClawdiusEffectiveConfigService(fileService, pathService, new NullLogService(), registry);
 	}
 
 	test('assembles tiers with local > project > user precedence', async () => {
@@ -122,6 +123,36 @@ suite('Clawdius effective-config service', () => {
 		assert.strictEqual(config.settings.find(s => s.path === 'model')?.effective, 'remote-user');
 		// ...but the managed system path is reported unevaluated rather than read off the local host.
 		assert.ok(diagnostics.some(d => d.tier === SettingsTier.ManagedFile && d.kind === 'unevaluated'));
+	});
+
+	test('an available registry reader supplies the HKLM (mdm) tier as the winning managed body', async () => {
+		const fs = makeFileService();
+		const home = URI.file('/home/t');
+		await write(fs, joinPath(home, CLAUDE_DIR, SETTINGS_JSON), JSON.stringify({ model: 'user' }));
+		const registry: IClawdiusRegistryReader = {
+			_serviceBrand: undefined,
+			available: true,
+			async readPolicySettings(hive) { return hive === 'HKLM' ? JSON.stringify({ model: 'mdm' }) : undefined; },
+		};
+		const { config, tiers } = await makeService(fs, home, undefined, registry).resolve(undefined);
+		assert.ok(tiers.some(t => t.tier === SettingsTier.MdmRegistry), 'HKLM body should become the mdmRegistry tier');
+		assert.strictEqual(config.managedWinner, SettingsTier.MdmRegistry);
+		assert.strictEqual(config.settings.find(s => s.path === 'model')?.effective, 'mdm'); // managed outranks user
+	});
+
+	test('a present-but-malformed registry policy value is diagnosed, not silently dropped', async () => {
+		const fs = makeFileService();
+		const home = URI.file('/home/t');
+		await write(fs, joinPath(home, CLAUDE_DIR, SETTINGS_JSON), JSON.stringify({ model: 'user' }));
+		const registry: IClawdiusRegistryReader = {
+			_serviceBrand: undefined,
+			available: true,
+			async readPolicySettings(hive) { return hive === 'HKLM' ? '{ not valid json' : undefined; },
+		};
+		const { config, diagnostics } = await makeService(fs, home, undefined, registry).resolve(undefined);
+		assert.ok(diagnostics.some(d => d.tier === SettingsTier.MdmRegistry && d.kind === 'malformed'),
+			'a broken registry policy must surface a diagnostic, not be treated as absent');
+		assert.strictEqual(config.settings.find(s => s.path === 'model')?.effective, 'user'); // not a phantom mdm tier
 	});
 });
 // CLAWDIUS-END

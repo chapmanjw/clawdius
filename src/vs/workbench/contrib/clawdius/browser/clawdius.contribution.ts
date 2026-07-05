@@ -20,6 +20,7 @@ import { IClawdiusConfigService } from '../common/clawdiusConfig.js';
 import { CLAWDIUS_STATUS_BAR_ENABLED_SETTING } from '../common/clawdiusStatusBar.js';
 import { ClawdiusConfigStore } from './clawdiusConfigStore.js';
 import { ClawdiusEffectiveConfigService, IClawdiusEffectiveConfigService } from './control/clawdiusEffectiveConfigService.js';
+import { ClawdiusNoopRegistryReader, IClawdiusRegistryReader } from '../common/clawdiusRegistryReader.js';
 import { registerClawdiusConfigActions } from './clawdiusConfigActions.js';
 import { ClawdiusPluginSetupContribution, InstallClaudeCodePluginAction } from './clawdiusPluginSetup.js';
 // CLAWDIUS-BEGIN load custom Claude Code icon registrations + their mask CSS (chat/session/terminal)
@@ -181,6 +182,10 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	// The shared config service: ONE scan + watcher set produces the typed snapshot the Control Center reads
 	// (configService.snapshot) for its Skills / MCP / Hooks / Plugins tabs, and re-renders on its onDidChange.
 	registerSingleton(IClawdiusConfigService, ClawdiusConfigStore, InstantiationType.Delayed);
+
+	// The registry policy reader: a no-op default here (web / remote); the electron-browser build registers the
+	// real native reader after this, so a desktop window reads the Windows managed-policy tiers.
+	registerSingleton(IClawdiusRegistryReader, ClawdiusNoopRegistryReader, InstantiationType.Delayed);
 
 	// The effective-config assembly service: reads every local settings tier for a folder and runs the precedence
 	// resolver, for the Control Center's merged EFFECTIVE view.

@@ -149,6 +149,9 @@ import './services/themes/electron-browser/themes.contribution.js';
 // User Data Sync
 import './contrib/userDataSync/electron-browser/userDataSync.contribution.js';
 
+// Clawdius (desktop-only services: the Windows registry policy reader)
+import './contrib/clawdius/electron-browser/clawdius.contribution.js';
+
 // Tags
 import './contrib/tags/electron-browser/workspaceTagsService.js';
 import './contrib/tags/electron-browser/tags.contribution.js';

@@ -254,8 +254,28 @@ export function mapSDKMessageToAgentSignals(
 				registry,
 			);
 		default:
-			// Phase 12 step 7 — system subtypes for subagent task discrimination.
 			if (message.type === 'system') {
+				// CLAWDIUS: surface local slash-command output (e.g. `/usage`, `/cost`) in the native chat. The
+				// SDK delivers it as a one-shot `local_command_output` system message whose `content` is already
+				// rendered by the engine; upstream has no case for it here, so `/usage` (and its "What's
+				// contributing to your limits usage?" breakdown, computed locally from your own sessions) showed
+				// NOTHING in the Agents window. Emit it as a markdown response part instead of dropping it.
+				if (message.subtype === 'local_command_output' && typeof message.content === 'string' && message.content.length > 0) {
+					return [{
+						kind: 'action',
+						resource: chat,
+						action: {
+							type: ActionType.ChatResponsePart,
+							turnId,
+							part: {
+								kind: ResponsePartKind.Markdown,
+								id: `${turnId}#localcmd#${message.uuid}`,
+								content: message.content,
+							},
+						},
+					}];
+				}
+				// Phase 12 step 7 — system subtypes for subagent task discrimination.
 				return mapSubagentSystemMessage(message, chat, registry);
 			}
 			return [];

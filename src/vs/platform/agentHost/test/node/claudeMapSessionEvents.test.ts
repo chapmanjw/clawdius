@@ -16,6 +16,8 @@ import { encodeForwardedChatError, PROXY_ERROR_PREFIX } from '../../node/shared/
 import { SubagentRegistry } from '../../node/claude/claudeSubagentRegistry.js';
 import {
 	makeAssistantMessage,
+	makeLocalCommandOutput,
+	TEST_UUID,
 	makeContentBlockStartText,
 	makeContentBlockStartThinking,
 	makeContentBlockStartToolUse,
@@ -81,6 +83,29 @@ suite('claudeMapSessionEvents — direct mapper tests', () => {
 		);
 
 		assert.deepStrictEqual(signals, []);
+	});
+
+	test('local_command_output system message renders its content as a markdown part (upstream drops it)', () => {
+		const content = 'What\'s contributing to your limits usage?\n  Plugins  42%\n  Skills  18%';
+		assert.deepStrictEqual(
+			[
+				mapSDKMessageToAgentSignals(makeLocalCommandOutput(SESSION_ID, content), SESSION, TURN_ID, new ClaudeMapperState(), new NullLogService(), r()),
+				// empty content is dropped - no empty bubble
+				mapSDKMessageToAgentSignals(makeLocalCommandOutput(SESSION_ID, ''), SESSION, TURN_ID, new ClaudeMapperState(), new NullLogService(), r()),
+			],
+			[
+				[{
+					kind: 'action',
+					resource: SESSION,
+					action: {
+						type: ActionType.ChatResponsePart,
+						turnId: TURN_ID,
+						part: { kind: ResponsePartKind.Markdown, id: `${TURN_ID}#localcmd#${TEST_UUID}`, content },
+					},
+				}],
+				[],
+			],
+		);
 	});
 
 	test('error_during_execution result with a proxy marker emits a ChatError carrying _meta', () => {

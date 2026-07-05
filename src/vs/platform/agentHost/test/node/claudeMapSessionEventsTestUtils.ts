@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type Anthropic from '@anthropic-ai/sdk';
-import type { SDKAssistantMessage, SDKPartialAssistantMessage, SDKResultError, SDKResultSuccess, SDKSystemMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { SDKAssistantMessage, SDKLocalCommandOutputMessage, SDKPartialAssistantMessage, SDKResultError, SDKResultSuccess, SDKSystemMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 
 // Beta event-stream type aliases. The `Anthropic` namespace re-exports
 // these from `@anthropic-ai/sdk/resources/beta/messages.js`, but
@@ -63,6 +63,17 @@ export function makeSystemInitMessage(sessionId: string): SDKSystemMessage {
 		output_style: 'default',
 		skills: [],
 		plugins: [],
+		uuid: TEST_UUID,
+		session_id: sessionId,
+	};
+}
+
+/** A `local_command_output` system message (the output of a local slash command like `/usage`). */
+export function makeLocalCommandOutput(sessionId: string, content: string): SDKLocalCommandOutputMessage {
+	return {
+		type: 'system',
+		subtype: 'local_command_output',
+		content,
 		uuid: TEST_UUID,
 		session_id: sessionId,
 	};

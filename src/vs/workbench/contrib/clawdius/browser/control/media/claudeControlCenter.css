@@ -165,6 +165,8 @@ block titles, brand orange (#d97757) accents, lavender (#a78bfa) highlights, and
 .clawdius-control-addmode:hover { opacity: 0.85; }
 .clawdius-control-addmode.active { opacity: 1; border-color: #d97757; color: #d97757; }
 .clawdius-control-addrow { display: flex; align-items: center; gap: 8px; }
+.clawdius-control-search { flex: 1 1 auto; min-width: 0; }
+.clawdius-control-filter-count { margin-left: auto; color: var(--vscode-descriptionForeground); font-size: 11px; white-space: nowrap; }
 .clawdius-control-select {
 	flex: 1 1 auto; min-width: 0; background: var(--vscode-input-background); color: var(--vscode-input-foreground);
 	border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 6px;

@@ -175,6 +175,10 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	 *  burst of quick actions (commitAdd is optimised for rapid multi-add) can't pile up unbounded. */
 	private static readonly MAX_TOASTS = 3;
 	private readonly toasts: DisposableStore[] = [];
+	/** Active search text for the current scope-aware tab (Permissions rules, Skills, MCP tools, Hooks); reset on
+	 *  tab switch. `filterInput` is the live input, re-set each render so the input handler can restore focus + caret. */
+	private filter = '';
+	private filterInput: HTMLInputElement | undefined;
 
 	private scope: ControlScope = 'global';
 	private tab: ControlTab = 'usage';
@@ -528,6 +532,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		this.pluginAddOpen = false;
 		this.marketplaceAddOpen = false;
 		this.skillFileForm = undefined;
+		this.filter = '';
 	}
 
 	private renderTabs(parent: HTMLElement): void {
@@ -632,9 +637,14 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			const state = parsePermissions(this.snapshot.settings);
 			this.renderScopedDefaultMode(parent, state);
 			const rules = this.block(parent, localize('clawdius.control.rules', "Permission rules"));
+			const setCount = this.renderSearchBox(rules, localize('clawdius.control.rules.search', "Search rules..."));
+			let total = 0;
+			let shown = 0;
 			for (const meta of this.bucketMetas()) {
-				this.renderBucket(rules, state, meta);
+				total += state[meta.bucket].length;
+				shown += this.renderBucket(rules, state, meta);
 			}
+			setCount(shown, total);
 			this.renderAdditionalDirectories(parent, state);
 		}
 	}
@@ -714,6 +724,36 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			() => void this.writeSettingsAtUri(uri, [additionalDirectoriesWrite(prev)], localize('clawdius.control.dirs.reverted', "Reverted directories")));
 	}
 
+	/** A shared, case-insensitive search box bound to `this.filter`. Re-renders the tab on input (matching the
+	 *  Plugins Browse search) and restores focus + caret from the live `filterInput` ref so typing is uninterrupted.
+	 *  Returns a setter for the "N of M shown" count the caller updates after filtering its own list. */
+	private renderSearchBox(parent: HTMLElement, placeholder: string): (shown: number, total: number) => void {
+		const row = append(parent, h('.clawdius-control-addrow'));
+		const input = append(row, h('input.clawdius-control-input.clawdius-control-search')) as HTMLInputElement;
+		input.type = 'text';
+		input.value = this.filter;
+		input.placeholder = placeholder;
+		input.setAttribute('aria-label', placeholder);
+		this.filterInput = input;
+		const count = append(row, h('span.clawdius-control-filter-count'));
+		this.renderStore.add(addDisposableListener(input, EventType.INPUT, () => {
+			this.filter = input.value;
+			const caret = input.selectionStart ?? input.value.length;
+			this.render();
+			this.filterInput?.focus();
+			this.filterInput?.setSelectionRange(caret, caret);
+		}));
+		return (shown, total) => {
+			count.textContent = this.filter.trim() ? localize('clawdius.control.filter.shown', "{0} of {1} shown", shown, total) : '';
+		};
+	}
+
+	/** True when `text` matches the active search filter (case-insensitive substring; an empty filter matches all). */
+	private matchesFilter(text: string): boolean {
+		const q = this.filter.trim().toLowerCase();
+		return q.length === 0 || text.toLowerCase().includes(q);
+	}
+
 	/** The shared scope selector (Global / Project / Project-local) + "Open settings.json" + active-file caption.
 	 *  Used by every scope-aware tab; switching scope reloads the settings.json the whole pane reads. */
 	private renderScopeBar(parent: HTMLElement): void {
@@ -727,7 +767,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			btn.title = `${meta.hint} (${meta.file})`;
 			if (meta.scope === this.scope) { btn.classList.add('active'); btn.setAttribute('aria-selected', 'true'); }
 			this.renderStore.add(addDisposableListener(btn, EventType.CLICK, () => {
-				if (this.scope !== meta.scope) { this.scope = meta.scope; this.adding = undefined; void this.load(); }
+				if (this.scope !== meta.scope) { this.scope = meta.scope; this.adding = undefined; this.filter = ''; void this.load(); }
 			}));
 		}
 		append(bar, h('.clawdius-control-spacer'));
@@ -749,7 +789,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		append(box, h('.clawdius-control-error-body')).textContent = localize('clawdius.control.malformedBody', "Editing is disabled so the file is never clobbered. Open it, fix the JSON, then come back.");
 	}
 
-	private renderBucket(parent: HTMLElement, state: IPermissionsState, meta: IBucketMeta): void {
+	private renderBucket(parent: HTMLElement, state: IPermissionsState, meta: IBucketMeta): number {
 		const rules = state[meta.bucket];
 		const bucket = append(parent, h(`.clawdius-control-bucket.bk-${meta.bucket}`));
 		const head = append(bucket, h('.clawdius-control-bk-hd'));
@@ -768,15 +808,19 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			addRuleOpen ? 'ghost' : 'add',
 			addRuleOpen ? Codicon.close : Codicon.add);
 
-		if (rules.length === 0 && this.adding?.bucket !== meta.bucket) {
-			append(bucket, h('.clawdius-control-emptyrule')).textContent = localize('clawdius.control.noRules', "No rules here yet.");
+		const matching = rules.filter(r => this.matchesFilter(r));
+		if (matching.length === 0 && this.adding?.bucket !== meta.bucket) {
+			append(bucket, h('.clawdius-control-emptyrule')).textContent = this.filter.trim()
+				? localize('clawdius.control.noMatch', "No matches for \"{0}\".", this.filter.trim())
+				: localize('clawdius.control.noRules', "No rules here yet.");
 		}
-		for (const rule of rules) {
+		for (const rule of matching) {
 			this.renderRule(bucket, meta.bucket, rule);
 		}
 		if (this.adding?.bucket === meta.bucket) {
 			this.renderAddRow(bucket, meta.bucket);
 		}
+		return matching.length;
 	}
 
 	private renderRule(parent: HTMLElement, bucket: PermissionBucket, rule: string): void {

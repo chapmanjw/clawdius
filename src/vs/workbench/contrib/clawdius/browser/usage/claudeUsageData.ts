@@ -27,7 +27,29 @@ export interface ICapacityWindow {
 	readonly resets_at?: string | null;
 }
 
+// The current /api/oauth/usage response supersedes the flat `seven_day_<model>` keys (now null on current
+// accounts) with a `limits` ARRAY - one entry per rate-limit window. Per-model weekly windows arrive as
+// `kind: 'weekly_scoped'` carrying `scope.model.display_name` (e.g. 'Fable'), so the dashboard can render one
+// bar per tracked model with NOTHING hardcoded - whatever the response carries appears, and a new model needs
+// no code change. Read defensively (unchecked JSON): every field is optional.
+export interface ILimitScope {
+	readonly model?: { readonly id?: string | null; readonly display_name?: string | null } | null;
+	readonly surface?: string | null;
+}
+export interface ILimitEntry {
+	readonly kind?: string;    // 'session' | 'weekly_all' | 'weekly_scoped' | ...
+	readonly group?: string;   // 'session' | 'weekly' | ...
+	readonly percent?: number; // 0-100 utilization
+	readonly severity?: string;
+	readonly resets_at?: string | null;
+	readonly is_active?: boolean;
+	readonly scope?: ILimitScope | null;
+}
+
 export interface IClaudeCapacity {
+	// The authoritative per-window array in the current response shape (preferred when present).
+	readonly limits?: ReadonlyArray<ILimitEntry> | null;
+	// Legacy flat keys (pre-`limits[]`; the per-model ones are now null on current accounts) - used as a fallback.
 	readonly five_hour?: ICapacityWindow | null;
 	readonly seven_day?: ICapacityWindow | null;
 	readonly seven_day_opus?: ICapacityWindow | null;
@@ -89,10 +111,16 @@ export interface IClaudeAccount {
 
 /** A resolved capacity window for rendering: a human label, utilization %, and reset time. */
 export interface IUsageWindow {
-	readonly key: 'session' | 'week' | 'weekOpus' | 'weekSonnet';
+	// 'session' and 'week' are well-known (the status bar reads them by key); per-model weekly windows use
+	// `week:<model>` (e.g. 'week:fable'). Legacy payloads still emit 'weekOpus' / 'weekSonnet'.
+	readonly key: string;
 	readonly label: string;
 	readonly util: number;
 	readonly resets?: string | null;
+	/** The scoped model's display name for a per-model weekly window (e.g. 'Fable'); undefined otherwise. */
+	readonly model?: string;
+	/** Whether this is the currently-binding (active) window, when the response marks it. */
+	readonly active?: boolean;
 }
 
 // CAPACITY_CACHE_FILE / CREDENTIALS_FILE / SETTINGS_FILE are re-exported from the common provider module (above).
@@ -160,11 +188,59 @@ export function resetLabel(resets_at: string | null | undefined): string | undef
 	return localize('clawdius.usage.resetsDay', "Resets {0}, {1}", day, time);
 }
 
-/** The non-null capacity windows that apply, in Claude Code's order. */
+/**
+ * The non-null capacity windows that apply, in Claude Code's order. Prefers the current `limits[]` array (one
+ * bar per window, per-model weekly windows labelled dynamically from `scope.model`); falls back to the legacy
+ * flat `five_hour` / `seven_day` / `seven_day_<model>` keys for older payloads. NOTHING is hardcoded per model:
+ * whatever scoped windows the response carries are rendered, and a new model needs no code change.
+ */
 export function capacityWindows(capacity: IClaudeCapacity | undefined): IUsageWindow[] {
 	if (!capacity) { return []; }
+	if (Array.isArray(capacity.limits) && capacity.limits.length > 0) {
+		return capacityWindowsFromLimits(capacity.limits);
+	}
+	return capacityWindowsFromFlatKeys(capacity);
+}
+
+/** Parse the current `limits[]` shape: one window per entry; per-model windows labelled from `scope.model`. */
+function capacityWindowsFromLimits(limits: ReadonlyArray<ILimitEntry>): IUsageWindow[] {
 	const out: IUsageWindow[] = [];
-	const add = (w: ICapacityWindow | null | undefined, key: IUsageWindow['key'], label: string) => {
+	for (const e of limits) {
+		if (!e || typeof e.percent !== 'number') { continue; } // unchecked JSON: percent can be absent / non-number
+		let key: string;
+		let label: string;
+		let model: string | undefined;
+		switch (e.kind) {
+			case 'session':
+				key = 'session';
+				label = localize('clawdius.usage.session', "Current session");
+				break;
+			case 'weekly_all':
+				key = 'week';
+				label = localize('clawdius.usage.week', "Current week (all models)");
+				break;
+			case 'weekly_scoped': {
+				const name = e.scope?.model?.display_name?.trim();
+				if (!name) { continue; } // a scoped window with no model name has nothing to label - skip it
+				model = name;
+				key = `week:${name.toLowerCase()}`;
+				label = localize('clawdius.usage.weekModel', "Current week ({0})", name);
+				break;
+			}
+			default:
+				continue; // only render window kinds we understand - never a mislabelled bar
+		}
+		out.push({ key, label, util: e.percent, resets: e.resets_at, model, active: e.is_active === true });
+	}
+	// session, then week (all models), then the per-model weekly windows in their response order (stable sort).
+	const rank = (k: string) => (k === 'session' ? 0 : k === 'week' ? 1 : 2);
+	return out.sort((a, b) => rank(a.key) - rank(b.key));
+}
+
+/** Legacy fallback: the flat `five_hour` / `seven_day` / `seven_day_<model>` keys (pre-`limits[]` payloads). */
+function capacityWindowsFromFlatKeys(capacity: IClaudeCapacity): IUsageWindow[] {
+	const out: IUsageWindow[] = [];
+	const add = (w: ICapacityWindow | null | undefined, key: string, label: string) => {
 		if (w && typeof w.utilization === 'number') { out.push({ key, label, util: w.utilization, resets: w.resets_at }); }
 	};
 	add(capacity.five_hour, 'session', localize('clawdius.usage.session', "Current session"));

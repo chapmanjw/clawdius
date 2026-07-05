@@ -118,6 +118,41 @@ suite('claudeUsageData', () => {
 		);
 	});
 
+	test('capacityWindows: limits[] preferred, per-model scoped windows dynamic + ordered, malformed dropped, empty falls back', () => {
+		// The current /api/oauth/usage shape: a `limits` array. Per-model weekly windows arrive as
+		// `weekly_scoped` carrying scope.model.display_name. Unchecked JSON, so percent may be missing / a
+		// non-number and entries may be null - all of which must drop, never crash or mislabel.
+		const live = JSON.parse('{"limits":[{"kind":"session","percent":27,"resets_at":"r1","is_active":true,"scope":null},{"kind":"weekly_all","percent":26,"resets_at":"r2","is_active":false,"scope":null},{"kind":"weekly_scoped","percent":27,"resets_at":"r3","is_active":false,"scope":{"model":{"id":null,"display_name":"Fable"},"surface":null}}]}') as IClaudeCapacity;
+		// A hypothetical EXTRA model (Nimbus) renders with zero code change; order is session/week/scoped; a scoped
+		// entry with no model name, a non-number percent, a null entry, and an unknown kind all drop.
+		const extra = JSON.parse('{"limits":[{"kind":"weekly_scoped","percent":10,"scope":{"model":{"display_name":"Nimbus"}}},{"kind":"session","percent":5},{"kind":"weekly_scoped","percent":99,"scope":{"model":{"display_name":null}}},{"kind":"weekly_scoped","percent":"bad"},null,{"kind":"mystery","percent":50},{"kind":"weekly_all","percent":20}]}') as IClaudeCapacity;
+		// A non-empty limits[] wins over the legacy flat keys; an EMPTY limits[] falls back to them.
+		const preferred = JSON.parse('{"limits":[{"kind":"session","percent":42}],"five_hour":{"utilization":1},"seven_day":{"utilization":2}}') as IClaudeCapacity;
+		const emptyLimits = JSON.parse('{"limits":[],"five_hour":{"utilization":9,"resets_at":"r9"}}') as IClaudeCapacity;
+		assert.deepStrictEqual(
+			[
+				capacityWindows(live).map(w => ({ key: w.key, util: w.util, resets: w.resets, model: w.model, active: w.active })),
+				capacityWindows(extra).map(w => ({ key: w.key, util: w.util })),
+				capacityWindows(preferred).map(w => ({ key: w.key, util: w.util })),
+				capacityWindows(emptyLimits).map(w => ({ key: w.key, util: w.util })),
+			],
+			[
+				[
+					{ key: 'session', util: 27, resets: 'r1', model: undefined, active: true },
+					{ key: 'week', util: 26, resets: 'r2', model: undefined, active: false },
+					{ key: 'week:fable', util: 27, resets: 'r3', model: 'Fable', active: false },
+				],
+				[
+					{ key: 'session', util: 5 },
+					{ key: 'week', util: 20 },
+					{ key: 'week:nimbus', util: 10 },
+				],
+				[{ key: 'session', util: 42 }],
+				[{ key: 'session', util: 9 }],
+			],
+		);
+	});
+
 	// --- modelLabel / modelFamily -----------------------------------------------------------------------------
 
 	test('modelLabel: claude major.minor, single-number, word suffix, passthrough, long-id truncation', () => {

@@ -1139,13 +1139,20 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			append(block, h('.clawdius-control-empty')).textContent = localize('clawdius.control.skills.none', "No skills yet. Click New Skill to scaffold one, or add a folder under ~/.claude/skills.");
 			return;
 		}
+		const setCount = this.renderSearchBox(block, localize('clawdius.control.skills.search', "Search skills..."));
+		const filtered = skills.filter(s => this.matchesFilter(`${s.name} ${s.description ?? ''}`));
+		setCount(filtered.length, skills.length);
+		if (filtered.length === 0) {
+			append(block, h('.clawdius-control-emptyrule')).textContent = localize('clawdius.control.noMatch', "No matches for \"{0}\".", this.filter.trim());
+			return;
+		}
 		// Validate every on-disk skill's SKILL.md off the paint path; the batch re-renders once for the badges.
-		const folders = skills.map(s => this.representativeSkillItem(s)?.targetResource).filter((u): u is URI => !!u);
+		const folders = filtered.map(s => this.representativeSkillItem(s)?.targetResource).filter((u): u is URI => !!u);
 		void this.ensureSkillValidations(folders);
 		// Standalone skills render flat; plugin-bundled skills are grouped under a collapsible header per plugin.
 		const standalone: ISkillRow[] = [];
 		const byPlugin = new Map<string, ISkillRow[]>();
-		for (const skill of skills) {
+		for (const skill of filtered) {
 			const pluginOnly = skill.items.length > 0 && skill.items.every(i => !!i.sourcePlugin);
 			if (pluginOnly) {
 				const plugin = this.representativeSkillItem(skill)?.sourcePlugin ?? skill.items[0].sourcePlugin!;
@@ -1690,7 +1697,13 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			append(block, h('.clawdius-control-empty')).textContent = localize('clawdius.control.hooks.none', "No hooks configured. Click New hook to add one for an event.");
 			return;
 		}
-		for (const item of hooks) { this.renderHookRow(block, item); }
+		const setCount = this.renderSearchBox(block, localize('clawdius.control.hooks.search', "Search hooks..."));
+		const matching = hooks.filter(item => this.matchesFilter(`${item.label} ${item.description ?? ''}`));
+		if (matching.length === 0) {
+			append(block, h('.clawdius-control-emptyrule')).textContent = localize('clawdius.control.noMatch', "No matches for \"{0}\".", this.filter.trim());
+		}
+		for (const item of matching) { this.renderHookRow(block, item); }
+		setCount(matching.length, hooks.length);
 	}
 
 	/** Hook events from the scanned config (each event with its hook count + backing settings file). */
@@ -1758,6 +1771,16 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const firstFolder = this.workspaceService.getWorkspace().folders[0]?.uri;
 		const projectServers = servers.filter(s => s.scope === ConfigScope.Project && (!firstFolder || isEqualOrParent(s.resource, firstFolder)));
 
+		// Search filters BOTH server lists by name; the box only appears when there is something to filter.
+		const totalServers = globalServers.length + projectServers.length;
+		let setMcpCount: (shown: number, total: number) => void = () => { };
+		if (totalServers > 0) {
+			setMcpCount = this.renderSearchBox(append(parent, h('.clawdius-control-block')), localize('clawdius.control.mcp.search', "Search servers..."));
+		}
+		const globalMatching = globalServers.filter(s => this.matchesFilter(s.name));
+		const projectMatching = projectServers.filter(s => this.matchesFilter(s.name));
+		setMcpCount(globalMatching.length + projectMatching.length, totalServers);
+
 		const gblock = append(parent, h('.clawdius-control-block'));
 		const ghd = append(gblock, h('.clawdius-control-bar'));
 		append(ghd, h('.clawdius-control-block-title')).textContent = localize('clawdius.control.mcp.globalTitle', "Global MCP servers");
@@ -1773,7 +1796,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		if (globalServers.length === 0) {
 			append(gblock, h('.clawdius-control-empty')).textContent = localize('clawdius.control.mcp.noGlobal', "No global MCP servers configured.");
 		} else {
-			for (const server of globalServers) { this.renderMcpServerRow(gblock, server, false, mcpState); }
+			for (const server of globalMatching) { this.renderMcpServerRow(gblock, server, false, mcpState); }
 		}
 
 		const hasWorkspace = this.workspaceService.getWorkspace().folders.length > 0;
@@ -1800,7 +1823,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			if (projectServers.length === 0) {
 				append(pblock, h('.clawdius-control-empty')).textContent = localize('clawdius.control.mcp.noProject', "No project MCP servers in .mcp.json.");
 			} else {
-				for (const server of projectServers) { this.renderMcpServerRow(pblock, server, true, mcpState); }
+				for (const server of projectMatching) { this.renderMcpServerRow(pblock, server, true, mcpState); }
 			}
 		}
 	}

@@ -480,6 +480,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		void this.configService.refresh(true);
 		await this.load();
 		this.toast(this.describeRule(intent), undo ? () => void this.apply(undo, uri) : undefined);
+		if (intent.type === 'addRule') { void this.warnIfRulesLocked(); }
 	}
 
 	/**
@@ -745,6 +746,21 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		}
 		const by = preview.overriddenBy !== undefined ? effectiveTierLabel(preview.overriddenBy) : localize('clawdius.pf.managed', "a higher-precedence source");
 		this.notificationService.warn(localize('clawdius.pf.overridden', "{0} is overridden by {1}, so your change does not affect the value in effect. See the Effective tab.", path, by));
+	}
+
+	/** After adding a permission rule, warn if a managed lock (allowManagedPermissionRulesOnly) restricts rules to
+	 *  the managed allowlist - a rule added in any user-editable scope will not take effect. */
+	private async warnIfRulesLocked(): Promise<void> {
+		const folder = this.workspaceService.getWorkspace().folders[0]?.uri;
+		let result: IEffectiveConfigResult;
+		try {
+			result = await this.effectiveConfigService.resolve(folder);
+		} catch {
+			return;
+		}
+		if (result.config.activeLocks.includes('allowManagedPermissionRulesOnly')) {
+			this.notificationService.warn(localize('clawdius.pf.rulesLocked', "A managed policy restricts permission rules to its own allowlist, so this rule will not take effect. See the Effective tab."));
+		}
 	}
 
 	/** Additional working directories - the previously DEAD `additionalDirectories` writer, now with a UI: a

@@ -30,7 +30,7 @@ import { DisposableStore, MutableDisposable, toDisposable } from '../../../../..
 import { ThemeIcon } from '../../../../../base/common/themables.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { localize } from '../../../../../nls.js';
-import { ConfigurationTarget, IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
+import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { IOpenerService } from '../../../../../platform/opener/common/opener.js';
 import { IHoverService } from '../../../../../platform/hover/browser/hover.js';
@@ -55,14 +55,14 @@ import { ConfigScope, ConfigSection, IClawdiusConfigService, IConfigItem } from 
 import { CONFIG_DELETE_COMMAND_ID, configCreateCommandId } from '../clawdiusConfigActions.js';
 import { IExtensionsWorkbenchService } from '../../../extensions/common/extensions.js';
 import {
-	ALLOW_BYPASS_KEY, INITIAL_PERMISSION_MODE_KEY, PermissionMode, parsePermissionMode, permissionModeWrites, permissionModes,
+	ALLOW_BYPASS_KEY, INITIAL_PERMISSION_MODE_KEY,
 } from '../clawdiusPermissionModeStatusEntry.js';
 import { INSTALL_CLAUDE_CODE_PLUGIN_COMMAND_ID, isClaudeCodePluginInstalled } from '../clawdiusPluginSetup.js';
 import { CLAWDIUS_DISABLE_ANIMATIONS_SETTING } from '../clawdiusDisableAnimations.js';
 import { ClaudeControlCenterInput, ControlTab } from './claudeControlCenterInput.js';
 import { ClaudeUsageDashboardView } from '../usage/claudeUsageDashboardView.js';
 import { IClaudeUsageCapacityRefresh } from '../usage/claudeUsageCapacityRefresh.js';
-import { BUILTIN_TOOLS, IJsonWrite, IPermissionsState, PERMISSION_BUCKETS, PermissionBucket, builtinRule, mcpToolRule, parsePermissions, parseRule } from './claudePermissionsModel.js';
+import { BUILTIN_TOOLS, IJsonWrite, IPermissionsState, PERMISSION_BUCKETS, PermissionBucket, PermissionDefaultMode, additionalDirectoriesWrite, builtinRule, defaultModeWrite, mcpToolRule, parsePermissions, parseRule } from './claudePermissionsModel.js';
 import {
 	ControlScope, PermissionIntent, classifySettings, invertIntent, planPermissionIntent, resolvePermissionsSettingsUri,
 } from './claudeControlCenterData.js';
@@ -150,6 +150,18 @@ export function canDeleteSkillFile(file: URI, folder: URI, isDirectory: boolean,
 	return !isDirectory && !isSkillMd && isEqualOrParent(file, folder) && !isEqual(file, folder);
 }
 // CLAWDIUS-END
+
+/** The six documented `permissions.defaultMode` values, with a label/icon/tone for the scope-aware default-mode
+ *  control. Deliberately distinct from the FOUR-value global session-start pill (clawdiusPermissionModeStatusEntry):
+ *  same words, different key - which is the conflation this control exists to defuse. */
+const DEFAULT_MODE_INFOS: readonly { value: PermissionDefaultMode; label: string; detail: string; icon: ThemeIcon; tone: 'none' | 'safe' | 'warn' | 'danger' }[] = [
+	{ value: 'default', label: localize('clawdius.control.dm.default', "Default"), detail: localize('clawdius.control.dm.default.d', "Ask for approval before each edit or command."), icon: Codicon.shield, tone: 'none' },
+	{ value: 'acceptEdits', label: localize('clawdius.control.dm.accept', "Accept edits"), detail: localize('clawdius.control.dm.accept.d', "Apply file edits without asking; still ask before running commands."), icon: Codicon.edit, tone: 'warn' },
+	{ value: 'plan', label: localize('clawdius.control.dm.plan', "Plan"), detail: localize('clawdius.control.dm.plan.d', "Explore and present a plan before making any changes."), icon: Codicon.eye, tone: 'safe' },
+	{ value: 'auto', label: localize('clawdius.control.dm.auto', "Auto"), detail: localize('clawdius.control.dm.auto.d', "Proceed automatically wherever the permission rules already allow it."), icon: Codicon.play, tone: 'warn' },
+	{ value: 'dontAsk', label: localize('clawdius.control.dm.dontAsk', "Don't ask"), detail: localize('clawdius.control.dm.dontAsk.d', "Do not prompt for approvals in this scope."), icon: Codicon.circleSlash, tone: 'danger' },
+	{ value: 'bypassPermissions', label: localize('clawdius.control.dm.bypass', "Bypass"), detail: localize('clawdius.control.dm.bypass.d', "Skip all approval prompts, including for potentially dangerous commands."), icon: Codicon.zap, tone: 'danger' },
+];
 
 export class ClaudeControlCenterEditor extends EditorPane {
 
@@ -457,25 +469,6 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		this.toast(toastMessage, onUndo);
 	}
 
-	/** Set the default mode (claudeCode.initialPermissionMode + bypass gate) - the same write the pill makes. */
-	private async applyMode(mode: PermissionMode): Promise<void> {
-		const prev = parsePermissionMode(this.configurationService.getValue<string>(INITIAL_PERMISSION_MODE_KEY));
-		if (prev === mode) { return; }
-		try {
-			for (const w of permissionModeWrites(mode)) {
-				await this.configurationService.updateValue(w.key, w.value, ConfigurationTarget.USER);
-			}
-		} catch (err) {
-			this.notificationService.error(localize('clawdius.control.modeFailed', "Could not set the default mode: {0}", err instanceof Error ? err.message : String(err)));
-			return;
-		}
-		// The config listener re-renders both this pane and the pill. Undo restores the previous mode (mode key
-		// only - we never un-set the bypass gate, matching the pill's one-way-enable rule).
-		this.toast(localize('clawdius.control.toast.mode', "Default mode set to {0}", this.modeLabel(mode)), () => {
-			void this.configurationService.updateValue(INITIAL_PERMISSION_MODE_KEY, prev, ConfigurationTarget.USER);
-		});
-	}
-
 	private describeRule(intent: PermissionIntent): string {
 		switch (intent.type) {
 			case 'addRule': return localize('clawdius.control.toast.added', "Added to {0}", intent.bucket);
@@ -618,47 +611,107 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		this.renderHero(parent,
 			localize('clawdius.control.heroTitle', "Permissions"),
 			localize('clawdius.control.heroSub', "Set how Claude starts new conversations and which actions it may take. Edits your own ~/.claude configuration."));
-		this.renderModeBlock(parent);
-		this.renderRulesBlock(parent);
+		this.renderScopedPermissions(parent);
 	}
 
-	private renderModeBlock(parent: HTMLElement): void {
-		const block = this.block(parent, localize('clawdius.control.defaultMode', "Default mode for new conversations"));
-		const current = parsePermissionMode(this.configurationService.getValue<string>(INITIAL_PERMISSION_MODE_KEY));
-		const seg = append(block, h('.clawdius-control-seg'));
-		for (const info of permissionModes()) {
-			const m = append(seg, h('button.clawdius-control-mode')) as HTMLButtonElement;
-			m.classList.add(`tone-${info.tone}`);
-			const active = info.value === current;
-			if (active) { m.classList.add('active'); }
-			const ico = append(m, h('span.clawdius-control-mode-ico'));
-			ico.classList.add(...ThemeIcon.asClassNameArray(info.icon));
-			append(m, h('span.clawdius-control-mode-name')).textContent = info.label;
-			// Description is a tooltip (+ aria) instead of inline text, to keep the row compact.
-			m.title = info.detail;
-			m.setAttribute('aria-label', `${info.label}: ${info.detail}`);
-			m.setAttribute('aria-pressed', active ? 'true' : 'false');
-			this.renderStore.add(addDisposableListener(m, EventType.CLICK, () => void this.applyMode(info.value)));
-		}
-	}
-
-	private renderRulesBlock(parent: HTMLElement): void {
-		const block = this.block(parent, localize('clawdius.control.rules', "Permission rules"));
-		this.renderScopeBar(block);
+	/** The scope bar plus every section it governs - the scope-aware default mode, the permission rules, and the
+	 *  additional working directories - all reading and writing the ONE settings.json the active scope selects. The
+	 *  scope bar leads so it visibly owns everything below (defusing the old global-mode-above-scoped-rules trap). */
+	private renderScopedPermissions(parent: HTMLElement): void {
+		const bar = append(parent, h('.clawdius-control-block'));
+		this.renderScopeBar(bar);
 		if (this.snapshot?.kind === 'unavailable') {
-			append(block, h('.clawdius-control-empty')).textContent = localize('clawdius.control.noFolder', "Open a folder to edit project permissions. Global permissions are always available.");
+			append(bar, h('.clawdius-control-empty')).textContent = localize('clawdius.control.noFolder', "Open a folder to edit project permissions. Global permissions are always available.");
 			return;
 		}
 		if (this.snapshot?.kind === 'malformed') {
-			this.renderMalformed(block);
+			this.renderMalformed(bar);
 			return;
 		}
 		if (this.snapshot?.kind === 'ok') {
 			const state = parsePermissions(this.snapshot.settings);
+			this.renderScopedDefaultMode(parent, state);
+			const rules = this.block(parent, localize('clawdius.control.rules', "Permission rules"));
 			for (const meta of this.bucketMetas()) {
-				this.renderBucket(block, state, meta);
+				this.renderBucket(rules, state, meta);
 			}
+			this.renderAdditionalDirectories(parent, state);
 		}
+	}
+
+	/** The scope-aware default mode: writes `permissions.defaultMode` into the ACTIVE scope's settings.json - NOT
+	 *  the global session-start pill (`claudeCode.initialPermissionMode`), which is a separate setting. Defusing
+	 *  that conflation (same words, two keys) is the point; the caption spells it out. */
+	private renderScopedDefaultMode(parent: HTMLElement, state: IPermissionsState): void {
+		const block = this.block(parent, localize('clawdius.control.defaultMode', "Default mode for new conversations"));
+		const seg = append(block, h('.clawdius-control-seg'));
+		for (const info of DEFAULT_MODE_INFOS) {
+			const m = append(seg, h('button.clawdius-control-mode')) as HTMLButtonElement;
+			m.classList.add(`tone-${info.tone}`);
+			const active = info.value === state.defaultMode;
+			if (active) { m.classList.add('active'); }
+			const ico = append(m, h('span.clawdius-control-mode-ico'));
+			ico.classList.add(...ThemeIcon.asClassNameArray(info.icon));
+			append(m, h('span.clawdius-control-mode-name')).textContent = info.label;
+			m.title = info.detail;
+			m.setAttribute('aria-label', `${info.label}: ${info.detail}`);
+			m.setAttribute('aria-pressed', active ? 'true' : 'false');
+			this.renderStore.add(addDisposableListener(m, EventType.CLICK, () => void this.applyScopedDefaultMode(state, info.value)));
+		}
+		append(block, h('span.clawdius-control-scope-hint')).textContent = localize('clawdius.control.defaultMode.caption',
+			"Writes permissions.defaultMode into this scope's settings.json. The session-start default (the status-bar mode pill) is a separate, global setting.");
+	}
+
+	private async applyScopedDefaultMode(state: IPermissionsState, mode: PermissionDefaultMode): Promise<void> {
+		if (state.defaultMode === mode) { return; }
+		const uri = await this.scopeUri(this.scope);
+		if (!uri) { return; }
+		const prev = state.defaultMode;
+		const label = DEFAULT_MODE_INFOS.find(i => i.value === mode)?.label ?? mode;
+		await this.writeSettingsAtUri(uri, [defaultModeWrite(mode)],
+			localize('clawdius.control.toast.scopedMode', "Default mode set to {0} for this scope", label),
+			() => void this.writeSettingsAtUri(uri, [defaultModeWrite(prev)], localize('clawdius.control.toast.modeReverted', "Reverted default mode")));
+	}
+
+	/** Additional working directories - the previously DEAD `additionalDirectories` writer, now with a UI: a
+	 *  removable row per directory plus an add input, writing `permissions.additionalDirectories` for the scope. */
+	private renderAdditionalDirectories(parent: HTMLElement, state: IPermissionsState): void {
+		const block = this.block(parent, localize('clawdius.control.dirs', "Additional working directories"));
+		const dirs = state.additionalDirectories;
+		if (dirs.length === 0) {
+			append(block, h('.clawdius-control-emptyrule')).textContent = localize('clawdius.control.dirs.empty', "Claude works in the workspace only. Add a folder to grant access beyond it.");
+		}
+		for (const dir of dirs) {
+			const row = append(block, h('.clawdius-control-rule'));
+			row.title = dir;
+			append(append(row, h('.clawdius-control-rule-label')), h('span.clawdius-control-chip')).textContent = dir;
+			append(row, h('.clawdius-control-spacer'));
+			const acts = append(row, h('.clawdius-control-rule-acts'));
+			this.iconButton(acts, Codicon.trash, localize('clawdius.control.remove', "Remove"),
+				() => void this.applyDirectories(dirs, dirs.filter(d => d !== dir), localize('clawdius.control.dirs.removed', "Removed {0}", dir)), true);
+		}
+		const addRow = append(block, h('.clawdius-control-addrow'));
+		const input = append(addRow, h('input.clawdius-control-input')) as HTMLInputElement;
+		input.type = 'text';
+		input.placeholder = localize('clawdius.control.dirs.placeholder', "../shared-libs or ~/scratch");
+		input.setAttribute('aria-label', localize('clawdius.control.dirs.add', "Add directory"));
+		const commit = () => {
+			const value = input.value.trim();
+			if (!value) { return; }
+			if (dirs.includes(value)) { this.toast(localize('clawdius.control.dirs.exists', "That directory is already listed.")); return; }
+			void this.applyDirectories(dirs, [...dirs, value], localize('clawdius.control.dirs.added', "Added {0}", value));
+		};
+		this.renderStore.add(addDisposableListener(input, EventType.KEY_DOWN, (e: KeyboardEvent) => {
+			if (e.key === 'Enter') { e.preventDefault(); commit(); }
+		}));
+		this.button(addRow, localize('clawdius.control.dirs.addBtn', "Add directory"), commit, 'add', Codicon.add);
+	}
+
+	private async applyDirectories(prev: ReadonlyArray<string>, next: ReadonlyArray<string>, toastMsg: string): Promise<void> {
+		const uri = await this.scopeUri(this.scope);
+		if (!uri) { return; }
+		await this.writeSettingsAtUri(uri, [additionalDirectoriesWrite(next)], toastMsg,
+			() => void this.writeSettingsAtUri(uri, [additionalDirectoriesWrite(prev)], localize('clawdius.control.dirs.reverted', "Reverted directories")));
 	}
 
 	/** The shared scope selector (Global / Project / Project-local) + "Open settings.json" + active-file caption.
@@ -2972,8 +3025,5 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		return this.bucketMetas().find(m => m.bucket === bucket)!.label;
 	}
 
-	private modeLabel(mode: PermissionMode): string {
-		return permissionModes().find(m => m.value === mode)?.label ?? mode;
-	}
 }
 // CLAWDIUS-END

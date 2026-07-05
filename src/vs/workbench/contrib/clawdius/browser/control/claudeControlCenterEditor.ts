@@ -54,6 +54,7 @@ import { ITerminalService, ITerminalGroupService } from '../../../terminal/brows
 import { ConfigScope, ConfigSection, IClawdiusConfigService, IConfigItem } from '../../common/clawdiusConfig.js';
 import { IClawdiusEffectiveConfigService, IEffectiveConfigResult } from './clawdiusEffectiveConfigService.js';
 import { IResolvedSetting, JsonValue, SettingsTier, isManagedTier } from '../../common/clawdiusEffectiveConfig.js';
+import { previewWrite } from '../../common/clawdiusPreflight.js';
 import { CONFIG_DELETE_COMMAND_ID, configCreateCommandId } from '../clawdiusConfigActions.js';
 import { IExtensionsWorkbenchService } from '../../../extensions/common/extensions.js';
 import {
@@ -164,6 +165,15 @@ const DEFAULT_MODE_INFOS: readonly { value: PermissionDefaultMode; label: string
 	{ value: 'dontAsk', label: localize('clawdius.control.dm.dontAsk', "Don't ask"), detail: localize('clawdius.control.dm.dontAsk.d', "Do not prompt for approvals in this scope."), icon: Codicon.circleSlash, tone: 'danger' },
 	{ value: 'bypassPermissions', label: localize('clawdius.control.dm.bypass', "Bypass"), detail: localize('clawdius.control.dm.bypass.d', "Skip all approval prompts, including for potentially dangerous commands."), icon: Codicon.zap, tone: 'danger' },
 ];
+
+/** Map a Control Center scope to the effective-config source tier it writes (for preflighting a scoped write). */
+function scopeToTier(scope: ControlScope): SettingsTier {
+	switch (scope) {
+		case 'global': return SettingsTier.User;
+		case 'project': return SettingsTier.Project;
+		case 'projectLocal': return SettingsTier.ProjectLocal;
+	}
+}
 
 /** A short display label for each effective-config source tier (highest precedence first). */
 function effectiveTierLabel(tier: SettingsTier): string {
@@ -712,6 +722,29 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		await this.writeSettingsAtUri(uri, [defaultModeWrite(mode)],
 			localize('clawdius.control.toast.scopedMode', "Default mode set to {0} for this scope", label),
 			() => void this.writeSettingsAtUri(uri, [defaultModeWrite(prev)], localize('clawdius.control.toast.modeReverted', "Reverted default mode")));
+		void this.warnIfOverridden('permissions.defaultMode', mode);
+	}
+
+	/** Preflight a scoped write against the FULL precedence stack and warn if a higher-precedence source (a managed
+	 *  policy, a lock, or a higher scope) means the edit will NOT change the value in effect. Advisory + non-blocking:
+	 *  the write already happened; this only tells the user their change is being shadowed. */
+	private async warnIfOverridden(path: string, value: JsonValue): Promise<void> {
+		const targetTier = scopeToTier(this.scope);
+		const folder = this.workspaceService.getWorkspace().folders[0]?.uri;
+		let result: IEffectiveConfigResult;
+		try {
+			result = await this.effectiveConfigService.resolve(folder);
+		} catch {
+			return; // preflight is advisory; never let it surface as a failure
+		}
+		const preview = previewWrite(result.tiers, targetTier, path, value);
+		if (preview.takesEffect) { return; }
+		if (preview.provisional) {
+			this.notificationService.warn(localize('clawdius.pf.provisional', "A managed policy may override {0}; open the Effective tab to confirm the value in effect.", path));
+			return;
+		}
+		const by = preview.overriddenBy !== undefined ? effectiveTierLabel(preview.overriddenBy) : localize('clawdius.pf.managed', "a higher-precedence source");
+		this.notificationService.warn(localize('clawdius.pf.overridden', "{0} is overridden by {1}, so your change does not affect the value in effect. See the Effective tab.", path, by));
 	}
 
 	/** Additional working directories - the previously DEAD `additionalDirectories` writer, now with a UI: a

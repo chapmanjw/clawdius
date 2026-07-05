@@ -52,6 +52,8 @@ import { IClaudeMcpTool, IClaudeMcpToolDiscoveryResult } from '../../../../../pl
 import { ICommandService } from '../../../../../platform/commands/common/commands.js';
 import { ITerminalService, ITerminalGroupService } from '../../../terminal/browser/terminal.js';
 import { ConfigScope, ConfigSection, IClawdiusConfigService, IConfigItem } from '../../common/clawdiusConfig.js';
+import { IClawdiusEffectiveConfigService, IEffectiveConfigResult } from './clawdiusEffectiveConfigService.js';
+import { IResolvedSetting, JsonValue, SettingsTier, isManagedTier } from '../../common/clawdiusEffectiveConfig.js';
 import { CONFIG_DELETE_COMMAND_ID, configCreateCommandId } from '../clawdiusConfigActions.js';
 import { IExtensionsWorkbenchService } from '../../../extensions/common/extensions.js';
 import {
@@ -163,6 +165,20 @@ const DEFAULT_MODE_INFOS: readonly { value: PermissionDefaultMode; label: string
 	{ value: 'bypassPermissions', label: localize('clawdius.control.dm.bypass', "Bypass"), detail: localize('clawdius.control.dm.bypass.d', "Skip all approval prompts, including for potentially dangerous commands."), icon: Codicon.zap, tone: 'danger' },
 ];
 
+/** A short display label for each effective-config source tier (highest precedence first). */
+function effectiveTierLabel(tier: SettingsTier): string {
+	switch (tier) {
+		case SettingsTier.PolicyHelper: return localize('clawdius.eff.tier.policy', "Policy helper");
+		case SettingsTier.ServerManaged: return localize('clawdius.eff.tier.server', "Server-managed");
+		case SettingsTier.MdmRegistry: return localize('clawdius.eff.tier.mdm', "MDM registry");
+		case SettingsTier.ManagedFile: return localize('clawdius.eff.tier.managed', "Managed file");
+		case SettingsTier.HkcuRegistry: return localize('clawdius.eff.tier.hkcu', "User registry");
+		case SettingsTier.ProjectLocal: return localize('clawdius.eff.tier.local', "Project-local");
+		case SettingsTier.Project: return localize('clawdius.eff.tier.project', "Project");
+		case SettingsTier.User: return localize('clawdius.eff.tier.user', "User");
+	}
+}
+
 export class ClaudeControlCenterEditor extends EditorPane {
 
 	static readonly ID = 'workbench.editor.clawdiusControlCenter';
@@ -179,6 +195,14 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	 *  tab switch. `filterInput` is the live input, re-set each render so the input handler can restore focus + caret. */
 	private filter = '';
 	private filterInput: HTMLInputElement | undefined;
+	/** The resolved effective configuration for the current folder + a monotonic token so a stale async resolve
+	 *  never overwrites a newer one. Loaded lazily when the Effective tab is first shown. */
+	private effectiveResult: IEffectiveConfigResult | undefined;
+	private effectiveToken = 0;
+	private effectiveLoading = false;
+	/** A TERMINAL error state for the Effective resolve: while set, the tab shows the error + a Retry button and
+	 *  does NOT auto-reload, so a persistent failure can never loop into a render->load->fail->render storm. */
+	private effectiveError: string | undefined;
 
 	private scope: ControlScope = 'global';
 	private tab: ControlTab = 'usage';
@@ -277,6 +301,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@IEditorService private readonly editorService: IEditorService,
 		@IClawdiusConfigService private readonly configService: IClawdiusConfigService,
+		@IClawdiusEffectiveConfigService private readonly effectiveConfigService: IClawdiusEffectiveConfigService,
 		@IExtensionsWorkbenchService private readonly extensionsWorkbenchService: IExtensionsWorkbenchService,
 		@IAgentHostService private readonly agentHostService: IAgentHostService,
 		@ICommandService private readonly commandService: ICommandService,
@@ -322,11 +347,15 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			// drop the cached plugins data so the next render re-reads it.
 			this.pluginsData = undefined;
 			this.pluginsLoaded = false;
+			// The merged EFFECTIVE view caches its resolved result; drop it (+ any error) so a settings edit anywhere
+			// re-resolves fresh - a stale "truth" view is worse than a brief reload.
+			this.effectiveResult = undefined;
+			this.effectiveError = undefined;
 			// Do NOT clear discovered tools here. Discovery RUNS the server (the spawn touches ~/.claude), which the
 			// config watcher catches and turns into a benign onDidChange - clearing here would make a freshly loaded
 			// tool list vanish a moment after it appears. The cached tools for a server are dropped only when that
 			// server's def actually changes (see ensureMcpDefs, which re-reads defs and prunes the matching tools).
-			if (this.adding?.mode === 'mcp' || this.tab === 'skills' || this.tab === 'plugins' || this.tab === 'mcp' || this.tab === 'hooks') { this.render(); }
+			if (this.adding?.mode === 'mcp' || this.tab === 'skills' || this.tab === 'plugins' || this.tab === 'mcp' || this.tab === 'hooks' || this.tab === 'effective') { this.render(); }
 		}));
 		// The Plugins tab leads with a "plugin missing" banner; re-render it when the critical plugin is installed
 		// or removed so the banner appears / disappears live. Presence is read from the installed-on-disk list.
@@ -505,6 +534,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		switch (this.tab) {
 			case 'usage': this.renderUsageTab(inner); break;
 			case 'permissions': this.renderPermissionsTab(inner); break;
+			case 'effective': this.renderEffectiveTab(inner); break;
 			case 'skills': this.renderSkillsTab(inner); break;
 			case 'plugins': this.renderPluginsTab(inner); break;
 			case 'mcp': this.renderMcpTab(inner); break;
@@ -541,6 +571,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const tabs: { readonly tab: ControlTab; readonly label: string; readonly ready: boolean }[] = [
 			{ tab: 'usage', label: localize('clawdius.control.tab.usage', "Usage"), ready: true },
 			{ tab: 'permissions', label: localize('clawdius.control.tab.permissions', "Permissions"), ready: true },
+			{ tab: 'effective', label: localize('clawdius.control.tab.effective', "Effective"), ready: true },
 			{ tab: 'mcp', label: localize('clawdius.control.tab.mcp', "MCP"), ready: true },
 			{ tab: 'skills', label: localize('clawdius.control.tab.skills', "Skills"), ready: true },
 			{ tab: 'plugins', label: localize('clawdius.control.tab.plugins', "Plugins"), ready: true },
@@ -752,6 +783,119 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	private matchesFilter(text: string): boolean {
 		const q = this.filter.trim().toLowerCase();
 		return q.length === 0 || text.toLowerCase().includes(q);
+	}
+
+	// --- Effective configuration tab (the merged, precedence-resolved view of every setting) ---
+
+	private async loadEffective(): Promise<void> {
+		const token = ++this.effectiveToken;
+		const folder = this.workspaceService.getWorkspace().folders[0]?.uri;
+		try {
+			const result = await this.effectiveConfigService.resolve(folder);
+			if (token !== this.effectiveToken) { return; }
+			this.effectiveResult = result;
+			this.effectiveError = undefined;
+		} catch (err) {
+			if (token !== this.effectiveToken) { return; }
+			this.effectiveError = err instanceof Error ? err.message : String(err);
+		} finally {
+			this.effectiveLoading = false;
+			if (this.tab === 'effective') { this.render(); }
+		}
+	}
+
+	private renderEffectiveTab(parent: HTMLElement): void {
+		this.renderHero(parent,
+			localize('clawdius.eff.heroTitle', "Effective configuration"),
+			localize('clawdius.eff.heroSub', "The resolved value of every setting across all sources - highest precedence wins. Read-only; edit a value from its own tab or settings.json."));
+
+		// Terminal error state: show the failure + a manual Retry, and do NOT auto-reload (breaks the retry loop).
+		if (this.effectiveError !== undefined) {
+			const bar = append(parent, h('.clawdius-control-bar'));
+			append(bar, h('.clawdius-control-spacer'));
+			this.button(bar, localize('clawdius.eff.retry', "Retry"), () => { this.effectiveError = undefined; this.effectiveResult = undefined; this.render(); }, 'ghost', Codicon.refresh);
+			append(parent, h('.clawdius-control-empty')).textContent = localize('clawdius.eff.failed', "Could not resolve the effective configuration: {0}", this.effectiveError);
+			return;
+		}
+
+		const result = this.effectiveResult;
+		if (!result) {
+			append(parent, h('.clawdius-control-empty')).textContent = localize('clawdius.eff.resolving', "Resolving effective configuration...");
+			if (!this.effectiveLoading) { this.effectiveLoading = true; void this.loadEffective(); }
+			return;
+		}
+
+		const bar = append(parent, h('.clawdius-control-bar'));
+		append(bar, h('.clawdius-control-spacer'));
+		this.button(bar, localize('clawdius.eff.refresh', "Refresh"), () => { this.effectiveResult = undefined; this.render(); }, 'ghost', Codicon.refresh);
+
+		this.renderEffectiveDiagnostics(parent, result);
+
+		const block = this.block(parent, localize('clawdius.eff.resolved', "Resolved settings"));
+		const setCount = this.renderSearchBox(block, localize('clawdius.eff.search', "Search settings..."));
+		const all = result.config.settings;
+		if (all.length === 0) {
+			append(block, h('.clawdius-control-emptyrule')).textContent = localize('clawdius.eff.none', "No settings are configured in any source.");
+			setCount(0, 0);
+			return;
+		}
+		let shown = 0;
+		for (const s of all) {
+			if (!this.matchesFilter(`${s.path} ${this.formatEffectiveValue(s.effective)}`)) { continue; }
+			this.renderEffectiveRow(block, s);
+			shown++;
+		}
+		setCount(shown, all.length);
+	}
+
+	/** The "not evaluated / malformed / opaque managed" banner, so the resolved values below are never read as a
+	 *  complete, definitive picture when a source could not be read. */
+	private renderEffectiveDiagnostics(parent: HTMLElement, result: IEffectiveConfigResult): void {
+		if (!result.config.managedOpaque && result.diagnostics.length === 0) { return; }
+		const block = this.block(parent, localize('clawdius.eff.notes', "Notes"));
+		if (result.config.managedOpaque) {
+			append(block, h('.clawdius-control-scope-hint')).textContent = localize('clawdius.eff.opaque', "A managed policy is active but its values are hidden (a policyHelper program computes them). The values below are best-effort and marked provisional - the policy may override them.");
+		}
+		for (const d of result.diagnostics) {
+			append(block, h('.clawdius-control-scope-hint')).textContent = d.detail;
+		}
+	}
+
+	private renderEffectiveRow(parent: HTMLElement, s: IResolvedSetting): void {
+		const row = append(parent, h('.clawdius-control-eff-row'));
+		const head = append(row, h('.clawdius-control-eff-head'));
+		append(head, h('span.clawdius-control-eff-path')).textContent = s.path;
+		append(head, h('span.clawdius-control-eff-value')).textContent = this.formatEffectiveValue(s.effective);
+		append(head, h('.clawdius-control-spacer'));
+		// Winning source (or "Merged" for a deny-first array union that draws from several tiers).
+		const tierBadge = append(head, h('span.clawdius-control-eff-tier'));
+		if (s.winner !== undefined) {
+			tierBadge.textContent = effectiveTierLabel(s.winner);
+			if (isManagedTier(s.winner)) { tierBadge.classList.add('managed'); }
+		} else {
+			tierBadge.textContent = localize('clawdius.eff.merged', "Merged");
+		}
+		if (s.provisional) {
+			const flag = append(head, h('span.clawdius-control-eff-flag.warn'));
+			flag.textContent = localize('clawdius.eff.provisional', "Provisional");
+			flag.title = localize('clawdius.eff.provisionalTip', "A managed policy is active but unreadable; this value may be overridden.");
+		}
+		if (s.locked) {
+			const flag = append(head, h('span.clawdius-control-eff-flag'));
+			flag.textContent = localize('clawdius.eff.locked', "Locked");
+			flag.title = localize('clawdius.eff.lockedTip', "A managed lock restricts this key to the managed allowlist.");
+		}
+		// Shadowed contributions (the non-winning tiers) so "why is it this value" is visible.
+		for (const c of s.contributions) {
+			if (c.winning) { continue; }
+			const line = append(row, h('.clawdius-control-eff-shadow'));
+			append(line, h('span.clawdius-control-eff-tier.muted')).textContent = effectiveTierLabel(c.tier);
+			append(line, h('span.clawdius-control-eff-shadowval')).textContent = this.formatEffectiveValue(c.value);
+		}
+	}
+
+	private formatEffectiveValue(value: JsonValue): string {
+		return typeof value === 'string' ? value : JSON.stringify(value);
 	}
 
 	/** The shared scope selector (Global / Project / Project-local) + "Open settings.json" + active-file caption.

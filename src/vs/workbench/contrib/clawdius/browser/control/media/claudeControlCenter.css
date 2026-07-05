@@ -167,6 +167,19 @@ block titles, brand orange (#d97757) accents, lavender (#a78bfa) highlights, and
 .clawdius-control-addrow { display: flex; align-items: center; gap: 8px; }
 .clawdius-control-search { flex: 1 1 auto; min-width: 0; }
 .clawdius-control-filter-count { margin-left: auto; color: var(--vscode-descriptionForeground); font-size: 11px; white-space: nowrap; }
+
+/* Effective-config view: one row per resolved setting (its winning value + source) with shadowed contributions. */
+.clawdius-control-eff-row { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; border-bottom: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.15)); }
+.clawdius-control-eff-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.clawdius-control-eff-path { font-family: var(--monaco-monospace-font); font-weight: 600; }
+.clawdius-control-eff-value { font-family: var(--monaco-monospace-font); overflow-wrap: anywhere; }
+.clawdius-control-eff-tier { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); white-space: nowrap; }
+.clawdius-control-eff-tier.managed { background: var(--vscode-inputValidation-warningBackground, #6b5300); color: var(--vscode-inputValidation-warningForeground, #fff); }
+.clawdius-control-eff-tier.muted { background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.3)); }
+.clawdius-control-eff-flag { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 5px; border-radius: 3px; border: 1px solid var(--vscode-descriptionForeground); color: var(--vscode-descriptionForeground); }
+.clawdius-control-eff-flag.warn { border-color: var(--vscode-editorWarning-foreground); color: var(--vscode-editorWarning-foreground); }
+.clawdius-control-eff-shadow { display: flex; align-items: center; gap: 8px; padding-left: 16px; opacity: 0.75; }
+.clawdius-control-eff-shadowval { font-family: var(--monaco-monospace-font); font-size: 12px; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
 .clawdius-control-select {
 	flex: 1 1 auto; min-width: 0; background: var(--vscode-input-background); color: var(--vscode-input-foreground);
 	border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 6px;

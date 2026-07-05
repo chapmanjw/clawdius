@@ -20,7 +20,7 @@ import { EditorInput } from '../../../../common/editor/editorInput.js';
 const ClaudeControlCenterIcon = registerIcon('clawdius-control-center-icon', Codicon.claude, localize('clawdius.control.icon', "Icon of the Claude Code Control Center."));
 
 /** The Control Center tabs, in display order (Usage is first / leftmost). */
-export type ControlTab = 'usage' | 'permissions' | 'mcp' | 'skills' | 'plugins' | 'hooks';
+export type ControlTab = 'usage' | 'permissions' | 'effective' | 'mcp' | 'skills' | 'plugins' | 'hooks';
 
 /** Command to open the Control Center. Optional first arg: a {@link ControlTab} to land on (default: Permissions). */
 export const OPEN_CONTROL_CENTER_COMMAND_ID = 'clawdius.openControlCenter';

@@ -71,7 +71,11 @@ function resolveCurrentPermissionMode(
 	sessionUri: URI,
 	permissionModeFallback: ClaudePermissionMode,
 ): ClaudePermissionMode {
-	return readClaudePermissionMode(configurationService, sessionUri) ?? permissionModeFallback;
+	const mode = readClaudePermissionMode(configurationService, sessionUri) ?? permissionModeFallback;
+	// Trust clamp: an untrusted workspace can never LIVE-FORWARD an escalated mode to the running query (this is
+	// the per-turn path that bypasses buildOptions), so a persisted 'acceptEdits' from a plan approval can never
+	// self-approve writes past the trust gate. Mirrors the buildOptions reachability clamp.
+	return resolveTrusted(configurationService, sessionUri) ? mode : 'default';
 }
 
 /**

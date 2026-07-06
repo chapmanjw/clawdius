@@ -10,6 +10,8 @@ import { IAgentConfigurationService } from '../agentConfigurationService.js';
 import { ClaudeAgentSession } from './claudeAgentSession.js';
 import { buildAskUserSessionInputQuestions, buildExitPlanModeConfirmationState, flattenAskUserAnswers, parseAskUserQuestionInput } from './claudeInteractiveTools.js';
 import { getClaudeConfirmationTitle, getClaudeInvocationMessage, getClaudePermissionKind, getClaudeToolDisplayName, getClaudeToolInputString, getClaudeToolPath, INTERACTIVE_CLAUDE_TOOLS, buildClaudeToolMeta } from './claudeToolDisplay.js';
+import { evaluateTrust, surfaceForToolCall } from '../../common/claudeTrust.js';
+import { isWriteInScope, resolveTrustState, resolveTrusted, trustDenyMessage } from './claudeTrustGate.js';
 
 /**
  * Dependencies for {@link handleCanUseTool}. Kept narrow: a session
@@ -118,6 +120,22 @@ async function dispatchCanUseTool(
 	// `requestUserInput` / `ChatInputRequested`.
 	if (INTERACTIVE_CLAUDE_TOOLS.has(toolName)) {
 		return handleInteractiveTool(deps, session, toolName, input, options);
+	}
+
+	// Workspace-trust gate: deny-by-default enforcement BEFORE any approvable prompt is built. An untrusted
+	// workspace hard-denies writes / shell / MCP / URL / other (reads proceed); a write in a trusted workspace must
+	// fall under a granted write root. A denied call never fires pending_confirmation, so it can never be approved
+	// away by the user or a session auto-approve.
+	const trust = resolveTrustState(deps.configurationService, session.sessionUri, session.workingDirectory);
+	const decision = evaluateTrust(trust, surfaceForToolCall(toolName, input));
+	if (decision.cls === 'deny') {
+		return { behavior: 'deny', message: trustDenyMessage(decision.reason) };
+	}
+	if (decision.cls === 'needs-write-scope') {
+		const writeTarget = options.blockedPath ?? getClaudeToolPath(toolName, input);
+		if (writeTarget === undefined || !(await isWriteInScope(writeTarget, trust.writeRoots))) {
+			return { behavior: 'deny', message: trustDenyMessage(writeTarget === undefined ? 'no-working-directory' : 'out-of-scope-write') };
+		}
 	}
 
 	const permissionKind = getClaudePermissionKind(toolName);
@@ -233,9 +251,14 @@ async function handleExitPlanMode(
 		...(parentToolCallId !== undefined ? { parentToolCallId } : {}),
 	});
 	if (approved) {
-		deps.configurationService.updateSessionConfig(session.sessionUri.toString(), {
-			[ClaudeSessionConfigKey.PermissionMode]: 'acceptEdits' satisfies ClaudePermissionMode,
-		});
+		// Defense in depth: only escalate to acceptEdits in a TRUSTED workspace. In an untrusted workspace,
+		// approving the plan must NOT unlock auto-approved edits (which the SDK self-resolves before canUseTool,
+		// bypassing the trust gate); the mode stays 'default' so every write still reaches the gate.
+		if (resolveTrusted(deps.configurationService, session.sessionUri)) {
+			deps.configurationService.updateSessionConfig(session.sessionUri.toString(), {
+				[ClaudeSessionConfigKey.PermissionMode]: 'acceptEdits' satisfies ClaudePermissionMode,
+			});
+		}
 		return { behavior: 'allow', updatedInput: input };
 	}
 	return { behavior: 'deny', message: 'The user declined the plan, maybe ask why?' };

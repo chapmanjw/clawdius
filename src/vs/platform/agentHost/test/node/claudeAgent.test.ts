@@ -3037,6 +3037,7 @@ suite('ClaudeAgentSession (Phase 7 §3.2)', () => {
 		const sdk = new FakeClaudeAgentSdkService();
 		const fakeConfigService: IAgentConfigurationService = {
 			getSessionConfigValues: () => undefined,
+			getEffectiveValue: () => undefined,
 		} as unknown as IAgentConfigurationService;
 		const sessionData = new RecordingSessionDataService(createSessionDataService());
 		const services = new ServiceCollection(

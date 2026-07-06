@@ -130,12 +130,11 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 .clawdius-usage-dashboard {
 	height: 100%;
 	overflow: auto;
-	padding: 26px 30px 56px;
+	padding: 20px 24px 56px;
 	box-sizing: border-box;
 	color: var(--vscode-foreground);
-	font-family: var(--monaco-monospace-font, "SF Mono", Menlo, Consolas, monospace);
 	font-size: 13px;
-	line-height: 1.5;
+	line-height: 1.4;
 }
 
 /* Match the workbench scrollbar instead of the unstyled native (orange-tinted) one. */
@@ -164,11 +163,11 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 }
 
 .clawdius-usage-dashboard-inner {
-	max-width: 980px;
-	margin: 0 auto;
+	max-width: 1080px;
+	margin: 0;
 	display: flex;
 	flex-direction: column;
-	gap: 28px;
+	gap: 22px;
 }
 
 /* The pane is focusable (for scrolling/keyboard) but should not paint a focus outline like a text input. */
@@ -181,11 +180,8 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 .clawdius-usage-hero {
 	display: flex;
 	align-items: center;
-	gap: 18px;
-	padding: 18px 20px;
-	border: 1px solid var(--vscode-widget-border, rgba(167, 139, 250, 0.25));
-	border-radius: 10px;
-	background: var(--vscode-editorWidget-background, rgba(127, 127, 127, 0.06));
+	gap: 15px;
+	padding: 2px 0 0;
 }
 
 .clawdius-usage-hero-mark {
@@ -208,9 +204,9 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 }
 
 .clawdius-usage-hero-title {
-	font-size: 17px;
+	font-size: 19px;
 	font-weight: 600;
-	letter-spacing: 0.02em;
+	color: var(--vscode-settings-headerForeground, var(--vscode-foreground));
 }
 
 .clawdius-usage-hero-sub {
@@ -236,7 +232,7 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 }
 
 .clawdius-usage-kv-value.accent {
-	color: #d97757;
+	color: var(--vscode-foreground);
 }
 
 .clawdius-usage-hero-meta {
@@ -251,9 +247,9 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 .clawdius-usage-refresh {
 	flex: none;
 	cursor: pointer;
-	border: 1px solid var(--vscode-button-border, rgba(167, 139, 250, 0.4));
-	border-radius: 6px;
-	padding: 5px 14px;
+	border: 1px solid var(--vscode-button-border, transparent);
+	border-radius: 2px;
+	padding: 4px 12px;
 	font-family: inherit;
 	font-size: 12px;
 	color: var(--vscode-button-secondaryForeground, inherit);
@@ -272,16 +268,9 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 }
 
 .clawdius-usage-block-title {
-	font-size: 12px;
-	font-weight: 700;
-	text-transform: uppercase;
-	letter-spacing: 0.12em;
-	color: #d97757;
-}
-
-.clawdius-usage-block-title::before {
-	content: "> ";
-	opacity: 0.6;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--vscode-settings-headerForeground, var(--vscode-foreground));
 }
 
 /* Limits - solid bars that flex-fill the row */
@@ -326,7 +315,7 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 
 .clawdius-usage-limit-pct {
 	font-variant-numeric: tabular-nums;
-	color: #d97757;
+	color: var(--vscode-foreground);
 	text-align: right;
 	white-space: nowrap;
 	min-width: 64px;
@@ -348,7 +337,7 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 
 /* Non-subscription callout */
 .clawdius-usage-callout {
-	border-left: 3px solid #a78bfa;
+	border-left: 2px solid var(--vscode-focusBorder);
 	padding: 4px 0 4px 14px;
 	display: flex;
 	flex-direction: column;
@@ -357,7 +346,7 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 
 .clawdius-usage-callout-head {
 	font-weight: 600;
-	color: #a78bfa;
+	color: var(--vscode-foreground);
 }
 
 .clawdius-usage-callout-body {
@@ -387,7 +376,7 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 }
 
 .clawdius-usage-stat-value {
-	color: #d97757;
+	color: var(--vscode-foreground);
 	font-variant-numeric: tabular-nums;
 	text-align: right;
 }

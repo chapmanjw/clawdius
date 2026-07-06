@@ -999,27 +999,54 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		if (cfg.allowUnsandboxedCommands === true) { flags.push(localize('clawdius.sbx.escape', "unsandboxed commands allowed")); }
 		if (flags.length > 0) { append(status, h('span.clawdius-control-scope-hint')).textContent = flags.join('  ·  '); }
 
-		this.renderSandboxList(parent, localize('clawdius.sbx.allowedDomains', "Allowed domains"), cfg.allowedDomains, localize('clawdius.sbx.noAllowed', "No allowed domains - every destination triggers a first-use prompt."));
-		this.renderSandboxList(parent, localize('clawdius.sbx.deniedDomains', "Denied domains"), cfg.deniedDomains, localize('clawdius.sbx.noDenied', "No denied domains."));
-		this.renderSandboxList(parent, localize('clawdius.sbx.allowWrite', "Writable paths"), cfg.allowWrite, localize('clawdius.sbx.noWrite', "No extra writable paths - writes are limited to the working directory."));
-		this.renderSandboxList(parent, localize('clawdius.sbx.denyWrite', "Denied write paths"), cfg.denyWrite, localize('clawdius.sbx.noDenyWrite', "No denied write paths."));
+		const domainPh = localize('clawdius.sbx.domainPh', "example.com or *.example.com");
+		const pathPh = localize('clawdius.sbx.pathPh', "/absolute/path");
+		this.renderSandboxList(parent, localize('clawdius.sbx.allowedDomains', "Allowed domains"), ['sandbox', 'network', 'allowedDomains'], cfg.allowedDomains, localize('clawdius.sbx.noAllowed', "No allowed domains - every destination triggers a first-use prompt."), domainPh);
+		this.renderSandboxList(parent, localize('clawdius.sbx.deniedDomains', "Denied domains"), ['sandbox', 'network', 'deniedDomains'], cfg.deniedDomains, localize('clawdius.sbx.noDenied', "No denied domains."), domainPh);
+		this.renderSandboxList(parent, localize('clawdius.sbx.allowWrite', "Writable paths"), ['sandbox', 'filesystem', 'allowWrite'], cfg.allowWrite, localize('clawdius.sbx.noWrite', "No extra writable paths - writes are limited to the working directory."), pathPh);
+		this.renderSandboxList(parent, localize('clawdius.sbx.denyWrite', "Denied write paths"), ['sandbox', 'filesystem', 'denyWrite'], cfg.denyWrite, localize('clawdius.sbx.noDenyWrite', "No denied write paths."), pathPh);
 
 		this.renderSandboxPreflight(parent, cfg);
-
-		append(parent, h('span.clawdius-control-scope-hint')).textContent = localize('clawdius.sbx.editHint', "Use \"Open settings.json\" above to edit sandbox rules; in-place editing arrives in a later update.");
 	}
 
-	private renderSandboxList(parent: HTMLElement, title: string, items: readonly string[], emptyText: string): void {
+	private renderSandboxList(parent: HTMLElement, title: string, path: readonly string[], items: readonly string[], emptyText: string, placeholder: string): void {
 		const block = this.block(parent, title);
 		if (items.length === 0) {
 			append(block, h('.clawdius-control-emptyrule')).textContent = emptyText;
-			return;
 		}
 		for (const item of items) {
 			const row = append(block, h('.clawdius-control-rule'));
 			row.title = item;
 			append(append(row, h('.clawdius-control-rule-label')), h('span.clawdius-control-chip')).textContent = item;
+			append(row, h('.clawdius-control-spacer'));
+			const acts = append(row, h('.clawdius-control-rule-acts'));
+			this.iconButton(acts, Codicon.trash, localize('clawdius.control.remove', "Remove"),
+				() => void this.applySandboxList(path, items, items.filter(i => i !== item), localize('clawdius.sbx.removed', "Removed {0}", item)), true);
 		}
+		const addRow = append(block, h('.clawdius-control-addrow'));
+		const input = append(addRow, h('input.clawdius-control-input.clawdius-control-search')) as HTMLInputElement;
+		input.type = 'text';
+		input.placeholder = placeholder;
+		input.setAttribute('aria-label', localize('clawdius.sbx.addLabel', "Add to {0}", title));
+		const commit = () => {
+			const value = input.value.trim();
+			if (value.length === 0) { return; }
+			if (items.includes(value)) { this.toast(localize('clawdius.sbx.exists', "That entry is already listed.")); return; }
+			void this.applySandboxList(path, items, [...items, value], localize('clawdius.sbx.added', "Added {0}", value));
+		};
+		this.renderStore.add(addDisposableListener(input, EventType.KEY_DOWN, (e: KeyboardEvent) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }));
+		this.button(addRow, localize('clawdius.sbx.add', "Add"), commit, 'add', Codicon.add);
+	}
+
+	/** Write a sandbox list (domains / paths) to the active scope, then preflight it: an array write is usually a
+	 *  union, but a managed lock (allowManagedDomainsOnly / allowManagedReadPathsOnly) can drop it - reuse the
+	 *  effective-config override warning so the user learns the edit is shadowed. */
+	private async applySandboxList(path: readonly string[], prev: readonly string[], next: readonly string[], toastMsg: string): Promise<void> {
+		const uri = await this.scopeUri(this.scope);
+		if (!uri) { return; }
+		await this.writeSettingsAtUri(uri, [{ path: [...path], value: [...next] }], toastMsg,
+			() => void this.writeSettingsAtUri(uri, [{ path: [...path], value: [...prev] }], localize('clawdius.sbx.reverted', "Reverted")));
+		void this.warnIfOverridden(path.join('.'), [...next]);
 	}
 
 	/** A live dry-run lane: type a domain or a write path, get the sandbox verdict the kernel would give. */

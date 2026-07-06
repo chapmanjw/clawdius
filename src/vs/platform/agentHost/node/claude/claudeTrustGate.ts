@@ -24,9 +24,13 @@ export function resolveTrustState(configurationService: IAgentConfigurationServi
 		return { trusted: trust[AgentHostTrustKey.Trusted] === true };
 	}
 	// getEffectiveValue is undefined for BOTH a truly-absent config AND a present-but-schema-invalid one. A trust
-	// value that WAS forwarded but validated away must FAIL CLOSED rather than fall back to dormant-trusted.
+	// value that WAS forwarded but validated away must FAIL CLOSED rather than fall back to dormant-trusted. Check
+	// BOTH the root layer (where the forwarder writes it) AND the session layer, so a malformed value at either
+	// cannot invert the deny-by-default posture.
+	const rawRoot = configurationService.getRootConfigValues();
 	const rawSession = configurationService.getSessionConfigValues(sessionUri.toString());
-	if (rawSession && rawSession[AgentHostTrustConfigKey.Trust] !== undefined) {
+	if ((rawRoot && rawRoot[AgentHostTrustConfigKey.Trust] !== undefined) ||
+		(rawSession && rawSession[AgentHostTrustConfigKey.Trust] !== undefined)) {
 		return UNTRUSTED;
 	}
 	// Truly absent: no trust source has connected yet - dormant, trusted.

@@ -88,6 +88,13 @@ export interface IAgentConfigurationService {
 	getSessionConfigValues(session: ProtocolURI): Record<string, unknown> | undefined;
 
 	/**
+	 * Returns the raw (unvalidated) host/root config values, mirroring {@link getSessionConfigValues} for the root
+	 * layer. Used to detect whether a key was forwarded-but-schema-invalid (present in the raw bag yet absent from
+	 * the validated effective value) so a caller can fail closed rather than treat a malformed value as absent.
+	 */
+	getRootConfigValues(): Record<string, unknown> | undefined;
+
+	/**
 	 * Returns the host-level value for `key`, validating it against
 	 * `schema.definition[key]`. Invalid persisted values are logged and treated
 	 * as missing.
@@ -191,6 +198,10 @@ export class AgentConfigurationService extends Disposable implements IAgentConfi
 
 	getSessionConfigValues(session: ProtocolURI): Record<string, unknown> | undefined {
 		return this._stateManager.getSessionState(session)?.config?.values;
+	}
+
+	getRootConfigValues(): Record<string, unknown> | undefined {
+		return this._stateManager.rootState.config?.values;
 	}
 
 	getRootValue<D extends SchemaDefinition, K extends keyof D & string>(

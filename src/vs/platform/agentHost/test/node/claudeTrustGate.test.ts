@@ -14,10 +14,11 @@ import { AgentHostTrustKey, ITrustConfigValue } from '../../common/trustConfigSc
 import { IAgentConfigurationService } from '../../node/agentConfigurationService.js';
 import { resolveTrustState, resolveTrusted, trustDenyMessage } from '../../node/claude/claudeTrustGate.js';
 
-/** Minimal IAgentConfigurationService double: getEffectiveValue (validated) + getSessionConfigValues (raw), the
- *  two the trust resolver reads. `rawSession` lets a test model a present-but-schema-invalid forwarded config. */
-function fakeConfig(trust: ITrustConfigValue | undefined, rawSession?: Record<string, unknown>): IAgentConfigurationService {
-	return { getEffectiveValue: () => trust, getSessionConfigValues: () => rawSession } as unknown as IAgentConfigurationService;
+/** Minimal IAgentConfigurationService double: getEffectiveValue (validated) + the raw root/session getters the
+ *  trust resolver reads. `rawRoot` / `rawSession` let a test model a present-but-schema-invalid forwarded config
+ *  at either layer (the forwarder writes trust at the ROOT layer). */
+function fakeConfig(trust: ITrustConfigValue | undefined, rawSession?: Record<string, unknown>, rawRoot?: Record<string, unknown>): IAgentConfigurationService {
+	return { getEffectiveValue: () => trust, getSessionConfigValues: () => rawSession, getRootConfigValues: () => rawRoot } as unknown as IAgentConfigurationService;
 }
 
 suite('Clawdius workspace-trust gate (node)', () => {
@@ -37,9 +38,12 @@ suite('Clawdius workspace-trust gate (node)', () => {
 		assert.strictEqual(resolveTrusted(fakeConfig({ [AgentHostTrustKey.Trusted]: false }), URI.file('/s')), false);
 	});
 
-	test('resolveTrustState fails closed on a present-but-invalid trust config (not dormant-trusted)', () => {
-		// getEffectiveValue validated the value away (undefined), but the raw session config HAS a trust key - so it
-		// was forwarded and is malformed: fail closed to UNTRUSTED rather than fall back to dormant-trusted.
+	test('resolveTrustState fails closed on a present-but-invalid trust config at either layer', () => {
+		// getEffectiveValue validated the value away (undefined), but a raw config HAS a trust key - so it was
+		// forwarded and is malformed: fail closed to UNTRUSTED rather than fall back to dormant-trusted.
+		// The forwarder writes at the ROOT layer, so that must be covered:
+		assert.deepStrictEqual(resolveTrustState(fakeConfig(undefined, undefined, { trust: { trusted: 'false' } }), URI.file('/s')), { trusted: false });
+		// ...and a malformed value at the session layer is also caught:
 		assert.deepStrictEqual(resolveTrustState(fakeConfig(undefined, { trust: { trusted: 'false' } }), URI.file('/s')), { trusted: false });
 	});
 

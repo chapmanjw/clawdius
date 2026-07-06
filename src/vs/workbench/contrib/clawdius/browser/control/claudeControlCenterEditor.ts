@@ -41,6 +41,7 @@ import { ITelemetryService } from '../../../../../platform/telemetry/common/tele
 import { IThemeService } from '../../../../../platform/theme/common/themeService.js';
 import { IEditorOptions } from '../../../../../platform/editor/common/editor.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
+import { IWorkspaceTrustManagementService } from '../../../../../platform/workspace/common/workspaceTrust.js';
 import { EditorPane } from '../../../../browser/parts/editor/editorPane.js';
 import { IEditorOpenContext } from '../../../../common/editor.js';
 import { IEditorGroup } from '../../../../services/editor/common/editorGroupsService.js';
@@ -327,6 +328,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		@IOpenerService private readonly openerService: IOpenerService,
 		@IPathService private readonly pathService: IPathService,
 		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService,
+		@IWorkspaceTrustManagementService private readonly trustService: IWorkspaceTrustManagementService,
 		@IJSONEditingService private readonly jsonEditing: IJSONEditingService,
 		@INotificationService private readonly notificationService: INotificationService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
@@ -357,6 +359,10 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			if (e.affectsConfiguration(CLAWDIUS_DISABLE_ANIMATIONS_SETTING)) {
 				this.render();
 			}
+		}));
+		// The Trust tab mirrors VS Code workspace trust; re-render it live when the trust decision flips.
+		this._register(this.trustService.onDidChangeTrust(() => {
+			if (this.tab === 'trust') { this.render(); }
 		}));
 		// Refresh when the scanned config changes: the MCP add box's server dropdown, or the Skills list. A skill
 		// folder may have changed on disk, so drop the per-skill validation + file caches (they re-read lazily).
@@ -568,6 +574,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			case 'permissions': this.renderPermissionsTab(inner); break;
 			case 'effective': this.renderEffectiveTab(inner); break;
 			case 'sandbox': this.renderSandboxTab(inner); break;
+			case 'trust': this.renderTrustTab(inner); break;
 			case 'skills': this.renderSkillsTab(inner); break;
 			case 'plugins': this.renderPluginsTab(inner); break;
 			case 'mcp': this.renderMcpTab(inner); break;
@@ -606,6 +613,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			{ tab: 'permissions', label: localize('clawdius.control.tab.permissions', "Permissions"), ready: true },
 			{ tab: 'effective', label: localize('clawdius.control.tab.effective', "Effective"), ready: true },
 			{ tab: 'sandbox', label: localize('clawdius.control.tab.sandbox', "Sandbox"), ready: true },
+			{ tab: 'trust', label: localize('clawdius.control.tab.trust', "Trust"), ready: true },
 			{ tab: 'mcp', label: localize('clawdius.control.tab.mcp', "MCP"), ready: true },
 			{ tab: 'skills', label: localize('clawdius.control.tab.skills', "Skills"), ready: true },
 			{ tab: 'plugins', label: localize('clawdius.control.tab.plugins', "Plugins"), ready: true },
@@ -971,6 +979,37 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	}
 
 	// --- Sandbox tab (the sandbox.* control surface + a dry-run preflight) ---
+
+	private renderTrustTab(parent: HTMLElement): void {
+		this.renderHero(parent,
+			localize('clawdius.trust.heroTitle', "Workspace Trust"),
+			localize('clawdius.trust.heroSub', "Whether Claude can act in this workspace. When it is not trusted the agent is read-only - it can read files, but editing, terminal commands, MCP tools, and web access are blocked. Trusting the workspace grants full access. Backed by VS Code Workspace Trust."));
+
+		const trusted = this.trustService.isWorkspaceTrusted();
+
+		const status = this.block(parent, localize('clawdius.trust.statusTitle', "Status"));
+		append(status, h('span.clawdius-control-scope-hint')).textContent = trusted
+			? localize('clawdius.trust.isTrusted', "This workspace is trusted - Claude has full access.")
+			: localize('clawdius.trust.isUntrusted', "This workspace is not trusted - Claude is read-only. Editing, terminal, MCP, and web tools are blocked until you trust it.");
+
+		const policy = this.block(parent, localize('clawdius.trust.policyTitle', "What trust controls"));
+		const yes = localize('clawdius.trust.allowed', "Allowed");
+		const no = localize('clawdius.trust.blocked', "Blocked");
+		const rows: readonly [string, string][] = [
+			[localize('clawdius.trust.reads', "Read files (Read, Grep, Glob)"), localize('clawdius.trust.always', "Always allowed")],
+			[localize('clawdius.trust.writes', "Edit files (Write, Edit)"), trusted ? yes : no],
+			[localize('clawdius.trust.shell', "Run terminal commands (Bash)"), trusted ? yes : no],
+			[localize('clawdius.trust.mcp', "MCP server tools"), trusted ? yes : no],
+			[localize('clawdius.trust.web', "Web fetch and search"), trusted ? yes : no],
+		];
+		for (const [what, verdict] of rows) {
+			append(policy, h('span.clawdius-control-scope-hint')).textContent = localize('clawdius.trust.row', "{0}: {1}", what, verdict);
+		}
+
+		const actions = this.block(parent, localize('clawdius.trust.manageTitle', "Manage"));
+		this.button(actions, localize('clawdius.trust.manageBtn', "Manage Workspace Trust"),
+			() => void this.commandService.executeCommand('workbench.trust.manage'));
+	}
 
 	private renderSandboxTab(parent: HTMLElement): void {
 		this.renderHero(parent,

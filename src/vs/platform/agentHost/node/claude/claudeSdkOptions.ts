@@ -31,6 +31,14 @@ export interface IBuildOptionsInput {
 	readonly model: ModelSelection | undefined;
 	readonly abortController: AbortController;
 	readonly permissionMode: ClaudePermissionMode;
+	/**
+	 * Whether the working directory is a TRUSTED workspace. The workspace-trust reachability clamp: when false,
+	 * buildOptions forces `permissionMode: 'default'` + `allowDangerouslySkipPermissions: false` (so no
+	 * permission-mode escalation can self-approve a governed tool) and `settingSources: []` (so NO repo or user
+	 * hooks / permission allow-rules / MCP load from a settings file - there is nothing for the model to route
+	 * around canUseTool with). Every governed tool then reaches canUseTool, where the host trust gate denies.
+	 */
+	readonly trusted: boolean;
 	readonly canUseTool: NonNullable<Options['canUseTool']>;
 	readonly isResume: boolean;
 	/**
@@ -135,7 +143,8 @@ export async function buildOptions(
 		// DENY if not pre-approved" (an auto-DENY path, sdk.d.ts), so it must NOT skip-and-run; letting it set
 		// this flag would re-open the auto-approve hole. default/acceptEdits/plan/auto/dontAsk all defer to the
 		// SDK's canUseTool + permissionMode gate (honoring ~/.claude allow-rules via settingSources below).
-		allowDangerouslySkipPermissions: input.permissionMode === 'bypassPermissions',
+		// Workspace-trust clamp: an untrusted workspace can NEVER skip permissions, regardless of the mode.
+		allowDangerouslySkipPermissions: input.trusted && input.permissionMode === 'bypassPermissions',
 		// CLAWDIUS-END
 		canUseTool: input.canUseTool,
 		onElicitation: async req => {
@@ -148,7 +157,9 @@ export async function buildOptions(
 		enableFileCheckpointing: true,
 		model: input.model?.id,
 		effort: resolveClaudeEffort(input.model),
-		permissionMode: input.permissionMode,
+		// Workspace-trust clamp: an untrusted workspace is forced to 'default' mode, so every governed tool routes through
+		// canUseTool (no acceptEdits / auto / dontAsk / bypass self-resolution) where the host trust gate denies.
+		permissionMode: input.trusted ? input.permissionMode : 'default',
 		...(input.isResume
 			? { resume: input.sessionId, ...(input.resumeSessionAt ? { resumeSessionAt: input.resumeSessionAt } : {}) }
 			: { sessionId: input.sessionId }),
@@ -158,7 +169,9 @@ export async function buildOptions(
 			? { plugins: input.plugins.map(p => ({ type: 'local' as const, path: p.fsPath })) }
 			: {}),
 		...(input.agent ? { agent: input.agent } : {}),
-		settingSources: ['user', 'project', 'local'],
+		// Workspace-trust clamp: an untrusted workspace loads NO settings sources - not user, project, or local - so no hooks
+		// (which bypass canUseTool entirely), permission allow-rules, or MCP servers from any settings file can run.
+		settingSources: input.trusted ? ['user', 'project', 'local'] : [],
 		settings: { env: settingsEnv },
 		systemPrompt: { type: 'preset', preset: 'claude_code' },
 		stderr: logStderr,

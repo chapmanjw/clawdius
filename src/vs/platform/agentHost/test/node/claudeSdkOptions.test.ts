@@ -122,13 +122,14 @@ suite('claudeSdkOptions / buildOptions plugins projection', () => {
 
 	const BUNDLED: IClawdiusCliResolution = { mode: 'bundled', executable: 'node', extraEnv: {}, providerPreset: 'oauth', disableLoginPrompt: false };
 
-	function input(plugins: readonly URI[] | undefined, cliResolution: IClawdiusCliResolution = BUNDLED) {
+	function input(plugins: readonly URI[] | undefined, cliResolution: IClawdiusCliResolution = BUNDLED, trusted = true) {
 		return {
 			sessionId: 's1',
 			workingDirectory: URI.file('/tmp/x'),
 			model: undefined,
 			abortController: new AbortController(),
 			permissionMode: 'default' as const,
+			trusted,
 			canUseTool: async () => ({ behavior: 'allow' as const, updatedInput: {} }),
 			isResume: false,
 			mcpServers: undefined,
@@ -136,6 +137,27 @@ suite('claudeSdkOptions / buildOptions plugins projection', () => {
 			...(plugins !== undefined ? { plugins } : {}),
 		};
 	}
+
+	test('Barrier 1: an untrusted workspace forces default mode, empty settingSources, no skip', async () => {
+		const opts = await buildOptions(input(undefined, BUNDLED, /*trusted*/ false), () => { }, () => { });
+		assert.strictEqual(opts.permissionMode, 'default');
+		assert.deepStrictEqual(opts.settingSources, []);
+		assert.strictEqual(opts.allowDangerouslySkipPermissions, false);
+	});
+
+	test('Barrier 1: a trusted workspace loads all settingSources and honours bypassPermissions', async () => {
+		const opts = await buildOptions({ ...input(undefined), permissionMode: 'bypassPermissions' as const, trusted: true }, () => { }, () => { });
+		assert.deepStrictEqual(opts.settingSources, ['user', 'project', 'local']);
+		assert.strictEqual(opts.allowDangerouslySkipPermissions, true);
+		assert.strictEqual(opts.permissionMode, 'bypassPermissions');
+	});
+
+	test('Barrier 1: an untrusted bypassPermissions request is neutralised', async () => {
+		const opts = await buildOptions({ ...input(undefined), permissionMode: 'bypassPermissions' as const, trusted: false }, () => { }, () => { });
+		assert.strictEqual(opts.allowDangerouslySkipPermissions, false);
+		assert.strictEqual(opts.permissionMode, 'default');
+		assert.deepStrictEqual(opts.settingSources, []);
+	});
 
 	test('non-empty plugins project to Options.plugins as local entries', async () => {
 		const opts = await buildOptions(

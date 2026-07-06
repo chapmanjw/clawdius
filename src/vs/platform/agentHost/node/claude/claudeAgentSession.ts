@@ -15,6 +15,7 @@ import { IInstantiationService } from '../../../instantiation/common/instantiati
 import { ILogService } from '../../../log/common/log.js';
 import { IClawdiusCliConfigService } from '../../../clawdius/common/clawdiusCliConfig.js';
 import { IAgentConfigurationService } from '../agentConfigurationService.js';
+import { resolveTrusted } from './claudeTrustGate.js';
 import { ISyncedCustomization } from '../../common/agentPluginManager.js';
 import { ClaudePermissionMode } from '../../common/claudeSessionConfigKeys.js';
 import { ClaudeRuntimeEffortLevel, clampEffortForRuntime, resolveClaudeEffort } from '../../common/claudeModelConfig.js';
@@ -377,6 +378,7 @@ export class ClaudeAgentSession extends Disposable {
 				model: this._provisionalModel,
 				abortController: this.abortController,
 				permissionMode,
+				trusted: resolveTrusted(this._configurationService, this.sessionUri),
 				canUseTool: ctx.canUseTool,
 				isResume: ctx.isResume,
 				resumeSessionAt: this._pendingResumeSessionAt,
@@ -474,6 +476,7 @@ export class ClaudeAgentSession extends Disposable {
 						model: this._provisionalModel,
 						abortController: rebuildAbort,
 						permissionMode: liveMode,
+						trusted: resolveTrusted(this._configurationService, this.sessionUri),
 						canUseTool: ctx.canUseTool,
 						isResume: true,
 						resumeSessionAt: this._pendingResumeSessionAt,

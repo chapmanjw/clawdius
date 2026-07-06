@@ -340,6 +340,7 @@ export class ClaudeAgent extends Disposable implements IAgent {
 					model: undefined,
 					abortController: controller,
 					permissionMode: 'default',
+					trusted: true, // discovery never runs a governed tool, so the trust clamp is moot here
 					// Discovery never runs a tool; the deny-all stub satisfies the required `canUseTool` type but
 					// is never invoked (no prompt is ever sent).
 					canUseTool: async () => ({ behavior: 'deny', message: 'model discovery: tools disabled', interrupt: true }),

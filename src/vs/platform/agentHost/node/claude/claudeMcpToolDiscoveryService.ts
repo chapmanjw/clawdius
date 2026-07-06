@@ -50,6 +50,7 @@ export class ClaudeMcpToolDiscoveryService implements IClaudeMcpToolDiscoverySer
 					model: undefined,
 					abortController: abort,
 					permissionMode: 'plan',
+					trusted: true, // discovery never runs a governed tool, so the trust clamp is moot here
 					canUseTool: denyTool,
 					isResume: false,
 					mcpServers: undefined,

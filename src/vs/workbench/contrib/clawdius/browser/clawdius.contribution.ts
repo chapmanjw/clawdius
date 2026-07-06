@@ -23,6 +23,7 @@ import { ClawdiusEffectiveConfigService, IClawdiusEffectiveConfigService } from 
 import { ClawdiusNoopRegistryReader, IClawdiusRegistryReader } from '../common/clawdiusRegistryReader.js';
 import { registerClawdiusConfigActions } from './clawdiusConfigActions.js';
 import { ClawdiusPluginSetupContribution, InstallClaudeCodePluginAction } from './clawdiusPluginSetup.js';
+import { ClawdiusTrustForwarder } from './clawdiusTrustForwarder.js';
 // CLAWDIUS-BEGIN load custom Claude Code icon registrations + their mask CSS (chat/session/terminal)
 import './clawdiusCustomIcons.js';
 import { registerClawdiusEditorTitleActions } from './clawdiusEditorTitleActions.js';
@@ -219,6 +220,11 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	// usage dashboard editor it opens (also reachable from the bottom-left Account button). All data is the
 	// user's own local files; the only network egress is the user-initiated /api/oauth/usage refresh.
 	registerWorkbenchContribution2(ClaudeUsageStatusEntry.ID, ClaudeUsageStatusEntry, WorkbenchPhase.BlockRestore);
+
+	// Workspace-trust forwarder: projects VS Code's workspace-trust decision + trusted folders into the agent host
+	// so the tool gate enforces deny-by-default in an untrusted workspace (writes / shell / MCP / web blocked;
+	// reads allowed). Runs after restore so the trust decision and workspace folders are settled before the push.
+	registerWorkbenchContribution2(ClawdiusTrustForwarder.ID, ClawdiusTrustForwarder, WorkbenchPhase.AfterRestored);
 
 	// Permission-mode status pill (N3-3a): shows + sets the DEFAULT permission mode for new Claude
 	// conversations (claudeCode.initialPermissionMode), named exactly as the CLI and color-coded by risk.

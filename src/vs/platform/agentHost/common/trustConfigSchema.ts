@@ -18,16 +18,14 @@ export const enum AgentHostTrustConfigKey {
 
 /** Well-known sub-keys inside the agent host's `trust` object. */
 export const enum AgentHostTrustKey {
-	/** Whether the workspace is trusted. Absent => the gate defaults trusted (no trust source connected yet). */
+	/** Whether the workspace is trusted. Absent => the gate defaults trusted (no trust source connected yet). A
+	 *  trusted workspace grants full access; an untrusted one denies writes / shell / MCP / URL tools. */
 	Trusted = 'trusted',
-	/** Canonical absolute directories granted write access in a trusted workspace (empty => no writes). */
-	WriteRoots = 'writeRoots',
 }
 
 /** Shape of the persisted/forwarded `trust` object. */
 export type ITrustConfigValue = Partial<{
 	[AgentHostTrustKey.Trusted]: boolean;
-	[AgentHostTrustKey.WriteRoots]: string[];
 }>;
 
 /** Schema for the workspace-trust values a host may forward into the agent host's config bag. */
@@ -39,11 +37,6 @@ export const trustConfigSchema = createSchema({
 			[AgentHostTrustKey.Trusted]: {
 				type: 'boolean',
 				title: localize('agentHost.config.trust.trusted.title', "Workspace Trusted"),
-			},
-			[AgentHostTrustKey.WriteRoots]: {
-				type: 'array',
-				title: localize('agentHost.config.trust.writeRoots.title', "Trusted Write Roots"),
-				items: { type: 'string', title: localize('agentHost.config.trust.writeRoots.item.title', "Path") },
 			},
 		},
 	}),

@@ -11,7 +11,7 @@ import { ClaudeAgentSession } from './claudeAgentSession.js';
 import { buildAskUserSessionInputQuestions, buildExitPlanModeConfirmationState, flattenAskUserAnswers, parseAskUserQuestionInput } from './claudeInteractiveTools.js';
 import { getClaudeConfirmationTitle, getClaudeInvocationMessage, getClaudePermissionKind, getClaudeToolDisplayName, getClaudeToolInputString, getClaudeToolPath, INTERACTIVE_CLAUDE_TOOLS, buildClaudeToolMeta } from './claudeToolDisplay.js';
 import { evaluateTrust, surfaceForToolCall } from '../../common/claudeTrust.js';
-import { isWriteInScope, resolveTrustState, resolveTrusted, trustDenyMessage } from './claudeTrustGate.js';
+import { resolveTrustState, resolveTrusted, trustDenyMessage } from './claudeTrustGate.js';
 
 /**
  * Dependencies for {@link handleCanUseTool}. Kept narrow: a session
@@ -123,19 +123,13 @@ async function dispatchCanUseTool(
 	}
 
 	// Workspace-trust gate: deny-by-default enforcement BEFORE any approvable prompt is built. An untrusted
-	// workspace hard-denies writes / shell / MCP / URL / other (reads proceed); a write in a trusted workspace must
-	// fall under a granted write root. A denied call never fires pending_confirmation, so it can never be approved
-	// away by the user or a session auto-approve.
-	const trust = resolveTrustState(deps.configurationService, session.sessionUri, session.workingDirectory);
-	const decision = evaluateTrust(trust, surfaceForToolCall(toolName, input));
+	// workspace hard-denies writes / shell / MCP / URL / other tools (reads proceed); a trusted workspace grants
+	// full access. A denied call never fires pending_confirmation, so it can never be approved away by the user or
+	// a session auto-approve.
+	const trust = resolveTrustState(deps.configurationService, session.sessionUri);
+	const decision = evaluateTrust(trust, surfaceForToolCall(toolName));
 	if (decision.cls === 'deny') {
 		return { behavior: 'deny', message: trustDenyMessage(decision.reason) };
-	}
-	if (decision.cls === 'needs-write-scope') {
-		const writeTarget = options.blockedPath ?? getClaudeToolPath(toolName, input);
-		if (writeTarget === undefined || !(await isWriteInScope(writeTarget, trust.writeRoots))) {
-			return { behavior: 'deny', message: trustDenyMessage(writeTarget === undefined ? 'no-working-directory' : 'out-of-scope-write') };
-		}
 	}
 
 	const permissionKind = getClaudePermissionKind(toolName);

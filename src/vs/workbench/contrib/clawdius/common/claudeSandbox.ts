@@ -11,7 +11,6 @@
 
 import { posix } from '../../../../base/common/path.js';
 import { isMacintosh, isWindows } from '../../../../base/common/platform.js';
-import { JsonObject, JsonValue } from './clawdiusEffectiveConfig.js';
 
 /** Windows + macOS default filesystems are case-insensitive, so the sandbox resolves paths case-insensitively
  *  there; Linux/WSL2 is case-sensitive. Path matching must follow suit or a `.git` deny is dodged by `.GIT`. */
@@ -32,20 +31,21 @@ export interface ISandboxConfig {
 	readonly excludedCommands: readonly string[];
 }
 
-function isObject(v: JsonValue | undefined): v is JsonObject {
+function isObject(v: unknown): v is Record<string, unknown> {
 	return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-function strings(v: JsonValue | undefined): string[] {
+function strings(v: unknown): string[] {
 	return Array.isArray(v) ? v.filter((e): e is string => typeof e === 'string') : [];
 }
 
-function bool(v: JsonValue | undefined): boolean | undefined {
+function bool(v: unknown): boolean | undefined {
 	return typeof v === 'boolean' ? v : undefined;
 }
 
-/** Parse the `sandbox` block of a settings object into {@link ISandboxConfig}. */
-export function parseSandboxConfig(settings: JsonObject | undefined): ISandboxConfig {
+/** Parse the `sandbox` block of a settings object into {@link ISandboxConfig}. Accepts any parsed-JSON object
+ *  shape (a scope's settings.json, or a reconstructed effective subtree). */
+export function parseSandboxConfig(settings: Record<string, unknown> | undefined): ISandboxConfig {
 	const sandbox = settings && isObject(settings['sandbox']) ? settings['sandbox'] : {};
 	const network = isObject(sandbox['network']) ? sandbox['network'] : {};
 	const filesystem = isObject(sandbox['filesystem']) ? sandbox['filesystem'] : {};

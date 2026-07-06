@@ -55,6 +55,7 @@ import { ConfigScope, ConfigSection, IClawdiusConfigService, IConfigItem } from 
 import { IClawdiusEffectiveConfigService, IEffectiveConfigResult } from './clawdiusEffectiveConfigService.js';
 import { IResolvedSetting, JsonValue, SettingsTier, isManagedTier } from '../../common/clawdiusEffectiveConfig.js';
 import { previewWrite } from '../../common/clawdiusPreflight.js';
+import { ISandboxConfig, SandboxNetworkVerdict, SandboxWriteVerdict, checkDomain, checkWrite, parseSandboxConfig } from '../../common/claudeSandbox.js';
 import { CONFIG_DELETE_COMMAND_ID, configCreateCommandId } from '../clawdiusConfigActions.js';
 import { IExtensionsWorkbenchService } from '../../../extensions/common/extensions.js';
 import {
@@ -165,6 +166,26 @@ const DEFAULT_MODE_INFOS: readonly { value: PermissionDefaultMode; label: string
 	{ value: 'dontAsk', label: localize('clawdius.control.dm.dontAsk', "Don't ask"), detail: localize('clawdius.control.dm.dontAsk.d', "Do not prompt for approvals in this scope."), icon: Codicon.circleSlash, tone: 'danger' },
 	{ value: 'bypassPermissions', label: localize('clawdius.control.dm.bypass', "Bypass"), detail: localize('clawdius.control.dm.bypass.d', "Skip all approval prompts, including for potentially dangerous commands."), icon: Codicon.zap, tone: 'danger' },
 ];
+
+/** A short label for a sandbox preflight verdict. */
+function sandboxVerdictLabel(v: SandboxNetworkVerdict | SandboxWriteVerdict): string {
+	switch (v) {
+		case 'allowed': return localize('clawdius.sbx.v.allowed', "Allowed");
+		case 'denied': return localize('clawdius.sbx.v.denied', "Denied");
+		case 'prompt': return localize('clawdius.sbx.v.prompt', "Would prompt");
+		case 'sandbox-off': return localize('clawdius.sbx.v.off', "Sandbox off");
+	}
+}
+
+/** The CSS tone class for a sandbox preflight verdict badge. */
+function sandboxVerdictTone(v: SandboxNetworkVerdict | SandboxWriteVerdict): string {
+	switch (v) {
+		case 'allowed': return 'sbx-allowed';
+		case 'denied': return 'sbx-denied';
+		case 'prompt': return 'sbx-prompt';
+		case 'sandbox-off': return 'muted';
+	}
+}
 
 /** Map a Control Center scope to the effective-config source tier it writes (for preflighting a scoped write). */
 function scopeToTier(scope: ControlScope): SettingsTier {
@@ -546,6 +567,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			case 'usage': this.renderUsageTab(inner); break;
 			case 'permissions': this.renderPermissionsTab(inner); break;
 			case 'effective': this.renderEffectiveTab(inner); break;
+			case 'sandbox': this.renderSandboxTab(inner); break;
 			case 'skills': this.renderSkillsTab(inner); break;
 			case 'plugins': this.renderPluginsTab(inner); break;
 			case 'mcp': this.renderMcpTab(inner); break;
@@ -583,6 +605,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			{ tab: 'usage', label: localize('clawdius.control.tab.usage', "Usage"), ready: true },
 			{ tab: 'permissions', label: localize('clawdius.control.tab.permissions', "Permissions"), ready: true },
 			{ tab: 'effective', label: localize('clawdius.control.tab.effective', "Effective"), ready: true },
+			{ tab: 'sandbox', label: localize('clawdius.control.tab.sandbox', "Sandbox"), ready: true },
 			{ tab: 'mcp', label: localize('clawdius.control.tab.mcp', "MCP"), ready: true },
 			{ tab: 'skills', label: localize('clawdius.control.tab.skills', "Skills"), ready: true },
 			{ tab: 'plugins', label: localize('clawdius.control.tab.plugins', "Plugins"), ready: true },
@@ -945,6 +968,80 @@ export class ClaudeControlCenterEditor extends EditorPane {
 
 	private formatEffectiveValue(value: JsonValue): string {
 		return typeof value === 'string' ? value : JSON.stringify(value);
+	}
+
+	// --- Sandbox tab (the sandbox.* control surface + a dry-run preflight) ---
+
+	private renderSandboxTab(parent: HTMLElement): void {
+		this.renderHero(parent,
+			localize('clawdius.sbx.heroTitle', "Sandbox"),
+			localize('clawdius.sbx.heroSub', "The Claude Code sandbox's network allowlist, write scopes, and a dry-run preflight. The kernel enforces the sandbox; this is its control surface. Edits your own ~/.claude configuration."));
+
+		const bar = append(parent, h('.clawdius-control-block'));
+		this.renderScopeBar(bar);
+		if (this.snapshot?.kind === 'unavailable') {
+			append(bar, h('.clawdius-control-empty')).textContent = localize('clawdius.sbx.noFolder', "Open a folder to edit project sandbox config. Global sandbox config is always available.");
+			return;
+		}
+		if (this.snapshot?.kind === 'malformed') { this.renderMalformed(bar); return; }
+		if (this.snapshot?.kind !== 'ok') { return; }
+
+		const cfg = parseSandboxConfig(this.snapshot.settings);
+
+		const status = this.block(parent, localize('clawdius.sbx.statusTitle', "Status"));
+		const enabledText = cfg.enabled === true ? localize('clawdius.sbx.on', "enabled")
+			: cfg.enabled === false ? localize('clawdius.sbx.off', "disabled")
+				: localize('clawdius.sbx.default', "not set (platform default)");
+		append(status, h('span.clawdius-control-scope-hint')).textContent = localize('clawdius.sbx.enabledIs', "Sandbox: {0} at this scope.", enabledText);
+		const flags: string[] = [];
+		if (cfg.allowManagedDomainsOnly) { flags.push(localize('clawdius.sbx.netLock', "network: managed allowlist only")); }
+		if (cfg.allowManagedReadPathsOnly) { flags.push(localize('clawdius.sbx.readLock', "reads: managed paths only")); }
+		if (cfg.allowUnsandboxedCommands === true) { flags.push(localize('clawdius.sbx.escape', "unsandboxed commands allowed")); }
+		if (flags.length > 0) { append(status, h('span.clawdius-control-scope-hint')).textContent = flags.join('  ·  '); }
+
+		this.renderSandboxList(parent, localize('clawdius.sbx.allowedDomains', "Allowed domains"), cfg.allowedDomains, localize('clawdius.sbx.noAllowed', "No allowed domains - every destination triggers a first-use prompt."));
+		this.renderSandboxList(parent, localize('clawdius.sbx.deniedDomains', "Denied domains"), cfg.deniedDomains, localize('clawdius.sbx.noDenied', "No denied domains."));
+		this.renderSandboxList(parent, localize('clawdius.sbx.allowWrite', "Writable paths"), cfg.allowWrite, localize('clawdius.sbx.noWrite', "No extra writable paths - writes are limited to the working directory."));
+		this.renderSandboxList(parent, localize('clawdius.sbx.denyWrite', "Denied write paths"), cfg.denyWrite, localize('clawdius.sbx.noDenyWrite', "No denied write paths."));
+
+		this.renderSandboxPreflight(parent, cfg);
+
+		append(parent, h('span.clawdius-control-scope-hint')).textContent = localize('clawdius.sbx.editHint', "Use \"Open settings.json\" above to edit sandbox rules; in-place editing arrives in a later update.");
+	}
+
+	private renderSandboxList(parent: HTMLElement, title: string, items: readonly string[], emptyText: string): void {
+		const block = this.block(parent, title);
+		if (items.length === 0) {
+			append(block, h('.clawdius-control-emptyrule')).textContent = emptyText;
+			return;
+		}
+		for (const item of items) {
+			const row = append(block, h('.clawdius-control-rule'));
+			row.title = item;
+			append(append(row, h('.clawdius-control-rule-label')), h('span.clawdius-control-chip')).textContent = item;
+		}
+	}
+
+	/** A live dry-run lane: type a domain or a write path, get the sandbox verdict the kernel would give. */
+	private renderSandboxPreflight(parent: HTMLElement, cfg: ISandboxConfig): void {
+		const block = this.block(parent, localize('clawdius.sbx.preflightTitle', "Preflight"));
+		append(block, h('span.clawdius-control-scope-hint')).textContent = localize('clawdius.sbx.preflightSub', "Dry-run a domain or a write path against the config above - the same check the sandbox makes.");
+		const row = append(block, h('.clawdius-control-addrow'));
+		const input = append(row, h('input.clawdius-control-input.clawdius-control-search')) as HTMLInputElement;
+		input.type = 'text';
+		input.placeholder = localize('clawdius.sbx.preflightPh', "registry.npmjs.org or /repo/dist");
+		input.setAttribute('aria-label', localize('clawdius.sbx.preflightLabel', "Domain or path to check"));
+		const verdict = append(row, h('span.clawdius-control-eff-tier'));
+		const check = () => {
+			const value = input.value.trim();
+			if (value.length === 0) { verdict.textContent = ''; verdict.className = 'clawdius-control-eff-tier'; return; }
+			const isPath = value.includes('/') || value.includes('\\') || /^[a-zA-Z]:/.test(value);
+			const result: SandboxNetworkVerdict | SandboxWriteVerdict = isPath ? checkWrite(cfg, value) : checkDomain(cfg, value);
+			verdict.textContent = sandboxVerdictLabel(result);
+			verdict.className = `clawdius-control-eff-tier ${sandboxVerdictTone(result)}`;
+		};
+		this.renderStore.add(addDisposableListener(input, EventType.INPUT, check));
+		check();
 	}
 
 	/** The shared scope selector (Global / Project / Project-local) + "Open settings.json" + active-file caption.

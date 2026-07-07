@@ -611,13 +611,13 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const tabs: { readonly tab: ControlTab; readonly label: string; readonly ready: boolean }[] = [
 			{ tab: 'usage', label: localize('clawdius.control.tab.usage', "Usage"), ready: true },
 			{ tab: 'permissions', label: localize('clawdius.control.tab.permissions', "Permissions"), ready: true },
-			{ tab: 'effective', label: localize('clawdius.control.tab.effective', "Effective"), ready: true },
-			{ tab: 'sandbox', label: localize('clawdius.control.tab.sandbox', "Sandbox"), ready: true },
-			{ tab: 'trust', label: localize('clawdius.control.tab.trust', "Trust"), ready: true },
 			{ tab: 'mcp', label: localize('clawdius.control.tab.mcp', "MCP"), ready: true },
 			{ tab: 'skills', label: localize('clawdius.control.tab.skills', "Skills"), ready: true },
 			{ tab: 'plugins', label: localize('clawdius.control.tab.plugins', "Plugins"), ready: true },
 			{ tab: 'hooks', label: localize('clawdius.control.tab.hooks', "Hooks"), ready: true },
+			{ tab: 'effective', label: localize('clawdius.control.tab.effective', "Claude Code Settings"), ready: true },
+			{ tab: 'sandbox', label: localize('clawdius.control.tab.sandbox', "Sandbox"), ready: true },
+			{ tab: 'trust', label: localize('clawdius.control.tab.trust', "Trust"), ready: true },
 		];
 		for (const def of tabs) {
 			if (!def.ready) {
@@ -886,7 +886,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 
 	private renderEffectiveTab(parent: HTMLElement): void {
 		this.renderHero(parent,
-			localize('clawdius.eff.heroTitle', "Effective configuration"),
+			localize('clawdius.eff.heroTitle', "Effective Claude Code Settings"),
 			localize('clawdius.eff.heroSub', "The resolved value of every setting across all sources - highest precedence wins. Read-only; edit a value from its own tab or settings.json."));
 
 		// Terminal error state: show the failure + a manual Retry, and do NOT auto-reload (breaks the retry loop).

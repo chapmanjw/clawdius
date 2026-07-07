@@ -44,7 +44,8 @@ rounded "card" chrome. Semantic tones (allow/warn/deny) map to the editor's own 
 
 /* hero band: the animated Clawd mark stays, but no card - native heading typography */
 .clawdius-control-hero {
-	display: flex; align-items: center; gap: 15px; padding: 2px 0 0;
+	/* flex-start (not center): keep the crab + title at the SAME position on every tab; centering re-anchors them to each tab's description length and makes them jump. */
+	display: flex; align-items: flex-start; gap: 15px; padding: 2px 0 0;
 }
 .clawdius-control-hero-mark {
 	flex: none; width: 52px; height: 42px;
@@ -207,6 +208,8 @@ rounded "card" chrome. Semantic tones (allow/warn/deny) map to the editor's own 
 	border-radius: 2px; font: inherit; font-size: 12px; padding: 3px 11px; cursor: pointer;
 }
 .clawdius-control-btn:hover { background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground)); }
+/* A button directly in a column block (e.g. Trust's "Manage Workspace Trust") must size to its content, not stretch to the full block width - a full-width button doesn't read as a button. Scoped to direct children so buttons in row sub-containers keep their alignment. */
+.clawdius-control-block > .clawdius-control-btn { align-self: flex-start; }
 .clawdius-control-btn.danger { color: var(--vscode-errorForeground); border-color: color-mix(in srgb, var(--vscode-errorForeground) 40%, transparent); }
 .clawdius-control-btn.add { background: none; }
 .clawdius-control-btn.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: var(--vscode-button-background); font-weight: 600; }

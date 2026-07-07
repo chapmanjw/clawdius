@@ -634,6 +634,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			const btn = append(strip, h('button.clawdius-control-tab')) as HTMLButtonElement;
 			btn.textContent = def.label;
 			btn.setAttribute('role', 'tab');
+			btn.setAttribute('data-tab', def.tab); // stable hook for the smoke e2e suite
 			const active = def.tab === this.tab;
 			if (active) { btn.classList.add('active'); }
 			btn.setAttribute('aria-selected', active ? 'true' : 'false');

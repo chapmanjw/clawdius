@@ -49,6 +49,17 @@ export function setup(logger: Logger) {
 			}
 		});
 
+		it('renders the Star on GitHub and Sponsor actions in the tab row', async function () {
+			const app = this.app as Application;
+			await app.workbench.quickaccess.runCommand(OPEN_CONTROL_CENTER);
+			await app.code.waitForElement('.clawdius-control');
+			// Both actions are real buttons beside (outside) the tablist. The star button opens the repo so the user
+			// stars it themselves; the count pill is fail-silent so it may or may not be present (no assertion on it).
+			const star = await app.code.waitForElement('.clawdius-control-star');
+			assert.ok((star.textContent || '').includes('Star on GitHub'), `star button text was "${star.textContent}"`);
+			await app.code.waitForElement('.clawdius-control-sponsor');
+		});
+
 		it('renders the usage dashboard chrome', async function () {
 			const app = this.app as Application;
 			await app.workbench.quickaccess.runCommand(OPEN_CONTROL_CENTER);

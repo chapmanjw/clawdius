@@ -54,6 +54,7 @@ import { ICommandService } from '../../../../../platform/commands/common/command
 import { ITerminalService, ITerminalGroupService } from '../../../terminal/browser/terminal.js';
 import { ConfigScope, ConfigSection, IClawdiusConfigService, IConfigItem } from '../../common/clawdiusConfig.js';
 import { IClawdiusEffectiveConfigService, IEffectiveConfigResult } from './clawdiusEffectiveConfigService.js';
+import { formatStarCount, IClawdiusStarCountService } from './clawdiusStarCountService.js';
 import { IResolvedSetting, JsonValue, SettingsTier, isManagedTier } from '../../common/clawdiusEffectiveConfig.js';
 import { previewWrite } from '../../common/clawdiusPreflight.js';
 import { ISandboxConfig, SandboxNetworkVerdict, SandboxWriteVerdict, checkDomain, checkWrite, parseSandboxConfig } from '../../common/claudeSandbox.js';
@@ -344,6 +345,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		@ITerminalGroupService private readonly terminalGroupService: ITerminalGroupService,
 		@IQuickInputService private readonly quickInputService: IQuickInputService,
 		@IHoverService private readonly hoverService: IHoverService,
+		@IClawdiusStarCountService private readonly starCountService: IClawdiusStarCountService,
 	) {
 		super(ClaudeControlCenterEditor.ID, group, telemetryService, themeService, storageService);
 		// Dispose any toasts still on screen when the pane closes (each toast owns its DOM + timer + Undo listener).
@@ -643,6 +645,23 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			}));
 		}
 
+		// CLAWDIUS-BEGIN "Star on GitHub" action (#star): a real <button> beside Sponsor that opens the repo so the
+		// user stars it themselves (GitHub has no way to star without their auth token - see the star research). A
+		// count pill is filled from the star-count service: synchronously from cache, else via ONE unauthenticated,
+		// fail-silent GitHub request kicked off by this (user-initiated) Control Center open. Offline -> no pill.
+		const star = append(row, h('button.clawdius-control-star')) as HTMLButtonElement;
+		star.title = localize('clawdius.control.starTip', "Star Clawdius on GitHub (opens in browser)");
+		append(star, h('span.codicon.codicon-star-empty.clawdius-control-star-glyph')).setAttribute('aria-hidden', 'true');
+		append(star, h('span')).textContent = localize('clawdius.control.star', "Star on GitHub");
+		const starCount = append(star, h('span.clawdius-control-star-count')) as HTMLSpanElement;
+		starCount.style.display = 'none';
+		append(star, h('span.codicon.codicon-link-external')).setAttribute('aria-hidden', 'true');
+		this.renderStore.add(addDisposableListener(star, EventType.CLICK, () => {
+			this.openerService.open(URI.parse('https://github.com/chapmanjw/clawdius'));
+		}));
+		this.fillStarCount(starCount);
+		// CLAWDIUS-END
+
 		// CLAWDIUS: a right-justified "Sponsor Clawdius" action - a real <button> (keyboard-focusable, Enter/Space
 		// activate) OUTSIDE the tablist. Styles live in claudeControlCenter.css.
 		const sponsor = append(row, h('button.clawdius-control-sponsor')) as HTMLButtonElement;
@@ -654,6 +673,26 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			this.openerService.open(URI.parse('https://github.com/sponsors/chapmanjw'));
 		}));
 	}
+
+	// CLAWDIUS-BEGIN "Star on GitHub" count pill (#star)
+	/** Fill the star-count pill: synchronously from the session cache, else via one fail-silent GitHub request kicked
+	 *  off by this Control Center open. `undefined` (offline / error / not-yet-fetched) leaves the pill hidden. The
+	 *  isConnected guard means a late fetch never writes into a pill discarded by a tab-switch re-render. */
+	private fillStarCount(pill: HTMLSpanElement): void {
+		const show = (count: number | undefined): void => {
+			if (count === undefined || !pill.isConnected) { return; }
+			pill.textContent = formatStarCount(count);
+			pill.setAttribute('aria-label', localize('clawdius.control.starCount', "{0} stars on GitHub", count));
+			pill.style.display = '';
+		};
+		const cached = this.starCountService.cachedCount;
+		if (cached !== undefined) {
+			show(cached);
+			return;
+		}
+		this.starCountService.getStarCount().then(show, () => { /* fail-silent: no pill */ });
+	}
+	// CLAWDIUS-END
 
 	private renderHero(parent: HTMLElement, title: string, sub: string): void {
 		const hero = append(parent, h('.clawdius-control-hero'));

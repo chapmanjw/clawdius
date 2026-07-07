@@ -61,15 +61,22 @@ rounded "card" chrome. Semantic tones (allow/warn/deny) map to the editor's own 
 /* tab strip: panel-style underline tabs (the ONE brand accent lives here, on .active) */
 .clawdius-control-tabs-row { display: flex; align-items: flex-end; border-bottom: 1px solid var(--vscode-panel-border); }
 .clawdius-control-tabs { display: flex; gap: 2px; }
-/* Sponsor action: a real button, keyboard-focusable, sitting beside (not inside) the tablist. */
-.clawdius-control-sponsor {
-	margin-left: auto; margin-bottom: 3px; display: inline-flex; align-items: center; gap: 5px;
+/* Star + Sponsor actions: real buttons, keyboard-focusable, sitting beside (not inside) the tablist. */
+.clawdius-control-star, .clawdius-control-sponsor {
+	margin-bottom: 3px; display: inline-flex; align-items: center; gap: 5px;
 	background: none; border: none; color: inherit; font: inherit; font-size: 12px; cursor: pointer;
 	opacity: 0.7; padding: 3px 6px; border-radius: 2px;
 }
-.clawdius-control-sponsor:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground)); }
-.clawdius-control-sponsor:focus-visible { opacity: 1; outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+/* The first action (Star) carries margin-left:auto so the Star+Sponsor group is pushed to the right of the tabs. */
+.clawdius-control-star { margin-left: auto; }
+.clawdius-control-star:hover, .clawdius-control-sponsor:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground)); }
+.clawdius-control-star:focus-visible, .clawdius-control-sponsor:focus-visible { opacity: 1; outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
 .clawdius-control-sponsor-heart { color: #db61a2; }
+/* Live star-count pill (fail-silent: hidden until a count arrives). Neutral, matches the native chrome. */
+.clawdius-control-star-count {
+	font-variant-numeric: tabular-nums; font-size: 11px; line-height: 15px; padding: 0 5px;
+	border: 1px solid var(--vscode-panel-border); border-radius: 999px; color: var(--vscode-descriptionForeground);
+}
 .clawdius-control-tab {
 	background: none; border: none; border-bottom: 1px solid transparent; margin-bottom: -1px;
 	color: var(--vscode-tab-inactiveForeground, var(--vscode-descriptionForeground)); font: inherit;

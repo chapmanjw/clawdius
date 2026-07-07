@@ -56,6 +56,7 @@ import { LintContextAction } from './clawdiusContextBudgetLint.js';
 import { DisableConfirmedLoadsAction, EnableConfirmedLoadsAction } from './clawdiusContextBudgetConfirm.js';
 import { ConfigurationScope, Extensions as ConfigExtensions, IConfigurationRegistry } from '../../../../platform/configuration/common/configurationRegistry.js';
 import { ClawdiusUpdateService, ClawdiusUpdateStartupContribution, IClawdiusUpdateService } from './update/clawdiusUpdateService.js';
+import { ClawdiusStarCountService, IClawdiusStarCountService } from './control/clawdiusStarCountService.js';
 import { CLAWDIUS_DISABLE_ANIMATIONS_SETTING, ClawdiusDisableAnimationsContribution } from './clawdiusDisableAnimations.js';
 import { ClawdiusHiddenSettingsContribution } from './clawdiusHiddenSettings.js';
 
@@ -354,6 +355,10 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	// and fires solely when `clawdius.update.checkOnStartup` is enabled (default false), so launch stays
 	// zero-egress out of the box. Registered at Eventually so the opt-in check never competes with startup.
 	registerSingleton(IClawdiusUpdateService, ClawdiusUpdateService, InstantiationType.Delayed);
+	// CLAWDIUS-BEGIN star-count service (#star): backs the Control Center "Star on GitHub" count pill with a single
+	// unauthenticated, on-open, fail-silent GitHub request (same call class as the update check).
+	registerSingleton(IClawdiusStarCountService, ClawdiusStarCountService, InstantiationType.Delayed);
+	// CLAWDIUS-END
 	registerWorkbenchContribution2(ClawdiusUpdateStartupContribution.ID, ClawdiusUpdateStartupContribution, WorkbenchPhase.Eventually);
 	// Manage-gear "Check for Updates..." -> runs the GitHub-releases check (user-initiated).
 	registerAction2(ClawdiusCheckForUpdatesAction);

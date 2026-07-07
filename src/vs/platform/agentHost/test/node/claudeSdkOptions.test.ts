@@ -23,6 +23,9 @@ suite('claudeSdkOptions / buildSubprocessEnv', () => {
 		'ELECTRON_NO_ATTACH_CONSOLE',
 		'PATH',
 		'HOME',
+		'OTEL_EXPORTER_OTLP_ENDPOINT',
+		'OTEL_SERVICE_NAME',
+		'COPILOT_OTEL_TOKEN',
 	];
 
 	function clearAndSet(values: Record<string, string>): void {
@@ -113,6 +116,30 @@ suite('claudeSdkOptions / buildSubprocessEnv', () => {
 			nodeOptions: undefined,
 			runAsNode: '1',
 		});
+	});
+
+	test('strips OTEL_*/COPILOT_OTEL_* in both modes so the subprocess cannot inherit an OTLP exporter (zero egress)', () => {
+		clearAndSet({
+			OTEL_EXPORTER_OTLP_ENDPOINT: 'https://collector.example.com',
+			OTEL_SERVICE_NAME: 'leak',
+			COPILOT_OTEL_TOKEN: 'tok',
+			PATH: '/usr/bin',
+		});
+
+		// The scrub must hold in BOTH the proxy and native branches - an inherited OTLP endpoint would let the
+		// claude subprocess export traces off-box, defeating the zero-egress posture.
+		for (const proxied of [true, false]) {
+			const env = buildSubprocessEnv(proxied);
+			assert.deepStrictEqual({
+				endpoint: env.OTEL_EXPORTER_OTLP_ENDPOINT,
+				service: env.OTEL_SERVICE_NAME,
+				copilotOtel: env.COPILOT_OTEL_TOKEN,
+			}, {
+				endpoint: undefined,
+				service: undefined,
+				copilotOtel: undefined,
+			}, `proxied=${proxied}`);
+		}
 	});
 });
 

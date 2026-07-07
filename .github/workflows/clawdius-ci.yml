@@ -254,6 +254,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Clawdius e2e smoke suite (headless via xvfb)
-        # `smoketest` self-builds via preLaunch (electron download, compile, built-in extensions), then `-g` runs
-        # ONLY the Clawdius describe block. Auth-free + native-UI, so it is deterministic without ~/.claude.
-        run: xvfb-run --auto-servernum npm run smoketest -- -g "Clawdius"
+        # Build in steps (not `npm run smoketest` in one shot) so we can fix the SUID chrome-sandbox for the
+        # headless runner: Electron ABORTS unless .build/electron/chrome-sandbox is root:root mode 4755. Then
+        # `-g` runs ONLY the Clawdius describe block. Auth-free + native-UI, deterministic without ~/.claude.
+        run: |
+          set -e
+          node build/lib/preLaunch.ts
+          sudo chown root:root .build/electron/chrome-sandbox
+          sudo chmod 4755 .build/electron/chrome-sandbox
+          ( cd test/smoke && npm run compile )
+          ( cd test/smoke && xvfb-run --auto-servernum node test/index.js -g "Clawdius" )

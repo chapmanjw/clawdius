@@ -606,7 +606,10 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	}
 
 	private renderTabs(parent: HTMLElement): void {
-		const strip = append(parent, h('.clawdius-control-tabs'));
+		// The tablist strip and the Sponsor action share one row, but the sponsor sits OUTSIDE the tablist (a11y:
+		// a tablist must contain only tabs). The row carries the underline border so it spans the full width.
+		const row = append(parent, h('.clawdius-control-tabs-row'));
+		const strip = append(row, h('.clawdius-control-tabs'));
 		strip.setAttribute('role', 'tablist');
 		const tabs: { readonly tab: ControlTab; readonly label: string; readonly ready: boolean }[] = [
 			{ tab: 'usage', label: localize('clawdius.control.tab.usage', "Usage"), ready: true },
@@ -639,21 +642,13 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			}));
 		}
 
-		// CLAWDIUS: a right-justified "Sponsor Clawdius" link in-line with the tab row.
-		const sponsor = append(strip, h('a.clawdius-control-sponsor')) as HTMLAnchorElement;
-		sponsor.style.marginLeft = 'auto';
-		sponsor.style.display = 'inline-flex';
-		sponsor.style.alignItems = 'center';
-		sponsor.style.gap = '5px';
-		sponsor.style.cursor = 'pointer';
-		sponsor.style.opacity = '0.7';
+		// CLAWDIUS: a right-justified "Sponsor Clawdius" action - a real <button> (keyboard-focusable, Enter/Space
+		// activate) OUTSIDE the tablist. Styles live in claudeControlCenter.css.
+		const sponsor = append(row, h('button.clawdius-control-sponsor')) as HTMLButtonElement;
 		sponsor.title = localize('clawdius.control.sponsorTip', "Sponsor Clawdius (opens in browser)");
-		const sponsorHeart = append(sponsor, h('span.codicon.codicon-heart'));
-		sponsorHeart.style.color = '#db61a2';
-		sponsorHeart.setAttribute('aria-hidden', 'true');
+		append(sponsor, h('span.codicon.codicon-heart.clawdius-control-sponsor-heart')).setAttribute('aria-hidden', 'true');
 		append(sponsor, h('span')).textContent = localize('clawdius.control.sponsor', "Sponsor Clawdius");
-		const sponsorExt = append(sponsor, h('span.codicon.codicon-link-external'));
-		sponsorExt.setAttribute('aria-hidden', 'true');
+		append(sponsor, h('span.codicon.codicon-link-external')).setAttribute('aria-hidden', 'true');
 		this.renderStore.add(addDisposableListener(sponsor, EventType.CLICK, () => {
 			this.openerService.open(URI.parse('https://github.com/sponsors/chapmanjw'));
 		}));

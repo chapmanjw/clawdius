@@ -76,6 +76,8 @@ interface ILoaded {
 	/** The engine's verbatim "What's contributing to your usage" text (from a one-shot `/usage`), or undefined
 	 *  when unavailable / not yet fetched. Rendered as a collapsed sub-section under the heatmap. */
 	readonly contribution: string | undefined;
+	/** True when the transcript-stats load THREW (distinct from genuinely-no-stats), so render shows error + Retry. */
+	readonly statsError: boolean;
 }
 
 export function dateKey(day: Date): string {
@@ -310,7 +312,7 @@ export class ClaudeUsageDashboardView extends Disposable {
 		}
 		if (token.isCancellationRequested || this.disposed) { return; }
 		// Paint immediately with the limits + a loading state for the stats.
-		this.loaded = { stats: undefined, capacity, account, refreshedAt, loading: true, contribution: undefined };
+		this.loaded = { stats: undefined, capacity, account, refreshedAt, loading: true, contribution: undefined, statsError: false };
 		this.render();
 		// Compute the accurate, always-current stats from the raw transcripts and swap them in.
 		await this.loadTranscriptStats(token);
@@ -346,17 +348,18 @@ export class ClaudeUsageDashboardView extends Disposable {
 		try {
 			result = await this.agentHostService.getUsageStats(home);
 		} catch {
-			if (this.loaded && !this.disposed) { this.loaded = { ...this.loaded, loading: false }; this.render(); }
+			if (this.loaded && !this.disposed) { this.loaded = { ...this.loaded, loading: false, statsError: true }; this.render(); }
 			return;
 		}
 		if (token.isCancellationRequested || this.disposed || !this.loaded) { return; }
-		this.loaded = { ...this.loaded, stats: result.status === 'ok' ? result.stats : undefined, loading: false };
+		this.loaded = { ...this.loaded, stats: result.status === 'ok' ? result.stats : undefined, loading: false, statsError: false };
 		this.render();
 	}
 
 	private async refreshOnDemand(): Promise<void> {
 		if (this.refreshing) { return; }
 		this.refreshing = true;
+		this.render(); // reflect the in-progress state on the button immediately
 		const cts = new CancellationTokenSource();
 		this.refreshCts.value = cts;
 		try {
@@ -369,6 +372,7 @@ export class ClaudeUsageDashboardView extends Disposable {
 			// best-effort: offline / extension not active / expired token - keep showing cached data
 		} finally {
 			this.refreshing = false;
+			this.render(); // restore the button label once the refresh settles
 		}
 	}
 
@@ -382,7 +386,7 @@ export class ClaudeUsageDashboardView extends Disposable {
 
 	private render(): void {
 		if (this.disposed || !this.loaded) { return; }
-		const { stats, capacity, account, refreshedAt, loading } = this.loaded;
+		const { stats, capacity, account, refreshedAt, loading, statsError } = this.loaded;
 		this.renderStore.clear();
 		clearNode(this.container);
 		const inner = append(this.container, h('.clawdius-usage-dashboard-inner'));
@@ -401,6 +405,13 @@ export class ClaudeUsageDashboardView extends Disposable {
 			this.renderHourActivity(inner, windowed);
 		} else if (loading) {
 			append(inner, h('.clawdius-usage-empty')).textContent = localize('clawdius.usage.dash.statsLoading', "Computing your session stats from local transcripts...");
+		} else if (statsError) {
+			// A stats READ failure is distinct from having no stats: show the error + a Retry, not the empty message.
+			const err = append(inner, h('.clawdius-usage-empty'));
+			append(err, h('.clawdius-usage-empty-text')).textContent = localize('clawdius.usage.dash.statsError', "Couldn't read your local session stats from the Agent Host.");
+			const retry = append(err, h('button.clawdius-usage-refresh'));
+			retry.textContent = localize('clawdius.usage.dash.retry', "Retry");
+			this.renderStore.add(addDisposableListener(retry, EventType.CLICK, () => void this.refreshOnDemand()));
 		} else {
 			append(inner, h('.clawdius-usage-empty')).textContent = localize('clawdius.usage.dash.statsUnavailable', "No local session stats yet. Start a Claude Code session (with the Agent Host enabled) to see your usage here.");
 		}
@@ -439,8 +450,12 @@ export class ClaudeUsageDashboardView extends Disposable {
 			: localize('clawdius.usage.dash.metaLocal', "Live limits refresh when you open this view or click Refresh.");
 
 		append(hero, h('.clawdius-usage-hero-spacer'));
-		const refresh = append(hero, h('button.clawdius-usage-refresh'));
-		refresh.textContent = localize('clawdius.usage.dash.refresh', "Refresh");
+		const refresh = append(hero, h('button.clawdius-usage-refresh')) as HTMLButtonElement;
+		// In-progress feedback: a cold recompute takes a few seconds, so reflect it instead of a static label.
+		refresh.textContent = this.refreshing
+			? localize('clawdius.usage.dash.refreshing', "Refreshing…")
+			: localize('clawdius.usage.dash.refresh', "Refresh");
+		refresh.disabled = this.refreshing;
 		refresh.title = localize('clawdius.usage.dash.refreshTip', "Refresh live subscription limits and recompute session + token stats from your transcripts.");
 		this.renderStore.add(addDisposableListener(refresh, EventType.CLICK, () => void this.refreshOnDemand()));
 	}

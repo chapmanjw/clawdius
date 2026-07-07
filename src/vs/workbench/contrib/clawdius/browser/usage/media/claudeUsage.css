@@ -326,7 +326,8 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 .clawdius-usage-limit-bar {
 	height: 10px;
 	border-radius: 3px;
-	background: rgba(167, 139, 250, 0.18);
+	/* Registered theme-aware track (dark #4D4D4D / light #CDCDCD / HC) instead of an 18%-alpha lavender that vanished on light/HC. Matches the status-bar hover bars. */
+	background: var(--vscode-clawdius-usageBarTrack, rgba(127, 127, 127, 0.3));
 	overflow: hidden;
 }
 
@@ -399,7 +400,8 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 	gap: 10px;
 	align-items: baseline;
 	justify-content: space-between;
-	border-bottom: 1px dotted rgba(127, 127, 127, 0.18);
+	/* contrastBorder (set only on HC) keeps the separator visible there; falls back to the faint rule off-HC. */
+	border-bottom: 1px dotted var(--vscode-contrastBorder, rgba(127, 127, 127, 0.18));
 	padding-bottom: 4px;
 }
 
@@ -513,6 +515,9 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 	border-radius: 2px;
 	/* Faint filled rectangle for empty days so cells read as cells; active levels override. */
 	background-color: rgba(150, 150, 165, 0.10);
+	/* High-contrast: low-opacity fills vanish, so outline every cell (transparent off-HC = no visual change; contrastBorder makes the grid legible under HC). */
+	outline: 1px solid var(--vscode-contrastBorder, transparent);
+	outline-offset: -1px;
 }
 
 .clawdius-usage-heatmap-day.level-0 {

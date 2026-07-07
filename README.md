@@ -200,13 +200,3 @@ Clawdius is licensed under the MIT License, the same as Code - OSS; see [LICENSE
 "Visual Studio Code", "VS Code", and the Microsoft logos are trademarks of Microsoft and are not used by this fork. "Claude" and "Claude Code" are products of Anthropic. Clawdius is an independent fork — not affiliated with, sponsored by, or endorsed by Anthropic or Microsoft.
 
 If Clawdius is useful to you, a ⭐ on the repo helps, and you can [sponsor the project](https://github.com/sponsors/chapmanjw) to support its development.
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=chapmanjw%2Fclawdius&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=chapmanjw/clawdius&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=chapmanjw/clawdius&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=chapmanjw/clawdius&type=date&legend=top-left" />
- </picture>
-</a>

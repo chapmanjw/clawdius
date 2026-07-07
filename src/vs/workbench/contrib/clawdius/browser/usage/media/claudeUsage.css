@@ -179,15 +179,16 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 /* Hero / account band */
 .clawdius-usage-hero {
 	display: flex;
-	align-items: center;
+	/* Match the Control Center hero (flex-start + same mark size) so the crab + title do not jump/resize between tabs. */
+	align-items: flex-start;
 	gap: 15px;
 	padding: 2px 0 0;
 }
 
 .clawdius-usage-hero-mark {
 	flex: none;
-	width: 58px;
-	height: 47px;
+	width: 52px;
+	height: 42px;
 	background-image: url('./clawd-dance.svg');
 	background-repeat: no-repeat;
 	background-position: center;
@@ -271,6 +272,37 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 	font-size: 13px;
 	font-weight: 600;
 	color: var(--vscode-settings-headerForeground, var(--vscode-foreground));
+}
+
+/* "What's contributing to your usage" - collapsed-by-default sub-section under the heatmap (native disclosure). */
+.clawdius-usage-contribution {
+	border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 2px;
+	background: var(--vscode-editorWidget-background, transparent);
+}
+.clawdius-usage-contribution-summary {
+	cursor: pointer; padding: 7px 12px; font-size: 12.5px; font-weight: 600; color: var(--vscode-foreground);
+	list-style: none; user-select: none; display: flex; align-items: center; gap: 6px;
+}
+.clawdius-usage-contribution-summary::-webkit-details-marker { display: none; }
+.clawdius-usage-contribution-summary::before {
+	content: "\203A"; display: inline-block; width: 10px; text-align: center; color: var(--vscode-descriptionForeground);
+	transition: transform 0.1s;
+}
+.clawdius-usage-contribution[open] > .clawdius-usage-contribution-summary::before { transform: rotate(90deg); }
+.clawdius-usage-contribution-summary:hover { background: var(--vscode-list-hoverBackground); }
+.clawdius-usage-contribution-body {
+	padding: 8px 14px 14px 28px;
+	border-top: 1px solid var(--vscode-panel-border);
+}
+/* Verbatim engine text: preserve the CLI's newlines + 2-space indents, wrap long lines, use the UI font. */
+.clawdius-usage-contribution-text {
+	margin: 0;
+	font-family: inherit;
+	font-size: 12.5px;
+	line-height: 1.5;
+	color: var(--vscode-foreground);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
 }
 
 /* Limits - solid bars that flex-fill the row */

@@ -73,6 +73,9 @@ interface ILoaded {
 	readonly refreshedAt: Date | undefined;
 	/** True while the first transcript scan is still running (the brief loading state). */
 	readonly loading: boolean;
+	/** The engine's verbatim "What's contributing to your usage" text (from a one-shot `/usage`), or undefined
+	 *  when unavailable / not yet fetched. Rendered as a collapsed sub-section under the heatmap. */
+	readonly contribution: string | undefined;
 }
 
 export function dateKey(day: Date): string {
@@ -307,10 +310,29 @@ export class ClaudeUsageDashboardView extends Disposable {
 		}
 		if (token.isCancellationRequested || this.disposed) { return; }
 		// Paint immediately with the limits + a loading state for the stats.
-		this.loaded = { stats: undefined, capacity, account, refreshedAt, loading: true };
+		this.loaded = { stats: undefined, capacity, account, refreshedAt, loading: true, contribution: undefined };
 		this.render();
 		// Compute the accurate, always-current stats from the raw transcripts and swap them in.
 		await this.loadTranscriptStats(token);
+		// Then fetch the engine's verbatim "what's contributing" text (a one-shot /usage session) and swap it in
+		// when it arrives - kept separate so a slow/failed fetch never delays or blocks the rest of the dashboard.
+		await this.loadContribution(token);
+	}
+
+	/** Fetch the engine's `/usage` "What's contributing to your usage" text via a short-lived session and swap it
+	 *  in when available. Best-effort: any non-`ok` status simply leaves the sub-section unrendered. */
+	private async loadContribution(token: CancellationToken): Promise<void> {
+		const home = usageHomePath(await this.pathService.userHome());
+		let text: string | undefined;
+		try {
+			const result = await this.agentHostService.fetchUsageContribution(home);
+			text = result.status === 'ok' ? result.text : undefined;
+		} catch {
+			text = undefined;
+		}
+		if (token.isCancellationRequested || this.disposed || !this.loaded || text === undefined) { return; }
+		this.loaded = { ...this.loaded, contribution: text };
+		this.render();
 	}
 
 	/** Aggregate the raw transcripts (off the UI thread, via the agentHost) and swap in the accurate stats. */
@@ -372,6 +394,9 @@ export class ClaudeUsageDashboardView extends Disposable {
 			// (totals, model breakdown, 24h activity, longest session) leaks past the [windowStart .. today] horizon.
 			const windowed = windowStats(stats, this.windowStartKey(), dateKey(new Date()));
 			this.renderOverview(inner, stats, windowed);
+			// The engine's verbatim "what's contributing" text sits as its own row below the Overview (heatmap +
+			// stats) and above Tokens per day. A flex child of the inner column, so it gets the 22px section gap.
+			this.renderContribution(inner);
 			this.renderTokensPerDay(inner, windowed);
 			this.renderHourActivity(inner, windowed);
 		} else if (loading) {
@@ -572,6 +597,19 @@ export class ClaudeUsageDashboardView extends Disposable {
 
 	/** Contribution heatmap spanning exactly the retention window: every day in [today-(N-1) .. today] is a cell
 	 *  (no-activity days are empty/no-data cells); days older than the window or in the future are not rendered. */
+	/** Collapsed-by-default sub-section below the Overview (heatmap + stats), above Tokens per day: the engine's
+	 *  verbatim `/usage` "what's contributing to your usage" text. The CLI emits plain text with newlines +
+	 *  2-space indents (not markdown), so render it in a whitespace-preserving <pre> to keep it exactly as the
+	 *  engine wrote it. Only present when the one-shot fetch returned content. */
+	private renderContribution(parent: HTMLElement): void {
+		const text = this.loaded?.contribution;
+		if (!text) { return; }
+		const details = append(parent, h('details.clawdius-usage-contribution'));
+		append(details, h('summary.clawdius-usage-contribution-summary')).textContent = localize('clawdius.usage.dash.contribTitle', "What's contributing to your usage");
+		const body = append(details, h('.clawdius-usage-contribution-body'));
+		append(body, h('pre.clawdius-usage-contribution-text')).textContent = text;
+	}
+
 	private renderHeatmap(parent: HTMLElement, activity: ReadonlyArray<IClaudeDailyActivity>): void {
 		const today = new Date();
 		// Pure window + intensity math (week count, per-cell level/visibility); the DOM build stays here.

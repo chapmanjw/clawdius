@@ -24,6 +24,8 @@ import { ClaudeAgent } from './claude/claudeAgent.js';
 import { ClaudeAgentSdkService, ClaudeSdkPackage, IClaudeAgentSdkService } from './claude/claudeAgentSdkService.js';
 import { ClaudeMcpToolDiscoveryChannelName, IClaudeMcpToolDiscoveryService } from '../common/claudeMcpToolDiscovery.js';
 import { ClaudeMcpToolDiscoveryService } from './claude/claudeMcpToolDiscoveryService.js';
+import { ClaudeUsageContributionChannelName, IClaudeUsageContributionService } from '../common/claudeUsageContribution.js';
+import { ClaudeUsageContributionService } from './claude/claudeUsageContributionService.js';
 import { ClaudeUsageStatsChannelName, IClaudeUsageStatsService } from '../../clawdius/common/claudeUsageStats.js';
 import { ClaudeUsageStatsService } from '../../clawdius/node/claudeUsageStatsService.js';
 // CLAWDIUS-BEGIN cli backend resolution
@@ -175,6 +177,12 @@ async function startAgentHost(): Promise<void> {
 		const mcpToolDiscoveryService = instantiationService.createInstance(ClaudeMcpToolDiscoveryService);
 		diServices.set(IClaudeMcpToolDiscoveryService, mcpToolDiscoveryService);
 		server.registerChannel(ClaudeMcpToolDiscoveryChannelName, ProxyChannel.fromService(mcpToolDiscoveryService, disposables));
+		// CLAWDIUS-END
+		// CLAWDIUS-BEGIN usage-contribution fetch (#usage): a short-lived /usage session captures the engine's
+		// "What's contributing to your limits usage?" text for the Control Center Usage dashboard.
+		const usageContributionService = instantiationService.createInstance(ClaudeUsageContributionService);
+		diServices.set(IClaudeUsageContributionService, usageContributionService);
+		server.registerChannel(ClaudeUsageContributionChannelName, ProxyChannel.fromService(usageContributionService, disposables));
 		// CLAWDIUS-END
 		// CLAWDIUS-BEGIN transcript-derived usage stats (#94): aggregate ~/.claude/projects/**/*.jsonl off the
 		// UI thread into accurate, always-current dashboard stats (the engine's stats-cache.json goes stale).

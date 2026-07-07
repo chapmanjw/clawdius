@@ -9,6 +9,7 @@ import { constObservable, IObservable } from '../../../base/common/observable.js
 import { URI } from '../../../base/common/uri.js';
 import type { IAgentCreateSessionConfig, IAgentHostInspectInfo, IAgentHostService, IAgentHostSocketInfo, IAgentResolveSessionConfigParams, IAgentSessionConfigCompletionsParams, IAgentSessionMetadata, AuthenticateParams, AuthenticateResult } from '../common/agentService.js';
 import type { IClaudeMcpToolDiscoveryResult } from '../common/claudeMcpToolDiscovery.js';
+import type { IClaudeUsageContributionResult } from '../common/claudeUsageContribution.js';
 import type { IClaudeUsageStatsResult } from '../../clawdius/common/claudeUsageStats.js';
 import type { IActiveSubscriptionInfo, IAgentSubscription } from '../common/state/agentSubscription.js';
 import type { CompletionsParams, CompletionsResult, CreateTerminalParams, ResolveSessionConfigResult, SessionConfigCompletionsResult } from '../common/state/protocol/commands.js';
@@ -56,6 +57,7 @@ export class NullAgentHostService implements IAgentHostService {
 	async startWebSocketServer(): Promise<IAgentHostSocketInfo> { return notSupported(); }
 	async getInspectInfo(_tryEnable: boolean): Promise<IAgentHostInspectInfo | undefined> { return undefined; }
 	async discoverMcpServerTools(_serverName: string, _workingDirectoryPath: string): Promise<IClaudeMcpToolDiscoveryResult> { return { status: 'disabled', tools: [], message: 'The Agent Host is not available in this context.' }; }
+	async fetchUsageContribution(_workingDirectoryPath: string): Promise<IClaudeUsageContributionResult> { return { text: undefined, status: 'disabled' }; }
 	async getUsageStats(_homeDirPath: string): Promise<IClaudeUsageStatsResult> { return { status: 'unavailable', message: 'The Agent Host is not available in this context.' }; }
 	async disposeSession(_session: URI): Promise<void> { }
 	async createChat(_session: URI, _chat: URI): Promise<void> { notSupported(); }

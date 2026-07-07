@@ -13,6 +13,7 @@ import { URI } from '../../../base/common/uri.js';
 import type { IConfigurationService } from '../../configuration/common/configuration.js';
 import { createDecorator } from '../../instantiation/common/instantiation.js';
 import type { IClaudeMcpToolDiscoveryResult } from './claudeMcpToolDiscovery.js';
+import type { IClaudeUsageContributionResult } from './claudeUsageContribution.js';
 import type { IClaudeUsageStatsResult } from '../../clawdius/common/claudeUsageStats.js';
 import type { IAgentServerToolHost } from './agentServerTools.js';
 import type { IActiveSubscriptionInfo, IAgentSubscription } from './state/agentSubscription.js';
@@ -1635,6 +1636,15 @@ export interface IAgentHostService extends IAgentConnection {
 	 * `disabled` result when the agent host is off, and self-caps so the renderer never hangs.
 	 */
 	discoverMcpServerTools(serverName: string, workingDirectoryPath: string): Promise<IClaudeMcpToolDiscoveryResult>;
+	// CLAWDIUS-END
+
+	// CLAWDIUS-BEGIN usage-contribution fetch (#usage)
+	/**
+	 * Run `/usage` in a short-lived Claude SDK session rooted at `workingDirectoryPath` and return the engine's
+	 * verbatim "What's contributing to your limits usage?" text for the Control Center Usage dashboard. Returns a
+	 * `disabled` status when the agent host is off; self-caps so the renderer never hangs.
+	 */
+	fetchUsageContribution(workingDirectoryPath: string): Promise<IClaudeUsageContributionResult>;
 	// CLAWDIUS-END
 
 	// CLAWDIUS-BEGIN transcript-derived usage stats (#94)

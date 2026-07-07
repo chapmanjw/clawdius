@@ -33,6 +33,7 @@ import { TELEMETRY_CRASH_REPORTER_SETTING_ID, TELEMETRY_OLD_SETTING_ID, TELEMETR
 import { getTelemetryLevel } from '../../telemetry/common/telemetryUtils.js';
 import { AgentHostTelemetryLevelConfigKey, AgentHostSessionSyncEnabledConfigKey, AgentHostTerminalAutoApproveEnabledConfigKey, AgentHostGlobalAutoApproveEnabledConfigKey, AgentHostAutoReplyEnabledConfigKey, AgentHostTerminalAutoApproveRulesConfigKey, getAgentHostTerminalAutoApproveRulesConfig, SESSION_SYNC_ENABLED_SETTING_ID, TERMINAL_AUTO_APPROVE_ENABLED_SETTING_ID, GLOBAL_AUTO_APPROVE_SETTING_ID, AUTO_REPLY_SETTING_ID, TERMINAL_AUTO_APPROVE_SETTING_ID, TERMINAL_IGNORE_DEFAULT_AUTO_APPROVE_RULES_SETTING_ID, telemetryLevelToAgentHostConfigValue } from '../common/agentHostSchema.js';
 import { ClaudeMcpToolDiscoveryChannelName, IClaudeMcpToolDiscoveryResult, IClaudeMcpToolDiscoveryService } from '../common/claudeMcpToolDiscovery.js';
+import { ClaudeUsageContributionChannelName, IClaudeUsageContributionResult, IClaudeUsageContributionService } from '../common/claudeUsageContribution.js';
 import { ClaudeUsageStatsChannelName, IClaudeUsageStatsResult, IClaudeUsageStatsService } from '../../clawdius/common/claudeUsageStats.js';
 
 /**
@@ -50,6 +51,7 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 	private readonly _clientEventually = new DeferredPromise<MessagePortClient>();
 	private readonly _proxy: IAgentService;
 	private readonly _mcpDiscoveryProxy: IClaudeMcpToolDiscoveryService;
+	private readonly _usageContributionProxy: IClaudeUsageContributionService;
 	private readonly _usageStatsProxy: IClaudeUsageStatsService;
 	private readonly _ahpLogger: AhpJsonlLogger | undefined;
 	private readonly _connectionTracker: IConnectionTrackerService;
@@ -116,6 +118,11 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 		// CLAWDIUS-BEGIN live MCP tool discovery (#93): a delayed-channel proxy to the agentHost discovery service.
 		this._mcpDiscoveryProxy = ProxyChannel.toService<IClaudeMcpToolDiscoveryService>(
 			getDelayedChannel(this._clientEventually.p.then(client => client.getChannel(ClaudeMcpToolDiscoveryChannelName)))
+		);
+		// CLAWDIUS-END
+		// CLAWDIUS-BEGIN usage-contribution fetch (#usage): a delayed-channel proxy to the agentHost usage-contribution service.
+		this._usageContributionProxy = ProxyChannel.toService<IClaudeUsageContributionService>(
+			getDelayedChannel(this._clientEventually.p.then(client => client.getChannel(ClaudeUsageContributionChannelName)))
 		);
 		// CLAWDIUS-END
 		// CLAWDIUS-BEGIN transcript-derived usage stats (#94): a delayed-channel proxy to the agentHost aggregator.
@@ -459,6 +466,25 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 			return { status: 'timeout', tools: [], message: 'Timed out reaching the Agent Host.' };
 		}
 		return this._mcpDiscoveryProxy.discoverServerTools(serverName, workingDirectoryPath);
+	}
+	// CLAWDIUS-END
+
+	// CLAWDIUS-BEGIN usage-contribution fetch (#usage)
+	async fetchUsageContribution(workingDirectoryPath: string): Promise<IClaudeUsageContributionResult> {
+		if (!isAgentHostEnabled(this._configurationService)) {
+			return { text: undefined, status: 'disabled' };
+		}
+		// Race READINESS, not the call (mirrors discoverMcpServerTools): wait for the MessagePort client so we
+		// never queue a session spawn that fires after a reported timeout. Once ready the call is live and the
+		// node service self-caps at 25s.
+		const ready = await Promise.race([
+			this._clientEventually.p.then(() => true),
+			timeout(30_000).then(() => false),
+		]);
+		if (!ready) {
+			return { text: undefined, status: 'timeout' };
+		}
+		return this._usageContributionProxy.fetchUsageContribution(workingDirectoryPath);
 	}
 	// CLAWDIUS-END
 

@@ -22,6 +22,7 @@ import { AgentHostEnabledSettingId, AgentHostIpcChannels, IAgentCreateChatOption
 import { AgentHostIpcChannelTransport } from '../../../../platform/agentHost/browser/agentHostIpcChannelTransport.js';
 import { RemoteAgentHostProtocolClient } from '../../../../platform/agentHost/browser/remoteAgentHostProtocolClient.js';
 import type { IClaudeMcpToolDiscoveryResult } from '../../../../platform/agentHost/common/claudeMcpToolDiscovery.js';
+import type { IClaudeUsageContributionResult } from '../../../../platform/agentHost/common/claudeUsageContribution.js';
 import { ClaudeUsageStatsChannelName, IClaudeUsageStatsResult, IClaudeUsageStatsService } from '../../../../platform/clawdius/common/claudeUsageStats.js';
 import type { IActiveSubscriptionInfo, IAgentSubscription } from '../../../../platform/agentHost/common/state/agentSubscription.js';
 import type { CompletionsParams, CompletionsResult, CreateTerminalParams, ResolveSessionConfigResult, SessionConfigCompletionsResult } from '../../../../platform/agentHost/common/state/protocol/commands.js';
@@ -166,6 +167,9 @@ export class EditorRemoteAgentHostServiceClient extends Disposable implements IA
 	// CLAWDIUS-BEGIN live MCP tool discovery (#93): not wired for the remote agent host (local SDK session only).
 	async discoverMcpServerTools(_serverName: string, _workingDirectoryPath: string): Promise<IClaudeMcpToolDiscoveryResult> {
 		return { status: 'error', tools: [], message: 'MCP tool discovery is only available with the local Agent Host.' };
+	}
+	async fetchUsageContribution(_workingDirectoryPath: string): Promise<IClaudeUsageContributionResult> {
+		return { text: undefined, status: 'error' };
 	}
 	async getUsageStats(homeDirPath: string): Promise<IClaudeUsageStatsResult> {
 		if (!this._usageStatsProxy) {

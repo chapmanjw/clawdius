@@ -16,9 +16,9 @@ const largeFilesMode = args.includes('--largefiles')
 const files = args.filter((a) => !a.startsWith('--'))
 
 // Clawdius-owned path prefixes the content scan applies to (scanned in full).
-const OWNED = [/^clawdius\//, /^src\/vs\/workbench\/contrib\/clawdius\//, /^script\/clawdius\//,
-  /^test\/clawdius\//, /^extensions\/clawdius-/, /^CHANGES_AGAINST_UPSTREAM\.md$/, /^MERGING\.md$/,
-  /^BUILD\.md$/, /^README-CLAWDIUS/]
+const OWNED = [/^clawdius\//, /^src\/vs\/workbench\/contrib\/clawdius\//, /^src\/vs\/platform\/clawdius\//,
+  /^script\/clawdius\//, /^test\/clawdius\//, /^extensions\/clawdius-/, /^CHANGES_AGAINST_UPSTREAM\.md$/,
+  /^MERGING\.md$/, /^BUILD\.md$/, /^README-CLAWDIUS/]
 const MARKER_BEGIN = 'CLAWDIUS-BEGIN'
 const MARKER_END = 'CLAWDIUS-END'
 

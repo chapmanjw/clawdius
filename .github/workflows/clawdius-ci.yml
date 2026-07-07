@@ -204,7 +204,9 @@ jobs:
             "out/vs/platform/agentHost/test/node/agentHostChangesetOperationService.test.js" \
             "out/vs/platform/agentHost/test/node/sessionPermissions.test.js" \
             "out/vs/platform/agentHost/test/node/claudeMapSessionEvents.test.js" \
-            "out/vs/platform/agentHost/test/node/claudeSubagentResolver.test.js"; do
+            "out/vs/platform/agentHost/test/node/claudeSubagentResolver.test.js" \
+            "out/vs/platform/agentHost/test/node/claudeTrustGate.test.js" \
+            "out/vs/platform/agentHost/test/common/claudeTrust.test.js"; do
             if [ ! -f "$t" ]; then echo "::error::compiled test missing ($t) — transpile path drift"; exit 1; fi
             log="$(basename "$t").node.log"
             node test/unit/node/index.js --run "$t" 2>&1 | tee "$log"

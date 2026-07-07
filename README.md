@@ -109,6 +109,17 @@ For the file you are editing, the inspector lists what Claude actually loads —
 
 Grab the build for your platform from the [Releases](https://github.com/chapmanjw/clawdius/releases) page. Builds are signed (Windows via Azure Trusted Signing, macOS via Apple Developer ID + notarization, Linux via GPG); a new publisher still has little reputation, so your OS may warn on first launch — the per-platform steps below cover how to proceed.
 
+### Supported platforms
+
+| Platform | Architectures | Packages | Signing |
+| --- | --- | --- | --- |
+| Windows 10 / 11 | x64, arm64 | `.exe` (user + system installers), `.zip` portable | Azure Trusted Signing |
+| macOS | Apple Silicon (arm64), Intel (x64) | `.dmg` | Apple Developer ID + notarization |
+| Linux | x64, arm64 | apt / dnf repository, `.deb`, `.rpm`, `.tar.gz` | GPG-signed packages |
+| Linux remote server (REH) | x64, arm64 | `.tar.gz` | — |
+
+Clawdius shares upstream VS Code 1.127.0's OS baseline: Windows 10 (1809) or later, a current macOS, and a Linux distribution with glibc 2.28 or newer (Ubuntu 20.04+, Debian 10+, RHEL/Rocky 8+, Fedora 38+).
+
 ### Windows
 
 Choose an installer (`<arch>` is `x64` or `arm64`):
@@ -129,7 +140,23 @@ xattr -dr com.apple.quarantine /Applications/Clawdius.app
 
 ### Linux
 
-Pick the package for your distribution and architecture (`x64` or `arm64`):
+**Recommended — apt / dnf repository.** Hosted on [Cloudsmith](https://cloudsmith.io/~chapmanjw/repos/clawdius/); adds the signed repository so `clawdius` installs and **updates through your package manager**. Works on x64 and arm64.
+
+Debian / Ubuntu:
+
+```bash
+curl -1sLf 'https://dl.cloudsmith.io/public/chapmanjw/clawdius/setup.deb.sh' | sudo -E bash
+sudo apt install clawdius
+```
+
+Fedora / RHEL / Rocky / openSUSE:
+
+```bash
+curl -1sLf 'https://dl.cloudsmith.io/public/chapmanjw/clawdius/setup.rpm.sh' | sudo -E bash
+sudo dnf install clawdius        # or: sudo zypper install clawdius
+```
+
+**Direct download.** Grab a package from the [Releases](https://github.com/chapmanjw/clawdius/releases) page instead (no repository; you update manually):
 
 ```bash
 # Debian / Ubuntu  (amd64 for x64 CPUs, arm64 for arm64)
@@ -142,16 +169,7 @@ sudo dnf install ./clawdius-*.x86_64.rpm
 tar -xf Clawdius-linux-x64-*.tar.gz && ./VSCode-linux-x64/bin/clawdius
 ```
 
-The `.deb` and `.rpm` packages are GPG-signed; hosted apt/rpm repositories are coming.
-
-### Snap
-
-```bash
-# x64 (amd64) shown; arm64 users use ./clawdius_*_arm64.snap
-sudo snap install --classic --dangerous ./clawdius_*_amd64.snap
-```
-
-The `--dangerous` flag is needed until the snap is published to the Snap Store (the store listing is in progress). Both x64 and arm64 snaps are built.
+The `.deb` and `.rpm` packages are GPG-signed — the Cloudsmith repository serves the same signed packages with automatic updates.
 
 ### Build from source
 

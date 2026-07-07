@@ -232,3 +232,28 @@ jobs:
             echo "ok: $t"
           done
           echo "Clawdius agent-host node tests passed"
+
+  clawdius-e2e-smoke:
+    # Layer-2 e2e: drives the shipped Clawdius surfaces (status bar, Control Center, usage dashboard) through the
+    # test/automation Electron driver so a broken native UI fails the build. Heavy (self-builds the app) and needs a
+    # headless display, so it runs as its own job. The suite is auth-free + deterministic (see clawdius.test.ts).
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          lfs: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Install build + headless-Electron prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxkbfile-dev libkrb5-dev libsecret-1-dev \
+            xvfb libnss3 libgbm1 libgtk-3-0 libasound2t64 libatk-bridge2.0-0 libdrm2
+      - name: Install dependencies
+        run: npm ci
+      - name: Clawdius e2e smoke suite (headless via xvfb)
+        # `smoketest` self-builds via preLaunch (electron download, compile, built-in extensions), then `-g` runs
+        # ONLY the Clawdius describe block. Auth-free + native-UI, so it is deterministic without ~/.claude.
+        run: xvfb-run --auto-servernum npm run smoketest -- -g "Clawdius"

@@ -46,6 +46,12 @@ paths = [
   '''sshRemoteAgentHostService\.ts''',
   '''workbench/contrib/surveys/''',
   '''workbench/parts/preferences/''',
+  # CLAWDIUS: never scan generated/vendored trees - huge and never hold committed source secrets. Also keeps a
+  # working-tree (--no-git) scan fast enough to run as a CI step.
+  '''(^|/)node_modules/''',
+  '''(^|/)out/''',
+  '''(^|/)\.build/''',
+  '''(^|/)\.git/''',
 ]
 # Note: the upstream VS Code tree contains example tokens in tests. Tune this allowlist
 # against a clean baseline scan before activating gitleaks as a blocking pre-commit hook.

@@ -71,6 +71,23 @@ jobs:
             echo "ERROR: internal planning-process markers found in tracked content"; exit 1
           fi
           echo "no internal planning material in the source tree"
+      - name: Secret scan (gitleaks over Clawdius-authored paths)
+        shell: bash
+        run: |
+          set -e
+          # gitleaks over the Clawdius-authored trees only: catches a committed credential where new Clawdius code
+          # lands, without the upstream VS Code tree's known example-token false positives. A working-tree scan, so
+          # it needs no deep clone (the CI checkout is shallow). The local pre-commit hook scans staged files; this
+          # is the CI backstop. node_modules/out/.build are excluded in .gitleaks.toml.
+          GLV=8.21.2
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GLV}/gitleaks_${GLV}_linux_x64.tar.gz" | tar -xz -C /tmp gitleaks
+          for d in src/vs/workbench/contrib/clawdius src/vs/platform/clawdius \
+                   src/vs/platform/agentHost/node/claude extensions/clawdius-chat \
+                   extensions/clawdius-themes script/clawdius docs; do
+            [ -d "$d" ] || continue
+            /tmp/gitleaks detect --no-git --source "$d" --config .gitleaks.toml --redact --no-banner --exit-code 1
+          done
+          echo "gitleaks: no secrets in Clawdius-authored paths"
       - name: Fork scaffolding intact
         shell: bash
         run: |

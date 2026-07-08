@@ -26,10 +26,13 @@ const MARKER_END = 'CLAWDIUS-END'
 // Never scan it, or the gate flags itself.
 const SELF = /(^|\/)script\/clawdius\/scan-forbidden\.ts$/
 // Files that must be able to NAME what Clawdius removes (Copilot / GitHub Copilot): the policy +
-// ledger docs, and branding-guard.ts (which asserts the brand is ABSENT, so it embeds the term). They
+// ledger docs, the claims-to-receipts registry source (a marketed-claims ledger whose verbatim claims name
+// the removed brand - the one .ts source member, a pure-data module with no icon/UI imports), and
+// branding-guard.ts (which asserts the brand is ABSENT, so it embeds the term). They
 // stay subject to telemetry-key and Amazon-internal checks; only brand mentions are allowed. SELF
 // already excludes the scanner itself, so this is a by-name list, not a directory-wide exemption.
 const BRAND_EXEMPT = [/^clawdius\/SECURITY-SCANNING\.md$/, /^clawdius\/PRIVACY\.md$/, /^CHANGES_AGAINST_UPSTREAM\.md$/,
+  /^src\/vs\/workbench\/contrib\/clawdius\/common\/claudeClaimsRegistry\.ts$/,
   /^MERGING\.md$/, /^BUILD\.md$/, /^README-CLAWDIUS/, /(^|\/)script\/clawdius\/branding-guard\.ts$/,
   /(^|\/)script\/clawdius\/brand-ratchet\.ts$/, /(^|\/)script\/clawdius\/brand-ratchet-baseline\.json$/]
 const BRANDING_IDS = new Set(['copilot-brand', 'github-copilot-brand'])

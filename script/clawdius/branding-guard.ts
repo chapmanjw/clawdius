@@ -36,6 +36,37 @@ const trustedPubs = ((p.trustedExtensionPublishers || []) as string[]).map(s => 
 ok(!trustedPubs.includes('microsoft') && !trustedPubs.includes('github'),
 	'trustedExtensionPublishers re-added a Microsoft/GitHub publisher');
 
+// FR-003 recommended-extension supply-chain guard (GlassWorm risk). Two invariants:
+//  (A) The fork must NOT inherit upstream's user-facing recommended-extension machinery - the large
+//      curated `*Tips` families product.json ships to steer users at the marketplace. Those keys stay
+//      stripped, so an upstream merge cannot silently re-seed a marketplace recommendation list.
+//  (B) Every extension the fork DOES recommend (its contributor-facing .vscode/extensions.json set) must
+//      live in a namespace we have verified on Open VSX. A recommendation resolves to whatever publisher
+//      currently owns that namespace on the gallery, so recommending an unverified namespace is a
+//      supply-chain foothold - a squatted or hijacked namespace, as in the GlassWorm Open VSX campaign.
+//      The allowlist FAILS CLOSED: a new namespace trips the guard until it is verified and added here
+//      deliberately (confirm on Open VSX who owns the namespace first).
+const RECOMMENDATION_TIP_KEYS = ['extensionTips', 'extensionImportantTips', 'keymapExtensionTips',
+	'configBasedExtensionTips', 'exeBasedExtensionTips', 'webExtensionTips', 'languageExtensionTips',
+	'virtualWorkspaceExtensionTips', 'remoteExtensionTips', 'extensionRecommendations'];
+for (const k of RECOMMENDATION_TIP_KEYS) {
+	const v = p[k];
+	const empty = v === undefined || (Array.isArray(v) ? v.length === 0 : Object.keys(v).length === 0);
+	ok(empty, `product.json carries an inherited recommended-extension list "${k}" (FR-003: upstream marketplace recommendations must stay stripped)`);
+}
+const VERIFIED_NAMESPACES = new Set(['clawdius', 'anthropic', 'ms-vscode', 'github', 'dbaeumer', 'typescriptteam', 'connor4312']);
+// .vscode/extensions.json is JSONC (line + block comments); strip them before parsing. The recommendation
+// ids carry no "//", so removing full-line "//" comments and /* */ blocks is safe for this file.
+const recText = fs.readFileSync('.vscode/extensions.json', 'utf8')
+	.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+let recommendations: string[] = [];
+try { recommendations = (JSON.parse(recText).recommendations || []) as string[]; }
+catch { ok(false, '.vscode/extensions.json is not parseable (FR-003 recommended-extension namespace guard cannot verify it)'); }
+for (const id of recommendations) {
+	const ns = id.split('.')[0].toLowerCase();
+	ok(VERIFIED_NAMESPACES.has(ns), `.vscode/extensions.json recommends "${id}" from unverified namespace "${ns}" (FR-003 / GlassWorm: verify who owns the Open VSX namespace, then add it to VERIFIED_NAMESPACES)`);
+}
+
 // The startup-fetch URLs DefaultAccountProviderContribution would call at BlockStartup with the user's session
 // must stay empty strings (each call site short-circuits on ''). Pin them empty rather than relying on host
 // matching, since a repopulated entitlement/registry URL on a non-denied host would otherwise pass.

@@ -53,6 +53,16 @@ const UNIVERSAL = [
 ]
 // Internal planning documents must not appear in the public source tree.
 const INTERNAL_DOC_PATH = /^src\/.*(-plan\.md|\/roadmap[^/]*\.md)$/i
+// SC-012 / FR-018: Spec-Kit artifacts (this product's spec, plans, tasks, checklists, review records) are
+// internal content and must NEVER appear in the public fork - not even gitignored. They live one level
+// ABOVE this repo, in the workspace-root container. Flag any scanned file path that contains a specs/ or
+// .specify/ segment (at the root OR nested, e.g. docs/specs/), AND (below, once per run) the presence of
+// any such directory anywhere in the tree.
+const SPEC_KIT_PATH = /(^|\/)(specs|\.specify)\//i
+// Directory basenames Spec-Kit writes its artifacts into; matched anywhere in the tree by the walk below.
+const SPEC_KIT_DIR_NAMES = new Set(['specs', '.specify'])
+// Build/dependency/VCS dirs the Spec-Kit walk never descends into (noise; also keeps the walk fast).
+const SPEC_KIT_WALK_SKIP = new Set(['node_modules', 'out', 'out-build', 'dist', '.git', '.build', 'target'])
 // The CI workflow legitimately carries the UNIVERSAL marker literals (it is the guard that greps for them),
 // so exempt it from the universal content rule - the same reason SELF exempts the scanner's own source.
 const UNIVERSAL_EXEMPT = [/(^|\/)\.github\/workflows\/clawdius-ci\.yml$/]
@@ -81,8 +91,31 @@ const LARGE_LIMIT = 5 * 1024 * 1024
 const LARGE_ALLOW = [/^clawdius\/branding\//, /\.(icns|ico)$/]
 
 let findings = 0
+// SC-012 / FR-018 tree-level assertion (runs once, independent of the file arguments): NO Spec-Kit
+// artifact directory may exist ANYWHERE in the public fork - at the root or nested, tracked OR
+// untracked/gitignored. Walk from the repo root (cwd), skipping build/dependency/VCS dirs, and flag any
+// directory named specs/ or .specify/. This closes the nested-copy gap a root-only check would leave.
+function findSpecKitDirs(dir: string, out: string[]): void {
+  let entries: fs.Dirent[]
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) { continue }
+    const full = dir === '.' ? entry.name : `${dir}/${entry.name}`
+    if (SPEC_KIT_DIR_NAMES.has(entry.name)) { out.push(full); continue }
+    if (!SPEC_KIT_WALK_SKIP.has(entry.name)) { findSpecKitDirs(full, out) }
+  }
+}
+const specKitDirs: string[] = []
+findSpecKitDirs('.', specKitDirs)
+for (const d of specKitDirs) {
+  console.error(`[spec-kit-artifact] "${d}/" is present in the public fork - Spec-Kit artifacts are internal and must live in the private docs repo (SC-012 / FR-018)`)
+  findings++
+}
 for (const f of files) {
   const nf = f.replace(/\\/g, '/')
+  // Belt-and-suspenders for the tree walk above: flag a Spec-Kit file passed in explicitly, whether at the
+  // root or nested (SPEC_KIT_PATH matches a specs/ or .specify/ segment anywhere in the path).
+  if (SPEC_KIT_PATH.test(nf)) { console.error(`[spec-kit-artifact] ${f}: Spec-Kit artifacts are internal and must not appear in the public fork (SC-012 / FR-018)`); findings++; continue }
   if (largeFilesMode) {
     try {
       const sz = fs.statSync(f).size

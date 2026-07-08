@@ -39,6 +39,33 @@ jobs:
           node script/clawdius/scan-forbidden.ts "$tmp/good.ts"
           rm -rf "$tmp"
           echo "scanner is falsifiable: flags planted Copilot string, passes a clean file"
+      - name: Spec-Kit artifact scan is falsifiable (a specs/ or .specify/ dir must fail)
+        shell: bash
+        run: |
+          set -e
+          # PREFLIGHT: this self-test plants and then rm -rf's these sentinel names. If any already exists in
+          # the checkout, refuse to run - otherwise a genuinely committed root specs/ or .specify/ (the exact
+          # SC-012 artifact) would be deleted by the cleanup below and masked. A pre-existing specs/.specify is
+          # itself an SC-012 violation; __sk_selftest__ signals stale state. Fail loud either way.
+          for s in specs .specify __sk_selftest__; do
+            if [ -e "$s" ]; then echo "::error::\"$s\" already exists before the spec-kit self-test - a committed SC-012 artifact or stale state; refusing to run destructive self-test"; exit 1; fi
+          done
+          # SC-012 / FR-018: the scanner must flag a Spec-Kit directory ANYWHERE in the public tree - at the
+          # root AND nested. Root cases live at the repo root; nested cases go under a throwaway parent so
+          # cleanup never touches a real tracked directory. Each must trip the scan (run with no file args).
+          for d in specs .specify __sk_selftest__/docs/specs __sk_selftest__/deep/nest/.specify; do
+            mkdir -p "$d" && printf 'internal\n' > "$d/artifact.md"
+            if node script/clawdius/scan-forbidden.ts >/dev/null 2>&1; then
+              echo "FAIL: scan did not flag a planted Spec-Kit $d/ directory"; rm -rf specs .specify __sk_selftest__; exit 1
+            fi
+            rm -rf specs .specify __sk_selftest__
+          done
+          # A nested Spec-Kit file passed as an explicit arg must also be flagged.
+          if node script/clawdius/scan-forbidden.ts docs/specs/tasks.md >/dev/null 2>&1; then
+            echo "FAIL: scan did not flag a nested Spec-Kit file argument"; exit 1
+          fi
+          node script/clawdius/scan-forbidden.ts
+          echo "spec-kit artifact scan is falsifiable: flags root + nested specs/ and .specify/, clean when absent"
       - name: Forbidden-content scan over Clawdius-owned + marked files
         shell: bash
         run: |
@@ -102,6 +129,24 @@ jobs:
           echo "Clawdius fork scaffolding intact; pinned upstream $(cat UPSTREAM_VERSION)"
       - name: Branding guard (Clawdius branding, Open VSX, no telemetry, Clawdius theme)
         run: node script/clawdius/branding-guard.ts
+      - name: Recommended-extension namespace guard is falsifiable (FR-003 / GlassWorm)
+        shell: bash
+        run: |
+          set -e
+          # An unverified namespace in the recommendation set must trip the guard (supply-chain foothold).
+          node -e "const fs=require('fs');let t=fs.readFileSync('.vscode/extensions.json','utf8');t=t.replace(/(\"recommendations\"\s*:\s*\[)/,'\$1\"evilpublisher.squatted-namespace\",');fs.writeFileSync('.vscode/extensions.json',t)"
+          if node script/clawdius/branding-guard.ts >/dev/null 2>&1; then
+            echo "FAIL: branding guard did not flag an unverified recommended-extension namespace"; git checkout -- .vscode/extensions.json; exit 1
+          fi
+          git checkout -- .vscode/extensions.json
+          # A reinstated upstream marketplace recommendation list must trip the guard.
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('product.json','utf8'));p.extensionTips={'ms-python.python':'py'};fs.writeFileSync('product.json',JSON.stringify(p,null,'\t'))"
+          if node script/clawdius/branding-guard.ts >/dev/null 2>&1; then
+            echo "FAIL: branding guard did not flag a reinstated extensionTips list"; git checkout -- product.json; exit 1
+          fi
+          git checkout -- product.json
+          node script/clawdius/branding-guard.ts >/dev/null
+          echo "FR-003 recommended-extension namespace guard is falsifiable and clean after restore"
       - name: Brand ratchet (Copilot icon/string/asset may only shrink) + per-probe falsifiability
         shell: bash
         run: |

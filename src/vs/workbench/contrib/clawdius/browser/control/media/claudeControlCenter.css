@@ -201,6 +201,13 @@ rounded "card" chrome. Semantic tones (allow/warn/deny) map to the editor's own 
 .clawdius-control-eff-tier.sbx-allowed { background: var(--vscode-testing-iconPassed, #388a34); color: var(--vscode-badge-foreground, #ffffff); }
 .clawdius-control-eff-tier.sbx-denied { background: var(--vscode-errorForeground, #c72e2e); color: var(--vscode-badge-foreground, #ffffff); }
 .clawdius-control-eff-tier.sbx-prompt { background: var(--vscode-editorWarning-foreground, #9a6700); color: var(--vscode-badge-foreground, #ffffff); }
+
+/* Effective-config source-precedence legend */
+.clawdius-control-legend-group { display: flex; flex-direction: column; gap: 4px; }
+.clawdius-control-legend-title { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--vscode-descriptionForeground); margin-top: 6px; }
+.clawdius-control-legend-row { display: flex; align-items: center; gap: 8px; }
+.clawdius-control-legend-rank { min-width: 14px; text-align: right; font-size: 11px; color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums; }
+.clawdius-control-legend-src { font-size: 11px; color: var(--vscode-descriptionForeground); }
 .clawdius-control-select {
 	flex: 1 1 auto; min-width: 0; background: var(--vscode-input-background); color: var(--vscode-input-foreground);
 	border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 2px;

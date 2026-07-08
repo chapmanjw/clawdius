@@ -55,7 +55,7 @@ import { ITerminalService, ITerminalGroupService } from '../../../terminal/brows
 import { ConfigScope, ConfigSection, IClawdiusConfigService, IConfigItem } from '../../common/clawdiusConfig.js';
 import { IClawdiusEffectiveConfigService, IEffectiveConfigResult } from './clawdiusEffectiveConfigService.js';
 import { formatStarCount, IClawdiusStarCountService } from './clawdiusStarCountService.js';
-import { IResolvedSetting, JsonValue, SettingsTier, isManagedTier } from '../../common/clawdiusEffectiveConfig.js';
+import { IResolvedSetting, JsonValue, SettingsTier, TIER_RANK, isManagedTier } from '../../common/clawdiusEffectiveConfig.js';
 import { previewWrite } from '../../common/clawdiusPreflight.js';
 import { ISandboxConfig, SandboxNetworkVerdict, SandboxWriteVerdict, checkDomain, checkWrite, parseSandboxConfig } from '../../common/claudeSandbox.js';
 import { CONFIG_DELETE_COMMAND_ID, configCreateCommandId } from '../clawdiusConfigActions.js';
@@ -209,6 +209,20 @@ function effectiveTierLabel(tier: SettingsTier): string {
 		case SettingsTier.ProjectLocal: return localize('clawdius.eff.tier.local', "Project-local");
 		case SettingsTier.Project: return localize('clawdius.eff.tier.project', "Project");
 		case SettingsTier.User: return localize('clawdius.eff.tier.user', "User");
+	}
+}
+
+/** A short source hint for the precedence legend - where each tier's body is read from. */
+function legendTierSource(tier: SettingsTier): string {
+	switch (tier) {
+		case SettingsTier.PolicyHelper: return localize('clawdius.eff.src.policy', "A managed policy program (value hidden)");
+		case SettingsTier.ServerManaged: return localize('clawdius.eff.src.server', "Cached at ~/.claude/remote-settings.json");
+		case SettingsTier.MdmRegistry: return localize('clawdius.eff.src.mdm', "Enterprise MDM (registry or managed plist)");
+		case SettingsTier.ManagedFile: return localize('clawdius.eff.src.managed', "managed-settings.json + drop-ins");
+		case SettingsTier.HkcuRegistry: return localize('clawdius.eff.src.hkcu', "User-writable policy registry");
+		case SettingsTier.ProjectLocal: return localize('clawdius.eff.src.local', ".claude/settings.local.json");
+		case SettingsTier.Project: return localize('clawdius.eff.src.project', ".claude/settings.json");
+		case SettingsTier.User: return localize('clawdius.eff.src.user', "~/.claude/settings.json");
 	}
 }
 
@@ -946,6 +960,8 @@ export class ClaudeControlCenterEditor extends EditorPane {
 
 		this.renderEffectiveDiagnostics(parent, result);
 
+		this.renderPrecedenceLegend(parent);
+
 		const block = this.block(parent, localize('clawdius.eff.resolved', "Resolved settings"));
 		const setCount = this.renderSearchBox(block, localize('clawdius.eff.search', "Search settings..."));
 		const all = result.config.settings;
@@ -961,6 +977,33 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			shown++;
 		}
 		setCount(shown, all.length);
+	}
+
+	/** The source-precedence legend: the tier order highest-first, split into the non-merging managed band and
+	 *  the merged sources below it, so the winning-tier badge on each resolved row reads against a key. */
+	private renderPrecedenceLegend(parent: HTMLElement): void {
+		const block = this.block(parent, localize('clawdius.eff.precedence', "Source precedence"));
+		append(block, h('.clawdius-control-scope-hint')).textContent = localize('clawdius.eff.precedenceIntro',
+			"Sources resolve highest precedence first. The managed band is non-merging: one managed source supplies the whole band and any lower managed source is replaced, not merged. The sources below the band deep-merge, and a permission denial is always kept.");
+		this.renderLegendGroup(block, localize('clawdius.eff.bandManaged', "Managed band - non-merging"),
+			[SettingsTier.PolicyHelper, SettingsTier.ServerManaged, SettingsTier.MdmRegistry, SettingsTier.ManagedFile, SettingsTier.HkcuRegistry]);
+		this.renderLegendGroup(block, localize('clawdius.eff.bandMerged', "Merged sources"),
+			[SettingsTier.ProjectLocal, SettingsTier.Project, SettingsTier.User]);
+	}
+
+	/** One precedence band in the legend: a titled group of rank + tier badge + source-hint rows. */
+	private renderLegendGroup(parent: HTMLElement, title: string, tiers: readonly SettingsTier[]): void {
+		const group = append(parent, h('.clawdius-control-legend-group'));
+		append(group, h('.clawdius-control-legend-title')).textContent = title;
+		for (const tier of tiers) {
+			const row = append(group, h('.clawdius-control-legend-row'));
+			append(row, h('span.clawdius-control-legend-rank')).textContent = String(TIER_RANK[tier]);
+			const badge = append(row, h('span.clawdius-control-eff-tier'));
+			badge.textContent = effectiveTierLabel(tier);
+			// Derive the managed styling from the resolver's own predicate so the legend cannot desync from it.
+			if (isManagedTier(tier)) { badge.classList.add('managed'); }
+			append(row, h('span.clawdius-control-legend-src')).textContent = legendTierSource(tier);
+		}
 	}
 
 	/** The "not evaluated / malformed / opaque managed" banner, so the resolved values below are never read as a

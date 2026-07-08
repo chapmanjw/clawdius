@@ -8,7 +8,9 @@ name: Clawdius CI
 
 on:
   push:
-    branches: [main]
+    # main plus the branches where the fork surface is most likely to grow: upstream re-bases and
+    # merge integration branches. The fork-diff ratchet must catch bloat here, before it reaches main.
+    branches: [main, "upstream-*", "merge/**"]
   pull_request:
     branches: [main]
 
@@ -127,6 +129,31 @@ jobs:
             test -f "$f" || { echo "MISSING required fork file: $f"; exit 1; }
           done
           echo "Clawdius fork scaffolding intact; pinned upstream $(cat UPSTREAM_VERSION)"
+      - name: Fork-diff ratchet is falsifiable (over-baseline growth must trip) + clean on this tree
+        shell: bash
+        run: |
+          set -e
+          # The checkout is shallow and carries no upstream remote/tag, so make the pinned base commit
+          # available by SHA (it is an ancestor of main, hence fetchable) before diffing against it.
+          base=$(sed -n 's/^upstream_commit:[[:space:]]*//p' script/clawdius/fork-diff-baseline.txt | tr -d '[:space:]')
+          if [ -z "$base" ]; then echo "::error::no upstream_commit recorded in fork-diff-baseline.txt"; exit 1; fi
+          if ! git rev-parse --verify --quiet "${base}^{commit}" >/dev/null; then
+            git fetch --no-tags --depth=1 origin "$base"
+          fi
+          # The current tree must be within the recorded baseline.
+          bash script/clawdius/diff-stat --check
+          # Falsifiability: shrink the baseline so the current surface exceeds it - the ratchet MUST trip.
+          # (git diff compares committed trees, so a working-tree file cannot plant growth; move the ceiling.)
+          cp script/clawdius/fork-diff-baseline.txt /tmp/fork-diff-baseline.bak
+          sed -i 's/^baseline:.*/baseline: 1 files changed, 1 insertions(+), 0 deletions(-)/' script/clawdius/fork-diff-baseline.txt
+          if bash script/clawdius/diff-stat --check >/dev/null 2>&1; then
+            echo "::error::fork-diff ratchet did not trip when the surface exceeds the baseline"
+            cp /tmp/fork-diff-baseline.bak script/clawdius/fork-diff-baseline.txt
+            exit 1
+          fi
+          cp /tmp/fork-diff-baseline.bak script/clawdius/fork-diff-baseline.txt
+          bash script/clawdius/diff-stat --check
+          echo "fork-diff ratchet is falsifiable (over-baseline growth trips) and clean on the current tree"
       - name: Branding guard (Clawdius branding, Open VSX, no telemetry, Clawdius theme)
         run: node script/clawdius/branding-guard.ts
       - name: Recommended-extension namespace guard is falsifiable (FR-003 / GlassWorm)

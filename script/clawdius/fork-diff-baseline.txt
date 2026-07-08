@@ -5,10 +5,16 @@
 # without a recorded, reviewed disposition, keeping the diff small, isolated, and auditable.
 # Update this file deliberately - for example after an upstream merge - by re-running:
 #   script/clawdius/diff-stat
+# and recording the new numbers below. The ratchet (script/clawdius/diff-stat --check, run in CI)
+# fails when files-changed or insertions exceed these numbers.
 #
 # The large deletion count is dominated by removing a prebuilt vendor chat extension (a checked-in
 # dist bundle); insertions and files-changed are the growth-relevant metrics for the ratchet.
+#
+# upstream_commit pins the base by SHA so the ratchet resolves even on a shallow CI checkout that
+# has no upstream remote and cannot see the tag name; CI fetches this SHA before running --check.
 
 upstream_version: 1.127.0
-recorded: 2026-07-07
-baseline: 5508 files changed, 32928 insertions(+), 1455594 deletions(-)
+upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
+recorded: 2026-07-08
+baseline: 5513 files changed, 33616 insertions(+), 1455594 deletions(-)

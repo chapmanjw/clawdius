@@ -1,8 +1,96 @@
 #!/usr/bin/env bash
-# Print the Clawdius fork surface against the pinned upstream tag, so bloat is visible.
-# Usage: script/clawdius/diff-stat
+# Show or ratchet-check the Clawdius fork surface against the pinned upstream base, so bloat is visible.
+#
+# Usage:
+#   script/clawdius/diff-stat            Print the full per-file diff-stat.
+#   script/clawdius/diff-stat --check    Compare the current surface to the recorded baseline and
+#                                        exit non-zero if it GREW (the fork-diff ratchet). The
+#                                        growth-relevant metrics are files-changed and insertions;
+#                                        deletions are ignored, since removing more upstream code
+#                                        only shrinks the fork.
+#
+# The pinned base is UPSTREAM_VERSION (a tag). When that tag is not present - for example on a
+# shallow CI checkout with no upstream remote - it falls back to the upstream_commit SHA recorded
+# in the baseline file, which CI fetches by SHA before running --check.
 set -euo pipefail
+
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-VER="$(cat "$ROOT/UPSTREAM_VERSION" | tr -d '[:space:]')"
-echo "Clawdius fork surface vs upstream $VER:"
-git -C "$ROOT" diff "$VER...HEAD" --stat
+BASELINE="$ROOT/script/clawdius/fork-diff-baseline.txt"
+VER="$(tr -d '[:space:]' < "$ROOT/UPSTREAM_VERSION")"
+
+# Resolve the base ref: prefer the version tag; fall back to the recorded upstream_commit SHA.
+resolve_base() {
+	if git -C "$ROOT" rev-parse --verify --quiet "${VER}^{commit}" >/dev/null; then
+		printf '%s' "$VER"
+		return 0
+	fi
+	local sha
+	sha="$(sed -n 's/^upstream_commit:[[:space:]]*//p' "$BASELINE" | tr -d '[:space:]')"
+	if [ -n "$sha" ] && git -C "$ROOT" rev-parse --verify --quiet "${sha}^{commit}" >/dev/null; then
+		printf '%s' "$sha"
+		return 0
+	fi
+	echo "diff-stat: cannot resolve the pinned upstream base ('$VER' tag absent and no reachable upstream_commit SHA)." >&2
+	echo "  In CI, fetch it first:  git fetch --no-tags --depth=1 origin <upstream_commit>" >&2
+	return 1
+}
+
+BASE="$(resolve_base)"
+
+# Two-dot diff: the full tree difference between the pinned base and HEAD. Equivalent to three-dot
+# here because the fork's merge-base with the pinned tag IS that tag, and two-dot needs only the two
+# tree objects (so it works on a shallow CI checkout that lacks the shared history).
+
+if [ "${1:-}" != "--check" ]; then
+	echo "Clawdius fork surface vs upstream $VER:"
+	git -C "$ROOT" diff "$BASE..HEAD" --stat
+	exit 0
+fi
+
+# --check: ratchet the growth-relevant metrics against the recorded baseline.
+# parse_num "<text>" "<unit-regex>" -> the integer preceding the unit, or 0 if absent.
+parse_num() {
+	echo "$1" | grep -oE "[0-9]+ $2" | grep -oE '^[0-9]+' || echo 0
+}
+
+cur="$(git -C "$ROOT" diff "$BASE..HEAD" --shortstat)"
+base_line="$(sed -n 's/^baseline:[[:space:]]*//p' "$BASELINE")"
+if [ -z "$base_line" ]; then
+	echo "diff-stat --check: no 'baseline:' line found in $BASELINE" >&2
+	exit 1
+fi
+
+cur_files="$(parse_num "$cur" 'files? changed')"
+cur_ins="$(parse_num "$cur" 'insertions?\(\+\)')"
+base_files="$(parse_num "$base_line" 'files? changed')"
+base_ins="$(parse_num "$base_line" 'insertions?\(\+\)')"
+
+# Silent-green guard: the fork always differs from upstream, so an empty diff means the base was
+# resolved to the wrong commit (or the diff failed). Refuse to pass rather than wave it through.
+if [ "$cur_files" -eq 0 ]; then
+	echo "diff-stat --check: computed an empty diff against $BASE - refusing to pass (base likely wrong)." >&2
+	echo "  shortstat: '$cur'" >&2
+	exit 1
+fi
+
+echo "fork surface vs upstream $VER (base ${BASE:0:12}):"
+echo "  current : $cur_files files changed, $cur_ins insertions(+)"
+echo "  baseline: $base_files files changed, $base_ins insertions(+)"
+
+fail=0
+if [ "$cur_files" -gt "$base_files" ]; then
+	echo "RATCHET: files changed grew $base_files -> $cur_files (+$((cur_files - base_files)))" >&2
+	fail=1
+fi
+if [ "$cur_ins" -gt "$base_ins" ]; then
+	echo "RATCHET: insertions grew $base_ins -> $cur_ins (+$((cur_ins - base_ins)))" >&2
+	fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+	echo "The fork surface grew beyond the recorded baseline. If this growth is intended, update the" >&2
+	echo "baseline deliberately: re-run 'script/clawdius/diff-stat' and record the new numbers (and" >&2
+	echo "upstream_commit) in $BASELINE with a reviewed disposition." >&2
+	exit 1
+fi
+echo "OK: fork surface is within the recorded baseline."

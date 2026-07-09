@@ -51,6 +51,7 @@ import { Codicon } from '../../../../base/common/codicons.js';
 import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContainer.js';
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainerLocation } from '../../../common/views.js';
 import { ClawdiusContextBudgetView, CONTEXT_BUDGET_VIEW_CONTAINER_ID, CONTEXT_BUDGET_VIEW_ID } from './clawdiusContextBudgetView.js';
+import { ClawdiusMissionsView, MISSIONS_VIEW_CONTAINER_ID, MISSIONS_VIEW_ID } from './missions/claudeMissionsView.js';
 import { ClawdiusContextBudgetStatusEntry, CONTEXT_BUDGET_WARN_TOKENS_SETTING, OpenContextBudgetAction } from './clawdiusContextBudgetStatusEntry.js';
 import { LintContextAction } from './clawdiusContextBudgetLint.js';
 import { DisableConfirmedLoadsAction, EnableConfirmedLoadsAction } from './clawdiusContextBudgetConfirm.js';
@@ -283,6 +284,29 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 		canMoveView: true,
 	}];
 	Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews(contextBudgetViews, contextBudgetContainer);
+
+	// The Missions fleet: a Sidebar (Activity Bar) view listing the runs the reader seam enumerates, each with
+	// honest coverage / freshness / completeness + ownership labels (a foreign/suppressed run present-with-label,
+	// never hidden). Activity-bar-backed containers use `ViewContainerLocation.Sidebar` in this fork (there is no
+	// `Activitybar` location). Reuses the same registerViewContainer + registerViews mechanism as the panel above;
+	// the view reads runs ONLY through the seam (FR-002).
+	const missionsContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
+		id: MISSIONS_VIEW_CONTAINER_ID,
+		title: localize2('clawdius.missions.container', "Claude Code Missions"),
+		ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [MISSIONS_VIEW_CONTAINER_ID, { mergeViewWithContainerWhenSingleView: true }]),
+		hideIfEmpty: false,
+		icon: Codicon.rocket,
+		order: 7,
+	}, ViewContainerLocation.Sidebar);
+	const missionsViews: IViewDescriptor[] = [{
+		id: MISSIONS_VIEW_ID,
+		name: localize2('clawdius.missions.view', "Claude Code Missions"),
+		ctorDescriptor: new SyncDescriptor(ClawdiusMissionsView),
+		containerIcon: Codicon.rocket,
+		canToggleVisibility: true,
+		canMoveView: true,
+	}];
+	Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews(missionsViews, missionsContainer);
 	registerWorkbenchContribution2(ClawdiusContextBudgetStatusEntry.ID, ClawdiusContextBudgetStatusEntry, WorkbenchPhase.BlockRestore);
 	registerAction2(OpenContextBudgetAction);
 	registerAction2(LintContextAction);

@@ -58,6 +58,17 @@ suite('Clawdius reader seam - Slice 1', () => {
 			assert.strictEqual(r.root.authority, 'wsl+ubuntu');
 			assert.strictEqual(r.root.path, '/home/user/.claude');
 		});
+
+		test('env set inside a remote window -> the env path is rebased onto the remote host (FR-002)', () => {
+			// A CLAUDE_CONFIG_DIR read from the remote host must resolve on that host, not fall back to a local
+			// `file:` URI - otherwise a WSL/SSH window would read the wrong machine's config.
+			const remoteHome = URI.from({ scheme: 'vscode-remote', authority: 'wsl+ubuntu', path: '/home/user' });
+			const r = resolveConfigRoot('/opt/claude-config', remoteHome);
+			assert.ok(r.kind === 'resolved');
+			assert.strictEqual(r.root.scheme, 'vscode-remote');
+			assert.strictEqual(r.root.authority, 'wsl+ubuntu');
+			assert.strictEqual(r.root.path, '/opt/claude-config');
+		});
 	});
 
 	suite('label enums equal the contract value sets', () => {

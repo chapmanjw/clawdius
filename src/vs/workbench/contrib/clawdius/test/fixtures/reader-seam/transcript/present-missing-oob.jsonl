@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"sess-fixture-0004","uuid":"rec-0001","parentUuid":null,"cwd":"/work/fixture-proj","timestamp":"2026-07-08T00:02:01.000Z"}
+{"type":"assistant","sessionId":"sess-fixture-0004","uuid":"rec-0002","parentUuid":"rec-0001","cwd":"/work/fixture-proj","timestamp":"2026-07-08T00:02:02.000Z","oobRef":"oob/tool-result-0007.json"}

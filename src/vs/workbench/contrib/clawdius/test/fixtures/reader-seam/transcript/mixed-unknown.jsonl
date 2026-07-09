@@ -1,0 +1,3 @@
+{"type":"user","sessionId":"sess-fixture-0007","uuid":"rec-0001","parentUuid":null,"cwd":"/work/fixture-proj","timestamp":"2026-07-08T00:05:01.000Z"}
+{"schemaVersion":9,"event":"future.record","payload":{"unreadable":true}}
+{"type":"assistant","sessionId":"sess-fixture-0007","uuid":"rec-0002","parentUuid":"rec-0001","cwd":"/work/fixture-proj","timestamp":"2026-07-08T00:05:02.000Z"}

@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"sess-fixture-0006","uuid":"rec-0001","parentUuid":null,"cwd":"/other/workspace/repo","timestamp":"2026-07-08T00:04:01.000Z"}
+{"type":"assistant","sessionId":"sess-fixture-0006","uuid":"rec-0002","parentUuid":"rec-0001","cwd":"/other/workspace/repo","timestamp":"2026-07-08T00:04:02.000Z"}

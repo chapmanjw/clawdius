@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"sess-fixture-0002","uuid":"rec-0001","parentUuid":null,"cwd":"/work/fixture-proj","timestamp":"2026-07-08T00:01:01.000Z","futureField":{"addedByNewerCli":true},"cost":{"tokens":123}}
+{"type":"assistant","sessionId":"sess-fixture-0002","uuid":"rec-0002","parentUuid":"rec-0001","cwd":"/work/fixture-proj","timestamp":"2026-07-08T00:01:02.000Z","anotherNewKey":["a","b"],"nested":{"x":{"y":1}}}

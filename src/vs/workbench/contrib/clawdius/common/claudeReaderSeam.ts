@@ -170,14 +170,23 @@ export interface IReaderSeam {
 
 /**
  * Resolve the config root of the ACTIVE window's host, purely over injected inputs. When `env`
- * (`CLAUDE_CONFIG_DIR`) is a non-empty string, that directory is used; else when a home URI is provided, the
- * `CLAUDE_DIR` (`.claude`) default under it is used - and because {@link URI.joinPath} preserves the URI's
- * scheme + authority, a remote-authority home resolves the remote host's root, not the local one (FR-002);
- * else (no env AND no home - e.g. an unresolvable/headless host) an honest `no-config` result is returned.
- * Never hardcodes `~/.claude` (FR-001). No Node/`process`/renderer import - pure over its arguments.
+ * (`CLAUDE_CONFIG_DIR`) is a non-empty string, that directory is used - but it is REBASED onto the active
+ * window's host: when a home URI is provided the env path is resolved against the home's scheme + authority, so
+ * a `CLAUDE_CONFIG_DIR` set inside a remote (WSL/SSH) window resolves the REMOTE host, not the local one
+ * (FR-002); only when there is no home is a bare local `file:` URI used. When `env` is unset, the `CLAUDE_DIR`
+ * (`.claude`) default under the home is used - and because {@link URI.joinPath} preserves the URI's scheme +
+ * authority, a remote-authority home again resolves the remote host's root. Else (no env AND no home - e.g. an
+ * unresolvable/headless host) an honest `no-config` result is returned. Never hardcodes `~/.claude` (FR-001).
+ * No Node/`process`/renderer import - pure over its arguments.
  */
 export function resolveConfigRoot(env: string | undefined, homeUri: URI | undefined): ReaderConfigRoot {
 	if (env !== undefined && env.length > 0) {
+		// Rebase the env path onto the active window's host so a remote window keeps the remote scheme +
+		// authority (mirrors how the config store resolves an absolute path onto the importer's provider);
+		// `URI.file(env).path` normalizes the native path, then `.with` swaps only the path.
+		if (homeUri) {
+			return { kind: 'resolved', root: homeUri.with({ path: URI.file(env).path }) };
+		}
 		return { kind: 'resolved', root: URI.file(env) };
 	}
 	if (homeUri) {

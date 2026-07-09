@@ -1,0 +1,3 @@
+{"schemaVersion":3,"event":"conversation.start","payload":{"id":"sess-fixture-0003"}}
+{"schemaVersion":3,"event":"conversation.turn","payload":{"role":"user"}}
+{"schemaVersion":3,"event":"conversation.turn","payload":{"role":"assistant"}}

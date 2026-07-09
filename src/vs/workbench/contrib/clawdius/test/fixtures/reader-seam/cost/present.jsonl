@@ -1,0 +1,4 @@
+{"type":"user","sessionId":"sess-fixture-0008","uuid":"rec-0001","cwd":"/work/fixture-proj","timestamp":"2026-07-08T00:06:01.000Z"}
+{"type":"assistant","sessionId":"sess-fixture-0008","uuid":"rec-0002","cwd":"/work/fixture-proj","message":{"model":"model-fixture-a","usage":{"input_tokens":120,"output_tokens":40}}}
+{"type":"assistant","sessionId":"sess-fixture-0008","uuid":"rec-0003","cwd":"/work/fixture-proj","message":{"model":"model-fixture-a","usage":{"input_tokens":80,"output_tokens":30}}}
+{"type":"assistant","sessionId":"sess-fixture-0008","uuid":"rec-0004","cwd":"/work/fixture-proj","message":{"model":"model-fixture-b","usage":{"input_tokens":200,"output_tokens":90}}}

@@ -1,0 +1,6 @@
+{
+	"tasks": [
+		{ "id": "task-fixture-03", "status": "done", "claimedBy": "member-fixture-02", "fileLocks": [], "futureTaskField": { "priority": 2 } }
+	],
+	"addedByNewerCli": ["a", "b"]
+}

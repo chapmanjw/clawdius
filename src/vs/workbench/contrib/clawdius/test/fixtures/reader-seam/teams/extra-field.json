@@ -1,0 +1,8 @@
+{
+	"teamId": "team-fixture-0002",
+	"members": [
+		{ "id": "member-fixture-03", "status": "active", "futureMemberFlag": true }
+	],
+	"mailbox": [],
+	"addedByNewerCli": { "schemaExtension": 1 }
+}

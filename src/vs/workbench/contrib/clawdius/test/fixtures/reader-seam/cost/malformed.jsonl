@@ -1,0 +1,2 @@
+{"schemaVersion":7,"event":"usage.snapshot","payload":{"credits":5}}
+{"schemaVersion":7,"event":"usage.rollup","payload":{"credits":9}}

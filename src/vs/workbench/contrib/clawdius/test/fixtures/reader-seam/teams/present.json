@@ -1,0 +1,10 @@
+{
+	"teamId": "team-fixture-0001",
+	"members": [
+		{ "id": "member-fixture-01", "status": "active" },
+		{ "id": "member-fixture-02", "status": "idle" }
+	],
+	"mailbox": [
+		{ "from": "member-fixture-01", "to": "member-fixture-02", "seq": 1 }
+	]
+}

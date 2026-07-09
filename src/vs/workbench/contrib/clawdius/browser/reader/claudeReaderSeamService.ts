@@ -19,18 +19,23 @@ import { URI } from '../../../../../base/common/uri.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import {
-	AdapterVersionStamp, CompletenessState, CoverageLabel, FreshnessLabel, IReaderRequest, IReaderResult,
-	IReaderSeam, ReaderEntityKind, Run, Session, Subagent, Transcript, TranscriptIndexKey,
+	AdapterVersionStamp, CompletenessState, CostRecord, CoverageLabel, FreshnessLabel, IReaderRequest,
+	IReaderResult, IReaderSeam, ReaderEntityKind, Run, Session, Subagent, TaskList, TeamRoster, Transcript,
+	TranscriptIndexKey,
 } from '../../common/claudeReaderSeam.js';
 import { encodeProjectDir } from '../clawdiusConfigStore.js';
 
 /** The transcript read-model entities this adapter can produce, by request kind. */
 type ReaderTranscriptEntity = Run | Session | Subagent | Transcript;
 
-/** Request kinds served by the transcript JSONL adapter (Slice 2). Teams / tasks / cost land in Slice 3. */
+/** Request kinds served by the transcript JSONL adapter (Slice 2). Cost (Slice 3) is derived from the same
+ *  transcript records but routed separately; teams / tasks are their own adapters gated behind TEAMS-14. */
 const TRANSCRIPT_KINDS: ReadonlySet<ReaderEntityKind> = new Set<ReaderEntityKind>([
 	'runs', 'session', 'subagent', 'transcript-slice',
 ]);
+
+/** Request kinds served by the teams / tasks adapters (Slice 3), gated behind the TEAMS-14 experimental probe. */
+const TEAMS_TASKS_KINDS: ReadonlySet<ReaderEntityKind> = new Set<ReaderEntityKind>(['team-roster', 'task-list']);
 
 /** The known transcript record types (Claude CLI transcript JSONL). A line the adapter RECOGNIZES is a JSON
  *  object whose `type` is one of these; anything else is a foreign shape that trips the unknown-shape canary. */
@@ -50,6 +55,12 @@ interface ITranscriptRecord {
 	readonly cwd?: string;
 	/** A reference to an out-of-band tool-result file (relative to the transcript's directory), when present. */
 	readonly oobRef?: string;
+	/** The model that produced an assistant record (from `message.model`), when present - for the cost rollup. */
+	readonly model?: string;
+	/** Authoritative input token count for this record (from `message.usage.input_tokens`), when present. */
+	readonly inputTokens?: number;
+	/** Authoritative output token count for this record (from `message.usage.output_tokens`), when present. */
+	readonly outputTokens?: number;
 	readonly byteOffset: number;
 }
 
@@ -72,12 +83,26 @@ function readString(obj: Record<string, unknown>, key: string): string | undefin
 	return typeof v === 'string' ? v : undefined;
 }
 
+function readNumber(obj: Record<string, unknown>, key: string): number | undefined {
+	const v = obj[key];
+	return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+}
+
+/** A non-null, non-array object - the shape every recognized JSON record/document must have. */
+function isObject(v: unknown): v is Record<string, unknown> {
+	return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
 /** Reduce a parsed JSON line to a recognized transcript record, or undefined when the shape is not recognized. */
 function toRecord(parsed: unknown, byteOffset: number): ITranscriptRecord | undefined {
-	if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) { return undefined; }
-	const obj = parsed as Record<string, unknown>;
+	if (!isObject(parsed)) { return undefined; }
+	const obj = parsed;
 	const type = obj['type'];
 	if (typeof type !== 'string' || !KNOWN_RECORD_TYPES.has(type)) { return undefined; }
+	// Token accounting for the cost rollup: authoritative counts from `message.usage`, model from `message.model`.
+	// Absent on records that carry no usage (e.g. user turns) - the cost adapter simply skips those.
+	const message = obj['message'];
+	const usage = isObject(message) ? message['usage'] : undefined;
 	return {
 		type,
 		sessionId: readString(obj, 'sessionId'),
@@ -86,6 +111,9 @@ function toRecord(parsed: unknown, byteOffset: number): ITranscriptRecord | unde
 		isSidechain: obj['isSidechain'] === true,
 		cwd: readString(obj, 'cwd'),
 		oobRef: readString(obj, 'oobRef'),
+		model: isObject(message) ? readString(message, 'model') : undefined,
+		inputTokens: isObject(usage) ? readNumber(usage, 'input_tokens') : undefined,
+		outputTokens: isObject(usage) ? readNumber(usage, 'output_tokens') : undefined,
 		byteOffset,
 	};
 }
@@ -189,6 +217,14 @@ function normalizePath(p: string): string {
 	return p.replace(/[\\/]+/g, '/').replace(/\/+$/, '').toLowerCase();
 }
 
+/** in-scope unless a session declares a working dir outside `folder` (an other-workspace run is surfaced as
+ *  foreign, never silently dropped). Shared by the transcript and cost adapters. */
+function coverageOf(records: readonly ITranscriptRecord[], folder: URI): CoverageLabel {
+	const cwd = records.map(r => r.cwd).find(c => c !== undefined);
+	if (cwd === undefined) { return CoverageLabel.InScope; }
+	return normalizePath(cwd) === normalizePath(folder.fsPath) ? CoverageLabel.InScope : CoverageLabel.Foreign;
+}
+
 /**
  * The transcript JSONL adapter. Reads the active session file under
  * `<root>/projects/<encodeProjectDir(folder)>/*.jsonl`, byte-offset tail-read, and produces the requested
@@ -213,13 +249,12 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 	 * is `partial`. `freshness` is always `polled` here - the live-event source is a consuming-surface concern.
 	 */
 	async read(root: URI, folder: URI, kind: ReaderEntityKind): Promise<IReaderResult<ReaderTranscriptEntity>> {
-		const projectsDir = URI.joinPath(root, 'projects', encodeProjectDir(folder));
-		const active = await this.selectActiveFile(projectsDir);
+		const active = await this.readActive(root, folder);
 		if (!active) {
+			// No session file under the projects dir: absent, not an error.
 			return this.result(emptyEntity(kind), CoverageLabel.InScope, FreshnessLabel.Polled, CompletenessState.Absent);
 		}
-		const { text, base } = await this.readTail(active);
-		const parsed = parseTranscriptRecords(text, base);
+		const { parsed, file, base } = active;
 		if (!parsed.sawJson) {
 			// The file exists but has no content (a fresh / empty session): absent, not unknown-shape.
 			return this.result(emptyEntity(kind), CoverageLabel.InScope, FreshnessLabel.Polled, CompletenessState.Absent);
@@ -228,15 +263,28 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 			// JSON was present but NO line matched a known shape: a wholesale schema shift - trip the canary.
 			return this.unknownShape(emptyEntity(kind), CoverageLabel.InScope, FreshnessLabel.Polled);
 		}
-		const coverage = this.coverageOf(parsed.records, folder);
+		const coverage = coverageOf(parsed.records, folder);
 		// A read is a known GAP (partial), not complete, when EITHER an unreadable record shape was present
 		// alongside recognized ones (additive drift - never silently dropped under a `complete` claim) OR the
 		// tail window started mid-file (`base > 0`), so records older than the window are not in view. Otherwise
 		// defer to the out-of-band check.
 		const completeness = (parsed.sawForeign || base > 0)
 			? CompletenessState.Partial
-			: await this.completenessOf(parsed.records, active);
-		return this.result(deriveEntity(kind, parsed.records, active.toString()), coverage, FreshnessLabel.Polled, completeness);
+			: await this.completenessOf(parsed.records, file);
+		return this.result(deriveEntity(kind, parsed.records, file.toString()), coverage, FreshnessLabel.Polled, completeness);
+	}
+
+	/**
+	 * Locate + tail-read + parse the active transcript for `folder` under `root` - the shared read step behind
+	 * BOTH the transcript entity and the token-first cost rollup (which is computed from the same records).
+	 * Returns undefined when there is no session file. Read-only.
+	 */
+	async readActive(root: URI, folder: URI): Promise<{ readonly parsed: IParsedTranscript; readonly file: URI; readonly base: number } | undefined> {
+		const projectsDir = URI.joinPath(root, 'projects', encodeProjectDir(folder));
+		const file = await this.selectActiveFile(projectsDir);
+		if (!file) { return undefined; }
+		const { text, base } = await this.readTail(file);
+		return { parsed: parseTranscriptRecords(text, base), file, base };
 	}
 
 	/** The newest `*.jsonl` session file under the projects dir (mtime-latest), or undefined when there is none. */
@@ -272,14 +320,6 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		} catch { return { text: '', base: 0 }; }
 	}
 
-	/** in-scope unless the session declares a working dir outside `folder` (an other-workspace run is surfaced as
-	 *  foreign, never silently dropped). */
-	private coverageOf(records: readonly ITranscriptRecord[], folder: URI): CoverageLabel {
-		const cwd = records.map(r => r.cwd).find(c => c !== undefined);
-		if (cwd === undefined) { return CoverageLabel.InScope; }
-		return normalizePath(cwd) === normalizePath(folder.fsPath) ? CoverageLabel.InScope : CoverageLabel.Foreign;
-	}
-
 	/** partial when the transcript references an out-of-band tool-result file that is missing; else complete. */
 	private async completenessOf(records: readonly ITranscriptRecord[], file: URI): Promise<CompletenessState> {
 		const dir = URI.joinPath(file, '..');
@@ -296,34 +336,254 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 }
 
 /**
- * The reader seam over the transcript JSONL format (Slice 2). Read-only and index-only: it delegates to the
- * transcript adapter for the active workspace folder and is NEVER the SDK `sessionStore`. The request carries
- * the already-resolved config root (see `resolveConfigRoot`); a `no-config` root degrades to an absent result.
+ * Reads a single small JSON document under the resolved config root (the teams / tasks config files, read
+ * WHOLE because they are small config docs - unlike the append-only transcript that needs a byte-offset tail).
+ * The honest ladder mirrors the transcript adapter's: a missing / empty document is `absent`; a recognized
+ * shape parses to the entity + `complete`; any other JSON (or non-JSON) trips the unknown-shape canary. These
+ * are global under the config root (not workspace-scoped), so coverage is always in-scope. Read-only.
+ */
+abstract class JsonDocAdapter<E> extends VersionKeyedAdapter {
+	constructor(protected readonly fileService: IFileService) { super(); }
+
+	/** The document this adapter reads, relative to the resolved config root. */
+	protected abstract locate(root: URI): URI;
+	/** True when the parsed JSON object is a shape this adapter version recognizes. */
+	protected abstract recognizes(obj: Record<string, unknown>): boolean;
+	/** Derive the index-only entity from a recognized JSON object. */
+	protected abstract derive(obj: Record<string, unknown>): E;
+	/** The empty entity for a degraded (absent / unknown-shape) result. */
+	protected abstract empty(): E;
+
+	async read(root: URI): Promise<IReaderResult<E>> {
+		const text = await this.readWhole(this.locate(root));
+		if (text === undefined || text.trim().length === 0) {
+			// Missing file, unreadable, or an empty document (fresh install / disbanded team): absent, not an error.
+			return this.result(this.empty(), CoverageLabel.InScope, FreshnessLabel.Polled, CompletenessState.Absent);
+		}
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(text);
+		} catch {
+			// A non-JSON / half-written document is an unrecognized shape, never a throw.
+			return this.unknownShape(this.empty(), CoverageLabel.InScope, FreshnessLabel.Polled);
+		}
+		if (!isObject(parsed) || !this.recognizes(parsed)) {
+			// Valid JSON but not a shape this adapter version knows: a schema shift - trip the canary.
+			return this.unknownShape(this.empty(), CoverageLabel.InScope, FreshnessLabel.Polled);
+		}
+		return this.result(this.derive(parsed), CoverageLabel.InScope, FreshnessLabel.Polled, CompletenessState.Complete);
+	}
+
+	/** Read a small JSON document whole, or undefined when it does not exist. Best-effort, read-only. */
+	private async readWhole(file: URI): Promise<string | undefined> {
+		try {
+			if (!(await this.fileService.exists(file))) { return undefined; }
+			return (await this.fileService.readFile(file)).value.toString();
+		} catch { return undefined; }
+	}
+}
+
+/**
+ * The teams roster adapter (Slice 3, behind the TEAMS-14 probe): reads `<root>/teams/config.json` and produces
+ * a {@link TeamRoster} (members + the Mailbox sub-view). The recognized shape is version-keyed, so a real
+ * teams-format drift trips the canary rather than mis-parsing.
+ */
+export class TeamsAdapter extends JsonDocAdapter<TeamRoster> {
+	readonly format = 'teams-roster';
+	readonly versionKey = 'v1';
+
+	protected locate(root: URI): URI { return URI.joinPath(root, 'teams', 'config.json'); }
+
+	protected recognizes(obj: Record<string, unknown>): boolean {
+		return typeof obj['teamId'] === 'string' && Array.isArray(obj['members']);
+	}
+
+	protected derive(obj: Record<string, unknown>): TeamRoster {
+		const members = (obj['members'] as unknown[]).filter(isObject).map(m => ({
+			id: readString(m, 'id') ?? '',
+			status: readString(m, 'status') ?? '',
+		}));
+		const mailboxRaw = Array.isArray(obj['mailbox']) ? obj['mailbox'] as unknown[] : [];
+		const mailbox = mailboxRaw.filter(isObject).map(x => ({
+			from: readString(x, 'from') ?? '',
+			to: readString(x, 'to') ?? '',
+			seq: readNumber(x, 'seq') ?? 0,
+		}));
+		return { teamId: readString(obj, 'teamId') ?? '', members, mailbox };
+	}
+
+	protected empty(): TeamRoster { return { teamId: '', members: [], mailbox: [] }; }
+}
+
+/**
+ * The tasks adapter (Slice 3, behind the TEAMS-14 probe): reads `<root>/tasks/tasks.json` and produces a
+ * {@link TaskList} of file-locked tasks with their claims. Version-keyed + unknown-shape canary.
+ */
+export class TasksAdapter extends JsonDocAdapter<TaskList> {
+	readonly format = 'tasks-list';
+	readonly versionKey = 'v1';
+
+	protected locate(root: URI): URI { return URI.joinPath(root, 'tasks', 'tasks.json'); }
+
+	protected recognizes(obj: Record<string, unknown>): boolean {
+		return Array.isArray(obj['tasks']);
+	}
+
+	protected derive(obj: Record<string, unknown>): TaskList {
+		const tasks = (obj['tasks'] as unknown[]).filter(isObject).map(t => ({
+			id: readString(t, 'id') ?? '',
+			status: readString(t, 'status') ?? '',
+			claimedBy: readString(t, 'claimedBy'),
+			fileLocks: Array.isArray(t['fileLocks'])
+				? (t['fileLocks'] as unknown[]).filter((s): s is string => typeof s === 'string')
+				: [],
+		}));
+		return { tasks };
+	}
+
+	protected empty(): TaskList { return { tasks: [] }; }
+}
+
+/** The empty cost rollup, for a degraded (absent / unknown-shape) result. */
+const EMPTY_COST: CostRecord = { totalInputTokens: 0, totalOutputTokens: 0, perModel: [] };
+
+/**
+ * Sum authoritative token counts per model from the transcript records. Token-first: this NEVER derives a
+ * US-dollar figure - a list-price USD would be an estimate, so the cost read model carries tokens only (FR-011).
+ */
+function computeCost(records: readonly ITranscriptRecord[]): CostRecord {
+	const perModel = new Map<string, { input: number; output: number }>();
+	let totalInput = 0;
+	let totalOutput = 0;
+	for (const r of records) {
+		if (r.inputTokens === undefined && r.outputTokens === undefined) { continue; }
+		const acc = perModel.get(r.model ?? '') ?? { input: 0, output: 0 };
+		acc.input += r.inputTokens ?? 0;
+		acc.output += r.outputTokens ?? 0;
+		perModel.set(r.model ?? '', acc);
+		totalInput += r.inputTokens ?? 0;
+		totalOutput += r.outputTokens ?? 0;
+	}
+	return {
+		totalInputTokens: totalInput,
+		totalOutputTokens: totalOutput,
+		perModel: [...perModel].map(([model, t]) => ({ model, inputTokens: t.input, outputTokens: t.output })),
+	};
+}
+
+/**
+ * The token-first cost adapter (Slice 3): computes a {@link CostRecord} from the SAME active transcript the
+ * transcript adapter reads (cost IS token-first from the transcript, FR-011), so it delegates to that adapter's
+ * shared read step rather than re-walking the tree. A windowed tail or an unreadable record among recognized
+ * ones is an honest `partial` (some token usage is out of view), never a false complete. Read-only.
+ */
+export class CostAdapter extends VersionKeyedAdapter {
+	readonly format = 'cost-token-rollup';
+	readonly versionKey = 'v1';
+
+	constructor(private readonly transcript: TranscriptJsonlAdapter) { super(); }
+
+	async read(root: URI, folder: URI): Promise<IReaderResult<CostRecord>> {
+		const active = await this.transcript.readActive(root, folder);
+		if (!active || !active.parsed.sawJson) {
+			return this.result(EMPTY_COST, CoverageLabel.InScope, FreshnessLabel.Polled, CompletenessState.Absent);
+		}
+		if (!active.parsed.recognized) {
+			return this.unknownShape(EMPTY_COST, CoverageLabel.InScope, FreshnessLabel.Polled);
+		}
+		const completeness = (active.parsed.sawForeign || active.base > 0)
+			? CompletenessState.Partial
+			: CompletenessState.Complete;
+		return this.result(computeCost(active.parsed.records), coverageOf(active.parsed.records, folder), FreshnessLabel.Polled, completeness);
+	}
+}
+
+/** The empty entity for any request kind (transcript / teams / tasks / cost), for a degraded result. */
+function emptyEntityForKind(kind: ReaderEntityKind): Run | Session | Subagent | Transcript | TeamRoster | TaskList | CostRecord {
+	switch (kind) {
+		case 'team-roster': return { teamId: '', members: [], mailbox: [] };
+		case 'task-list': return { tasks: [] };
+		case 'cost-rollup': return EMPTY_COST;
+		default: return emptyEntity(kind);
+	}
+}
+
+/**
+ * The reader seam over every local Claude format (Slice 2 transcript + Slice 3 teams / tasks / cost). Read-only
+ * and index-only: it delegates to the per-format adapters for the active workspace folder / config root and is
+ * NEVER the SDK `sessionStore`. The request carries the already-resolved config root (see `resolveConfigRoot`);
+ * a `no-config` root degrades to an absent result. Teams / tasks are gated behind the TEAMS-14 experimental
+ * probe: when it is off, a team-roster / task-list request degrades to an honest absent result rather than
+ * half-lighting an unshipped surface.
  */
 export class ClawdiusReaderSeamService implements IReaderSeam {
 	private readonly transcript: TranscriptJsonlAdapter;
+	private readonly teams: TeamsAdapter;
+	private readonly tasks: TasksAdapter;
+	private readonly cost: CostAdapter;
 
+	/**
+	 * @param teamsProbeEnabled the TEAMS-14 gating probe: when false (the default), the experimental teams / tasks
+	 * read model is not exposed and a team-roster / task-list request degrades to an honest absent result.
+	 */
 	constructor(
+		private readonly teamsProbeEnabled: boolean = false,
 		@IFileService fileService: IFileService,
 		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService,
 	) {
 		this.transcript = new TranscriptJsonlAdapter(fileService);
+		this.teams = new TeamsAdapter(fileService);
+		this.tasks = new TasksAdapter(fileService);
+		this.cost = new CostAdapter(this.transcript);
 	}
 
 	async read<T>(request: IReaderRequest): Promise<IReaderResult<T>> {
-		const folder = this.workspaceService.getWorkspace().folders[0]?.uri;
-		if (request.root.kind === 'no-config' || !folder || !TRANSCRIPT_KINDS.has(request.kind)) {
-			// No resolvable root, no workspace, or a format this slice does not serve yet: an honest empty result.
-			const absent: IReaderResult<ReaderTranscriptEntity> = {
-				entity: emptyEntity(request.kind),
-				coverage: request.root.kind === 'no-config' ? CoverageLabel.OutOfScope : CoverageLabel.InScope,
-				freshness: FreshnessLabel.Stale,
-				completeness: CompletenessState.Absent,
-				adapterVersion: { format: this.transcript.format, versionKey: this.transcript.versionKey },
-			};
-			return absent as IReaderResult<T>;
+		if (request.root.kind === 'no-config') {
+			return this.degradedAbsent(request.kind, CoverageLabel.OutOfScope) as IReaderResult<T>;
 		}
-		return await this.transcript.read(request.root.root, folder, request.kind) as IReaderResult<T>;
+		const root = request.root.root;
+		// Teams / tasks: global under the config root, gated behind the TEAMS-14 experimental probe.
+		if (TEAMS_TASKS_KINDS.has(request.kind)) {
+			if (!this.teamsProbeEnabled) {
+				return this.degradedAbsent(request.kind, CoverageLabel.InScope) as IReaderResult<T>;
+			}
+			const res = request.kind === 'team-roster' ? await this.teams.read(root) : await this.tasks.read(root);
+			return res as IReaderResult<T>;
+		}
+		// Transcript + cost: scoped to the active workspace folder.
+		const folder = this.workspaceService.getWorkspace().folders[0]?.uri;
+		if (!folder) {
+			return this.degradedAbsent(request.kind, CoverageLabel.InScope) as IReaderResult<T>;
+		}
+		if (request.kind === 'cost-rollup') {
+			return await this.cost.read(root, folder) as IReaderResult<T>;
+		}
+		if (TRANSCRIPT_KINDS.has(request.kind)) {
+			return await this.transcript.read(root, folder, request.kind) as IReaderResult<T>;
+		}
+		return this.degradedAbsent(request.kind, CoverageLabel.InScope) as IReaderResult<T>;
+	}
+
+	/** An honest fully-labeled empty result for a root/probe/workspace that cannot be read (freshness=stale: no
+	 *  poll was even attempted), stamped with the format that would have served the request. */
+	private degradedAbsent(kind: ReaderEntityKind, coverage: CoverageLabel): IReaderResult<unknown> {
+		return {
+			entity: emptyEntityForKind(kind),
+			coverage,
+			freshness: FreshnessLabel.Stale,
+			completeness: CompletenessState.Absent,
+			adapterVersion: this.stampFor(kind),
+		};
+	}
+
+	/** The adapter-version stamp of the format that serves `kind`, so even a degraded result carries a stamp. */
+	private stampFor(kind: ReaderEntityKind): AdapterVersionStamp {
+		switch (kind) {
+			case 'team-roster': return { format: this.teams.format, versionKey: this.teams.versionKey };
+			case 'task-list': return { format: this.tasks.format, versionKey: this.tasks.versionKey };
+			case 'cost-rollup': return { format: this.cost.format, versionKey: this.cost.versionKey };
+			default: return { format: this.transcript.format, versionKey: this.transcript.versionKey };
+		}
 	}
 }
 // CLAWDIUS-END

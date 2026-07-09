@@ -1,0 +1,6 @@
+{
+	"tasks": [
+		{ "id": "task-fixture-01", "status": "in-progress", "claimedBy": "member-fixture-01", "fileLocks": ["src/example/placeholder.ts"] },
+		{ "id": "task-fixture-02", "status": "todo", "fileLocks": [] }
+	]
+}

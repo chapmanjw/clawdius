@@ -128,6 +128,63 @@ export interface Transcript {
 	readonly index: TranscriptIndexKey;
 }
 
+// The teams/tasks/cost read model (Slice 3). Like the transcript entities above, these are INDEX-ONLY and
+// derived: a live-and-recent view of local Claude state, never an authoritative copy. Teams/tasks ship behind
+// the TEAMS-14 experimental probe; cost is token-first (FR-011).
+
+/** One teammate in a team roster: a stable id and a coarse status string. */
+export interface TeamMember {
+	readonly id: string;
+	readonly status: string;
+}
+
+/** One message in a team's mailbox traffic, reduced to routing fields (never the message body). */
+export interface MailboxMessage {
+	readonly from: string;
+	readonly to: string;
+	readonly seq: number;
+}
+
+/** A team roster: the team identity, its members, and its mailbox traffic (the Mailbox sub-view). */
+export interface TeamRoster {
+	readonly teamId: string;
+	readonly members: readonly TeamMember[];
+	readonly mailbox: readonly MailboxMessage[];
+}
+
+/** One task in a file-locked task list: identity, status, an optional claimant, and the files it locks. */
+export interface TaskEntry {
+	readonly id: string;
+	readonly status: string;
+	readonly claimedBy?: string;
+	readonly fileLocks: readonly string[];
+}
+
+/** A task list: the file-locked tasks with their claims. */
+export interface TaskList {
+	readonly tasks: readonly TaskEntry[];
+}
+
+/** A per-model token rollup: authoritative token counts, never a derived US-dollar figure (FR-011). */
+export interface ModelTokenRollup {
+	readonly model: string;
+	readonly inputTokens: number;
+	readonly outputTokens: number;
+}
+
+/**
+ * The token-first local cost read model (Slice 3). Authoritative TOKEN counts only, computed locally from the
+ * transcript; it deliberately carries NO US-dollar field. Per FR-011 / the no-estimated-USD-cost decision, a
+ * list-price USD figure is never shown; only an authoritative, provider-accurate USD may ever appear (labeled,
+ * and suppressed where a list price is meaningless - subscription / Bedrock / wrapper), and that is out of this
+ * read model's scope.
+ */
+export interface CostRecord {
+	readonly totalInputTokens: number;
+	readonly totalOutputTokens: number;
+	readonly perModel: readonly ModelTokenRollup[];
+}
+
 /** The entity a caller can request from the seam. */
 export type ReaderEntityKind =
 	| 'runs'

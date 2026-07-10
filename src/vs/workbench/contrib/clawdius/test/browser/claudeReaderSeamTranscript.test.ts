@@ -3,11 +3,11 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Reader-seam transcript adapter tests (Slice 2)
+// CLAWDIUS-BEGIN Reader-seam transcript adapter tests
 // Drives the transcript JSONL adapter over the sanitized fixtures staged into an in-memory filesystem: the
 // four-way matrix (present->complete, empty/missing->absent, extra-field->forward-compatible, malformed->canary
-// unknown-shape + stamp), the missing out-of-band case (->partial, SC-006), a foreign run (->coverage=foreign,
-// US1), and the truncated-tail edge (only whole records, never a half-parsed one). freshness=live is deferred
+// unknown-shape + stamp), the missing out-of-band case (->partial), a foreign run (->coverage=foreign),
+// and the truncated-tail edge (only whole records, never a half-parsed one). freshness=live is deferred
 // (the live-event source is out of scope), so fixture reads assert freshness=polled.
 
 import assert from 'assert';
@@ -32,7 +32,7 @@ async function loadFixture(name: string): Promise<string> {
 	return await __readFileInTests(URI.joinPath(src, FIXTURE_DIR, name).fsPath);
 }
 
-suite('Clawdius reader seam - transcript adapter (Slice 2)', () => {
+suite('Clawdius reader seam - transcript adapter', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	// The resolved config root (as resolveConfigRoot would return) and the active workspace folder. The in-scope
@@ -54,7 +54,7 @@ suite('Clawdius reader seam - transcript adapter (Slice 2)', () => {
 		return new TranscriptJsonlAdapter(fs);
 	}
 
-	test('present -> complete, in-scope, freshness=polled, all four labels (SC-001)', async () => {
+	test('present -> complete, in-scope, freshness=polled, all four labels', async () => {
 		const r = await (await stage('present.jsonl')).read(ROOT, FOLDER, 'transcript-slice');
 		assert.deepStrictEqual(Object.keys(r).sort(), ['adapterVersion', 'completeness', 'coverage', 'entity', 'freshness']);
 		assert.strictEqual(r.completeness, 'complete');
@@ -74,24 +74,24 @@ suite('Clawdius reader seam - transcript adapter (Slice 2)', () => {
 		assert.strictEqual(r.completeness, 'absent');
 	});
 
-	test('extra-field -> forward-compatible parse, complete (SC-004)', async () => {
+	test('extra-field -> forward-compatible parse, complete', async () => {
 		const r = await (await stage('extra-field.jsonl')).read(ROOT, FOLDER, 'transcript-slice');
 		assert.strictEqual(r.completeness, 'complete');
 		assert.strictEqual(r.adapterVersion.versionKey, 'v1');
 	});
 
-	test('malformed (unrecognized shape) -> canary unknown-shape + stamp (SC-004/SC-005)', async () => {
+	test('malformed (unrecognized shape) -> canary unknown-shape + stamp', async () => {
 		const r = await (await stage('malformed.jsonl')).read(ROOT, FOLDER, 'transcript-slice');
 		assert.strictEqual(r.completeness, 'unknown-shape');
 		assert.deepStrictEqual(r.adapterVersion, { format: 'transcript-jsonl', versionKey: 'unknown-shape' });
 	});
 
-	test('missing out-of-band tool-result file -> partial (SC-006)', async () => {
+	test('missing out-of-band tool-result file -> partial', async () => {
 		const r = await (await stage('present-missing-oob.jsonl')).read(ROOT, FOLDER, 'transcript-slice');
 		assert.strictEqual(r.completeness, 'partial');
 	});
 
-	test('foreign (other-workspace) run -> coverage=foreign, surfaced not dropped (US1)', async () => {
+	test('foreign (other-workspace) run -> coverage=foreign, surfaced not dropped', async () => {
 		const r = await (await stage('foreign.jsonl')).read(ROOT, FOLDER, 'runs');
 		assert.strictEqual(r.coverage, 'foreign');
 		assert.strictEqual(r.completeness, 'complete');
@@ -162,7 +162,7 @@ suite('Clawdius reader seam - transcript adapter (Slice 2)', () => {
 		assert.strictEqual(session.index.byteOffset, VSBuffer.fromString(lineA).byteLength + 1);
 	});
 
-	test('every transcript request kind returns a fully labeled result (SC-001)', async () => {
+	test('every transcript request kind returns a fully labeled result', async () => {
 		const adapter = await stage('present.jsonl');
 		for (const kind of ['runs', 'session', 'subagent', 'transcript-slice'] as const) {
 			const r = await adapter.read(ROOT, FOLDER, kind);

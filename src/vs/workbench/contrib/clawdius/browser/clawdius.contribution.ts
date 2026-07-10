@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN native main-IDE clawdius container (Phase 2a)
+// CLAWDIUS-BEGIN native main-IDE clawdius container
 // Registers a native "Clawdius" sidebar view container in the MAIN workbench, plus an (empty for now)
 // Workflows view, ONLY in Clawdius mode (empty entitlementUrl). This is the home that will absorb the
 // Ultracode workflows board (ported from the sessions window) and, in later phases, native chat + config
@@ -309,7 +309,7 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	// honest coverage / freshness / completeness + ownership labels (a foreign/suppressed run present-with-label,
 	// never hidden). Activity-bar-backed containers use `ViewContainerLocation.Sidebar` in this fork (there is no
 	// `Activitybar` location). Reuses the same registerViewContainer + registerViews mechanism as the panel above;
-	// the view reads runs ONLY through the seam (FR-002).
+	// the view reads runs ONLY through the seam.
 	const missionsContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
 		id: MISSIONS_VIEW_CONTAINER_ID,
 		title: localize2('clawdius.missions.container', "Claude Code Missions"),
@@ -330,7 +330,7 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 
 	// The transcript drill-in: an editor-area EditorPane that opens a subagent's real on-disk transcript through
 	// the seam, honestly completeness-labeled (a missing out-of-band tool-result ref -> partial, not complete).
-	// Opened from the Missions view when a subagent row is clicked. Reads ONLY through the seam (FR-002).
+	// Opened from the Missions view when a subagent row is clicked. Reads ONLY through the seam.
 	Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
 		EditorPaneDescriptor.create(ClaudeMissionTranscriptEditor, ClaudeMissionTranscriptEditor.ID, localize('clawdius.missions.transcriptPane', "Claude Code Subagent Transcript")),
 		[new SyncDescriptor(ClaudeMissionTranscriptInput)],

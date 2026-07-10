@@ -34,7 +34,7 @@ export const enum AgentHostConfigKey {
 	 * When true (the default), the Claude provider routes all Anthropic
 	 * `messages` traffic through the local Copilot-CAPI proxy (Copilot-routed
 	 * Claude). When false, the Claude Agent SDK talks to Anthropic directly on
-	 * the user's own credentials (BYO Anthropic — Phase 19).
+	 * the user's own credentials (BYO Anthropic).
 	 */
 	ClaudeUseCopilotProxy = 'claudeUseCopilotProxy',
 }

@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Missions fleet - transcript drill-in editor input (US2)
+// CLAWDIUS-BEGIN Missions fleet - transcript drill-in editor input
 // A read-only EditorInput carrying the FleetSubagent a fleet row was drilled into. NOT a singleton: each subagent
 // is its own transcript, so each opens as a distinct editor (a re-open of the SAME subagent reveals the existing
 // one via `matches`). The input holds only the labeled index handle (the subagent's opaque transcriptRef +

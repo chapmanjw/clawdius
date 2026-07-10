@@ -3,12 +3,12 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Missions fleet identity-join tests (Slice 6)
+// CLAWDIUS-BEGIN Missions fleet identity-join tests
 // Drives the pure `joinFleetIdentity` correlation over the sanitized read-model skeletons in `identity/`:
-//   • clean: every subagent correlates to its correct run with NO cross-run mixup (SC-007), and - with an owned
+//   • clean: every subagent correlates to its correct run with NO cross-run mixup, and - with an owned
 //     set built the way the ownership probe builds it (`AgentSession.id` over a `<provider>:/<rawId>` URI) - the
 //     run whose `sessionId` equals that raw id is `active` while the other is `detached`, proving the
-//     `AgentSession.id` <-> `FleetRun.sessionId` namespace join is exact string equality (FR-009).
+//     `AgentSession.id` <-> `FleetRun.sessionId` namespace join is exact string equality.
 //   • collision: a subagent id reused across two runs is labeled `ambiguous` and held out of any single group,
 //     never merged; a distinct clean subagent still correlates.
 //   • ambiguous: a duplicated run identity yields `ambiguous` groups and an `ambiguous` unjoined subagent; an
@@ -58,13 +58,13 @@ function summarizeUnjoined(join: ReturnType<typeof joinFleetIdentity>) {
 	}));
 }
 
-suite('Clawdius missions fleet - identity join (Slice 6)', () => {
+suite('Clawdius missions fleet - identity join', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
 	test('clean: subagents correlate to the correct run, and the sessionId liveness join marks the held run active', async () => {
 		const { runs, subagents } = await loadFixture('clean.json');
 		// The owned set is built the way the ownership probe builds it: AgentSession.id over a <provider>:/<rawId>
-		// session URI. That raw id is the SAME string as FleetRun.sessionId (FR-009), so run-alpha resolves active.
+		// session URI. That raw id is the SAME string as FleetRun.sessionId, so run-alpha resolves active.
 		const ownedSessionIds = new Set<string>([AgentSession.id(AgentSession.uri('claude', 'sess-alpha-0001'))]);
 		const join = joinFleetIdentity({ runs, subagents, ownedSessionIds });
 		assert.deepStrictEqual(
@@ -79,7 +79,7 @@ suite('Clawdius missions fleet - identity join (Slice 6)', () => {
 		);
 	});
 
-	test('collision: a subagent id reused across runs is labeled ambiguous and never merged into one run (SC-007)', async () => {
+	test('collision: a subagent id reused across runs is labeled ambiguous and never merged into one run', async () => {
 		const { runs, subagents } = await loadFixture('collision.json');
 		const join = joinFleetIdentity({ runs, subagents });
 		assert.deepStrictEqual(

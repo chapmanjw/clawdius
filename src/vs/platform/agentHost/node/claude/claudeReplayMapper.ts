@@ -27,9 +27,9 @@ import { buildClaudeToolMeta, getClaudeInvocationMessage, getClaudePastTenseMess
 import { stripClientToolNamePrefix } from './clientTools/claudeClientToolMcpServer.js';
 
 /**
- * Phase 13 — replay mapper. Reduces a flat `SessionMessage[]` (the SDK's
- * on-disk JSONL transcript) into the protocol's `Turn[]` shape per
- * [CONTEXT.md M7](./CONTEXT.md). Pure function; no I/O, no DI.
+ * Replay mapper. Reduces a flat `SessionMessage[]` (the SDK's
+ * on-disk JSONL transcript) into the protocol's `Turn[]` shape.
+ * Pure function; no I/O, no DI.
  *
  * Distinct from the live mapper (`mapSDKMessageToAgentSignals`) because:
  * - input shape differs (`SessionMessage` envelope vs `SDKMessage` union),
@@ -38,7 +38,7 @@ import { stripClientToolNamePrefix } from './clientTools/claudeClientToolMcpServ
  *   `'stream_event'` lifecycle (terminal states only).
  *
  * Shared invariant with the live mapper: the `Map<tool_use_id, turnId>`
- * attribution rule from M7 — `tool_result` legitimately lands in a later
+ * attribution rule — `tool_result` legitimately lands in a later
  * `'user'` envelope and must resolve back to the announcing `tool_use`'s
  * turn. This mapper builds an equivalent local map during its single pass.
  */
@@ -59,7 +59,7 @@ export function mapSessionMessagesToTurns(
 }
 
 /**
- * Phase 6.5 — translate a protocol `turnId` (the last KEPT turn N) into the
+ * Translate a protocol `turnId` (the last KEPT turn N) into the
  * SDK envelope `uuid` that `forkSession({ upToMessageId })` accepts
  * (INCLUSIVE). Returns the `uuid` of turn N's last `'assistant'` envelope,
  * or `turnId` itself when turn N has no assistant reply (still a valid
@@ -107,7 +107,7 @@ interface AssistantBlock { readonly type: string; readonly text?: string; readon
  * `undefined` from {@link parseSessionMessage}.
  *
  * The split keeps SDK shape detection (this seam) separate from the
- * stateful reduction (the {@link ReplayBuilder}) — see CONTEXT M7.
+ * stateful reduction (the {@link ReplayBuilder}).
  */
 type ParsedSessionMessage =
 	| { readonly kind: 'user-text'; readonly uuid: string; readonly text: string }
@@ -173,7 +173,7 @@ function parseSystemMessage(msg: SessionMessage): ParsedSessionMessage | undefin
 /**
  * Allowlist of `system` subtypes that survive replay as
  * {@link ResponsePartKind.SystemNotification} parts on the active turn.
- * Mirrors CONTEXT M7's table — anything not in this set is dropped.
+ * Anything not in this set is dropped.
  */
 const ALLOWED_SYSTEM_SUBTYPES: ReadonlySet<string> = new Set([
 	'compact_boundary',
@@ -220,7 +220,7 @@ class ReplayBuilder {
 	/**
 	 * Cross-turn tool-use tracking. Keyed by `tool_use_id`:
 	 * - `turnId` — the announcing turn (so a late `tool_result` in a
-	 *   later `user` envelope can attach back to the right turn per M7).
+	 *   later `user` envelope can attach back to the right turn).
 	 * - `parsedInput` — the original `tool_use.input`, looked up at
 	 *   `_attachToolResult` so the past-tense message can include the
 	 *   original parameters. Mirrors the live mapper's `_toolCallInfo`
@@ -313,7 +313,7 @@ class ReplayBuilder {
 				// fall back to the generic "Run MCP tool" rendering.
 				this._openToolUse(block.id, stripClientToolNamePrefix(block.name), block.input);
 			}
-			// Other block types (server_tool_use, etc.) are dropped silently per M7.
+			// Other block types (server_tool_use, etc.) are dropped silently.
 		}
 	}
 
@@ -441,7 +441,7 @@ class ReplayBuilder {
  * Returns string content (legacy form) or an array of recognised user
  * blocks (text + tool_result). Anything else returns `undefined` and the
  * caller drops the message — matches the production extension's parser
- * semantics per CONTEXT M7 glossary.
+ * semantics.
  */
 function readUserContent(raw: unknown): string | ReadonlyArray<UserTextBlock | UserToolResultBlock> | undefined {
 	if (raw === null || typeof raw !== 'object') {

@@ -20,8 +20,8 @@
 //
 // NAMESPACE DEPENDENCY (disclosed): `AgentSession.id(resource)` yields the agent-host RAW session id, while
 // `FleetRun.sessionId` is `runEntity.sessionId || fileStem(file)` - the transcript's own id / filename stem
-// (`claudeReaderSeamService.ts`). Whether those two id namespaces are the SAME string is the FR-009 identity-join
-// question owned by a later reliability slice; this probe correlates on plain string equality. Where the
+// (`claudeReaderSeamService.ts`). Whether those two id namespaces are the SAME string is an identity-join
+// question owned by later reliability work; this probe correlates on plain string equality. Where the
 // namespaces do not (yet) align, the run resolves `foreign` - the safe, never-falsely-owned outcome - so
 // functional owned-detection in the real build may pend that join. The resolver's mechanism is correct today;
 // only the guarantee that the two namespaces coincide is deferred.

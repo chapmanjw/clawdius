@@ -3,7 +3,7 @@ name: Clawdius CI
 # Clawdius runs its own CI. The inherited microsoft/vscode workflows were removed because they
 # depend on Microsoft secrets, self-hosted runners, and the distro repo and fail on any fork.
 # This minimal job validates the fork scaffolding and works on a private repo with no secrets.
-# Phase 6 expands it into the full matrix (build, branding guard against the built product,
+# A later change expands it into the full matrix (build, branding guard against the built product,
 # network-egress guard, gitleaks).
 
 on:
@@ -47,12 +47,12 @@ jobs:
           set -e
           # PREFLIGHT: this self-test plants and then rm -rf's these sentinel names. If any already exists in
           # the checkout, refuse to run - otherwise a genuinely committed root specs/ or .specify/ (the exact
-          # SC-012 artifact) would be deleted by the cleanup below and masked. A pre-existing specs/.specify is
-          # itself an SC-012 violation; __sk_selftest__ signals stale state. Fail loud either way.
+          # Spec-Kit artifact) would be deleted by the cleanup below and masked. A pre-existing specs/.specify is
+          # itself a Spec-Kit-artifact violation; __sk_selftest__ signals stale state. Fail loud either way.
           for s in specs .specify __sk_selftest__; do
-            if [ -e "$s" ]; then echo "::error::\"$s\" already exists before the spec-kit self-test - a committed SC-012 artifact or stale state; refusing to run destructive self-test"; exit 1; fi
+            if [ -e "$s" ]; then echo "::error::\"$s\" already exists before the spec-kit self-test - a committed Spec-Kit artifact or stale state; refusing to run destructive self-test"; exit 1; fi
           done
-          # SC-012 / FR-018: the scanner must flag a Spec-Kit directory ANYWHERE in the public tree - at the
+          # the scanner must flag a Spec-Kit directory ANYWHERE in the public tree - at the
           # root AND nested. Root cases live at the repo root; nested cases go under a throwaway parent so
           # cleanup never touches a real tracked directory. Each must trip the scan (run with no file args).
           for d in specs .specify __sk_selftest__/docs/specs __sk_selftest__/deep/nest/.specify; do
@@ -72,7 +72,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          owned=$(git ls-files 'clawdius/**' 'src/vs/workbench/contrib/clawdius/**' 'src/vs/platform/clawdius/**' 'script/clawdius/**' 'extensions/clawdius-*/**' docs/CHANGES_AGAINST_UPSTREAM.md docs/MERGING.md docs/BUILD.md docs/CONTRIBUTING.md docs/SECURITY.md 'README-CLAWDIUS*')
+          owned=$(git ls-files 'clawdius/**' 'src/vs/workbench/contrib/clawdius/**' 'src/vs/platform/clawdius/**' 'src/vs/platform/agentHost/**' 'script/clawdius/**' 'extensions/clawdius-*/**' docs/CHANGES_AGAINST_UPSTREAM.md docs/MERGING.md docs/BUILD.md docs/CONTRIBUTING.md docs/SECURITY.md 'README-CLAWDIUS*')
           # Discover in-place upstream edits by their begin-marker across ALL tracked files (built at
           # runtime so this workflow does not match itself). The scanner self-selects: it skips its own
           # source, scans owned files in full, and inspects only the marked regions of everything else, so
@@ -156,7 +156,7 @@ jobs:
           echo "fork-diff ratchet is falsifiable (over-baseline growth trips) and clean on the current tree"
       - name: Branding guard (Clawdius branding, Open VSX, no telemetry, Clawdius theme)
         run: node script/clawdius/branding-guard.ts
-      - name: Recommended-extension namespace guard is falsifiable (FR-003 / GlassWorm)
+      - name: Recommended-extension namespace guard is falsifiable (GlassWorm)
         shell: bash
         run: |
           set -e
@@ -173,7 +173,7 @@ jobs:
           fi
           git checkout -- product.json
           node script/clawdius/branding-guard.ts >/dev/null
-          echo "FR-003 recommended-extension namespace guard is falsifiable and clean after restore"
+          echo "recommended-extension namespace guard is falsifiable and clean after restore"
       - name: Brand ratchet (Copilot icon/string/asset may only shrink) + per-probe falsifiability
         shell: bash
         run: |
@@ -202,7 +202,7 @@ jobs:
   # no-default-account egress regression plus the workflow-store/transcript and Claude-CLI-plugin-discovery
   # suites. Targeted on purpose: --run loads only the named test files, not the full upstream suite (which
   # carries unrelated upstream tests). Kept as a separate job so the fast fork-hygiene checks are never
-  # gated on the heavy dev install. Phase 6 broadens this to the full matrix.
+  # gated on the heavy dev install. Later work broadens this to the full matrix.
   unit-test-browser:
     runs-on: ubuntu-latest
     steps:

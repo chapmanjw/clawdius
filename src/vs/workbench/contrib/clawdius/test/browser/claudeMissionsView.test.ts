@@ -3,10 +3,10 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Missions fleet - Sidebar view render tests (Slice 2)
-// The view layer of SC-001/SC-002: the fleet binds to the seam's listRuns and renders EVERY enumerated run as a
-// labeled row carrying its status + coverage/freshness/completeness/ownership as both a badge and a `data-*` hook
-// (SC-001); a foreign/suppressed run is rendered PRESENT-WITH-LABEL (marked, never omitted - SC-002). Drives the
+// CLAWDIUS-BEGIN Missions fleet - Sidebar view render tests
+// The view layer honesty guarantee: the fleet binds to the seam's listRuns and renders EVERY enumerated run as a
+// labeled row carrying its status + coverage/freshness/completeness/ownership as both a badge and a `data-*` hook;
+// a foreign/suppressed run is rendered PRESENT-WITH-LABEL (marked, never omitted). Drives the
 // SAME production code path the ViewPane uses (FleetRunsList over a fake IFleetRunSource), so the test needs no
 // workbench host. Also covers the honest empty state (no runs -> a labeled empty row, never a crash).
 
@@ -38,7 +38,7 @@ function run(overrides: Partial<FleetRun>): FleetRun {
 }
 
 /** Extract the honest projection each rendered row carries (its `data-*` hooks + the count of label badges), the
- *  view-layer analogue of the enumeration snapshot the Slice-1 tests assert. */
+ *  view-layer analogue of the enumeration snapshot the enumeration tests assert. */
 function rowsOf(container: HTMLElement): unknown[] {
 	return [...container.querySelectorAll<HTMLElement>('.clawdius-missions-row')].map(el => ({
 		runId: el.getAttribute('data-run-id'),
@@ -54,11 +54,11 @@ function rowsOf(container: HTMLElement): unknown[] {
 	}));
 }
 
-suite('Clawdius missions fleet - Sidebar view (Slice 2)', () => {
+suite('Clawdius missions fleet - Sidebar view', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 	const ROOT: ReaderConfigRoot = { kind: 'resolved', root: URI.file('/home/tester/.claude') };
 
-	test('binds to listRuns and renders every run labeled; a foreign run is present-with-label (SC-001/SC-002)', async () => {
+	test('binds to listRuns and renders every run labeled; a foreign run is present-with-label', async () => {
 		const source = new FakeRunSource([
 			run({ runId: 'a-0001', sessionId: 'sess-a', coverage: CoverageLabel.InScope }),
 			run({ runId: 'f-0001', sessionId: 'sess-foreign', coverage: CoverageLabel.Foreign }),
@@ -70,8 +70,8 @@ suite('Clawdius missions fleet - Sidebar view (Slice 2)', () => {
 		// Bind exactly as the ViewPane does: pull the enumerated runs off the seam, then render them.
 		list.render(await source.listRuns(ROOT));
 
-		// Every run present (the foreign run WITH its label, not omitted - SC-002), each fully labeled with four
-		// badges + all four honesty `data-*` hooks (SC-001), and the foreign run visually marked.
+		// Every run present (the foreign run WITH its label, not omitted), each fully labeled with four
+		// badges + all four honesty `data-*` hooks, and the foreign run visually marked.
 		assert.strictEqual(container.getAttribute('data-clawdius-missions'), '3');
 		assert.deepStrictEqual(rowsOf(container), [
 			{ runId: 'a-0001', sessionId: 'sess-a', kind: 'single', status: 'unknown', ownership: 'foreign', coverage: 'in-scope', freshness: 'polled', completeness: 'complete', foreignMarked: false, labelCount: 4 },
@@ -95,7 +95,7 @@ function subagent(id: string): FleetSubagent {
 	return { subagentId: id, parentRunId: 'r', transcriptRef: 'file:///t.jsonl', coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.Complete };
 }
 
-suite('Clawdius missions fleet - drill-in interactions (Slice 3)', () => {
+suite('Clawdius missions fleet - drill-in interactions', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	function run(id: string): FleetRun {
@@ -117,7 +117,7 @@ suite('Clawdius missions fleet - drill-in interactions (Slice 3)', () => {
 		list.render([run('a')]);
 
 		const row = container.querySelector<HTMLElement>('.clawdius-missions-row')!;
-		// Expandable rows carry the twistie + the expanded hook; the run's four labels are still intact (SC-001).
+		// Expandable rows carry the twistie + the expanded hook; the run's four labels are still intact.
 		assert.strictEqual(row.classList.contains('expandable'), true);
 		assert.strictEqual(row.querySelectorAll('.clawdius-missions-label').length, 4);
 		row.click();

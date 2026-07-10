@@ -24,7 +24,7 @@ export const CLAUDE_THINKING_LEVEL_KEY = 'thinkingLevel';
  *
  * NOTE: the live hot-swap path `applyFlagSettings({ effortLevel })`
  * (sdk.d.ts:4292) only accepts a 4-value subset that omits `'max'`; that
- * clamp lives at the hot-swap seam (Phase 9), not here.
+ * clamp lives at the hot-swap seam, not here.
  */
 export type ClaudeEffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
@@ -44,7 +44,7 @@ export type ClaudeRuntimeEffortLevel = 'low' | 'medium' | 'high' | 'xhigh';
  * does not — the runtime hot-swap effort union omits `'max'`, so
  * mid-session `'max'` selections degrade to `'xhigh'` here. If the SDK
  * later widens the runtime union to accept `'max'`, this clamp becomes a
- * passthrough (CONTEXT.md M11 effort-clamp; Phase 9 D7).
+ * passthrough.
  */
 export function clampEffortForRuntime(effort: ClaudeEffortLevel | undefined): ClaudeRuntimeEffortLevel | undefined {
 	if (effort === undefined) { return undefined; }

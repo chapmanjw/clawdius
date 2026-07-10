@@ -3,14 +3,14 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Missions fleet ownership-probe tests (Slice 4a)
+// CLAWDIUS-BEGIN Missions fleet ownership-probe tests
 // Exercises the PURE ownership resolver + the thin `getActiveSubscriptions()` adapter mapping against injected
 // data - NO live agent host. Proves: `resolveOwnership` returns `owned` iff the run's `sessionId` is in the
 // owned set and `foreign` otherwise (the never-falsely-owned safety floor); the adapter keeps only
 // `StateComponents.Session` subscriptions and extracts each raw id via `AgentSession.id`; and that when the
 // agent-host raw id and a seam-style `FleetRun.sessionId` are the SAME string the run resolves `owned` (the join
-// mechanism), while a run whose id does not align stays `foreign` (the honest default - the FR-009 namespace
-// join is a later slice's work).
+// mechanism), while a run whose id does not align stays `foreign` (the honest default - the namespace
+// join is future work).
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
@@ -49,7 +49,7 @@ function subscription(kind: StateComponents, provider: string, rawId: string): I
 	};
 }
 
-suite('Clawdius missions fleet - ownership probe (Slice 4a)', () => {
+suite('Clawdius missions fleet - ownership probe', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
 	test('resolveOwnership: owned iff sessionId is in the owned set, else foreign (safety floor)', () => {
@@ -79,7 +79,7 @@ suite('Clawdius missions fleet - ownership probe (Slice 4a)', () => {
 
 	test('join: a run whose sessionId equals the adapter raw id resolves owned; a mismatch stays foreign', () => {
 		// When the agent-host raw id and the seam-style FleetRun.sessionId are the SAME string, the join fires
-		// (owned). When they do not align - the FR-009 namespace question owned by a later slice - the run stays
+		// (owned). When they do not align - the namespace question left for future work - the run stays
 		// foreign, the honest never-falsely-owned default.
 		const owned = ownedSessionIdsFromSubscriptions([subscription(StateComponents.Session, 'claude', 'shared-id')]);
 		assert.deepStrictEqual(

@@ -17,8 +17,16 @@ const files = args.filter((a) => !a.startsWith('--'))
 
 // Clawdius-owned path prefixes the content scan applies to (scanned in full).
 const OWNED = [/^clawdius\//, /^src\/vs\/workbench\/contrib\/clawdius\//, /^src\/vs\/platform\/clawdius\//,
-  /^script\/clawdius\//, /^test\/clawdius\//, /^extensions\/clawdius-/, /^CHANGES_AGAINST_UPSTREAM\.md$/,
-  /^MERGING\.md$/, /^BUILD\.md$/, /^README-CLAWDIUS/]
+  /^script\/clawdius\//, /^test\/clawdius\//, /^extensions\/clawdius-/,
+  /^docs\/(BUILD|MERGING|CHANGES_AGAINST_UPSTREAM|CONTRIBUTING|SECURITY)\.md$/]
+// Clawdius-CONTENT subsystems that keep upstream (Microsoft) headers and legitimately reference the removed
+// Copilot: scanned for INTERNAL REFERENCES (whole file) but NOT for brand. The Claude agent-host is authored by
+// Clawdius yet keeps upstream headers + names Copilot throughout, so a full brand scan would false-positive;
+// its internal spec/planning references still must not leak into public source.
+const INTERNAL_REF_SCOPE = [/^src\/vs\/platform\/agentHost\//]
+// Binary/asset files (icons, images, fonts): skip the internal-reference rules - a coordinate like an SVG
+// moveto "M18" or a path token is not an internal reference, and scanning them only produces false positives.
+const ASSET_EXT = /\.(svg|png|jpe?g|gif|ico|icns|woff2?|ttf|eot|webp|mp4|pdf|wasm)$/i
 const MARKER_BEGIN = 'CLAWDIUS-BEGIN'
 const MARKER_END = 'CLAWDIUS-END'
 
@@ -31,9 +39,10 @@ const SELF = /(^|\/)script\/clawdius\/scan-forbidden\.ts$/
 // branding-guard.ts (which asserts the brand is ABSENT, so it embeds the term). They
 // stay subject to telemetry-key and Amazon-internal checks; only brand mentions are allowed. SELF
 // already excludes the scanner itself, so this is a by-name list, not a directory-wide exemption.
-const BRAND_EXEMPT = [/^clawdius\/SECURITY-SCANNING\.md$/, /^clawdius\/PRIVACY\.md$/, /^CHANGES_AGAINST_UPSTREAM\.md$/,
+const BRAND_EXEMPT = [/^clawdius\/SECURITY-SCANNING\.md$/, /^clawdius\/PRIVACY\.md$/,
+  /^docs\/(BUILD|MERGING|CHANGES_AGAINST_UPSTREAM|CONTRIBUTING|SECURITY)\.md$/,
   /^src\/vs\/workbench\/contrib\/clawdius\/common\/claudeClaimsRegistry\.ts$/,
-  /^MERGING\.md$/, /^BUILD\.md$/, /^README-CLAWDIUS/, /(^|\/)script\/clawdius\/branding-guard\.ts$/,
+  /(^|\/)script\/clawdius\/branding-guard\.ts$/,
   /(^|\/)script\/clawdius\/brand-ratchet\.ts$/, /(^|\/)script\/clawdius\/brand-ratchet-baseline\.json$/]
 const BRANDING_IDS = new Set(['copilot-brand', 'github-copilot-brand'])
 
@@ -53,8 +62,8 @@ const UNIVERSAL = [
 ]
 // Internal planning documents must not appear in the public source tree.
 const INTERNAL_DOC_PATH = /^src\/.*(-plan\.md|\/roadmap[^/]*\.md)$/i
-// SC-012 / FR-018: Spec-Kit artifacts (this product's spec, plans, tasks, checklists, review records) are
-// internal content and must NEVER appear in the public fork - not even gitignored. They live one level
+// Spec-Kit artifacts (this product's spec, plans, tasks, checklists, review records) are internal content
+// and must NEVER appear in the public fork - not even gitignored. They live one level
 // ABOVE this repo, in the workspace-root container. Flag any scanned file path that contains a specs/ or
 // .specify/ segment (at the root OR nested, e.g. docs/specs/), AND (below, once per run) the presence of
 // any such directory anywhere in the tree.
@@ -66,6 +75,50 @@ const SPEC_KIT_WALK_SKIP = new Set(['node_modules', 'out', 'out-build', 'dist', 
 // The CI workflow legitimately carries the UNIVERSAL marker literals (it is the guard that greps for them),
 // so exempt it from the universal content rule - the same reason SELF exempts the scanner's own source.
 const UNIVERSAL_EXEMPT = [/(^|\/)\.github\/workflows\/clawdius-ci\.yml$/]
+
+// Internal spec/planning references that must not appear in Clawdius-authored PUBLIC source - the same
+// public/private hygiene the commit-message linter applies, extended to code comments and test-description
+// strings. These are labels for the private Spec-Kit artifacts (slice / success-criterion / requirement /
+// user-story / task ids, spec numbers), the private docs paths, and the internal review-tool names. Public
+// code should describe WHAT it does, never cite the internal artifact. Kept high-precision so ordinary code
+// (Array.slice, "US-dollar"/USD, a bare "Codex" naming the removed subsystem) never trips.
+// SCOPE (stated honestly, not overclaimed): this gates the CLEARLY-internal reference forms - spec ids,
+// phases, plan sections (§), named internal docs (CONTEXT.md/roadmap.md/*-plan.md/Glossary), and review
+// vocabulary (Council-review/cross-vendor/must-fix). It deliberately does NOT gate ambiguous single-letter +
+// digit tags (a lone C6 / Q8 / S4 / D6 / M1) - they collide with real code (a queue `Q1`, an SVG/coordinate
+// `M1`, a test-case label) and cannot be matched without false positives. Those rely on human review + the
+// commit-message linter; the existing ones were swept by hand.
+const SPEC_LABEL = [
+  { id: 'spec-slice-ref', re: /\bSlice[ -]?\d/ },
+  { id: 'spec-criterion-ref', re: /\bSC-\d{3}\b/ },
+  { id: 'spec-requirement-ref', re: /\bFR-\d{3}\b/ },
+  { id: 'spec-story-ref', re: /\bUS-?\d{1,3}\b/ },
+  // Task ids are T0##-form (leading zero); anchored so SVG-path/coordinate tokens like T150 never trip.
+  { id: 'spec-task-ref', re: /\bT0\d{2}\b/ },
+  { id: 'spec-code-ref', re: /\b(?:Decision-\d|DISP-\d|TEAMS-\d|WF-\d)/ },
+  { id: 'spec-number-ref', re: /\bspec-00\d\b/ },
+  // Roadmap/milestone labels (capitalized form only, so ordinary lowercase "phase"/"wave" prose is safe).
+  // Bare "M#" milestone labels are NOT matched (they collide with SVG moveto commands + coordinates); those
+  // few are caught by the commit-message linter + human review, not this code gate.
+  { id: 'roadmap-phase-ref', re: /\bPhase[- ][0-9A-C]|\bWave[- ][0-9]|\bINC-[0-9]|\bUltracode P[0-9]/ },
+  { id: 'private-artifact-ref', re: /\bdata-model\.md\b|\bclawdius-private\b|(?:^|[^\w-])\.research\b/ },
+  // Internal design-doc references + plan-section (§) tags, seen through the agent-host code. (Bare "M##"
+  // milestone tags are deliberately NOT a rule - they collide with SVG moveto commands + coordinates; the sweep
+  // removed the existing ones, and in practice they co-occur with the CONTEXT.md / Phase refs above, which ARE
+  // caught.)
+  { id: 'plan-section-ref', re: /§\s*\d/ },
+  { id: 'internal-doc-ref', re: /\b(?:CONTEXT|roadmap)\.md\b|\bCONTEXT\s+M\d|\b[a-z][\w-]*-plan\.md\b|\bGlossary\b/ },
+  // NB: bare "Rutherford" / "Codex" are NOT flagged - they legitimately name public plugins/subsystems (the
+  // Rutherford CLI plugin the discovery surfaces; the removed Codex agent). The commit-message linter guards
+  // review-chatter uses of those names in messages; here we flag only terms with no legitimate product meaning.
+  { id: 'review-tool-ref', re: /\bcross-vendor\b|\bmust-fix\b|\bCouncil[- ]review\b/ },
+  { id: 'constitution-ref', re: /\bPrinciple [IVX]+\b/ },
+]
+// Files that legitimately NAME the internal-ref literals (like SELF for the scanner itself): the
+// commit-message linter carries the review-tool + private-path literals it forbids in messages, and
+// `.gitignore` names the private paths it EXCLUDES (e.g. the receipts dir) - naming them there is the
+// mechanism that keeps them out of the repo, so it must not be flagged.
+const TOOLING_EXEMPT = [/(^|\/)script\/clawdius\/commit-msg-lint\.ts$/, /(^|\/)\.gitignore$/]
 
 // Amazon-internal wordlist (path supplied via env, never committed).
 let internal: string[] = []
@@ -91,7 +144,7 @@ const LARGE_LIMIT = 5 * 1024 * 1024
 const LARGE_ALLOW = [/^clawdius\/branding\//, /\.(icns|ico)$/]
 
 let findings = 0
-// SC-012 / FR-018 tree-level assertion (runs once, independent of the file arguments): NO Spec-Kit
+// Tree-level assertion (runs once, independent of the file arguments): NO Spec-Kit
 // artifact directory may exist ANYWHERE in the public fork - at the root or nested, tracked OR
 // untracked/gitignored. Walk from the repo root (cwd), skipping build/dependency/VCS dirs, and flag any
 // directory named specs/ or .specify/. This closes the nested-copy gap a root-only check would leave.
@@ -108,14 +161,14 @@ function findSpecKitDirs(dir: string, out: string[]): void {
 const specKitDirs: string[] = []
 findSpecKitDirs('.', specKitDirs)
 for (const d of specKitDirs) {
-  console.error(`[spec-kit-artifact] "${d}/" is present in the public fork - Spec-Kit artifacts are internal and must live in the private docs repo (SC-012 / FR-018)`)
+  console.error(`[spec-kit-artifact] "${d}/" is present in the public fork - Spec-Kit artifacts are internal and must live in the private docs repo`)
   findings++
 }
 for (const f of files) {
   const nf = f.replace(/\\/g, '/')
   // Belt-and-suspenders for the tree walk above: flag a Spec-Kit file passed in explicitly, whether at the
   // root or nested (SPEC_KIT_PATH matches a specs/ or .specify/ segment anywhere in the path).
-  if (SPEC_KIT_PATH.test(nf)) { console.error(`[spec-kit-artifact] ${f}: Spec-Kit artifacts are internal and must not appear in the public fork (SC-012 / FR-018)`); findings++; continue }
+  if (SPEC_KIT_PATH.test(nf)) { console.error(`[spec-kit-artifact] ${f}: Spec-Kit artifacts are internal and must not appear in the public fork`); findings++; continue }
   if (largeFilesMode) {
     try {
       const sz = fs.statSync(f).size
@@ -137,18 +190,35 @@ for (const f of files) {
     }
   }
   const marked = !owned && text.includes(MARKER_BEGIN)
-  if (!owned && !marked) { continue }
-  // Owned files: scan the whole file. Marked upstream edits: scan only the Clawdius regions, and treat
-  // them as brand-exempt (the comments legitimately describe the Copilot they neutralize) while still
-  // checking telemetry keys + internal terms.
+  // INTERNAL_REF_SCOPE files (the Claude agent-host subsystem) are Clawdius CONTENT that keeps UPSTREAM
+  // (Microsoft) headers and legitimately names the removed Copilot throughout - so they are scanned for
+  // INTERNAL REFERENCES + Amazon-internal terms over the WHOLE file, but NOT for brand (a full brand scan
+  // would false-positive on their legitimate Copilot mentions).
+  const internalScope = !owned && INTERNAL_REF_SCOPE.some((re) => re.test(nf))
+  if (!owned && !marked && !internalScope) { continue }
+  // Brand/telemetry scope: owned files in full; marked upstream edits only within the Clawdius regions.
   const scanText = owned ? text : markedRegions(text)
+  // Internal-reference + Amazon-term scope: owned OR internal-scope files in full; a marked-only upstream edit
+  // only within its Clawdius regions.
+  const internalText = (owned || internalScope) ? text : markedRegions(text)
   const brandExempt = marked || BRAND_EXEMPT.some((re) => re.test(nf))
-  for (const rule of FORBIDDEN) {
-    if (brandExempt && BRANDING_IDS.has(rule.id)) { continue }
-    if (rule.re.test(scanText)) { console.error(`[${rule.id}] forbidden content in ${f}`); findings++ }
+  // Brand/telemetry rules do NOT run over internal-scope-only files (their Copilot refs are legitimate).
+  if (owned || marked) {
+    for (const rule of FORBIDDEN) {
+      if (brandExempt && BRANDING_IDS.has(rule.id)) { continue }
+      if (rule.re.test(scanText)) { console.error(`[${rule.id}] forbidden content in ${f}`); findings++ }
+    }
+  }
+  // Internal spec/planning references (owned + internal-scope files in full; marked regions of upstream files).
+  // The linter that must carry these literals as its own rules is TOOLING_EXEMPT.
+  if (!TOOLING_EXEMPT.some((re) => re.test(nf)) && !ASSET_EXT.test(nf)) {
+    for (const rule of SPEC_LABEL) {
+      const hit = internalText.match(rule.re)
+      if (hit) { console.error(`[${rule.id}] internal reference "${hit[0]}" in ${f} - describe the behavior, not the private spec artifact`); findings++ }
+    }
   }
   for (const term of internal) {
-    if (term && scanText.toLowerCase().includes(term.toLowerCase())) {
+    if (term && internalText.toLowerCase().includes(term.toLowerCase())) {
       console.error(`[amazon-internal] term match in ${f}`); findings++
     }
   }

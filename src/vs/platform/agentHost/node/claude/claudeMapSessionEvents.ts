@@ -42,23 +42,23 @@ import { ToolCallConfirmationReason, ToolCallContributorKind, type StringOrMarkd
  *   delivers `tool_result` cannot leak entries across turns.
  *
  * Encapsulated as a class (vs. a plain interface) so the maps' mutators
- * are not part of the public surface — Phase 6.1's lesson — and the
- * lifecycle invariants live behind named methods.
+ * are not part of the public surface, and the lifecycle invariants
+ * live behind named methods.
  */
 export class ClaudeMapperState {
 	private readonly _activeToolBlocks = new Map<number, { toolUseId: string; toolName: string }>();
 	/**
-	 * Phase 8.5 — cross-message tool-call attribution + input
-	 * accumulation + computed start-info, encapsulated as its own
-	 * collaborator class so it can be unit-tested independently.
-	 * Public so mapper functions can call its lifecycle methods
-	 * directly without forwarding through this class.
+	 * Cross-message tool-call attribution + input accumulation +
+	 * computed start-info, encapsulated as its own collaborator class
+	 * so it can be unit-tested independently. Public so mapper
+	 * functions can call its lifecycle methods directly without
+	 * forwarding through this class.
 	 */
 	readonly toolCalls = new ClaudeToolCallRegistry();
 	private _currentMessageId: string | undefined;
 
 	/**
-	 * Phase 8 — file-edit content pre-staged by
+	 * File-edit content pre-staged by
 	 * `ClaudeAgentSession._observeUserMessage` and consumed by
 	 * {@link mapUserMessage} when the matching `tool_result` arrives.
 	 * Keyed by SDK `tool_use_id`. The session's `_processMessages` loop
@@ -101,7 +101,7 @@ export class ClaudeMapperState {
 	}
 
 	/**
-	 * Phase 8.5 — forward an `input_json_delta.partial_json` chunk
+	 * Forward an `input_json_delta.partial_json` chunk
 	 * to the registry. Resolves the index → `tool_use_id` mapping
 	 * locally (the registry is keyed by id, not by index) and is a
 	 * no-op when the index is unknown.
@@ -115,7 +115,7 @@ export class ClaudeMapperState {
 	}
 
 	/**
-	 * Phase 8.5 — forward the `content_block_stop` signal to the
+	 * Forward the `content_block_stop` signal to the
 	 * registry, which parses the buffer and stashes the computed
 	 * start-info.
 	 */
@@ -143,7 +143,7 @@ export class ClaudeMapperState {
 	}
 
 	/**
-	 * Phase 8 — stash a {@link ToolResultFileEditContent} produced by
+	 * Stash a {@link ToolResultFileEditContent} produced by
 	 * `ClaudeAgentSession._observeUserMessage` so the synchronous mapper
 	 * can append it to the matching `ChatToolCallComplete` action.
 	 */
@@ -152,7 +152,7 @@ export class ClaudeMapperState {
 	}
 
 	/**
-	 * Phase 8 — consume and remove the cached file edit for this
+	 * Consume and remove the cached file edit for this
 	 * `tool_use_id`. Returns `undefined` for non-file-edit tools or for
 	 * file-edit tools where snapshotting was skipped (e.g. denied before
 	 * the SDK ran the tool, or no actual file change occurred).
@@ -173,7 +173,7 @@ export class ClaudeMapperState {
 	 * across turns. Called from {@link mapResult} on every `result`
 	 * envelope; warns once per orphan to surface the protocol break.
 	 *
-	 * Phase 12 subagent state lives on {@link SubagentRegistry}, not
+	 * Subagent state lives on {@link SubagentRegistry}, not
 	 * here; the mapper drives that drain via
 	 * `registry.drainForegroundSpawns()` from {@link mapResult}.
 	 */
@@ -185,13 +185,13 @@ export class ClaudeMapperState {
 /**
  * Map one SDK message to zero or more agent signals.
  *
- * Stateful via {@link ClaudeMapperState} as of Phase 7: per-block tool
+ * Stateful via {@link ClaudeMapperState}: per-block tool
  * tracking is per-message, cross-block `tool_use` → `tool_result`
  * linkage is cross-message. Callers MUST thread one shared state
  * instance through every invocation for a given session.
  *
- * Phase 6 emissions (text / thinking / usage / turn complete) are
- * unchanged and stateless. Phase 7 adds:
+ * Text / thinking / usage / turn complete emissions are stateless.
+ * The mapper additionally emits:
  *
  * - {@link ActionType.ChatToolCallStart} on
  *   `content_block_start` with a `tool_use` block.
@@ -275,7 +275,7 @@ export function mapSDKMessageToAgentSignals(
 						},
 					}];
 				}
-				// Phase 12 step 7 — system subtypes for subagent task discrimination.
+				// System subtypes for subagent task discrimination.
 				return mapSubagentSystemMessage(message, chat, registry);
 			}
 			return [];
@@ -326,13 +326,12 @@ function mapAssistantCanonical(
 /**
  * Handle synthetic `user` messages whose `message.content` carries
  * `tool_result` blocks. The SDK delivers these as the response to a
- * prior `tool_use`. Per Phase 7 S3.3.4, each such block emits a
+ * prior `tool_use`. Each such block emits a
  * {@link ActionType.ChatToolCallComplete} action targeting the turn
  * that owned the original `tool_use`.
  *
  * Cross-message linkage is via {@link ClaudeMapperState.lookupToolCall};
- * unknown `tool_use_id`s warn and drop (defense-in-depth, mirrors the
- * Phase 7 plan S3.3.5 directive).
+ * unknown `tool_use_id`s warn and drop (defense-in-depth).
  */
 function mapUserMessage(
 	message: Extract<SDKMessage, { type: 'user' }>,
@@ -385,7 +384,7 @@ function mapUserMessage(
 			},
 		});
 		state.completeToolCall(block.tool_use_id);
-		// Phase 12 — foreground subagent completion. A tool_result for a
+		// Foreground subagent completion. A tool_result for a
 		// known spawning Task/Agent tool_use fires `subagent_completed`
 		// UNLESS the spawning entry has been flagged background, in which
 		// case completion is deferred to a later `task_notification`.
@@ -406,7 +405,7 @@ function mapUserMessage(
  * Project the SDK's `ToolResultBlockParam.content` into the protocol's
  * text content shape. The SDK accepts either a bare string (legacy
  * shape) or an array of typed blocks; non-text blocks are dropped
- * here. Phase 8 file-edit content is appended separately by
+ * here. File-edit content is appended separately by
  * {@link mapUserMessage} from {@link ClaudeMapperState.takeFileEdit}.
  */
 function extractToolResultContent(content: unknown): { type: ToolResultContentType.Text; text: string }[] | undefined {
@@ -444,8 +443,8 @@ function mapResult(
 	const signals: AgentSignal[] = [];
 	if (message.subtype === 'success') {
 		// `modelUsage` is keyed by model name; pick the first key as the
-		// reported model. Phase 6 turns are single-model; multi-model
-		// attribution is a Phase 7+ concern.
+		// reported model. Turns are currently single-model; multi-model
+		// attribution is a future concern.
 		const modelKey = Object.keys(message.modelUsage)[0];
 		// Per-turn credits are deliberately NOT derived from
 		// `total_cost_usd`: that is the SDK's Anthropic-list-price USD
@@ -493,10 +492,10 @@ function mapResult(
 	// `ChatTurnComplete` is emitted by the session via
 	// `ClaudeSdkPipeline.onTurnComplete`, NOT here. The pipeline knows
 	// when the protocol Turn is truly done (queue fully drained vs an
-	// intermediate result during a steering preempt — CONTEXT.md M10);
-	// the mapper does not have that state.
+	// intermediate result during a steering preempt); the mapper does
+	// not have that state.
 	state.clearPendingToolCalls(logService);
-	// Phase 12 — drain orphaned subagent-spawning entries (foreground
+	// Drain orphaned subagent-spawning entries (foreground
 	// only; background entries survive across turns by design). The
 	// registry owns this state; the mapper drives the drain at turn end.
 	for (const orphan of registry.drainForegroundSpawns()) {
@@ -568,7 +567,7 @@ function mapStreamEvent(
 				}];
 			}
 			if (block.type === 'tool_use') {
-				// Phase 10 — strip the SDK's `mcp__<server>__` prefix for
+				// Strip the SDK's `mcp__<server>__` prefix for
 				// our in-process client-tool MCP server. The SDK surfaces
 				// in-process MCP tools to the model with that prefix, but
 				// the workbench's registered client-tool list (and the
@@ -582,7 +581,7 @@ function mapStreamEvent(
 				const toolName = stripClientToolNamePrefix(block.name);
 				const isClientTool = hasClientToolNamePrefix(block.name);
 				state.startToolBlock(event.index, block.id, toolName, turnId);
-				// Phase 12 — subagent correlation bookkeeping. Either this
+				// Subagent correlation bookkeeping. Either this
 				// tool_use is at the top level and (if Task/Agent) spawns a
 				// new subagent, or it is inner and we record its edge to the
 				// parent. They are mutually exclusive (a Task call inside a
@@ -598,10 +597,10 @@ function mapStreamEvent(
 				} else {
 					registry.noteInnerTool(block.id, parentToolUseId);
 				}
-				// Phase 8.5 — `_meta.toolKind` drives the workbench's terminal /
+				// `_meta.toolKind` drives the workbench's terminal /
 				// search / subagent renderers. Single write at the tool-open
 				// seam; the reducer carries `_meta` forward to all subsequent
-				// state transitions (D6). Subagent meta from Phase 12 is now
+				// state transitions. Subagent meta is now
 				// produced by `buildClaudeToolMeta` because
 				// `getClaudeToolKind('Task') === 'subagent'`.
 				const meta = buildClaudeToolMeta(toolName);

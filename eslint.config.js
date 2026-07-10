@@ -1700,7 +1700,7 @@ export default defineConfig(
 						'@vscode/tree-sitter-wasm', // used by agentHost for command auto-approval
 						'@anthropic-ai/sdk', // used by agentHost for Anthropic API requests
 						'@anthropic-ai/claude-agent-sdk', // used by agentHost for Claude Agent SDK session enumeration / queries
-						'@modelcontextprotocol/sdk/**/*', // used by agentHost for Claude client-tool MCP result types (Phase 10)
+						'@modelcontextprotocol/sdk/**/*', // used by agentHost for Claude client-tool MCP result types
 						'zod' // used by agentHost for Claude client-tool MCP input schemas
 					]
 				},

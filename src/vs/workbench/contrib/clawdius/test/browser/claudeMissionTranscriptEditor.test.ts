@@ -3,10 +3,10 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Missions fleet - transcript drill-in tests (Slice 3)
-// The drill-in half of US2: the seam reads a subagent's transcript through its opaque transcriptRef and returns a
+// CLAWDIUS-BEGIN Missions fleet - transcript drill-in tests
+// The drill-in path: the seam reads a subagent's transcript through its opaque transcriptRef and returns a
 // labeled, INDEX-ONLY slice (record types in view + the four honesty labels), which the editor's pure render
-// helper paints with `data-*` hooks. The headline case (SC-003): a subagent transcript referencing a MISSING
+// helper paints with `data-*` hooks. The headline case: a subagent transcript referencing a MISSING
 // out-of-band tool-result file drills in as `partial`, not `complete` - the drill-in read runs the out-of-band
 // probe the coarse enumeration deliberately skips. A subagent whose transcript has no missing ref is `complete`.
 // Fixtures are the committed sanitized `runs/` skeletons (no real ~/.claude content), staged into an in-memory FS.
@@ -37,7 +37,7 @@ async function loadFixture(name: string): Promise<string> {
 	return await __readFileInTests(URI.joinPath(src, FIXTURE_DIR, name).fsPath);
 }
 
-suite('Clawdius missions fleet - transcript drill-in (Slice 3)', () => {
+suite('Clawdius missions fleet - transcript drill-in', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	const ROOT = URI.file('/home/tester/.claude');
@@ -60,7 +60,7 @@ suite('Clawdius missions fleet - transcript drill-in (Slice 3)', () => {
 		await fs.writeFile(URI.joinPath(dir, name), VSBuffer.fromString(await loadFixture(name)));
 	}
 
-	test('a subagent transcript with a missing out-of-band ref drills in as partial, not complete (SC-003)', async () => {
+	test('a subagent transcript with a missing out-of-band ref drills in as partial, not complete', async () => {
 		const fs = makeFs();
 		await stage(fs, FOLDER, 'run-c-oob-subagent.jsonl');
 		const svc = makeService(fs);
@@ -90,7 +90,7 @@ suite('Clawdius missions fleet - transcript drill-in (Slice 3)', () => {
 		assert.strictEqual(slice.coverage, CoverageLabel.InScope);
 	});
 
-	test('the editor render helper paints the completeness label + record count as data-* hooks (SC-003)', async () => {
+	test('the editor render helper paints the completeness label + record count as data-* hooks', async () => {
 		const fs = makeFs();
 		await stage(fs, FOLDER, 'run-c-oob-subagent.jsonl');
 		const svc = makeService(fs);

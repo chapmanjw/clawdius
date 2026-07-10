@@ -3,16 +3,15 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Missions fleet - owned-run control tests (Slice 5, US4)
+// CLAWDIUS-BEGIN Missions fleet - owned-run control tests
 // Carries the OWNED stop/steer positive proof the sanitized Playwright harness cannot produce (its null agent
 // host has no owned session, so every harness run is foreign). Proves, against an injected control host - no live
 // agent host:
 //   - an OWNED run exposes {stop, steerInFlight}; invoking them DISPATCHES a ChatTurnCancelled / a
 //     ChatPendingMessageSet (kind Steering) action via the host `dispatch` (spied) - never a direct abortSession
 //     (that runs node-side on the per-provider IAgent, unreachable from the browser);
-//   - a FOREIGN run exposes ONLY {terminalHandoff} and no control verb - invoking it reveals the run read-only
-//     (SC-005);
-//   - the CEILING guard (SC-006): the affordance set is exactly the three named verbs, and a source-scan asserts
+//   - a FOREIGN run exposes ONLY {terminalHandoff} and no control verb - invoking it reveals the run read-only;
+//   - the CEILING guard: the affordance set is exactly the three named verbs, and a source-scan asserts
 //     the unplumbed low-level interrupt/stop-task stub names appear NOWHERE in the control module.
 
 import assert from 'assert';
@@ -59,7 +58,7 @@ function host(ownedSessionIds: ReadonlySet<string>, activeTurnId: string | undef
 	};
 }
 
-suite('Clawdius missions fleet - owned-run control (Slice 5)', () => {
+suite('Clawdius missions fleet - owned-run control', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
 	const OWNED = run('owned-0001', 'sess-owned');
@@ -85,7 +84,7 @@ suite('Clawdius missions fleet - owned-run control (Slice 5)', () => {
 		assert.deepStrictEqual(h.dispatched, []);
 	});
 
-	test('an OWNED run steerInFlight dispatches ChatPendingMessageSet with the STEERING kind (FR-006), not queued', () => {
+	test('an OWNED run steerInFlight dispatches ChatPendingMessageSet with the STEERING kind, not queued', () => {
 		const h = host(new Set(['sess-owned']), 'turn-42');
 		const aff = affordancesFor(OWNED, h.source);
 		if (aff.ownership !== 'owned') { assert.fail('expected owned'); }
@@ -112,7 +111,7 @@ suite('Clawdius missions fleet - owned-run control (Slice 5)', () => {
 		);
 	});
 
-	test('a FOREIGN run exposes ONLY a read-only terminal handoff - no control verb (SC-005)', () => {
+	test('a FOREIGN run exposes ONLY a read-only terminal handoff - no control verb', () => {
 		const h = host(new Set(['sess-owned']), 'turn-42');
 		const aff = affordancesFor(FOREIGN, h.source);
 		assert.strictEqual(aff.ownership, 'foreign');
@@ -131,7 +130,7 @@ suite('Clawdius missions fleet - owned-run control (Slice 5)', () => {
 		);
 	});
 
-	test('CEILING (SC-006): the control surface is only {stop, steerInFlight, terminalHandoff}; no interrupt/stop-task stub appears', async () => {
+	test('CEILING: the control surface is only {stop, steerInFlight, terminalHandoff}; no interrupt/stop-task stub appears', async () => {
 		const ownedVerbs = Object.keys(affordancesFor(OWNED, host(new Set(['sess-owned']), 'turn-42').source)).filter(k => k !== 'ownership').sort();
 		const foreignVerbs = Object.keys(affordancesFor(FOREIGN, host(new Set(['sess-owned']), 'turn-42').source)).filter(k => k !== 'ownership').sort();
 		const source = await (await fetch(new URL('../../browser/missions/claudeMissionControls.js', import.meta.url))).text();

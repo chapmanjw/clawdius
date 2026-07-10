@@ -203,7 +203,7 @@ export async function buildClientMcpServers(
 
 /**
  * Build a minimal {@link Options} bag for an ephemeral model-enumeration
- * query (Phase 19, native transport). No workspace (`cwd = os.tmpdir()`), no
+ * query (native transport). No workspace (`cwd = os.tmpdir()`), no
  * proxy env, and the user's `ANTHROPIC_API_KEY` preserved so the SDK can
  * authenticate. Reads the user's real `~/.claude` config so subscription
  * models (e.g. Opus) surface; verified not to write any session transcript

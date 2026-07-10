@@ -3,11 +3,11 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Missions fleet - Sidebar (Activity Bar) ViewPane (US1)
+// CLAWDIUS-BEGIN Missions fleet - Sidebar (Activity Bar) ViewPane
 // A native-DOM ViewPane (pattern: clawdiusContextBudgetView) listing the runs the reader seam enumerates
-// (Slice 1's listRuns). Each FleetRun renders with its coarse status and the four honesty labels (coverage /
-// freshness / completeness + ownership); a foreign or suppressed run is rendered PRESENT-WITH-LABEL (SC-002),
-// never hidden. The view consumes ONLY the seam (FR-002): it resolves the config root from IPathService.userHome
+// (listRuns). Each FleetRun renders with its coarse status and the four honesty labels (coverage /
+// freshness / completeness + ownership); a foreign or suppressed run is rendered PRESENT-WITH-LABEL,
+// never hidden. The view consumes ONLY the seam: it resolves the config root from IPathService.userHome
 // (never a hardcoded ~/.claude) and calls the seam's listRuns - no direct Claude config-tree read, no egress.
 // Rows carry data-* hooks so the real-build Playwright render can assert them. A large fleet is appended in
 // animation-frame batches so enumeration of many runs never blocks the workbench thread.
@@ -41,7 +41,7 @@ import { ClaudeMissionTranscriptInput } from './claudeMissionTranscriptInput.js'
 export const MISSIONS_VIEW_CONTAINER_ID = 'workbench.view.clawdiusMissions';
 export const MISSIONS_VIEW_ID = 'clawdius.missions';
 
-/** The minimal run-enumeration surface the fleet view binds to (Slice 1's listRuns). Structural so a unit test
+/** The minimal run-enumeration surface the fleet view binds to (listRuns). Structural so a unit test
  *  can supply a fake without instantiating the full seam service. */
 export interface IFleetRunSource {
 	listRuns(root: ReaderConfigRoot, scope?: ReaderScope): Promise<readonly FleetRun[]>;
@@ -113,9 +113,9 @@ export function appendRunRow(parent: HTMLElement, run: FleetRun, badge?: BadgeSi
 /** The per-row drill-in wiring the ViewPane supplies (kept out of the pure list so a unit test can render rows
  *  without a workbench host): expand a run to its subagents, and open a subagent's transcript in the editor area. */
 export interface IFleetRowInteractions {
-	/** List a run's subagents through the seam (SC-002: present-with-label, never dropped). */
+	/** List a run's subagents through the seam (present-with-label, never dropped). */
 	listSubagents(run: FleetRun): Promise<readonly FleetSubagent[]>;
-	/** Open a subagent's transcript in the editor area (the drill-in - US2). */
+	/** Open a subagent's transcript in the editor area (the drill-in). */
 	openSubagent(subagent: FleetSubagent): void;
 }
 
@@ -314,7 +314,7 @@ export class ClawdiusMissionsView extends ViewPane {
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 		// The seam service is not a registered singleton; instantiate it (teams probe off) so the view reads runs
-		// through the SAME enumeration the Slice-1 tests exercise. It is stateless + read-only (not a disposable).
+		// through the SAME enumeration the sibling tests exercise. It is stateless + read-only (not a disposable).
 		this.seam = instantiationService.createInstance(ClawdiusReaderSeamService, false);
 	}
 
@@ -332,7 +332,7 @@ export class ClawdiusMissionsView extends ViewPane {
 		}));
 		// The LIVE-only badge feed: an owned run's `onDidAction` needs-input/completion event raises a `live` badge on
 		// its row. In a runtime with no agent host the null service's `onDidAction` is `Event.None`, so nothing fires
-		// and the rows keep the seam's honest polled status - never a fabricated badge (SC-004).
+		// and the rows keep the seam's honest polled status - never a fabricated badge.
 		this.badgeFeed = this._register(new ClaudeMissionBadgeFeed({
 			onDidAction: this.agentHostService.onDidAction,
 			getRuns: () => this.currentRuns,
@@ -345,7 +345,7 @@ export class ClawdiusMissionsView extends ViewPane {
 		void this.refresh();
 	}
 
-	/** List a run's subagents through the seam against the last-resolved root (the drill-in expand - US2). */
+	/** List a run's subagents through the seam against the last-resolved root (the drill-in expand). */
 	private async listSubagentsFor(run: FleetRun): Promise<readonly FleetSubagent[]> {
 		if (!this.root) { return []; }
 		try {
@@ -355,7 +355,7 @@ export class ClawdiusMissionsView extends ViewPane {
 		}
 	}
 
-	/** Open a subagent's transcript in the editor area via IEditorService (the drill-in - US2). */
+	/** Open a subagent's transcript in the editor area via IEditorService (the drill-in). */
 	private openSubagent(sub: FleetSubagent): void {
 		void this.editorService.openEditor(new ClaudeMissionTranscriptInput(sub), { pinned: true, revealIfOpened: true });
 	}
@@ -368,7 +368,7 @@ export class ClawdiusMissionsView extends ViewPane {
 	}
 
 	/** Resolve the config root from the active window's home (never a hardcoded path) and list the enumerated runs
-	 *  through the seam (FR-002 - the only data path). Honest on failure: an empty labeled list renders the empty
+	 *  through the seam (the only data path). Honest on failure: an empty labeled list renders the empty
 	 *  state rather than throwing. */
 	private async refresh(): Promise<void> {
 		this.refreshStore.clear();

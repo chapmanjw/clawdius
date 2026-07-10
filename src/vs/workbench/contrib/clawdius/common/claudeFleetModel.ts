@@ -11,19 +11,19 @@
 // read. This layer stays pure so it can be unit-tested without a host: the only import is the reader-seam label
 // vocabulary from the sibling `common/claudeReaderSeam.ts`; there is NO Node/`process`/renderer import (purity
 // is enforced by `valid-layers-check`, whose browser tsconfig has no `@types/node`). The two-value `ownership`
-// mirrors data-model.md: it DEFAULTS to `foreign` at enumeration time (the conservative, never-falsely-owned,
+// DEFAULTS to `foreign` at enumeration time (the conservative, never-falsely-owned,
 // read-only-until-proven floor) and is promoted to `owned` ONLY by the later registry probe - a run merely
 // observed on disk stays `foreign`.
 
 import { AdapterVersionStamp, CompletenessState, CoverageLabel, FreshnessLabel } from './claudeReaderSeam.js';
 
-// The drill-in read model (Slice 3). A `FleetTranscriptSlice` is the labeled projection the seam produces when a
+// The drill-in read model. A `FleetTranscriptSlice` is the labeled projection the seam produces when a
 // subagent's transcript is opened in the editor area: an INDEX-ONLY list of the transcript's records (each reduced
 // to its record type + whether it is a subagent sidechain record - never the message body, keeping the seam a
 // second index and never a copy of Claude's authoritative content) plus the four honesty labels. Its
 // `completeness` is computed at DRILL-IN time and, unlike the coarse enumeration label, includes the out-of-band
 // tool-result probe: a record referencing a missing out-of-band file degrades the slice to `partial`, not
-// `complete` (SC-003). Pure `common/`: the only imports are the reader-seam label vocabulary.
+// `complete`. Pure `common/`: the only imports are the reader-seam label vocabulary.
 
 /** How a run was launched, as far as the fleet can tell. Refined by later slices; `single` is the default. */
 export type FleetRunKind = 'single' | 'background' | 'team';
@@ -31,7 +31,7 @@ export type FleetRunKind = 'single' | 'background' | 'team';
 /**
  * Whether THIS Clawdius workbench holds the run (`owned`) or it is merely observed on disk (`foreign`). At
  * enumeration time this is ALWAYS `foreign`: `owned` is a positive signal resolved later by the registry probe,
- * never inferred from an on-disk read. The two-value shape matches data-model.md + the fleet contract.
+ * never inferred from an on-disk read.
  */
 export type FleetOwnership = 'owned' | 'foreign';
 
@@ -39,7 +39,7 @@ export type FleetOwnership = 'owned' | 'foreign';
  * One observable run enumerated by the seam across the config root's `projects/` dir - a labeled projection, not
  * an authoritative copy. Every instance carries the four honesty labels inline (coverage / freshness /
  * completeness + the adapter-version stamp), so a consumer can render an honest status for every run without a
- * second read. A foreign or suppressed run appears in the enumeration WITH its label, never omitted (SC-002).
+ * second read. A foreign or suppressed run appears in the enumeration WITH its label, never omitted.
  */
 export interface FleetRun {
 	/** Stable run identity (the main-line record's id, falling back to the session id / session file identity). */
@@ -95,10 +95,10 @@ export interface FleetTranscriptRecord {
 }
 
 /**
- * A subagent's drilled-in transcript, read through the seam by the transcript-drill-in editor (Slice 3): the
+ * A subagent's drilled-in transcript, read through the seam by the transcript-drill-in editor: the
  * subagent it was opened from, the index-only records in view, and the four honesty labels. `completeness` is the
  * drill-in read's OWN label, which unlike the coarse enumeration label runs the out-of-band tool-result probe, so
- * a transcript referencing a missing out-of-band file is `partial`, not `complete` (SC-003). Never an
+ * a transcript referencing a missing out-of-band file is `partial`, not `complete`. Never an
  * authoritative copy of Claude state.
  */
 export interface FleetTranscriptSlice {

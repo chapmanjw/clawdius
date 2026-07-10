@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Missions fleet needs-input/completion badge feed (Slice 4b, US3)
+// CLAWDIUS-BEGIN Missions fleet needs-input/completion badge feed
 // A LIVE-ONLY badge feed. It subscribes to the workbench-facing `IAgentHostService.onDidAction` action stream and
 // raises an honest needs-input / completion badge for an OWNED run when a live event actually fires:
 //   - `ActionType.ChatInputRequested` -> a `needs-input` badge (the run is blocked on the user).
@@ -11,7 +11,7 @@
 //     reaches the browser as this same `ChatTurnComplete` carrying `_meta` subagent attribution, NOT a node-side
 //     `onDidSessionProgress` signal (that lives on the per-provider `IAgent`, unreachable from `vs/workbench`).
 //
-// `freshness` is `live` ONLY for an OWNED run (resolved via the shipped Slice-4a `resolveOwnership`) when an event
+// `freshness` is `live` ONLY for an OWNED run (resolved via the shipped `resolveOwnership`) when an event
 // fired. A foreign / non-live run gets NO live badge - its row shows the seam's honest polled status instead. The
 // feed NEVER fabricates a needs-input / completion badge from disk: the indexed transcript record carries no such
 // field, so there is no honest disk-derived signal (the seam only ever reports `status:'unknown'` / `polled`).
@@ -24,7 +24,7 @@
 // decodes a subagent chat URI back to its OWNING session) and then `AgentSession.id` on the recovered session URI
 // - yielding the agent-host raw session id matched against `FleetRun.sessionId`. A non-chat channel falls back to
 // being read as a bare session URI. Whether the agent-host raw id and the seam's `sessionId` share a namespace is
-// the FR-009 identity-join question owned by a later slice; where they do not, no run matches and no badge is
+// an identity-join question left for later; where they do not, no run matches and no badge is
 // raised - the safe, never-falsely-live outcome. This module names ONLY `ActionType`-discriminated action types
 // from the agent-host protocol layer; it deliberately does NOT import `vs/sessions` `SessionStatus`.
 
@@ -62,14 +62,14 @@ export interface BadgeSignal {
 	readonly kind: BadgeKind;
 	/** Always `live` for an emitted signal - a badge is raised only for an OWNED run on a real live event. */
 	readonly freshness: FreshnessLabel;
-	/** Provenance of the signal (the live agent-host action stream), for the FR-002 honesty audit. */
+	/** Provenance of the signal (the live agent-host action stream), for the honesty audit. */
 	readonly source: 'live-event';
 }
 
 /**
  * The PURE freshness classifier the honesty of the badge turns on: a badge is `live` iff the run is OWNED AND a
  * live event actually fired; in every other case it is `polled` (the seam's honest fallback). This is the
- * never-falsely-live floor - a foreign run, or an owned run with no event, is `polled`, never `live` (SC-004).
+ * never-falsely-live floor - a foreign run, or an owned run with no event, is `polled`, never `live`.
  */
 export function badgeFreshnessFor(ownership: FleetOwnership, hadLiveEvent: boolean): FreshnessLabel {
 	return ownership === 'owned' && hadLiveEvent ? FreshnessLabel.Live : FreshnessLabel.Polled;
@@ -97,7 +97,7 @@ export interface IBadgeFeedSource {
 	readonly onDidAction: Event<ActionEnvelope>;
 	/** The runs currently in view, to correlate an event's session id back to a `FleetRun`. */
 	getRuns(): readonly FleetRun[];
-	/** The owned raw-session-id set (from `getActiveSubscriptions()` via the Slice-4a adapter). */
+	/** The owned raw-session-id set (from `getActiveSubscriptions()` via the ownership adapter). */
 	getOwnedSessionIds(): ReadonlySet<string>;
 }
 
@@ -135,13 +135,13 @@ export class ClaudeMissionBadgeFeed extends Disposable {
 			return;
 		}
 		// Correlate the event's chat channel back to a run in view. No match -> no badge (the safe outcome when the
-		// agent-host id namespace and the seam's `sessionId` do not align - the FR-009 join is a later slice).
+		// agent-host id namespace and the seam's `sessionId` do not align - that join is left for later).
 		const sessionId = runSessionIdFromChannel(envelope.channel);
 		const run = this.source.getRuns().find(candidate => candidate.sessionId === sessionId);
 		if (!run) {
 			return;
 		}
-		// A live badge is raised ONLY for an OWNED run (SC-004). A foreign run gets no live badge - the row keeps
+		// A live badge is raised ONLY for an OWNED run. A foreign run gets no live badge - the row keeps
 		// the seam's honest polled status.
 		const ownership = resolveOwnership(run, this.source.getOwnedSessionIds());
 		if (badgeFreshnessFor(ownership, true) !== FreshnessLabel.Live) {

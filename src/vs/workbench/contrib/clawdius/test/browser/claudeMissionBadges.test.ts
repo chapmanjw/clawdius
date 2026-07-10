@@ -3,10 +3,10 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Missions fleet - live badge feed tests (Slice 4b)
+// CLAWDIUS-BEGIN Missions fleet - live badge feed tests
 // The POSITIVE-path proof the sanitized Playwright harness cannot provide (its null agent host's onDidAction is
 // Event.None): an injected onDidAction event drives the SAME production path the ViewPane wires - the badge feed
-// correlates the event to a run, gates on ownership, and the FleetRunsList row is decorated. Proves SC-004 honesty
+// correlates the event to a run, gates on ownership, and the FleetRunsList row is decorated. Proves honesty
 // from both directions: an OWNED run's ChatInputRequested/ChatTurnComplete raises a `live` badge that renders on
 // the row; the same event on a FOREIGN run (or with no ownership) raises NO badge and the row keeps its honest
 // polled labels. Also covers the pure `badgeFreshnessFor` floor and a source-scan that the module does not import
@@ -80,7 +80,7 @@ function badgeOf(row: HTMLElement | null): unknown {
 	};
 }
 
-suite('Clawdius missions fleet - live badges (Slice 4b)', () => {
+suite('Clawdius missions fleet - live badges', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	const OWNED = run('owned-0001', 'sess-owned');
@@ -103,7 +103,7 @@ suite('Clawdius missions fleet - live badges (Slice 4b)', () => {
 		return { feed, fire: (e: ActionEnvelope) => onDidAction.fire(e), rowFor };
 	}
 
-	test('ChatInputRequested on an OWNED run raises a live needs-input badge that renders on the row (SC-004)', () => {
+	test('ChatInputRequested on an OWNED run raises a live needs-input badge that renders on the row', () => {
 		const { feed, fire, rowFor } = harness([OWNED, FOREIGN], new Set(['sess-owned']));
 		// The event rides the session's REAL default chat channel (ahp-chat://default/<base64(sessionUri)>), so this
 		// proves the production correlation (recover session URI -> AgentSession.id), not a fabricated session channel.
@@ -120,7 +120,7 @@ suite('Clawdius missions fleet - live badges (Slice 4b)', () => {
 		);
 	});
 
-	test('the same event on a FOREIGN run raises NO live badge - the row keeps its honest polled labels (SC-004)', () => {
+	test('the same event on a FOREIGN run raises NO live badge - the row keeps its honest polled labels', () => {
 		const { feed, fire, rowFor } = harness([OWNED, FOREIGN], new Set(['sess-owned']));
 		fire(envelope(chatChannel('sess-foreign'), inputRequested()));
 		assert.deepStrictEqual(

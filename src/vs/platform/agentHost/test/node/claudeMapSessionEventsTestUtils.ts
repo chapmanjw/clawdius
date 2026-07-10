@@ -118,7 +118,7 @@ export function makeResultError(sessionId: string, errors: string[]): SDKResultE
 }
 
 // `stream_event` (SDKPartialAssistantMessage) builders. The SDK's
-// `Options.includePartialMessages: true` setting (Phase 6 §3.4) routes
+// `Options.includePartialMessages: true` setting routes
 // raw `BetaRawMessageStreamEvent`s through to the agent so we can map
 // per-token. The deep `BetaMessage` shape on `message_start` carries
 // many required fields irrelevant to mapping; these helpers populate
@@ -213,7 +213,7 @@ export function makeThinkingDelta(index: number, thinking: string): BetaRawConte
 }
 
 /**
- * Phase 7 §3.3: `content_block_delta` with `input_json_delta` is the
+ * `content_block_delta` with `input_json_delta` is the
  * stream of partial parameter JSON for an open `tool_use` block.
  */
 export function makeInputJsonDelta(index: number, partialJson: string): BetaRawContentBlockDeltaEvent {
@@ -283,7 +283,7 @@ export function makeAssistantMessage(
 /**
  * Builds the synthetic {@link SDKUserMessage} envelope (`type: 'user'`)
  * the SDK delivers as the response to a previously-emitted `tool_use`.
- * Phase 7 §3.3.4 — the mapper detects this by walking
+ * The mapper detects this by walking
  * `message.content` for `tool_result` blocks and emits a
  * `ChatToolCallComplete` per match. The `content` field is the SDK's
  * `string | (TextBlockParam | ImageBlockParam | ...)[]` shape; the

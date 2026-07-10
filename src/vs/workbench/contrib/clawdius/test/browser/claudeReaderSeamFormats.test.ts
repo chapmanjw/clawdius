@@ -3,11 +3,11 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Reader-seam teams/tasks/cost adapter tests (Slice 3)
-// Drives the teams, tasks, and cost adapters over the sanitized Slice-3 fixtures staged into an in-memory
+// CLAWDIUS-BEGIN Reader-seam teams/tasks/cost adapter tests
+// Drives the teams, tasks, and cost adapters over the sanitized fixtures staged into an in-memory
 // filesystem: each format's four-way matrix (present->complete, absent->absent, extra-field->forward-compatible
 // complete, malformed->canary unknown-shape + stamp), an explicit assertion that the token-first cost adapter
-// produces NO list-price USD figure (FR-011), and the service-level TEAMS-14 gating probe (off->absent,
+// produces NO list-price USD figure, and the service-level teams-enablement gating probe (off->absent,
 // on->read) plus cost routing. freshness=live is deferred (out of scope), so fixture reads assert polled/stale.
 
 import assert from 'assert';
@@ -25,7 +25,7 @@ import { ClawdiusReaderSeamService, CostAdapter, TasksAdapter, TeamsAdapter, Tra
 import { TestContextService } from '../../../../test/common/workbenchTestServices.js';
 
 // The committed .jsonl / .json skeletons are the single source of truth, read via the browser harness's file
-// bridge (the same mechanism the Slice-2 tests use) - no inline duplicate fixtures.
+// bridge (the same mechanism the sibling seam tests use) - no inline duplicate fixtures.
 declare const __readFileInTests: (path: string) => Promise<string>;
 const FIXTURE_ROOT = 'vs/workbench/contrib/clawdius/test/fixtures/reader-seam';
 
@@ -34,7 +34,7 @@ async function loadFixture(sub: string, name: string): Promise<string> {
 	return await __readFileInTests(URI.joinPath(src, FIXTURE_ROOT, sub, name).fsPath);
 }
 
-suite('Clawdius reader seam - teams/tasks/cost adapters (Slice 3)', () => {
+suite('Clawdius reader seam - teams/tasks/cost adapters', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	const ROOT = URI.file('/home/tester/.claude');
@@ -206,20 +206,20 @@ suite('Clawdius reader seam - teams/tasks/cost adapters (Slice 3)', () => {
 		assert.deepStrictEqual(r.adapterVersion, { format: 'cost-token-rollup', versionKey: 'unknown-shape' });
 	});
 
-	test('cost adapter produces NO list-price USD figure - token-first only (FR-011)', async () => {
+	test('cost adapter produces NO list-price USD figure - token-first only', async () => {
 		const fs = makeFs();
 		await writeCost(fs, 'present.jsonl');
 		const cost = (await costAdapter(fs).read(ROOT, FOLDER)).entity as CostRecord;
 		// The read model carries token counts only: the top-level shape is exactly tokens + a per-model rollup,
-		// and no field at any level names a currency / price. A list-price USD is never derived (FR-011).
+		// and no field at any level names a currency / price. A list-price USD is never derived.
 		assert.deepStrictEqual(Object.keys(cost).sort(), ['perModel', 'totalInputTokens', 'totalOutputTokens']);
 		const everyKey = [...Object.keys(cost), ...cost.perModel.flatMap(m => Object.keys(m))];
 		assert.ok(!everyKey.some(k => /usd|dollar|price|money|cash|spend/i.test(k)), 'no monetary field may appear in the token-first cost record');
 	});
 
-	// --- Service-level TEAMS-14 gating probe + routing -------------------------------------------------------
+	// --- Service-level teams-enablement gating probe + routing -------------------------------------------------
 
-	test('service gates teams/tasks behind the TEAMS-14 probe: off -> absent, on -> read', async () => {
+	test('service gates teams/tasks behind the teams-enablement probe: off -> absent, on -> read', async () => {
 		const fsOff = makeFs();
 		await writeTeams(fsOff, 'present.json');
 		const off = new ClawdiusReaderSeamService(false, fsOff, new TestContextService(testWorkspace(FOLDER)));
@@ -244,7 +244,7 @@ suite('Clawdius reader seam - teams/tasks/cost adapters (Slice 3)', () => {
 		assert.strictEqual(r.entity.totalInputTokens, 400);
 	});
 
-	test('service no-config root -> out-of-scope absent, still fully labeled (SC-001)', async () => {
+	test('service no-config root -> out-of-scope absent, still fully labeled', async () => {
 		const svc = new ClawdiusReaderSeamService(true, makeFs(), new TestContextService(testWorkspace(FOLDER)));
 		for (const kind of ['team-roster', 'task-list', 'cost-rollup'] as const) {
 			const r = await svc.read({ kind, root: { kind: 'no-config' } });

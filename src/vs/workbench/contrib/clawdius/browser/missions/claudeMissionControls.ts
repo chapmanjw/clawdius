@@ -3,10 +3,10 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Missions fleet owned-run control affordances (Slice 5, US4)
+// CLAWDIUS-BEGIN Missions fleet owned-run control affordances
 // The minimal, honest control ceiling for a run: whole-run STOP + in-flight STEER for an OWNED run; a FOREIGN run
 // is read-only, offering ONLY a terminal handoff (a read-only reveal). The fleet exposes no control it cannot
-// actually perform (SC-006) - so the affordance set is keyed off the Slice-4a ownership signal and nothing else.
+// actually perform - so the affordance set is keyed off the ownership signal and nothing else.
 //
 // Both control verbs act through the workbench-facing `IAgentHostService.dispatch(channel, action)` and NEVER
 // through a per-provider agent method: the fleet has no `abortSession` (that lives on the per-provider `IAgent`,
@@ -17,20 +17,20 @@
 //     is whole-session regardless. When no turn is in flight there is nothing to cancel, so `stop` is a
 //     noop-success, exactly mirroring the shipped cancellation handler.
 //   - `steerInFlight(run, message)` dispatches a `ChatPendingMessageSet` action with `kind` STEERING - the ONLY
-//     kind that routes to the agent's in-flight steering message; a QUEUED kind would type-check but violate
-//     FR-006 (it would queue a new turn instead of steering the live one), so the kind is named explicitly.
+//     kind that routes to the agent's in-flight steering message; a QUEUED kind would type-check but would
+//     queue a new turn instead of steering the live one, so the kind is named explicitly.
 //
 // The dispatch `channel` is the run session's DEFAULT chat channel (`buildDefaultChatUri` over the
 // `<provider>:/<rawId>` session URI), the same channel class the badge feed correlates on - grounded in the agent
 // host's own URI builders, not a bare session URI.
 //
-// Control CEILING (SC-006): the fleet's whole surface is {stop, steerInFlight, terminalHandoff}. It never exposes
+// Control CEILING: the fleet's whole surface is {stop, steerInFlight, terminalHandoff}. It never exposes
 // the unplumbed low-level interrupt-query or task-stop test stubs - production cancellation runs through the
 // agent's abort controller, reached only via the dispatched `ChatTurnCancelled` above. A source-scan test asserts
 // those stub names appear nowhere in this module.
 //
 // This module names ONLY agent-host protocol action types (via the workbench-facing surface); it does NOT import
-// `vs/sessions` `SessionStatus`. Ownership is resolved by the shipped Slice-4a `resolveOwnership`, whose
+// `vs/sessions` `SessionStatus`. Ownership is resolved by the shipped `resolveOwnership`, whose
 // default-`foreign` floor keeps a run read-only until it is positively proven owned.
 
 import { generateUuid } from '../../../../../base/common/uuid.js';
@@ -48,13 +48,13 @@ export type FleetControlAction = ChatTurnCancelledAction | ChatPendingMessageSet
 /**
  * The host surface the control affordances act through, injectable so the dispatch + ownership correlation are
  * unit-testable without a live agent host. In production these are backed by the workbench-facing
- * `IAgentHostService` (`dispatch`, `getActiveSubscriptions()` via the Slice-4a adapter) and the fleet's read-only
+ * `IAgentHostService` (`dispatch`, `getActiveSubscriptions()` via the ownership adapter) and the fleet's read-only
  * drill-in reveal.
  */
 export interface IMissionControlHost {
 	/** Dispatch a client-originated control action on a chat channel (`IAgentHostService.dispatch`). */
 	dispatch(channel: string, action: FleetControlAction): void;
-	/** The owned raw-session-id set (from `getActiveSubscriptions()` via the Slice-4a adapter). */
+	/** The owned raw-session-id set (from `getActiveSubscriptions()` via the ownership adapter). */
 	getOwnedSessionIds(): ReadonlySet<string>;
 	/** The run's live active-turn id, read from agent-host state; `undefined` when no turn is in flight. */
 	getActiveTurnId(run: FleetRun): string | undefined;
@@ -71,7 +71,7 @@ export interface OwnedRunAffordances {
 	steerInFlight(message: string): void;
 }
 
-/** The single affordance available for a FOREIGN run: a read-only terminal handoff, no control verb (FR-007). */
+/** The single affordance available for a FOREIGN run: a read-only terminal handoff, no control verb. */
 export interface ForeignRunAffordances {
 	readonly ownership: 'foreign';
 	/** Reveal the run read-only - the only affordance a foreign run gets; it exposes no stop/steer verb. */
@@ -91,9 +91,9 @@ export function controlChannelForRun(run: FleetRun): string {
 }
 
 /**
- * The control affordances for a run, keyed off the Slice-4a ownership signal: an OWNED run gets {stop,
- * steerInFlight}; a FOREIGN run gets ONLY {terminalHandoff}. The fleet exposes no control it cannot perform
- * (SC-006), and the default-`foreign` floor keeps a run read-only until it is positively proven owned.
+ * The control affordances for a run, keyed off the ownership signal: an OWNED run gets {stop,
+ * steerInFlight}; a FOREIGN run gets ONLY {terminalHandoff}. The fleet exposes no control it cannot perform,
+ * and the default-`foreign` floor keeps a run read-only until it is positively proven owned.
  */
 export function affordancesFor(run: FleetRun, host: IMissionControlHost): RunAffordances {
 	if (resolveOwnership(run, host.getOwnedSessionIds()) === 'owned') {
@@ -121,7 +121,7 @@ function stopOwnedRun(run: FleetRun, host: IMissionControlHost): void {
 }
 
 /** In-flight steer: dispatch `ChatPendingMessageSet` with the STEERING kind (the only kind routed to the agent's
- *  live-turn steering message; a queued kind would violate FR-006). */
+ *  live-turn steering message; a queued kind would instead queue a new turn). */
 function steerOwnedRun(run: FleetRun, host: IMissionControlHost, message: string): void {
 	const action: ChatPendingMessageSetAction = {
 		type: ActionType.ChatPendingMessageSet,

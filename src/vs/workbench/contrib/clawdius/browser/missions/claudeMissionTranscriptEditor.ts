@@ -3,13 +3,13 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Missions fleet - transcript drill-in EditorPane (US2)
+// CLAWDIUS-BEGIN Missions fleet - transcript drill-in EditorPane
 // A native-DOM EditorPane (no webview => zero-egress; pattern: claudeControlCenterEditor) that opens a subagent's
-// REAL on-disk transcript in the editor area. It reads ONLY through the shipped seam (FR-002): the subagent's
+// REAL on-disk transcript in the editor area. It reads ONLY through the shipped seam: the subagent's
 // opaque transcriptRef -> the seam's per-subagent transcript read, which returns an INDEX-ONLY labeled slice (the
 // record types in view + the four honesty labels), never the message bodies. The drill-in read's completeness
 // runs the out-of-band tool-result probe, so a transcript referencing a missing out-of-band file paints `partial`,
-// not `complete` (SC-003) - the label is rendered honestly, never fabricated up to complete. The header + record
+// not `complete` - the label is rendered honestly, never fabricated up to complete. The header + record
 // rows carry `data-*` hooks so the real-build Playwright render can assert the completeness label + record count.
 
 import './media/claudeMissions.css';
@@ -34,7 +34,7 @@ import { ClaudeMissionTranscriptInput } from './claudeMissionTranscriptInput.js'
  * freshness labels (as badges AND `data-*` hooks) plus the record count, then one row per INDEX-ONLY record (its
  * type + a subagent marker for sidechain records). Never renders a message body - the seam is an index, not a copy.
  * Pure over its inputs (no services, no IO), so a unit test can drive it directly. `partial` completeness is
- * rendered exactly as the seam labeled it (SC-003), never quietly promoted to `complete`.
+ * rendered exactly as the seam labeled it, never quietly promoted to `complete`.
  */
 export function renderTranscriptSlice(container: HTMLElement, slice: FleetTranscriptSlice): void {
 	clearNode(container);
@@ -104,7 +104,7 @@ export class ClaudeMissionTranscriptEditor extends EditorPane {
 
 	override async setInput(input: ClaudeMissionTranscriptInput, options: IEditorOptions | undefined, context: IEditorOpenContext, token: CancellationToken): Promise<void> {
 		await super.setInput(input, options, context, token);
-		// Read the transcript through the seam (FR-002 - the only data path). Honest on failure: the seam degrades to
+		// Read the transcript through the seam - the only data path. Honest on failure: the seam degrades to
 		// a labeled absent/unknown-shape slice rather than throwing, so the pane always has something honest to paint.
 		const slice = await this.seam.readSubagentTranscript(input.subagent);
 		if (token.isCancellationRequested || this.disposed) { return; }

@@ -85,7 +85,7 @@ function resolveCurrentPermissionMode(
  *     and emits every {@link AgentSignal} for this session (router-
  *     mapped per-message signals plus `ChatTurnComplete` and
  *     `steering_consumed`).
- *   • Pending-permission and pending-user-input registries (Phase 7),
+ *   • Pending-permission and pending-user-input registries,
  *     surfaced via `requestPermission` / `requestUserInput`.
  */
 export class ClaudeAgentSession extends Disposable {
@@ -148,7 +148,7 @@ export class ClaudeAgentSession extends Disposable {
 	}
 
 	/**
-	 * Phase 12 — per-session registry of Task tool calls that spawn
+	 * Per-session registry of Task tool calls that spawn
 	 * subagents (`SubagentSpawn` records keyed by `tool_use_id`, plus a
 	 * reverse index from inner `tool_use_id` to its parent Task). Owned
 	 * here so the registry dies with the session; consumers in the live
@@ -159,30 +159,30 @@ export class ClaudeAgentSession extends Disposable {
 	readonly subagents: SubagentRegistry = this._register(new SubagentRegistry());
 
 	/**
-	 * Phase 7 / S3.2. Tool-permission deferreds parked inside
+	 * Tool-permission deferreds parked inside
 	 * {@link Options.canUseTool}. Keyed by SDK `tool_use_id`.
 	 */
 	private readonly _pendingPermissions = new PendingRequestRegistry<boolean>();
 
 	/**
-	 * Phase 7 / S3.2. User-input deferreds parked for interactive tools
+	 * User-input deferreds parked for interactive tools
 	 * (`AskUserQuestion`, `ExitPlanMode`). Keyed by `ChatInputRequest.id`.
 	 */
 	private readonly _pendingUserInputs = new PendingRequestRegistry<{ response: ChatInputResponseKind; answers?: Record<string, ChatInputAnswer> }>();
 
 	/**
-	 * Phase 10 — owns the workbench-registered client-tool snapshot
+	 * Owns the workbench-registered client-tool snapshot
 	 * (via {@link SessionClientToolsDiff.model}) plus the
 	 * "changed since last successful build" dirty bit. Read by the
 	 * agent's sendMessage diff check; used by the materialize /
 	 * rematerializer flow to pin the SDK build against a specific
-	 * snapshot. See {@link SessionClientToolsDiff} for the C6 race
+	 * snapshot. See {@link SessionClientToolsDiff} for the race
 	 * semantics this collaborator enforces.
 	 */
 	readonly toolDiff: SessionClientToolsDiff;
 
 	/**
-	 * Phase 11 — per-session **client-pushed** synced customization
+	 * Per-session **client-pushed** synced customization
 	 * snapshot + enablement map. Owns the workbench-supplied
 	 * {@link ISyncedCustomization} list, the per-URI enablement bits,
 	 * and the dirty flag drained at the next {@link send} pre-flight.
@@ -360,7 +360,7 @@ export class ClaudeAgentSession extends Disposable {
 	 * If the session's `abortController` fires while `sdk.startup()` is in
 	 * flight, the SDK unwinds via the controller; if `startup` resolves
 	 * anyway, the `WarmQuery` is asyncDisposed and a {@link CancellationError}
-	 * is thrown (Q8 belt-and-suspenders).
+	 * is thrown (belt-and-suspenders).
 	 */
 	async materialize(ctx: IMaterializeContext): Promise<void> {
 		if (this._pipeline) {
@@ -393,7 +393,7 @@ export class ClaudeAgentSession extends Disposable {
 				cliResolution: await this._cliConfigService.resolveCliBackend(), // CLAWDIUS cli backend resolution
 			},
 			data => this._logService.error(`[Claude SDK stderr] ${data}`),
-			msg => this._logService.info(`[Claude] declining elicitation from MCP server (Phase 7 stub): ${msg}`),
+			msg => this._logService.info(`[Claude] declining elicitation from MCP server (stub): ${msg}`),
 		);
 
 		this._logService.info(`[Claude] session ${this.sessionId}: enableFileCheckpointing=${options.enableFileCheckpointing} isResume=${ctx.isResume}`);
@@ -491,7 +491,7 @@ export class ClaudeAgentSession extends Disposable {
 						cliResolution: await this._cliConfigService.resolveCliBackend(), // CLAWDIUS cli backend resolution
 					},
 					data => this._logService.error(`[Claude SDK stderr] ${data}`),
-					msg => this._logService.info(`[Claude] declining elicitation from MCP server (Phase 7 stub): ${msg}`),
+					msg => this._logService.info(`[Claude] declining elicitation from MCP server (stub): ${msg}`),
 				);
 				this._logService.info(`[Claude] session ${this.sessionId}: resume rebuild agent=${rebuildOptions.agent ?? '(none)'}`);
 				const rebuildWarm = await this._sdkService.startup({ options: rebuildOptions });
@@ -730,7 +730,7 @@ export class ClaudeAgentSession extends Disposable {
 	/**
 	 * Inject a steering message. Builds the `priority: 'now'`
 	 * {@link SDKUserMessage} and hands it to the pipeline; the pipeline
-	 * inherits the parent's turnId (CONTEXT.md M10) and fires
+	 * inherits the parent's turnId and fires
 	 * `steering_consumed` when the SDK accepts it. No-op if the pipeline
 	 * is aborted.
 	 */
@@ -763,7 +763,7 @@ export class ClaudeAgentSession extends Disposable {
 		return this._requirePipeline().setPermissionMode(mode);
 	}
 
-	// #region Phase 7 / S3.2 — pending state
+	// #region pending state
 
 	/**
 	 * Atomically register a pending-permission deferred and fire the
@@ -777,7 +777,7 @@ export class ClaudeAgentSession extends Disposable {
 		readonly state: ToolCallPendingConfirmationState;
 		readonly permissionKind: ClaudePermissionKind;
 		readonly permissionPath?: string;
-		/** Phase 12 step 5 — when the confirmation belongs to a subagent context, route it to the subagent session. */
+		/** When the confirmation belongs to a subagent context, route it to the subagent session. */
 		readonly parentToolCallId?: string;
 	}): Promise<boolean> {
 		if (!this._pipeline || this._pipeline.isAborted) {
@@ -831,7 +831,7 @@ export class ClaudeAgentSession extends Disposable {
 
 	// #endregion
 
-	// #region Phase 10 — client tools
+	// #region client tools
 
 	/** Replace a client's registered tools (full replacement). */
 	setClientTools(clientId: string, tools: readonly ToolDefinition[]): void {
@@ -877,7 +877,7 @@ export class ClaudeAgentSession extends Disposable {
 
 	// #endregion
 
-	// #region Phase 11 — customizations / plugins
+	// #region customizations / plugins
 
 	/**
 	 * Merged fire-and-forget signal that this session's customization

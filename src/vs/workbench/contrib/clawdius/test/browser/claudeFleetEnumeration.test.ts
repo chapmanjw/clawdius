@@ -3,13 +3,13 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Missions fleet seam-enumeration tests (Slice 1)
+// CLAWDIUS-BEGIN Missions fleet seam-enumeration tests
 // Drives the seam's cross-project run-/subagent-enumeration over the sanitized `runs/` fixtures staged into an
 // in-memory filesystem across several encoded project dirs: `listRuns` returns EVERY observable run each labeled
-// coverage/freshness/completeness + adapter stamp (SC-001); a foreign run is present-with-label, not omitted
-// (SC-002); a malformed file is present labeled `unknown-shape`; `listSubagents` lists a run's subagent roots;
-// a no-config / empty-projects tree degrades to an empty labeled result; and `ownership` is `foreign` at this
-// layer, NEVER `owned` (owned requires the later registry probe - the honesty ceiling).
+// coverage/freshness/completeness + adapter stamp; a foreign run is present-with-label, not omitted; a malformed
+// file is present labeled `unknown-shape`; `listSubagents` lists a run's subagent roots; a no-config /
+// empty-projects tree degrades to an empty labeled result; and `ownership` is `foreign` at this layer, NEVER
+// `owned` (owned requires the later registry probe - the honesty ceiling).
 
 import assert from 'assert';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
@@ -27,7 +27,7 @@ import { ClawdiusReaderSeamService } from '../../browser/reader/claudeReaderSeam
 import { TestContextService } from '../../../../test/common/workbenchTestServices.js';
 
 // The committed .jsonl skeletons are the single source of truth, read via the browser harness's file bridge (the
-// same mechanism the Slice-2/3 seam tests use) - no inline duplicate fixtures.
+// same mechanism the sibling seam tests use) - no inline duplicate fixtures.
 declare const __readFileInTests: (path: string) => Promise<string>;
 const FIXTURE_DIR = 'vs/workbench/contrib/clawdius/test/fixtures/reader-seam/runs';
 
@@ -36,10 +36,10 @@ async function loadFixture(name: string): Promise<string> {
 	return await __readFileInTests(URI.joinPath(src, FIXTURE_DIR, name).fsPath);
 }
 
-/** The full labeled shape of a FleetRun - a run is fully labeled iff it carries exactly these keys (SC-001). */
+/** The full labeled shape of a FleetRun - a run is fully labeled iff it carries exactly these keys. */
 const FLEET_RUN_KEYS = ['adapterVersion', 'completeness', 'coverage', 'freshness', 'kind', 'ownership', 'runId', 'sessionId', 'status'];
 
-suite('Clawdius missions fleet - seam enumeration (Slice 1)', () => {
+suite('Clawdius missions fleet - seam enumeration', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	// The resolved config root, and the active workspace folder in-scope runs declare as their cwd.
@@ -73,14 +73,14 @@ suite('Clawdius missions fleet - seam enumeration (Slice 1)', () => {
 		await stage(fs, URI.file('/malformed-proj'), 'malformed.jsonl');
 	}
 
-	test('listRuns enumerates every run fully labeled; foreign present-with-label; ownership foreign, never owned (SC-001/SC-002)', async () => {
+	test('listRuns enumerates every run fully labeled; foreign present-with-label; ownership foreign, never owned', async () => {
 		const fs = makeFs();
 		await stageFullTree(fs);
 		const runs = await makeService(fs).listRuns(RESOLVED);
 
-		// Every run carries the full label set - no unlabeled item (SC-001).
+		// Every run carries the full label set - no unlabeled item.
 		assert.deepStrictEqual(runs.map(r => Object.keys(r).sort()), runs.map(() => FLEET_RUN_KEYS));
-		// The labeled projection: every run present (a foreign run WITH its label not omitted - SC-002; a
+		// The labeled projection: every run present (a foreign run WITH its label not omitted; a
 		// malformed file present labeled unknown-shape), freshness=polled, and ownership=foreign for ALL runs -
 		// never owned at the enumeration layer (owned requires the later registry probe - the honesty ceiling).
 		assert.deepStrictEqual(runs.map(r => ({
@@ -103,7 +103,7 @@ suite('Clawdius missions fleet - seam enumeration (Slice 1)', () => {
 		assert.deepStrictEqual(stampBySession.get('malformed'), { format: 'transcript-jsonl', versionKey: 'unknown-shape' });
 	});
 
-	test('listSubagents lists a run\'s subagent roots, each labeled and drillable (US2 prerequisite)', async () => {
+	test('listSubagents lists a run\'s subagent roots, each labeled and drillable', async () => {
 		const fs = makeFs();
 		await stageFullTree(fs);
 		const svc = makeService(fs);

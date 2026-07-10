@@ -37,7 +37,7 @@ export interface IClaudeCanUseToolOptions {
 	readonly blockedPath?: string;
 	readonly toolUseID: string;
 	/**
-	 * Phase 12 step 5 — SDK-supplied subagent id for inner-tool
+	 * SDK-supplied subagent id for inner-tool
 	 * confirmations. When set, the bridge resolves the parent
 	 * `tool_use_id` via the mapper state and tags the resulting
 	 * `pending_confirmation` so the host can route it to the subagent
@@ -163,7 +163,7 @@ async function dispatchCanUseTool(
 }
 
 /**
- * Phase 12 step 5 — shared subagent-context resolution for every
+ * Shared subagent-context resolution for every
  * `pending_confirmation` and `ChatInputRequested` emission. When the
  * SDK delivers `options.agentID`, look up the parent spawn via the
  * session's registry and write the agentId back to it. The write is
@@ -190,7 +190,7 @@ function resolveSubagentParent(
 }
 
 /**
- * Dispatch the two interactive built-in tools (S3.5). They share a
+ * Dispatch the two interactive built-in tools. They share a
  * dispatcher only because both are exempt from SDK
  * `permissionMode` auto-approval; routing then splits by tool
  * semantics. Caller must guard with {@link INTERACTIVE_CLAUDE_TOOLS} —
@@ -214,7 +214,7 @@ function handleInteractiveTool(
 }
 
 /**
- * `ExitPlanMode` (S3.5b): render the plan body inside the standard
+ * `ExitPlanMode`: render the plan body inside the standard
  * tool-confirmation card (`pending_confirmation` channel — same path
  * normal write tools take), persist `permissionMode = 'acceptEdits'`
  * on Approve (next `sendMessage` forwards via `Query.setPermissionMode`),
@@ -259,7 +259,7 @@ async function handleExitPlanMode(
 }
 
 /**
- * `AskUserQuestion` (S3.5a): translate the SDK's question carousel
+ * `AskUserQuestion`: translate the SDK's question carousel
  * into a {@link ChatInputRequest}, await the workbench answer,
  * and re-key answers by question text (matching the production
  * extension's `Record<question, value>` contract).

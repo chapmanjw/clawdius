@@ -63,7 +63,7 @@ suite('claudeMapSessionEvents — direct mapper tests', () => {
 
 	/**
 	 * Fresh real {@link SubagentRegistry} so the per-test registry can
-	 * record subagent state writes the mapper makes (Phase 12: spawning
+	 * record subagent state writes the mapper makes (spawning
 	 * entries, inner-tool→parent edges, etc). Tests that don't touch
 	 * subagent paths simply pass `r()` through to satisfy the mapper
 	 * signature.
@@ -230,7 +230,7 @@ suite('claudeMapSessionEvents — direct mapper tests', () => {
 		}]);
 	});
 
-	// #region Phase 7 §3.3 tool_use / tool_result — Tests 8/9/10/11
+	// #region tool_use / tool_result
 
 	test('Test 8 — content_block_start tool_use emits ChatToolCallStart with displayName', () => {
 		const log = new CapturingLogService();
@@ -465,9 +465,9 @@ suite('claudeMapSessionEvents — direct mapper tests', () => {
 
 	// #endregion
 
-	// #region Phase 8 — file-edit cache
+	// #region file-edit cache
 
-	test('Phase 8 — cached file edit is appended to ChatToolCallComplete.result.content', () => {
+	test('cached file edit is appended to ChatToolCallComplete.result.content', () => {
 		const log = new NullLogService();
 		const state = new ClaudeMapperState();
 		const resolver = r();
@@ -499,7 +499,7 @@ suite('claudeMapSessionEvents — direct mapper tests', () => {
 		]);
 	});
 
-	test('Phase 8 — no cached edit leaves content text-only (no regression)', () => {
+	test('no cached edit leaves content text-only (no regression)', () => {
 		const log = new NullLogService();
 		const state = new ClaudeMapperState();
 		const resolver = r();
@@ -522,7 +522,7 @@ suite('claudeMapSessionEvents — direct mapper tests', () => {
 		]);
 	});
 
-	test('Phase 8 — takeFileEdit returns undefined on cache miss and consumes on hit', () => {
+	test('takeFileEdit returns undefined on cache miss and consumes on hit', () => {
 		const state = new ClaudeMapperState();
 
 		assert.strictEqual(state.takeFileEdit('absent'), undefined);
@@ -600,7 +600,7 @@ suite('claudeMapSessionEvents — direct mapper tests', () => {
 
 		const signals = mapSDKMessageToAgentSignals(result, SESSION, TURN_ID, new ClaudeMapperState(), new NullLogService(), r());
 
-		// Pipeline (Phase 9 refactor) owns the protocol-Turn boundary; it
+		// The pipeline owns the protocol-Turn boundary; it
 		// fires ChatTurnComplete via `onTurnComplete` only on the FINAL
 		// result of a turn (intermediate results during steering preempt do
 		// NOT close the protocol Turn). The mapper therefore emits only

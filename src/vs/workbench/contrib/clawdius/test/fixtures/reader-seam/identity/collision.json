@@ -1,5 +1,5 @@
 {
-	"_comment": "Sanitized identity-join skeleton: a CROSS-RUN COLLISION. The subagent id 'sub-shared' is claimed by two different runs (run-x and run-y) - id reuse across runs. It must be labeled ambiguous (both instances held out of any single group), never merged into one run (SC-007). 'sub-x-clean' correlates cleanly to run-x to prove the collision does not poison a distinct subagent. No real ~/.claude content.",
+	"_comment": "Sanitized identity-join skeleton: a CROSS-RUN COLLISION. The subagent id 'sub-shared' is claimed by two different runs (run-x and run-y) - id reuse across runs. It must be labeled ambiguous (both instances held out of any single group), never merged into one run. 'sub-x-clean' correlates cleanly to run-x to prove the collision does not poison a distinct subagent. No real ~/.claude content.",
 	"runs": [
 		{
 			"runId": "run-x",

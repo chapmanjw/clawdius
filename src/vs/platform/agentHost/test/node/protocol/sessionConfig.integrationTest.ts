@@ -170,7 +170,7 @@ suite('Protocol WebSocket - Session Config persistence across restarts', functio
 		const updatedBranch = 'release';
 		let sessionUri: string;
 
-		// ---- Phase 1: create session, change config, wait for persistence ----
+		// ---- Part 1: create session, change config, wait for persistence ----
 		const server1 = await startServer({ userDataDir });
 		try {
 			const client1 = new TestProtocolClient(server1.port);
@@ -215,7 +215,7 @@ suite('Protocol WebSocket - Session Config persistence across restarts', functio
 			await new Promise<void>(resolve => server1.process.once('exit', () => resolve()));
 		}
 
-		// ---- Phase 2: restart server, subscribe, verify restored config ----
+		// ---- Part 2: restart server, subscribe, verify restored config ----
 		// The mock agent does not persist its in-memory session list across
 		// restarts, so seed it via env var so `agent.listSessions()` includes
 		// our session and `restoreSession` proceeds.

@@ -10,7 +10,7 @@
 // `common/` read-model + label vocabulary (no Node/`process`/renderer import - `valid-layers-check` is the
 // enforcer, whose browser tsconfig has no `@types/node`).
 //
-// NAMESPACE ALIGNMENT (resolved - FR-009): the two id namespaces this slice must join provably COINCIDE BY
+// NAMESPACE ALIGNMENT (resolved): the two id namespaces this module must join provably COINCIDE BY
 // CONSTRUCTION, so the correlation is exact string equality, not a heuristic:
 //   • The agent host mints a run's session id once (`generateUuid()`, `claudeAgent.ts` createSession) and stamps
 //     it into the session URI via `AgentSession.uri(provider, id)`, so `AgentSession.id(uri)` recovers exactly
@@ -21,14 +21,14 @@
 //   • The reader seam reads `FleetRun.sessionId = runEntity.sessionId || fileStem(file)` (`claudeReaderSeam
 //     Service.ts`) - the transcript's own `sessionId` / filename stem, i.e. that same UUID.
 // Therefore the agent-host RAW session id (`AgentSession.id`) and `FleetRun.sessionId` are the SAME string, and
-// the ownership probe's string-equality resolver (Slice 4a) is functionally live: a run held by this workbench
+// the ownership probe's string-equality resolver is functionally live: a run held by this workbench
 // is joined to its live session by `sessionId` equality. This module carries that liveness join into an honest
 // run lifecycle. (An empty `sessionId` never joins - the empty-string false-match guard.)
 //
 // HONESTY: an AMBIGUOUS correlation is LABELED, never silently merged. A run identity claimed by more than one
 // run, and a subagent id reused across runs (a cross-run collision), are surfaced with `confidence: 'ambiguous'`
 // and their subagents are held OUT of any single run's grouping (`unjoined`), so the fleet never mixes one run's
-// subagents into another (SC-007). Consent scope is preserved by construction: a subagent only ever joins the
+// subagents into another. Consent scope is preserved by construction: a subagent only ever joins the
 // run it names (`parentRunId`), and that run carries its own coverage label, so a foreign-coverage run's
 // subagents are never re-attributed into an in-scope run.
 
@@ -119,7 +119,7 @@ function lifecycleOf(run: FleetRun, ownedSessionIds: ReadonlySet<string> | undef
  * Correlate the pooled read model into one grouping per run, labeling every weak join instead of guessing:
  * subagents are attributed to the run they name (`parentRunId` === `runId`); a run identity claimed by more than
  * one run, and a subagent id reused across runs, are labeled `ambiguous` and their subagents are held out
- * (`unjoined`), never mixed into a single run (SC-007); a subagent whose parent run is absent is an `orphan`. The
+ * (`unjoined`), never mixed into a single run; a subagent whose parent run is absent is an `orphan`. The
  * run lifecycle comes from the live-session join. Deterministic: groups follow `runs` order, `unjoined` follows
  * `subagents` order.
  */

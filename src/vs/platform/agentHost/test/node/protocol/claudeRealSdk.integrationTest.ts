@@ -63,7 +63,7 @@ const CLAUDE_CONFIG: IRealSdkProviderConfig = {
 	exitPlanModeToolName: 'ExitPlanMode',
 	enabled: REAL_SDK_ENABLED && !!CLAUDE_SDK_ROOT,
 	claudeSdkRoot: CLAUDE_SDK_ROOT,
-	// Claude has not landed worktree isolation yet (deferred to Phase 12).
+	// Claude has not landed worktree isolation yet.
 	// The shared suite skips that test when the flag is false.
 	supportsWorktreeIsolation: false,
 	supportsSubagents: true,

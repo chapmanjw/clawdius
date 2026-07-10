@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 /**
- * Integration test for the Phase 6+ ClaudeAgent.
+ * Integration test for the ClaudeAgent.
  *
  * Wires a real {@link ClaudeAgent} (built via the instantiation service) to a
  * recording {@link IClaudeAgentSdkService} test double and drives the
@@ -13,7 +13,7 @@
  * the smoke run (`smoke.md`). What this test guarantees in CI is the
  * cross-component wiring between the agent and the SDK boundary:
  *  - The `canUseTool` / `onElicitation` closures survive the
- *    materialize-to-SDK boundary intact (Phase 7 §5.3).
+ *    materialize-to-SDK boundary intact.
  *  - An assistant `tool_use`, its `pending_confirmation` card,
  *    `respondToPermissionRequest`, the synthetic `tool_result`, and the
  *    assistant continuation produce the expected ordered progress signals.
@@ -62,7 +62,7 @@ import {
 
 /**
  * The {@link IFileService} + {@link INativeEnvironmentService} pair the
- * Phase 16 customization disk scan / watcher needs at session construction
+ * customization disk scan / watcher needs at session construction
  * time. Nothing is seeded under `userHome`, so the scan is deterministically
  * empty — these only exist so `new ClaudeAgentSession` can read `userHome`
  * and start its watcher without throwing.
@@ -341,11 +341,11 @@ suite('ClaudeAgent integration', function () {
 	// catalog at construction and authenticate via native ~/.claude OAuth (there is no Copilot/CAPI path).
 	const productService = upcastDeepPartial<IProductService>({ _serviceBrand: undefined });
 
-	test('Phase 7 §5.3 — canUseTool / onElicitation closures wired through to Options on materialize', async () => {
-		// Phase 7 §5.3. Pins the Phase-7 callback surface — `canUseTool`
+	test('canUseTool / onElicitation closures wired through to Options on materialize', async () => {
+		// Pins the callback surface — `canUseTool`
 		// and `onElicitation` must both be present in the Options the SDK
 		// service receives from `_materializeProvisional` and behave per
-		// §3.4 / §3.7. We don't need a full SDK message stream with
+		// expectations. We don't need a full SDK message stream with
 		// tool_use blocks to validate the wiring — the unit suites in
 		// `claudeAgent.test.ts` cover the in-process tool round-trip
 		// exhaustively. What this integration adds: the closures survive
@@ -396,8 +396,8 @@ suite('ClaudeAgent integration', function () {
 		});
 	});
 
-	test('Phase 7 §5.3 — Read tool round-trip: SDK tool_use → pending_confirmation → respondToPermissionRequest(true) → tool_result → continuation', async () => {
-		// §5.3 of the Phase-7 plan: drive a one-tool round-trip end-to-end
+	test('Read tool round-trip: SDK tool_use → pending_confirmation → respondToPermissionRequest(true) → tool_result → continuation', async () => {
+		// Drive a one-tool round-trip end-to-end
 		// through a materialized agent. Unit tests in `claudeAgent.test.ts`
 		// already cover the in-process `_handleCanUseTool` mechanics; what
 		// this test pins is the agent-to-mapper progress-event ordering when
@@ -507,7 +507,7 @@ suite('ClaudeAgent integration', function () {
 				{ kind: 'action', type: ActionType.ChatDelta, content: 'reading' },
 				{ kind: 'action', type: ActionType.ChatToolCallStart, toolCallId: TOOL_USE_ID, toolName: 'Read' },
 				{ kind: 'action', type: ActionType.ChatToolCallDelta, toolCallId: TOOL_USE_ID, content: '{"file_path":"/tmp/x"}' },
-				// Phase 8.5 — mapper emits `ChatToolCallReady` at
+				// mapper emits `ChatToolCallReady` at
 				// `content_block_stop` so auto-allowed tools transition out of
 				// `Streaming`; `sessionPermissions` then emits a second Ready
 				// for the pending_confirmation card below.

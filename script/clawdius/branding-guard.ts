@@ -1,6 +1,6 @@
 // Clawdius branding guard. Asserts the product is branded Clawdius, uses Open VSX, ships no telemetry,
-// drops the GitHub/Copilot default chat agent, and defaults to the Clawdius theme. Source-level guard for
-// M1; Phase 6 extends it to scan the BUILT product (and the egress guarantee). Run with: node branding-guard.ts
+// drops the GitHub/Copilot default chat agent, and defaults to the Clawdius theme. Source-level guard;
+// a companion guard extends it to scan the BUILT product (and the egress guarantee). Run with: node branding-guard.ts
 import fs from 'node:fs';
 
 const fail: string[] = [];
@@ -36,7 +36,7 @@ const trustedPubs = ((p.trustedExtensionPublishers || []) as string[]).map(s => 
 ok(!trustedPubs.includes('microsoft') && !trustedPubs.includes('github'),
 	'trustedExtensionPublishers re-added a Microsoft/GitHub publisher');
 
-// FR-003 recommended-extension supply-chain guard (GlassWorm risk). Two invariants:
+// Recommended-extension supply-chain guard (GlassWorm risk). Two invariants:
 //  (A) The fork must NOT inherit upstream's user-facing recommended-extension machinery - the large
 //      curated `*Tips` families product.json ships to steer users at the marketplace. Those keys stay
 //      stripped, so an upstream merge cannot silently re-seed a marketplace recommendation list.
@@ -52,7 +52,7 @@ const RECOMMENDATION_TIP_KEYS = ['extensionTips', 'extensionImportantTips', 'key
 for (const k of RECOMMENDATION_TIP_KEYS) {
 	const v = p[k];
 	const empty = v === undefined || (Array.isArray(v) ? v.length === 0 : Object.keys(v).length === 0);
-	ok(empty, `product.json carries an inherited recommended-extension list "${k}" (FR-003: upstream marketplace recommendations must stay stripped)`);
+	ok(empty, `product.json carries an inherited recommended-extension list "${k}" (upstream marketplace recommendations must stay stripped)`);
 }
 const VERIFIED_NAMESPACES = new Set(['clawdius', 'anthropic', 'ms-vscode', 'github', 'dbaeumer', 'typescriptteam', 'connor4312']);
 // .vscode/extensions.json is JSONC (line + block comments); strip them before parsing. The recommendation
@@ -61,10 +61,10 @@ const recText = fs.readFileSync('.vscode/extensions.json', 'utf8')
 	.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 let recommendations: string[] = [];
 try { recommendations = (JSON.parse(recText).recommendations || []) as string[]; }
-catch { ok(false, '.vscode/extensions.json is not parseable (FR-003 recommended-extension namespace guard cannot verify it)'); }
+catch { ok(false, '.vscode/extensions.json is not parseable (the recommended-extension namespace guard cannot verify it)'); }
 for (const id of recommendations) {
 	const ns = id.split('.')[0].toLowerCase();
-	ok(VERIFIED_NAMESPACES.has(ns), `.vscode/extensions.json recommends "${id}" from unverified namespace "${ns}" (FR-003 / GlassWorm: verify who owns the Open VSX namespace, then add it to VERIFIED_NAMESPACES)`);
+	ok(VERIFIED_NAMESPACES.has(ns), `.vscode/extensions.json recommends "${id}" from unverified namespace "${ns}" (GlassWorm risk: verify who owns the Open VSX namespace, then add it to VERIFIED_NAMESPACES)`);
 }
 
 // The startup-fetch URLs DefaultAccountProviderContribution would call at BlockStartup with the user's session
@@ -93,7 +93,7 @@ while ((hm = urlHostRe.exec(productText))) {
 }
 ok(badHosts.length === 0, `product.json has URL host(s) outside the allowlist (possible Microsoft/telemetry/Copilot egress): ${[...new Set(badHosts)].join(', ')}`);
 
-// Phase 6 zero-egress guarantee (audit: .research/egress-audit.md). Each of these product.json keys is the
+// Zero-egress guarantee. Each of these product.json keys is the
 // SOLE source of an uninitiated outbound request (startup/idle/background poll); when the key is absent the
 // call site short-circuits and no request is built. Asserting them absent locks in the "robustly dead"
 // Microsoft telemetry/experiment/update/crash/survey surface so an upstream merge cannot silently
@@ -110,7 +110,7 @@ ok(!gal.controlUrl, 'product.json extensionsGallery.controlUrl is set (extension
 // Zero-egress RUNTIME backstop (not just product keys): the clawdius-chat usage-capacity fetch to
 // api.anthropic.com must be ON DEMAND only - wired to the `clawdius.refreshUsageCapacity` command the usage
 // tooltip invokes - with NO startup call and NO background timer. (It previously fetched at activate() +
-// every 60s; see .research/egress-audit.md.) A regression to a timer or a bare activation call trips this.
+// every 60s.) A regression to a timer or a bare activation call trips this.
 const chatExt = fs.readFileSync('extensions/clawdius-chat/src/extension.ts', 'utf8');
 ok(/registerCommand\('clawdius\.refreshUsageCapacity'/.test(chatExt), 'clawdius-chat: the on-demand usage-refresh command is missing');
 ok(!/setInterval\([^)]*fetchUsageCapacity/.test(chatExt), 'clawdius-chat: usage capacity is fetched on a background timer (uninitiated egress)');
@@ -222,7 +222,7 @@ for (const t of (p.onboardingThemes || []) as { themeId: string }[]) {
 	ok(ALLOWED_THEMES.has(t.themeId), `onboardingThemes references non-Clawdius theme "${t.themeId}"`);
 }
 
-// "Copilot eliminated" guarantee (Phase 2): the GitHub Copilot Chat extension (extensions/copilot) was
+// "Copilot eliminated" guarantee: the GitHub Copilot Chat extension (extensions/copilot) was
 // removed wholesale. The chat panel is powered by the bundled clawdius-chat extension, whose handler shells
 // out to the local Claude Code CLI. A future upstream merge that re-introduces extensions/copilot trips this
 // gate (it would re-register six competing isDefault panel participants + nine sign-in welcome views).
@@ -230,7 +230,7 @@ ok(!fs.existsSync('extensions/copilot'), 'extensions/copilot was re-introduced -
 ok(p.defaultChatAgent?.extensionId === 'vscode.clawdius-chat', 'defaultChatAgent.extensionId is not the clawdius-chat backend');
 ok(fs.existsSync('extensions/clawdius-chat/package.json'), 'the clawdius-chat extension (Claude CLI chat backend) is missing');
 
-// Phase 6 brand backstop: the user-visible Copilot/GitHub strings + logo icons rebranded by the brand
+// Brand backstop: the user-visible Copilot/GitHub strings + logo icons rebranded by the brand
 // sweeps must STAY rebranded, so an upstream merge can't silently re-introduce them in shipped UI. Each
 // site asserts the Claude/neutral wording is PRESENT and the exact old brand string/icon is ABSENT. The
 // `absent` patterns target the rebranded VALUE precisely (not the localize key or internal id), so the

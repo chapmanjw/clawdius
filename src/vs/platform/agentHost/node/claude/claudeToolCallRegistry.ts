@@ -8,7 +8,7 @@ import type { StringOrMarkdown } from '../../common/state/protocol/state.js';
 import { getClaudeInvocationMessage, getClaudeToolDisplayName, getClaudeToolInputString } from './claudeToolDisplay.js';
 
 /**
- * Phase 8.5 — per-tool-call info computed at `content_block_stop` and
+ * Per-tool-call info computed at `content_block_stop` and
  * reused at `tool_result` time. Mirrors Copilot's `IToolStartInfo`
  * shape: Copilot stashes it at `tool.execution_start` (where the
  * Copilot SDK hands over complete args); Claude stashes it at the
@@ -31,7 +31,7 @@ interface IRegistryEntry {
 }
 
 /**
- * Phase 8.5 — per-session, cross-message tool-call tracking for the
+ * Per-session, cross-message tool-call tracking for the
  * live mapper. Owns:
  *
  * - **Attribution** — `tool_use_id → { toolName, turnId }`. A
@@ -55,7 +55,7 @@ interface IRegistryEntry {
  * "ready" seam is `content_block_stop`).
  *
  * Encapsulated as a class with named lifecycle methods so the maps'
- * mutators are not part of the public surface — Phase 6.1's lesson.
+ * mutators are not part of the public surface.
  * One instance lives per `ClaudeAgentSession` and is composed by
  * `ClaudeMapperState`; the mapper threads `state` (which exposes the
  * registry as `state.toolCalls`) into every invocation.
@@ -128,8 +128,8 @@ export class ClaudeToolCallRegistry {
 	 * than via streamed `input_json_delta` chunks. Without this the
 	 * registry entry's `info` would stay `undefined` and the live
 	 * `tool_result` handler would emit the generic
-	 * `"{displayName} finished"` past-tense, violating D6 (live/replay
-	 * parity).
+	 * `"{displayName} finished"` past-tense, breaking live/replay
+	 * parity.
 	 */
 	seedParsedInput(toolUseId: string, parsedInput: unknown): void {
 		const entry = this._entries.get(toolUseId);

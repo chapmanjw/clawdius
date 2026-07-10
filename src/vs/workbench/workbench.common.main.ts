@@ -227,7 +227,7 @@ import './contrib/chat/browser/chat.contribution.js';
 import './contrib/chat/browser/chat.view.contribution.js';
 import './contrib/inlineChat/browser/inlineChat.contribution.js';
 
-// CLAWDIUS-BEGIN native main-IDE clawdius container (Phase 2)
+// CLAWDIUS-BEGIN native main-IDE clawdius container
 import './contrib/clawdius/browser/clawdius.contribution.js';
 // CLAWDIUS-END
 

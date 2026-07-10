@@ -18,6 +18,7 @@ import { StandardKeyboardEvent } from '../../../../../base/browser/keyboardEvent
 import { KeyCode } from '../../../../../base/common/keyCodes.js';
 import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '../../../../../base/common/lifecycle.js';
 import { localize } from '../../../../../nls.js';
+import { IAgentHostService } from '../../../../../platform/agentHost/common/agentService.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
 import { IContextMenuService } from '../../../../../platform/contextview/browser/contextView.js';
@@ -33,6 +34,8 @@ import { IPathService } from '../../../../services/path/common/pathService.js';
 import { FleetRun, FleetSubagent } from '../../common/claudeFleetModel.js';
 import { CoverageLabel, ReaderConfigRoot, ReaderScope, resolveConfigRoot } from '../../common/claudeReaderSeam.js';
 import { ClawdiusReaderSeamService } from '../reader/claudeReaderSeamService.js';
+import { BadgeSignal, ClaudeMissionBadgeFeed } from './claudeMissionBadges.js';
+import { ownedSessionIdsFromHost } from './claudeMissionOwnership.js';
 import { ClaudeMissionTranscriptInput } from './claudeMissionTranscriptInput.js';
 
 export const MISSIONS_VIEW_CONTAINER_ID = 'workbench.view.clawdiusMissions';
@@ -44,9 +47,41 @@ export interface IFleetRunSource {
 	listRuns(root: ReaderConfigRoot, scope?: ReaderScope): Promise<readonly FleetRun[]>;
 }
 
+/** Row -> its dedicated badge-host element, so the live badge can be updated by direct reference (never a
+ *  selector lookup). A `WeakMap` keyed by the row element releases automatically when the row is cleared. */
+const badgeHosts = new WeakMap<HTMLElement, HTMLElement>();
+
+/** The badge-host element for a rendered run row, if it has one (created by {@link appendRunRow}). */
+export function badgeHostOf(row: HTMLElement): HTMLElement | undefined {
+	return badgeHosts.get(row);
+}
+
+/** Render (or clear) a run's LIVE needs-input/completion badge into its dedicated badge-host element. Idempotent -
+ *  clears the host first, then, when a signal is present, fills it with a decoration carrying a `data-live-badge`
+ *  hook plus the kind/freshness `data-*` attributes so the receipt and the DOM test can assert it. A cleared host
+ *  (no signal) leaves the row showing only its seam-derived honest labels (no fabricated live state). Operates on
+ *  the host by direct reference (no fragile selector lookups). */
+export function renderRunBadge(host: HTMLElement, signal: BadgeSignal | undefined): void {
+	clearNode(host);
+	if (!signal) {
+		host.removeAttribute('data-live-badge');
+		return;
+	}
+	host.setAttribute('data-live-badge', signal.kind);
+	const text = signal.kind === 'needs-input'
+		? localize('clawdius.missions.badge.needsInput', "needs input")
+		: localize('clawdius.missions.badge.completion', "completed");
+	append(host, $(`.clawdius-missions-badge.badge-${signal.kind}.freshness-${signal.freshness}`, {
+		'data-badge-kind': signal.kind,
+		'data-badge-freshness': signal.freshness,
+	}, text));
+}
+
 /** Append one FleetRun as a labeled row, carrying every honesty label as both a badge and a `data-*` hook so a
- *  Playwright render can assert it. A foreign/suppressed run gets a `foreign` marker class but is never omitted. */
-export function appendRunRow(parent: HTMLElement, run: FleetRun): HTMLElement {
+ *  Playwright render can assert it. A foreign/suppressed run gets a `foreign` marker class but is never omitted.
+ *  When a live `BadgeSignal` is supplied (an owned run that fired an event), its needs-input/completion decoration
+ *  is rendered too; otherwise only the seam's honest labels show (no fabricated live badge). */
+export function appendRunRow(parent: HTMLElement, run: FleetRun, badge?: BadgeSignal): HTMLElement {
 	const foreign = run.coverage === CoverageLabel.Foreign;
 	const row = append(parent, $(`.clawdius-missions-row${foreign ? '.foreign' : ''}`, {
 		'data-run-id': run.runId,
@@ -63,10 +98,15 @@ export function appendRunRow(parent: HTMLElement, run: FleetRun): HTMLElement {
 	name.title = localize('clawdius.missions.runTitle', "Run {0} · session {1}", run.runId, run.sessionId);
 	append(row, $('.clawdius-missions-status', undefined, localize('clawdius.missions.status', "status: {0}", run.status)));
 	const labels = append(row, $('.clawdius-missions-labels'));
+	// A dedicated badge host leads the labels area; the live badge (if any) is rendered into it by direct
+	// reference, so no fragile selector lookup is needed to update it later.
+	const host = append(labels, $('.clawdius-missions-badgehost'));
+	badgeHosts.set(row, host);
 	append(labels, $(`.clawdius-missions-label.coverage-${run.coverage}`, undefined, localize('clawdius.missions.coverage', "coverage: {0}", run.coverage)));
 	append(labels, $(`.clawdius-missions-label.freshness-${run.freshness}`, undefined, localize('clawdius.missions.freshness', "freshness: {0}", run.freshness)));
 	append(labels, $(`.clawdius-missions-label.completeness-${run.completeness}`, undefined, localize('clawdius.missions.completeness', "completeness: {0}", run.completeness)));
 	append(labels, $(`.clawdius-missions-label.ownership-${run.ownership}`, undefined, localize('clawdius.missions.ownership', "ownership: {0}", run.ownership)));
+	renderRunBadge(host, badge);
 	return row;
 }
 
@@ -118,6 +158,11 @@ export class FleetRunsList extends Disposable {
 	/** Bumped on every render() (and on dispose) so a subagent list still in flight from a torn-down row can detect
 	 *  that its row no longer exists and bail before touching detached DOM or a disposed child store. */
 	private generation = 0;
+	/** The live badges to paint per run on (re)render; the authoritative map is owned by the view and re-passed. */
+	private badges: ReadonlyMap<string, BadgeSignal> = new Map();
+	/** runId -> its rendered row, so a live badge poke reaches the row by direct reference (no selector lookup);
+	 *  rebuilt on every render. */
+	private readonly rowByRunId = new Map<string, HTMLElement>();
 
 	/** @param interactions when supplied, each run row expands to its subagents and a subagent opens its transcript;
 	 *  omitted (the pure unit-test path) leaves rows non-interactive. */
@@ -128,10 +173,12 @@ export class FleetRunsList extends Disposable {
 		this._register(toDisposable(() => { this.generation++; }));
 	}
 
-	render(runs: readonly FleetRun[]): void {
+	render(runs: readonly FleetRun[], badges?: ReadonlyMap<string, BadgeSignal>): void {
 		this.pendingBatch.clear();
 		this.rowStore.clear();
 		this.generation++;
+		this.badges = badges ?? new Map();
+		this.rowByRunId.clear();
 		clearNode(this.container);
 		this.container.setAttribute('data-clawdius-missions', String(runs.length));
 		if (runs.length === 0) {
@@ -143,7 +190,8 @@ export class FleetRunsList extends Disposable {
 		const step = () => {
 			const end = Math.min(i + FleetRunsList.BATCH_SIZE, runs.length);
 			for (; i < end; i++) {
-				const row = appendRunRow(this.container, runs[i]);
+				const row = appendRunRow(this.container, runs[i], this.badges.get(runs[i].runId));
+				this.rowByRunId.set(runs[i].runId, row);
 				if (this.interactions) { this.wireRunRow(row, runs[i]); }
 			}
 			if (i < runs.length) {
@@ -153,6 +201,17 @@ export class FleetRunsList extends Disposable {
 			}
 		};
 		step();
+	}
+
+	/** Apply a live badge to an already-rendered run row (best-effort - if the row is not yet painted the badge is
+	 *  picked up from the map on the next render). The view owns the authoritative badge map; this is the live poke.
+	 *  Reaches the row and its badge host by direct reference (no selector lookup). */
+	decorateRun(signal: BadgeSignal): void {
+		const row = this.rowByRunId.get(signal.runId);
+		const host = row && badgeHostOf(row);
+		if (host) {
+			renderRunBadge(host, signal);
+		}
 	}
 
 	/** Make a run row expandable: a click (or Enter/Space) toggles an inline child list of the run's subagents,
@@ -231,6 +290,12 @@ export class ClawdiusMissionsView extends ViewPane {
 	private disposed = false;
 	/** The config root resolved on the last refresh, reused by the drill-in to list a run's subagents. */
 	private root: ReaderConfigRoot | undefined;
+	/** The runs painted on the last refresh, correlated against by the live badge feed. */
+	private currentRuns: readonly FleetRun[] = [];
+	/** The authoritative live badges per run; re-applied on every render and updated live by the feed. */
+	private readonly badges = new Map<string, BadgeSignal>();
+	/** The live needs-input/completion badge feed (created in renderBody, disposed with the view). */
+	private badgeFeed: ClaudeMissionBadgeFeed | undefined;
 
 	constructor(
 		options: IViewPaneOptions,
@@ -245,6 +310,7 @@ export class ClawdiusMissionsView extends ViewPane {
 		@IHoverService hoverService: IHoverService,
 		@IPathService private readonly pathService: IPathService,
 		@IEditorService private readonly editorService: IEditorService,
+		@IAgentHostService private readonly agentHostService: IAgentHostService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 		// The seam service is not a registered singleton; instantiate it (teams probe off) so the view reads runs
@@ -263,6 +329,18 @@ export class ClawdiusMissionsView extends ViewPane {
 		this.list = this._register(new FleetRunsList(this.listEl, {
 			listSubagents: run => this.listSubagentsFor(run),
 			openSubagent: sub => this.openSubagent(sub),
+		}));
+		// The LIVE-only badge feed: an owned run's `onDidAction` needs-input/completion event raises a `live` badge on
+		// its row. In a runtime with no agent host the null service's `onDidAction` is `Event.None`, so nothing fires
+		// and the rows keep the seam's honest polled status - never a fabricated badge (SC-004).
+		this.badgeFeed = this._register(new ClaudeMissionBadgeFeed({
+			onDidAction: this.agentHostService.onDidAction,
+			getRuns: () => this.currentRuns,
+			getOwnedSessionIds: () => ownedSessionIdsFromHost(this.agentHostService),
+		}));
+		this._register(this.badgeFeed.onDidChangeBadge(signal => {
+			this.badges.set(signal.runId, signal);
+			this.list?.decorateRun(signal);
 		}));
 		void this.refresh();
 	}
@@ -305,7 +383,13 @@ export class ClawdiusMissionsView extends ViewPane {
 			runs = [];
 		}
 		if (this.disposed) { return; }
-		this.list?.render(runs);
+		this.currentRuns = runs;
+		// Drop badges for runs no longer enumerated so a stale live badge never outlives its run.
+		const present = new Set(runs.map(run => run.runId));
+		for (const runId of [...this.badges.keys()]) {
+			if (!present.has(runId)) { this.badges.delete(runId); }
+		}
+		this.list?.render(runs, this.badges);
 	}
 }
 // CLAWDIUS-END

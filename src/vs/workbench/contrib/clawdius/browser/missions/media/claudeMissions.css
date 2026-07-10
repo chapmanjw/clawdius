@@ -67,6 +67,34 @@
 	color: var(--vscode-editor-background);
 }
 
+/* The badge host leads the labels area; display:contents so an empty host adds no gap. */
+.clawdius-missions-badgehost {
+	display: contents;
+}
+
+/* The LIVE needs-input/completion badge (owned run, real event); distinct from the seam labels. */
+.clawdius-missions-badge {
+	font-size: 10px;
+	font-weight: 600;
+	line-height: 15px;
+	padding: 0 6px;
+	border-radius: 3px;
+	white-space: nowrap;
+	text-transform: uppercase;
+	letter-spacing: 0.02em;
+}
+
+.clawdius-missions-badge.badge-needs-input {
+	background: var(--vscode-inputValidation-warningBackground, var(--vscode-editorWarning-foreground));
+	color: var(--vscode-inputValidation-warningForeground, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-editorWarning-foreground);
+}
+
+.clawdius-missions-badge.badge-completion {
+	background: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+	color: var(--vscode-editor-background);
+}
+
 .clawdius-missions-label.completeness-unknown-shape,
 .clawdius-missions-label.completeness-suppressed,
 .clawdius-missions-label.completeness-partial {

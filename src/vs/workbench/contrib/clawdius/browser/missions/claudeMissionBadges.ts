@@ -8,8 +8,9 @@
 // raises an honest needs-input / completion badge for an OWNED run when a live event actually fires:
 //   - `ActionType.ChatInputRequested` -> a `needs-input` badge (the run is blocked on the user).
 //   - `ActionType.ChatTurnComplete`   -> a `completion` badge (the assistant went idle). A SUBAGENT completion
-//     reaches the browser as this same `ChatTurnComplete` carrying `_meta` subagent attribution, NOT a node-side
-//     `onDidSessionProgress` signal (that lives on the per-provider `IAgent`, unreachable from `vs/workbench`).
+//     also arrives as this same `ChatTurnComplete`, dispatched on the subagent's chat channel and correlated to
+//     its owning run via that channel (below) - NOT a node-side `onDidSessionProgress` signal (that lives on the
+//     per-provider `IAgent`, unreachable from `vs/workbench`).
 //
 // `freshness` is `live` ONLY for an OWNED run (resolved via the shipped `resolveOwnership`) when an event
 // fired. A foreign / non-live run gets NO live badge - its row shows the seam's honest polled status instead. The
@@ -78,7 +79,8 @@ export function badgeFreshnessFor(ownership: FleetOwnership, hadLiveEvent: boole
 /**
  * The PURE action discriminator: maps a state action to the badge it raises, or `undefined` for any action that
  * is not a badge trigger. Discriminates on `ActionType` only - `ChatInputRequested` -> `needs-input`,
- * `ChatTurnComplete` -> `completion` (including a subagent completion carrying `_meta` attribution).
+ * `ChatTurnComplete` -> `completion` (including a subagent completion, which arrives as a `ChatTurnComplete` on
+ * the subagent's chat channel and is correlated to its owning run via that channel).
  */
 export function badgeKindForAction(action: StateAction): BadgeKind | undefined {
 	switch (action.type) {

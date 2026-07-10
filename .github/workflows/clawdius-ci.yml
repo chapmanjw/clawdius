@@ -4,7 +4,7 @@ name: Clawdius CI
 # depend on Microsoft secrets, self-hosted runners, and the distro repo and fail on any fork.
 # This minimal job validates the fork scaffolding and works on a private repo with no secrets.
 # A later change expands it into the full matrix (build, branding guard against the built product,
-# network-egress guard, gitleaks).
+# network-egress guard).
 
 on:
   push:
@@ -110,6 +110,27 @@ jobs:
           # is the CI backstop. node_modules/out/.build are excluded in .gitleaks.toml.
           GLV=8.21.2
           curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GLV}/gitleaks_${GLV}_linux_x64.tar.gz" | tar -xz -C /tmp gitleaks
+          # Falsifiability: a real-shaped secret planted under a Clawdius TEST path MUST trip the gate. Proves the
+          # test/ trees are actually scanned (the allowlist no longer blanket-exempts them, which had let a real
+          # credential in a mock/test file slip). If the planted secret does not trip, the gate is dead - fail.
+          probe=src/vs/workbench/contrib/clawdius/test/browser/__gitleaks_selftest__.test.ts
+          printf 'const k = "sk-ant-api03-FAKE00000000000000000000000000";\n' > "$probe"
+          if /tmp/gitleaks detect --no-git --source src/vs/workbench/contrib/clawdius --config .gitleaks.toml --redact --no-banner --exit-code 1 >/dev/null 2>&1; then
+            rm -f "$probe"; echo "FAIL: gitleaks did not flag a planted secret in a Clawdius test path"; exit 1
+          fi
+          rm -f "$probe"
+          echo "gitleaks falsifiability: a planted Clawdius-test secret correctly tripped the gate"
+          # Second probe: prove Clawdius extension MANIFESTS are scanned. The blanket extensions/*/package.json path
+          # exemption was removed (upstream aiKeys are allowlisted by VALUE), so a real credential in a Clawdius
+          # extension package.json must now trip. Plant into a temp package.json under the extension dir, then remove.
+          mdir=extensions/clawdius-chat/__gitleaks_probe__
+          mkdir -p "$mdir"
+          printf '{ "__probe": "sk-ant-api03-FAKE00000000000000000000000000" }\n' > "$mdir/package.json"
+          if /tmp/gitleaks detect --no-git --source extensions/clawdius-chat --config .gitleaks.toml --redact --no-banner --exit-code 1 >/dev/null 2>&1; then
+            rm -rf "$mdir"; echo "FAIL: gitleaks did not flag a planted secret in a Clawdius extension package.json"; exit 1
+          fi
+          rm -rf "$mdir"
+          echo "gitleaks falsifiability: a planted Clawdius extension-manifest secret correctly tripped the gate"
           for d in src/vs/workbench/contrib/clawdius src/vs/platform/clawdius \
                    src/vs/platform/agentHost/node/claude extensions/clawdius-chat \
                    extensions/clawdius-themes script/clawdius docs; do

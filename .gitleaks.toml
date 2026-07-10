@@ -26,8 +26,12 @@ keywords = ["Atzr|"]
 [allowlist]
 description = "Global allowlist: upstream test fixtures, mock creds, and lockfiles"
 paths = [
-  '''(.*/)?test/.*''',
-  '''(.*/)?fixtures?/.*''',
+  # NOTE: `test/` and `fixtures/` are deliberately NOT globally allowlisted. The CI gate scans the Clawdius
+  # source trees (src/vs/**/clawdius, script/clawdius, extensions/clawdius-*, ...), which contain their own
+  # test/ subtrees; a blanket test/ exemption would let a real credential committed to a Clawdius mock/test
+  # file slip the secret gate. Intentional mock credentials live under the narrow `test/clawdius/mocks/` path
+  # below, or carry an inline `gitleaks:allow` on the line. (A full-history baseline scan of the upstream tree
+  # should use `--baseline-path` for the known upstream example-token findings; see SECURITY-SCANNING.md.)
   '''(.*/)?\.vscode-test.*''',
   '''package-lock\.json''',
   '''test/clawdius/mocks/.*''',
@@ -35,13 +39,13 @@ paths = [
   # full-history findings was triaged to Microsoft / VS Code-team authors, in upstream files, with
   # zero hits in any Clawdius-authored path - see SECURITY-SCANNING.md. These patterns stay scoped to
   # upstream files so a real secret in a Clawdius path would still be caught: the minified TypeScript
-  # compiler bundles, upstream extension manifests (Application Insights aiKeys), the upstream CI
-  # pipelines, the per-channel product.json, the SSH key-PARSING code, and the surveys/search code.
+  # compiler bundles, the upstream CI pipelines, the per-channel product.json, the SSH key-PARSING code,
+  # and the surveys/search code. (Upstream extension-manifest aiKeys are handled by VALUE below, not by a
+  # path exemption, so the Clawdius extension manifests stay scanned.)
   '''tsserver\.js''',
   '''typescriptServices\.js''',
   '''build/(azure-pipelines|tfs)/''',
   '''quality/.*/product\.json''',
-  '''extensions/.*/package\.json''',
   '''extensions/(copilot|github|github-authentication)/''',
   '''sshRemoteAgentHostService\.ts''',
   '''workbench/contrib/surveys/''',
@@ -53,5 +57,12 @@ paths = [
   '''(^|/)\.build/''',
   '''(^|/)\.git/''',
 ]
-# Note: the upstream VS Code tree contains example tokens in tests. Tune this allowlist
-# against a clean baseline scan before activating gitleaks as a blocking pre-commit hook.
+# VS Code's shared, PUBLIC Application Insights telemetry key is committed verbatim in ~13 upstream extension
+# package.json manifests and trips the default generic-api-key rule. It is a known public value, not a secret,
+# so allowlist it by VALUE (not by path) - that way every manifest, INCLUDING the Clawdius extension manifests,
+# is still scanned for real credentials (a blanket path exemption would let a real key in a Clawdius manifest slip).
+regexes = [
+  '''0c6ae279ed8443289764825290e4f9e2-1a736e7c-1324-4338-be46-fc2a58ae4d14-7255''',
+]
+# Note: the CI gate scans the Clawdius-authored trees with `gitleaks --no-git`. A full-history baseline scan of
+# the upstream tree should use `--baseline-path` for the known upstream example-token findings (SECURITY-SCANNING.md).

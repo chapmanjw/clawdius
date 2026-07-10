@@ -281,6 +281,7 @@ jobs:
             "out/vs/workbench/contrib/clawdius/test/browser/claudeMissionTranscriptEditor.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeMissionOwnership.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeMissionBadges.test.js" \
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeMissionControls.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeFleetIdentityJoin.test.js"; do
             if [ ! -f "$t" ]; then echo "::error::compiled test missing ($t) — transpile path drift"; exit 1; fi
             log="$(basename "$t").log"

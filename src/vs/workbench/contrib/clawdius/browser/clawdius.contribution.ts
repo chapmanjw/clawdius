@@ -34,7 +34,7 @@ import { EditorExtensions, IEditorFactoryRegistry, IEditorSerializer } from '../
 import { EditorInput } from '../../../common/editor/editorInput.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { Action2, MenuId, registerAction2 } from '../../../../platform/actions/common/actions.js';
-import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
+import { IInstantiationService, ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ClaudeUsageStatusEntry } from './usage/claudeUsageStatusEntry.js';
@@ -52,6 +52,9 @@ import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContaine
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainerLocation } from '../../../common/views.js';
 import { ClawdiusContextBudgetView, CONTEXT_BUDGET_VIEW_CONTAINER_ID, CONTEXT_BUDGET_VIEW_ID } from './clawdiusContextBudgetView.js';
 import { ClawdiusMissionsView, MISSIONS_VIEW_CONTAINER_ID, MISSIONS_VIEW_ID } from './missions/claudeMissionsView.js';
+import { ClaudeMissionTranscriptEditor } from './missions/claudeMissionTranscriptEditor.js';
+import { ClaudeMissionTranscriptInput } from './missions/claudeMissionTranscriptInput.js';
+import { FleetSubagent } from '../common/claudeFleetModel.js';
 import { ClawdiusContextBudgetStatusEntry, CONTEXT_BUDGET_WARN_TOKENS_SETTING, OpenContextBudgetAction } from './clawdiusContextBudgetStatusEntry.js';
 import { LintContextAction } from './clawdiusContextBudgetLint.js';
 import { DisableConfirmedLoadsAction, EnableConfirmedLoadsAction } from './clawdiusContextBudgetConfirm.js';
@@ -102,6 +105,23 @@ class ClaudeControlCenterInputSerializer implements IEditorSerializer {
 	canSerialize(): boolean { return true; }
 	serialize(): string { return ''; }
 	deserialize(): EditorInput { return ClaudeControlCenterInput.instance; }
+}
+
+// The transcript drill-in input round-trips its FleetSubagent (a plain labeled index handle - subagent id, parent
+// run id, the opaque transcriptRef, and the honesty labels; never authoritative content). On restore the pane
+// re-reads the transcript live from disk through the seam, so a stale serialized label is refreshed on open.
+class ClaudeMissionTranscriptInputSerializer implements IEditorSerializer {
+	canSerialize(): boolean { return true; }
+	serialize(input: EditorInput): string {
+		return JSON.stringify((input as ClaudeMissionTranscriptInput).subagent);
+	}
+	deserialize(_instantiationService: IInstantiationService, serialized: string): EditorInput | undefined {
+		try {
+			return new ClaudeMissionTranscriptInput(JSON.parse(serialized) as FleetSubagent);
+		} catch {
+			return undefined;
+		}
+	}
 }
 
 // Opens (or reveals) the interactive Control Center. An optional first argument selects which tab to land on;
@@ -307,6 +327,16 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 		canMoveView: true,
 	}];
 	Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews(missionsViews, missionsContainer);
+
+	// The transcript drill-in: an editor-area EditorPane that opens a subagent's real on-disk transcript through
+	// the seam, honestly completeness-labeled (a missing out-of-band tool-result ref -> partial, not complete).
+	// Opened from the Missions view when a subagent row is clicked. Reads ONLY through the seam (FR-002).
+	Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
+		EditorPaneDescriptor.create(ClaudeMissionTranscriptEditor, ClaudeMissionTranscriptEditor.ID, localize('clawdius.missions.transcriptPane', "Claude Code Subagent Transcript")),
+		[new SyncDescriptor(ClaudeMissionTranscriptInput)],
+	);
+	Registry.as<IEditorFactoryRegistry>(EditorExtensions.EditorFactory).registerEditorSerializer(ClaudeMissionTranscriptInput.ID, ClaudeMissionTranscriptInputSerializer);
+
 	registerWorkbenchContribution2(ClawdiusContextBudgetStatusEntry.ID, ClawdiusContextBudgetStatusEntry, WorkbenchPhase.BlockRestore);
 	registerAction2(OpenContextBudgetAction);
 	registerAction2(LintContextAction);

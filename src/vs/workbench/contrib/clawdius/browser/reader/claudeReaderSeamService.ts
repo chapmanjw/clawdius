@@ -23,7 +23,7 @@ import {
 	IReaderResult, IReaderSeam, ReaderConfigRoot, ReaderEntityKind, ReaderScope, Run, Session, Subagent, TaskList,
 	TeamRoster, Transcript, TranscriptIndexKey,
 } from '../../common/claudeReaderSeam.js';
-import { FleetRun, FleetSubagent } from '../../common/claudeFleetModel.js';
+import { FleetRun, FleetSubagent, FleetTranscriptSlice } from '../../common/claudeFleetModel.js';
 import { encodeProjectDir } from '../clawdiusConfigStore.js';
 
 /** The transcript read-model entities this adapter can produce, by request kind. */
@@ -382,6 +382,50 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		return out.sort((a, b) => a.subagentId.localeCompare(b.subagentId));
 	}
 
+	/**
+	 * Read a subagent's on-disk transcript by its opaque `transcriptRef` (the file identity handed out at
+	 * enumeration) as a labeled {@link FleetTranscriptSlice} - the per-subagent drill-in read (Slice 3). Unlike the
+	 * coarse enumeration completeness, this runs the out-of-band tool-result probe, so a transcript referencing a
+	 * missing out-of-band file degrades to `partial`, not `complete` (SC-003). The records are INDEX-ONLY (type +
+	 * sidechain flag; never the message body). Never throws: a missing/empty file is `absent`, an unrecognized
+	 * shape is `unknown-shape`. Read-only - reads only the seam's own indexed file, never writes.
+	 */
+	async readTranscriptSlice(subagent: FleetSubagent, folders: readonly URI[]): Promise<FleetTranscriptSlice> {
+		const ref = subagent.transcriptRef;
+		if (!ref) {
+			return { subagentId: subagent.subagentId, records: [], coverage: CoverageLabel.OutOfScope, freshness: FreshnessLabel.Stale, completeness: CompletenessState.Absent, adapterVersion: this.stamp };
+		}
+		let file: URI;
+		try {
+			file = URI.parse(ref);
+		} catch {
+			return { subagentId: subagent.subagentId, records: [], coverage: CoverageLabel.OutOfScope, freshness: FreshnessLabel.Stale, completeness: CompletenessState.Absent, adapterVersion: this.stamp };
+		}
+		const { parsed, base } = await this.parseFile(file);
+		if (!parsed.sawJson) {
+			// The file is missing / empty (a fresh or removed session): absent, not an error.
+			return { subagentId: subagent.subagentId, records: [], coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.Absent, adapterVersion: this.stamp };
+		}
+		if (!parsed.recognized) {
+			// JSON present but no recognized shape: a wholesale schema shift - trip the canary.
+			return { subagentId: subagent.subagentId, records: [], coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.UnknownShape, adapterVersion: this.canaryStamp };
+		}
+		// A known gap (partial), not complete, when a windowed tail dropped older records (`base > 0`) OR an
+		// unreadable record shape sat alongside recognized ones OR - the drill-in's extra probe - a referenced
+		// out-of-band tool-result file is missing (SC-003). Otherwise the read is whole.
+		const completeness = (parsed.sawForeign || base > 0)
+			? CompletenessState.Partial
+			: await this.completenessOf(parsed.records, file);
+		return {
+			subagentId: subagent.subagentId,
+			records: parsed.records.map(r => ({ type: r.type, isSidechain: r.isSidechain })),
+			coverage: coverageForEnum(parsed.records, folders),
+			freshness: FreshnessLabel.Polled,
+			completeness,
+			adapterVersion: this.stamp,
+		};
+	}
+
 	/** Locate the session file for a run: first by the `<sessionId>.jsonl` naming convention (no read), else by
 	 *  parsing each file and matching the derived session/run id. Undefined when no file matches. Read-only. */
 	private async findRunFile(root: URI, run: FleetRun): Promise<URI | undefined> {
@@ -712,6 +756,17 @@ export class ClawdiusReaderSeamService implements IReaderSeam {
 	async listSubagents(root: ReaderConfigRoot, run: FleetRun): Promise<readonly FleetSubagent[]> {
 		if (root.kind === 'no-config') { return []; }
 		return this.transcript.enumerateSubagents(root.root, run, this.scopeFolders());
+	}
+
+	/**
+	 * Read a subagent's transcript as a labeled {@link FleetTranscriptSlice} - the per-subagent drill-in read the
+	 * transcript editor binds to (Slice 3). Goes through the seam's own indexed file (the subagent's
+	 * `transcriptRef`), so a consuming surface never reads the Claude config tree directly (FR-002). Coverage is
+	 * scored against the active workspace folders; the completeness label includes the out-of-band probe (a missing
+	 * tool-result ref -> `partial` - SC-003). Read-only.
+	 */
+	async readSubagentTranscript(subagent: FleetSubagent): Promise<FleetTranscriptSlice> {
+		return this.transcript.readTranscriptSlice(subagent, this.scopeFolders());
 	}
 
 	/** The active workspace folders coverage is scored against. Consent-scope is CARRIED not enforced at the seam

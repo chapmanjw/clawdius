@@ -13,8 +13,10 @@
 // animation-frame batches so enumeration of many runs never blocks the workbench thread.
 
 import './media/claudeMissions.css';
-import { $, append, clearNode, getWindow, scheduleAtNextAnimationFrame } from '../../../../../base/browser/dom.js';
-import { Disposable, DisposableStore, MutableDisposable } from '../../../../../base/common/lifecycle.js';
+import { $, addDisposableListener, append, clearNode, EventType, getWindow, scheduleAtNextAnimationFrame } from '../../../../../base/browser/dom.js';
+import { StandardKeyboardEvent } from '../../../../../base/browser/keyboardEvent.js';
+import { KeyCode } from '../../../../../base/common/keyCodes.js';
+import { Disposable, DisposableStore, MutableDisposable, toDisposable } from '../../../../../base/common/lifecycle.js';
 import { localize } from '../../../../../nls.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
@@ -26,10 +28,12 @@ import { IOpenerService } from '../../../../../platform/opener/common/opener.js'
 import { IThemeService } from '../../../../../platform/theme/common/themeService.js';
 import { IViewPaneOptions, ViewPane } from '../../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../../common/views.js';
+import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IPathService } from '../../../../services/path/common/pathService.js';
-import { FleetRun } from '../../common/claudeFleetModel.js';
+import { FleetRun, FleetSubagent } from '../../common/claudeFleetModel.js';
 import { CoverageLabel, ReaderConfigRoot, ReaderScope, resolveConfigRoot } from '../../common/claudeReaderSeam.js';
 import { ClawdiusReaderSeamService } from '../reader/claudeReaderSeamService.js';
+import { ClaudeMissionTranscriptInput } from './claudeMissionTranscriptInput.js';
 
 export const MISSIONS_VIEW_CONTAINER_ID = 'workbench.view.clawdiusMissions';
 export const MISSIONS_VIEW_ID = 'clawdius.missions';
@@ -66,6 +70,37 @@ export function appendRunRow(parent: HTMLElement, run: FleetRun): HTMLElement {
 	return row;
 }
 
+/** The per-row drill-in wiring the ViewPane supplies (kept out of the pure list so a unit test can render rows
+ *  without a workbench host): expand a run to its subagents, and open a subagent's transcript in the editor area. */
+export interface IFleetRowInteractions {
+	/** List a run's subagents through the seam (SC-002: present-with-label, never dropped). */
+	listSubagents(run: FleetRun): Promise<readonly FleetSubagent[]>;
+	/** Open a subagent's transcript in the editor area (the drill-in - US2). */
+	openSubagent(subagent: FleetSubagent): void;
+}
+
+/** Append one FleetSubagent as a clickable child row under its run, carrying its honesty labels as `data-*` hooks
+ *  so a Playwright render can assert them. Clicking (or Enter/Space) the row opens the subagent's transcript. */
+export function appendSubagentRow(parent: HTMLElement, sub: FleetSubagent): HTMLElement {
+	const row = append(parent, $('.clawdius-missions-subrow', {
+		'data-subagent-id': sub.subagentId,
+		'data-parent-run-id': sub.parentRunId,
+		'data-coverage': sub.coverage,
+		'data-freshness': sub.freshness,
+		'data-completeness': sub.completeness,
+	}));
+	row.setAttribute('role', 'button');
+	row.tabIndex = 0;
+	const name = append(row, $('.clawdius-missions-subagent'));
+	name.textContent = sub.subagentId || localize('clawdius.missions.subagentRoot', "subagent");
+	name.title = localize('clawdius.missions.subagentTitle', "Open transcript for subagent {0}", sub.subagentId || '');
+	const labels = append(row, $('.clawdius-missions-sublabels'));
+	append(labels, $(`.clawdius-missions-label.coverage-${sub.coverage}`, undefined, localize('clawdius.missions.coverage', "coverage: {0}", sub.coverage)));
+	append(labels, $(`.clawdius-missions-label.freshness-${sub.freshness}`, undefined, localize('clawdius.missions.freshness', "freshness: {0}", sub.freshness)));
+	append(labels, $(`.clawdius-missions-label.completeness-${sub.completeness}`, undefined, localize('clawdius.missions.completeness', "completeness: {0}", sub.completeness)));
+	return row;
+}
+
 /**
  * Renders a labeled list of enumerated runs into a container, incrementally. The first batch paints synchronously
  * so the initial render always has content; the remainder is appended in animation-frame batches so a large fleet
@@ -78,13 +113,25 @@ export class FleetRunsList extends Disposable {
 	private static readonly BATCH_SIZE = 40;
 
 	private readonly pendingBatch = this._register(new MutableDisposable());
+	/** Listeners + child-container disposables for the interactive rows; cleared and rebuilt on every render. */
+	private readonly rowStore = this._register(new DisposableStore());
+	/** Bumped on every render() (and on dispose) so a subagent list still in flight from a torn-down row can detect
+	 *  that its row no longer exists and bail before touching detached DOM or a disposed child store. */
+	private generation = 0;
 
-	constructor(private readonly container: HTMLElement) {
+	/** @param interactions when supplied, each run row expands to its subagents and a subagent opens its transcript;
+	 *  omitted (the pure unit-test path) leaves rows non-interactive. */
+	constructor(private readonly container: HTMLElement, private readonly interactions?: IFleetRowInteractions) {
 		super();
+		// A render (or disposal) after an expand's async listSubagents was issued must invalidate that in-flight
+		// expansion; the generation counter is the guard the expand closure checks after its await.
+		this._register(toDisposable(() => { this.generation++; }));
 	}
 
 	render(runs: readonly FleetRun[]): void {
 		this.pendingBatch.clear();
+		this.rowStore.clear();
+		this.generation++;
 		clearNode(this.container);
 		this.container.setAttribute('data-clawdius-missions', String(runs.length));
 		if (runs.length === 0) {
@@ -96,7 +143,8 @@ export class FleetRunsList extends Disposable {
 		const step = () => {
 			const end = Math.min(i + FleetRunsList.BATCH_SIZE, runs.length);
 			for (; i < end; i++) {
-				appendRunRow(this.container, runs[i]);
+				const row = appendRunRow(this.container, runs[i]);
+				if (this.interactions) { this.wireRunRow(row, runs[i]); }
 			}
 			if (i < runs.length) {
 				this.pendingBatch.value = scheduleAtNextAnimationFrame(getWindow(this.container), step);
@@ -105,6 +153,69 @@ export class FleetRunsList extends Disposable {
 			}
 		};
 		step();
+	}
+
+	/** Make a run row expandable: a click (or Enter/Space) toggles an inline child list of the run's subagents,
+	 *  fetched lazily through the seam; clicking a subagent opens its transcript. Only wired when interactions were
+	 *  supplied. */
+	private wireRunRow(row: HTMLElement, run: FleetRun): void {
+		const interactions = this.interactions!;
+		row.classList.add('expandable');
+		row.setAttribute('role', 'button');
+		row.tabIndex = 0;
+		row.setAttribute('data-expanded', 'false');
+		const twistie = $('.clawdius-missions-twistie.codicon.codicon-chevron-right');
+		twistie.setAttribute('aria-hidden', 'true');
+		row.insertBefore(twistie, row.firstChild);
+
+		const childStore = new DisposableStore();
+		this.rowStore.add(childStore);
+		let child: HTMLElement | undefined;
+
+		const collapse = () => {
+			child?.remove();
+			child = undefined;
+			childStore.clear();
+			row.classList.remove('expanded');
+			row.setAttribute('data-expanded', 'false');
+		};
+
+		const expand = async () => {
+			row.classList.add('expanded');
+			row.setAttribute('data-expanded', 'true');
+			const gen = this.generation;
+			const mine = $('.clawdius-missions-subagents', { 'data-parent-run-id': run.runId });
+			child = mine;
+			row.after(mine);
+			let subs: readonly FleetSubagent[] = [];
+			try { subs = await interactions.listSubagents(run); } catch { subs = []; }
+			// Bail if this expansion is stale: a collapse/re-expand replaced this child (child !== mine), OR a
+			// full render() / disposal tore the row down (generation moved) - in the latter case mine is detached
+			// and childStore is already disposed, so appending or adding listeners would be a leak/no-op warning.
+			if (child !== mine || this.generation !== gen) { return; }
+			clearNode(mine);
+			if (subs.length === 0) {
+				append(mine, $('.clawdius-missions-subempty', { 'data-clawdius-missions-subempty': 'true' })).textContent =
+					localize('clawdius.missions.noSubagents', "No subagents for this run.");
+				return;
+			}
+			for (const sub of subs) {
+				const subrow = appendSubagentRow(mine, sub);
+				const open = () => interactions.openSubagent(sub);
+				childStore.add(addDisposableListener(subrow, EventType.CLICK, open));
+				childStore.add(addDisposableListener(subrow, EventType.KEY_DOWN, e => {
+					const ke = new StandardKeyboardEvent(e);
+					if (ke.keyCode === KeyCode.Enter || ke.keyCode === KeyCode.Space) { ke.preventDefault(); open(); }
+				}));
+			}
+		};
+
+		const toggle = () => { if (child) { collapse(); } else { void expand(); } };
+		this.rowStore.add(addDisposableListener(row, EventType.CLICK, toggle));
+		this.rowStore.add(addDisposableListener(row, EventType.KEY_DOWN, e => {
+			const ke = new StandardKeyboardEvent(e);
+			if (ke.keyCode === KeyCode.Enter || ke.keyCode === KeyCode.Space) { ke.preventDefault(); toggle(); }
+		}));
 	}
 }
 
@@ -115,9 +226,11 @@ export class ClawdiusMissionsView extends ViewPane {
 
 	private listEl: HTMLElement | undefined;
 	private list: FleetRunsList | undefined;
-	private readonly source: IFleetRunSource;
+	private readonly seam: ClawdiusReaderSeamService;
 	private readonly refreshStore = this._register(new DisposableStore());
 	private disposed = false;
+	/** The config root resolved on the last refresh, reused by the drill-in to list a run's subagents. */
+	private root: ReaderConfigRoot | undefined;
 
 	constructor(
 		options: IViewPaneOptions,
@@ -131,11 +244,12 @@ export class ClawdiusMissionsView extends ViewPane {
 		@IThemeService themeService: IThemeService,
 		@IHoverService hoverService: IHoverService,
 		@IPathService private readonly pathService: IPathService,
+		@IEditorService private readonly editorService: IEditorService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 		// The seam service is not a registered singleton; instantiate it (teams probe off) so the view reads runs
 		// through the SAME enumeration the Slice-1 tests exercise. It is stateless + read-only (not a disposable).
-		this.source = instantiationService.createInstance(ClawdiusReaderSeamService, false);
+		this.seam = instantiationService.createInstance(ClawdiusReaderSeamService, false);
 	}
 
 	override dispose(): void {
@@ -146,8 +260,26 @@ export class ClawdiusMissionsView extends ViewPane {
 	protected override renderBody(container: HTMLElement): void {
 		super.renderBody(container);
 		this.listEl = append(container, $('.clawdius-missions'));
-		this.list = this._register(new FleetRunsList(this.listEl));
+		this.list = this._register(new FleetRunsList(this.listEl, {
+			listSubagents: run => this.listSubagentsFor(run),
+			openSubagent: sub => this.openSubagent(sub),
+		}));
 		void this.refresh();
+	}
+
+	/** List a run's subagents through the seam against the last-resolved root (the drill-in expand - US2). */
+	private async listSubagentsFor(run: FleetRun): Promise<readonly FleetSubagent[]> {
+		if (!this.root) { return []; }
+		try {
+			return await this.seam.listSubagents(this.root, run);
+		} catch {
+			return [];
+		}
+	}
+
+	/** Open a subagent's transcript in the editor area via IEditorService (the drill-in - US2). */
+	private openSubagent(sub: FleetSubagent): void {
+		void this.editorService.openEditor(new ClaudeMissionTranscriptInput(sub), { pinned: true, revealIfOpened: true });
 	}
 
 	protected override layoutBody(height: number, width: number): void {
@@ -165,9 +297,10 @@ export class ClawdiusMissionsView extends ViewPane {
 		const home = await this.pathService.userHome();
 		if (this.disposed) { return; }
 		const root = resolveConfigRoot(undefined, home);
+		this.root = root;
 		let runs: readonly FleetRun[] = [];
 		try {
-			runs = await this.source.listRuns(root);
+			runs = await this.seam.listRuns(root);
 		} catch {
 			runs = [];
 		}

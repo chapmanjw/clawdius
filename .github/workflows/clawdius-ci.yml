@@ -277,7 +277,8 @@ jobs:
             "out/vs/workbench/contrib/clawdius/test/browser/claudeReaderSeamReadOnly.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeReaderSeamFormats.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeFleetEnumeration.test.js" \
-            "out/vs/workbench/contrib/clawdius/test/browser/claudeMissionsView.test.js"; do
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeMissionsView.test.js" \
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeMissionTranscriptEditor.test.js"; do
             if [ ! -f "$t" ]; then echo "::error::compiled test missing ($t) — transpile path drift"; exit 1; fi
             log="$(basename "$t").log"
             node test/unit/browser/index.js --run "$t" --browser chromium 2>&1 | tee "$log"

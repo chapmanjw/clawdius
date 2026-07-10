@@ -1,0 +1,4 @@
+{"type":"user","sessionId":"sess-fleet-run-c","uuid":"c-0001","parentUuid":null,"cwd":"/work/fixture-proj","timestamp":"2026-07-08T00:03:01.000Z"}
+{"type":"assistant","sessionId":"sess-fleet-run-c","uuid":"c-0002","parentUuid":"c-0001","cwd":"/work/fixture-proj","timestamp":"2026-07-08T00:03:02.000Z","oobRef":"oob/tool-result-0007.json"}
+{"type":"user","sessionId":"sess-fleet-run-c","uuid":"sub-c-01","parentUuid":"c-0002","isSidechain":true,"cwd":"/work/fixture-proj","timestamp":"2026-07-08T00:03:03.000Z"}
+{"type":"assistant","sessionId":"sess-fleet-run-c","uuid":"sub-c-01b","parentUuid":"sub-c-01","isSidechain":true,"cwd":"/work/fixture-proj","timestamp":"2026-07-08T00:03:04.000Z"}

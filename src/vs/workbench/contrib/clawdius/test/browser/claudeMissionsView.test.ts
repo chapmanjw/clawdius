@@ -14,9 +14,9 @@ import assert from 'assert';
 import { $ } from '../../../../../base/browser/dom.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { FleetRun } from '../../common/claudeFleetModel.js';
+import { FleetRun, FleetSubagent } from '../../common/claudeFleetModel.js';
 import { CompletenessState, CoverageLabel, FreshnessLabel, ReaderConfigRoot, ReaderScope } from '../../common/claudeReaderSeam.js';
-import { FleetRunsList, IFleetRunSource } from '../../browser/missions/claudeMissionsView.js';
+import { FleetRunsList, IFleetRowInteractions, IFleetRunSource } from '../../browser/missions/claudeMissionsView.js';
 
 /** A fake enumeration source: returns a fixed labeled list, so the view test binds to the SAME `listRuns` shape
  *  the seam produces without touching disk. */
@@ -87,6 +87,71 @@ suite('Clawdius missions fleet - Sidebar view (Slice 2)', () => {
 		assert.strictEqual(container.getAttribute('data-clawdius-missions'), '0');
 		assert.strictEqual(container.querySelectorAll('.clawdius-missions-row').length, 0);
 		assert.strictEqual(container.querySelectorAll('[data-clawdius-missions-empty]').length, 1);
+	});
+});
+
+/** A subagent with the given id, fully labeled (defaults are the conservative enumeration labels). */
+function subagent(id: string): FleetSubagent {
+	return { subagentId: id, parentRunId: 'r', transcriptRef: 'file:///t.jsonl', coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.Complete };
+}
+
+suite('Clawdius missions fleet - drill-in interactions (Slice 3)', () => {
+	const store = ensureNoDisposablesAreLeakedInTestSuite();
+
+	function run(id: string): FleetRun {
+		return {
+			runId: id, sessionId: id, kind: 'single', status: 'unknown', ownership: 'foreign',
+			coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.Complete,
+			adapterVersion: { format: 'transcript-jsonl', versionKey: 'v1' },
+		};
+	}
+
+	test('an interactive run row expands to its subagents; clicking one opens its transcript', async () => {
+		const opened: string[] = [];
+		const interactions: IFleetRowInteractions = {
+			listSubagents: async () => [subagent('sub-1'), subagent('sub-2')],
+			openSubagent: sub => { opened.push(sub.subagentId); },
+		};
+		const container = $('div');
+		const list = store.add(new FleetRunsList(container, interactions));
+		list.render([run('a')]);
+
+		const row = container.querySelector<HTMLElement>('.clawdius-missions-row')!;
+		// Expandable rows carry the twistie + the expanded hook; the run's four labels are still intact (SC-001).
+		assert.strictEqual(row.classList.contains('expandable'), true);
+		assert.strictEqual(row.querySelectorAll('.clawdius-missions-label').length, 4);
+		row.click();
+		// listSubagents resolves on a microtask; let it settle, then the two subagent rows are present.
+		await Promise.resolve();
+		await Promise.resolve();
+		const subrows = container.querySelectorAll<HTMLElement>('.clawdius-missions-subrow');
+		assert.strictEqual(subrows.length, 2);
+		subrows[1].click();
+		assert.deepStrictEqual(opened, ['sub-2']);
+
+		// A second click collapses the row - the subagent list is removed.
+		row.click();
+		assert.strictEqual(container.querySelectorAll('.clawdius-missions-subrow').length, 0);
+	});
+
+	test('a render() while a subagent list is in flight discards the stale expansion (no detached rows, no leak)', async () => {
+		let resolveList: (subs: readonly FleetSubagent[]) => void = () => { };
+		const interactions: IFleetRowInteractions = {
+			listSubagents: () => new Promise<readonly FleetSubagent[]>(res => { resolveList = res; }),
+			openSubagent: () => { },
+		};
+		const container = $('div');
+		const list = store.add(new FleetRunsList(container, interactions));
+		list.render([run('a')]);
+		container.querySelector<HTMLElement>('.clawdius-missions-row')!.click();
+		// A full re-render tears the expanding row down before the list resolves.
+		list.render([run('b')]);
+		// The now-stale list resolves: the generation guard must drop it - no subagent rows, no listeners leaked.
+		resolveList([subagent('sub-1')]);
+		await Promise.resolve();
+		await Promise.resolve();
+		assert.strictEqual(container.querySelectorAll('.clawdius-missions-subrow').length, 0);
+		assert.strictEqual(container.querySelectorAll('.clawdius-missions-row').length, 1);
 	});
 });
 // CLAWDIUS-END

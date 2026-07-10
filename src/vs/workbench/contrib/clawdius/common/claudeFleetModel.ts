@@ -17,6 +17,14 @@
 
 import { AdapterVersionStamp, CompletenessState, CoverageLabel, FreshnessLabel } from './claudeReaderSeam.js';
 
+// The drill-in read model (Slice 3). A `FleetTranscriptSlice` is the labeled projection the seam produces when a
+// subagent's transcript is opened in the editor area: an INDEX-ONLY list of the transcript's records (each reduced
+// to its record type + whether it is a subagent sidechain record - never the message body, keeping the seam a
+// second index and never a copy of Claude's authoritative content) plus the four honesty labels. Its
+// `completeness` is computed at DRILL-IN time and, unlike the coarse enumeration label, includes the out-of-band
+// tool-result probe: a record referencing a missing out-of-band file degrades the slice to `partial`, not
+// `complete` (SC-003). Pure `common/`: the only imports are the reader-seam label vocabulary.
+
 /** How a run was launched, as far as the fleet can tell. Refined by later slices; `single` is the default. */
 export type FleetRunKind = 'single' | 'background' | 'team';
 
@@ -72,5 +80,39 @@ export interface FleetSubagent {
 	readonly freshness: FreshnessLabel;
 	/** Whether the read was whole, and if not, why. */
 	readonly completeness: CompletenessState;
+}
+
+/**
+ * One record in a drilled-in subagent transcript, reduced to the INDEX-ONLY fields the drill-in editor renders:
+ * the record type (`user` / `assistant` / `system` / `summary`) and whether it is a subagent sidechain record.
+ * The message body is deliberately never carried - the seam is an index over Claude's transcript, not a copy of it.
+ */
+export interface FleetTranscriptRecord {
+	/** The transcript record type (`user` / `assistant` / `system` / `summary`). */
+	readonly type: string;
+	/** Whether this record belongs to a subagent's sidechain thread (vs the run's main line). */
+	readonly isSidechain: boolean;
+}
+
+/**
+ * A subagent's drilled-in transcript, read through the seam by the transcript-drill-in editor (Slice 3): the
+ * subagent it was opened from, the index-only records in view, and the four honesty labels. `completeness` is the
+ * drill-in read's OWN label, which unlike the coarse enumeration label runs the out-of-band tool-result probe, so
+ * a transcript referencing a missing out-of-band file is `partial`, not `complete` (SC-003). Never an
+ * authoritative copy of Claude state.
+ */
+export interface FleetTranscriptSlice {
+	/** The subagent this transcript was drilled into (empty when the drill-in root carried no id). */
+	readonly subagentId: string;
+	/** The index-only records in view (never the message bodies). */
+	readonly records: readonly FleetTranscriptRecord[];
+	/** How much of the transcript is in view. */
+	readonly coverage: CoverageLabel;
+	/** How current the read is: `polled` at drill-in time. */
+	readonly freshness: FreshnessLabel;
+	/** Whether the read was whole, and if not, why - including the out-of-band probe (missing ref -> `partial`). */
+	readonly completeness: CompletenessState;
+	/** Which adapter/shape produced the slice, so a schema shift across Claude CLI versions is detectable. */
+	readonly adapterVersion: AdapterVersionStamp;
 }
 // CLAWDIUS-END

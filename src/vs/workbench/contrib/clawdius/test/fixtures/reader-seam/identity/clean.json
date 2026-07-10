@@ -1,0 +1,32 @@
+{
+	"_comment": "Sanitized identity-join skeleton: a clean multi-namespace pool where every subagent correlates to exactly one run. run-alpha holds sess-alpha (its two subagents), run-beta holds sess-beta (one subagent). No real ~/.claude content. Shapes only.",
+	"runs": [
+		{
+			"runId": "run-alpha",
+			"sessionId": "sess-alpha-0001",
+			"kind": "single",
+			"status": "unknown",
+			"ownership": "foreign",
+			"coverage": "in-scope",
+			"freshness": "polled",
+			"completeness": "complete",
+			"adapterVersion": { "format": "transcript-jsonl", "versionKey": "v1" }
+		},
+		{
+			"runId": "run-beta",
+			"sessionId": "sess-beta-0002",
+			"kind": "single",
+			"status": "unknown",
+			"ownership": "foreign",
+			"coverage": "in-scope",
+			"freshness": "polled",
+			"completeness": "complete",
+			"adapterVersion": { "format": "transcript-jsonl", "versionKey": "v1" }
+		}
+	],
+	"subagents": [
+		{ "subagentId": "sub-alpha-a", "parentRunId": "run-alpha", "transcriptRef": "file:///c/root/projects/proj/run-alpha.jsonl", "coverage": "in-scope", "freshness": "polled", "completeness": "complete" },
+		{ "subagentId": "sub-alpha-b", "parentRunId": "run-alpha", "transcriptRef": "file:///c/root/projects/proj/run-alpha.jsonl", "coverage": "in-scope", "freshness": "polled", "completeness": "complete" },
+		{ "subagentId": "sub-beta-a", "parentRunId": "run-beta", "transcriptRef": "file:///c/root/projects/proj/run-beta.jsonl", "coverage": "in-scope", "freshness": "polled", "completeness": "complete" }
+	]
+}

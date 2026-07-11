@@ -430,6 +430,22 @@ export const AgentHostGlobalAutoApproveEnabledConfigKey = 'globalAutoApproveEnab
  */
 export const GLOBAL_AUTO_APPROVE_SETTING_ID = 'chat.tools.global.autoApprove';
 
+// CLAWDIUS-BEGIN workspace-trust deny-by-default policy key + setting
+/**
+ * Root config key forwarded from the renderer carrying the Clawdius workspace-trust deny-by-default policy. When
+ * `true`, the node trust gate treats a session with NO forwarded trust value (the dormant state) as UNTRUSTED
+ * instead of the legacy dormant-trusted default, failing closed on any surface a trust decision never reached.
+ * Opt-in and default `false`, so it changes nothing until deliberately enabled.
+ */
+export const AgentHostWorkspaceTrustDenyByDefaultConfigKey = 'workspaceTrustDenyByDefault';
+
+/**
+ * The Clawdius setting ID for the workspace-trust deny-by-default policy. Defined here so renderer-side agent-host
+ * clients can forward it (mirroring the auto-approve settings) without importing from a workbench contribution.
+ */
+export const WORKSPACE_TRUST_DENY_BY_DEFAULT_SETTING_ID = 'clawdius.agent.workspaceTrust.denyByDefault';
+// CLAWDIUS-END
+
 /**
  * Root config key forwarded from the renderer when VS Code's `chat.autoReply`
  * setting changes. When `true`, the agent host auto-answers `ask_user`
@@ -679,6 +695,14 @@ export const platformRootSchema = createSchema({
 		// CLAWDIUS-END
 		default: false,
 	}),
+	// CLAWDIUS-BEGIN workspace-trust deny-by-default policy (opt-in, default off)
+	[AgentHostWorkspaceTrustDenyByDefaultConfigKey]: schemaProperty<boolean>({
+		type: 'boolean',
+		title: localize('agentHost.config.workspaceTrustDenyByDefault.title', "Workspace Trust Deny by Default"),
+		description: localize('agentHost.config.workspaceTrustDenyByDefault.description', "Whether a session whose workspace trust was never established is denied tool access (fail closed). When `false` (the default) such a session keeps the legacy dormant-trusted behaviour until a trust decision arrives."),
+		default: false,
+	}),
+	// CLAWDIUS-END
 	[AgentHostAutoReplyEnabledConfigKey]: schemaProperty<boolean>({
 		type: 'boolean',
 		title: localize('agentHost.config.autoReplyEnabled.title', "Auto Reply"),

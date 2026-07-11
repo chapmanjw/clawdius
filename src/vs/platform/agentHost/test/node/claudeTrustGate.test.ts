@@ -13,6 +13,7 @@ import { Emitter } from '../../../../base/common/event.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
+import { AgentHostWorkspaceTrustDenyByDefaultConfigKey } from '../../common/agentHostSchema.js';
 import { AgentHostTrustKey, ITrustConfigValue } from '../../common/trustConfigSchema.js';
 import { IAgentConfigurationService } from '../../node/agentConfigurationService.js';
 import { isTrustForwarded, resolveTrustState, resolveTrusted, trustDenyMessage, whenTrustForwarded } from '../../node/claude/claudeTrustGate.js';
@@ -21,7 +22,14 @@ import { isTrustForwarded, resolveTrustState, resolveTrusted, trustDenyMessage, 
  *  trust resolver reads. `rawRoot` / `rawSession` let a test model a present-but-schema-invalid forwarded config
  *  at either layer (the forwarder writes trust at the ROOT layer). */
 function fakeConfig(trust: ITrustConfigValue | undefined, rawSession?: Record<string, unknown>, rawRoot?: Record<string, unknown>): IAgentConfigurationService {
-	return { getEffectiveValue: () => trust, getSessionConfigValues: () => rawSession, getRootConfigValues: () => rawRoot } as unknown as IAgentConfigurationService;
+	return {
+		getEffectiveValue: () => trust,
+		getSessionConfigValues: () => rawSession,
+		getRootConfigValues: () => rawRoot,
+		// getRootValue reads the same raw root bag the real service validates against, so a test can seed the
+		// deny-by-default policy key alongside (or instead of) a trust key.
+		getRootValue: (_schema: unknown, key: string) => rawRoot?.[key],
+	} as unknown as IAgentConfigurationService;
 }
 
 /** An evented config-service double for the materialize barrier: trust starts absent, `setTrust` makes it
@@ -79,6 +87,43 @@ suite('Clawdius workspace-trust gate (node)', () => {
 		// The session's OWN forwarded value is authoritative and read directly, not via the effective chain.
 		assert.strictEqual(resolveTrustState(fakeConfig({ [AgentHostTrustKey.Trusted]: false }, { trust: { trusted: true } }), URI.file('/s')).trusted, true);
 		assert.strictEqual(resolveTrustState(fakeConfig({ [AgentHostTrustKey.Trusted]: true }, { trust: { trusted: false } }), URI.file('/s')).trusted, false);
+	});
+
+	test('resolveTrustState (B6): the dormant state honors the deny-by-default policy', () => {
+		const denyKey = AgentHostWorkspaceTrustDenyByDefaultConfigKey;
+		assert.deepStrictEqual(
+			[
+				// Flag absent (the staged default): dormant stays trusted, legacy behaviour preserved.
+				resolveTrustState(fakeConfig(undefined), URI.file('/s')),
+				// Flag explicitly false: dormant trusted.
+				resolveTrustState(fakeConfig(undefined, undefined, { [denyKey]: false }), URI.file('/s')),
+				// Flag on: a session with no forwarded trust value fails closed.
+				resolveTrustState(fakeConfig(undefined, undefined, { [denyKey]: true }), URI.file('/s')),
+				// A malformed policy value cannot flip the posture ON: isDenyByDefaultEnabled requires a strict
+				// boolean `true`, and the real getRootValue validates a non-boolean away to undefined - either way
+				// a non-`true` value is OFF, so dormant stays trusted (a malformed policy never fails closed spuriously).
+				resolveTrustState(fakeConfig(undefined, undefined, { [denyKey]: 'true' }), URI.file('/s')),
+				resolveTrustState(fakeConfig(undefined, undefined, { [denyKey]: 1 }), URI.file('/s')),
+			],
+			[{ trusted: true }, { trusted: true }, { trusted: false }, { trusted: true }, { trusted: true }],
+		);
+	});
+
+	test('resolveTrustState (B6): a forwarded trust value decides regardless of the deny-by-default policy', () => {
+		const denyKey = AgentHostWorkspaceTrustDenyByDefaultConfigKey;
+		assert.deepStrictEqual(
+			[
+				// Flag on must NOT deny a genuinely-trusted session (no false-deny of a forwarded-trusted value).
+				resolveTrustState(fakeConfig({ [AgentHostTrustKey.Trusted]: true }, undefined, { [denyKey]: true }), URI.file('/s')).trusted,
+				// Flag on with an explicit untrusted decision stays untrusted (consistent).
+				resolveTrustState(fakeConfig({ [AgentHostTrustKey.Trusted]: false }, undefined, { [denyKey]: true }), URI.file('/s')).trusted,
+				// A valid session-layer trusted value wins over the policy too.
+				resolveTrustState(fakeConfig(undefined, { trust: { trusted: true } }, { [denyKey]: true }), URI.file('/s')).trusted,
+				// A malformed session-layer value still fails closed even with the policy on (B5 tightening intact).
+				resolveTrustState(fakeConfig(undefined, { trust: { trusted: 'garbage' } }, { [denyKey]: true }), URI.file('/s')).trusted,
+			],
+			[true, false, true, false],
+		);
 	});
 
 	test('isTrustForwarded: absent => false; effective value or raw key at either layer => true', () => {

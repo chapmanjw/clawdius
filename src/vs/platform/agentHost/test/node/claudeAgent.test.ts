@@ -4606,6 +4606,39 @@ suite('ClaudeAgent — customizations', () => {
 		);
 	});
 
+	test('a late workspace-trust grant rebuilds the session on the next send to restore trusted engine state', async () => {
+		const ctx = createTestContext(disposables);
+		const { agent, sdk, configService } = ctx;
+		// Materialize UNTRUSTED: forward trusted:false before the first send so the barrier sees a forwarded value and
+		// bakes _materializedTrusted=false - the same baked-untrusted state B6's deny-by-default default produces when
+		// the materialize barrier times out with no trust forwarded.
+		configService.updateRootConfig({ [AgentHostTrustConfigKey.Trust]: { [AgentHostTrustKey.Trusted]: false } });
+		const created = await agent.createSession({ workingDirectory: URI.file('/work') });
+		const sessionId = AgentSession.id(created.session);
+		sdk.nextQueryMessages = [
+			makeSystemInitMessage(sessionId), makeResultSuccess(sessionId),
+			makeSystemInitMessage(sessionId), makeResultSuccess(sessionId),
+		];
+		await agent.sendMessage(created.session, URI.parse(buildDefaultChatUri(created.session)), 'first', undefined, 'turn-1');
+		assert.deepStrictEqual(
+			{ settingSources: sdk.capturedStartupOptions[0]?.settingSources, strictMcpConfig: sdk.capturedStartupOptions[0]?.strictMcpConfig },
+			{ settingSources: [], strictMcpConfig: true },
+			'untrusted materialize drops trusted engine state',
+		);
+
+		// A late trust GRANT: forward trusted:true. The eager revocation handler ignores a false->true transition, so
+		// the trusted engine state is restored non-disruptively at the next send via the trust-divergence rebuild.
+		configService.updateRootConfig({ [AgentHostTrustConfigKey.Trust]: { [AgentHostTrustKey.Trusted]: true } });
+		await agent.sendMessage(created.session, URI.parse(buildDefaultChatUri(created.session)), 'second', undefined, 'turn-2');
+
+		assert.strictEqual(sdk.startupCallCount, 2, 'the late trust grant triggered a rebuild on the next send');
+		assert.deepStrictEqual(
+			sdk.capturedStartupOptions[1]?.settingSources,
+			['user', 'project', 'local'],
+			'rebuilt session restores trusted settings sources',
+		);
+	});
+
 	test('a non-trust root-config change does not rebuild a trusted session', async () => {
 		const ctx = createTestContext(disposables);
 		const { agent, sdk, configService } = ctx;

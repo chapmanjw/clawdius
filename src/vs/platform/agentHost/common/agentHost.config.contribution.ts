@@ -9,6 +9,7 @@ import { Extensions as ConfigurationExtensions, IConfigurationRegistry } from '.
 import product from '../../product/common/product.js';
 import { Registry } from '../../registry/common/platform.js';
 import { AgentHostEnabledSettingId } from './agentService.js';
+import { WORKSPACE_TRUST_DENY_BY_DEFAULT_SETTING_ID } from './agentHostSchema.js';
 
 // `chat.agentHost.enabled` is read in the desktop main process
 // (`src/vs/code/electron-main/app.ts`) to decide whether to spawn the agent
@@ -95,6 +96,25 @@ configurationRegistry.registerConfiguration({
 		},
 	}
 });
+
+// CLAWDIUS-BEGIN workspace-trust deny-by-default setting
+// The opt-in security policy that flips the agent-host trust gate to fail-closed for sessions whose workspace
+// trust was never established. Default off (no behaviour change); the node reads it via platformRootSchema after
+// the agent-host clients forward it. Registered unconditionally so the fork's trust posture is always tunable.
+configurationRegistry.registerConfiguration({
+	id: 'clawdiusWorkspaceTrust',
+	title: nls.localize('clawdiusWorkspaceTrustConfigurationTitle', "Clawdius Workspace Trust"),
+	type: 'object',
+	properties: {
+		[WORKSPACE_TRUST_DENY_BY_DEFAULT_SETTING_ID]: {
+			type: 'boolean',
+			default: false,
+			markdownDescription: nls.localize('clawdius.agent.workspaceTrust.denyByDefault', "When enabled, an agent session whose workspace trust has not been established is treated as **untrusted** - file writes, shell commands, MCP tools, and web access are blocked until the workspace is trusted. When off (the default), such a session keeps full access until a trust decision arrives. Turn this on to fail closed on any surface a trust decision never reaches."),
+			tags: ['clawdius'],
+		},
+	},
+});
+// CLAWDIUS-END
 
 // CLAWDIUS-BEGIN clawdius cli engine settings
 // These drive IClawdiusCliConfigService in the agent-host process (which reads the user settings.json) to

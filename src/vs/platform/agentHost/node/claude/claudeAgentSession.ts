@@ -94,9 +94,12 @@ export class ClaudeAgentSession extends Disposable {
 	private _pipeline: ClaudeSdkPipeline | undefined;
 	/**
 	 * The workspace-trust value baked into the LIVE SDK Query at the last (re)materialize. Undefined until
-	 * the first materialize. A forwarded trust change that flips this from true to false triggers a rebuild
+	 * the first materialize. A forwarded trust change that flips this from true to false triggers an eager rebuild
 	 * ({@link _tearDownRevokedTrust}) so the Query drops the trusted-only engine state (settings-MCP / repo
-	 * project MCP servers, hooks, plugins, permission mode) it would otherwise keep for its whole life.
+	 * project MCP servers, hooks, plugins, permission mode) it would otherwise keep for its whole life. A late
+	 * false -> true grant (e.g. the materialize barrier timed out and baked the deny-by-default untrusted default,
+	 * then a trust source connected) is picked up at the next {@link send}, which rebuilds when this baked value
+	 * diverges from the live trust decision - restoring the trusted engine state without interrupting an in-flight turn.
 	 */
 	private _materializedTrusted: boolean | undefined;
 	/** Serializes trust-revocation teardowns so overlapping config events never drive two concurrent rebuilds. */
@@ -660,7 +663,15 @@ export class ClaudeAgentSession extends Disposable {
 		// New turn: reset the per-turn credit accumulator so proxy reports
 		// for this turn's `/v1/messages` calls sum from zero.
 		this._currentTurnNanoAiu = 0;
-		if (this.toolDiff.hasDifference || this.clientCustomizationsDiff.hasDifference || this._pendingResumeSessionAt !== undefined) {
+		// A late workspace-trust change since the last (re)materialize must rebuild so the SDK Query's engine state
+		// matches the current trust decision. The eager revocation path (_onTrustConfigMaybeChanged) already handles a
+		// true->false transition immediately; this covers the remaining divergence - notably a false->true GRANT after
+		// the materialize barrier timed out and baked the dormant (deny-by-default) UNTRUSTED default - non-disruptively
+		// at the next turn boundary, restoring the trusted engine state. The rebuild's rematerializer re-resolves trust
+		// and resets _materializedTrusted, so this self-clears once applied.
+		const trustDiverged = this._materializedTrusted !== undefined
+			&& resolveTrusted(this._configurationService, this.sessionUri) !== this._materializedTrusted;
+		if (trustDiverged || this.toolDiff.hasDifference || this.clientCustomizationsDiff.hasDifference || this._pendingResumeSessionAt !== undefined) {
 			await this._rebindForSyncedState();
 		} else {
 			await pipeline.setPermissionMode(resolveCurrentPermissionMode(this._configurationService, this.sessionUri, this._permissionModeFallback));
@@ -688,8 +699,10 @@ export class ClaudeAgentSession extends Disposable {
 
 	/**
 	 * React to a forwarded workspace-trust change. Only a true -> false transition of THIS session's baked
-	 * trust triggers a teardown; unrelated config changes (and re-grants) are ignored. Pre-materialize the
-	 * barrier ({@link whenTrustForwarded}) covers trust, so there is nothing baked to tear down yet.
+	 * trust triggers an eager teardown here (trusted engine state must be dropped immediately on revocation); a
+	 * false -> true re-grant is handled non-eagerly at the next {@link send} (the trust-divergence rebuild there),
+	 * and unrelated config changes are ignored. Pre-materialize the barrier ({@link whenTrustForwarded}) covers
+	 * trust, so there is nothing baked to tear down yet.
 	 */
 	private _onTrustConfigMaybeChanged(): void {
 		if (this._store.isDisposed || this._materializedTrusted !== true) {

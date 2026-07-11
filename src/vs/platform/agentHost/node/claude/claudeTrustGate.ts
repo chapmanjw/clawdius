@@ -11,13 +11,15 @@
 import { DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ITrustState, TrustReason, UNTRUSTED } from '../../common/claudeTrust.js';
+import { AgentHostWorkspaceTrustDenyByDefaultConfigKey, platformRootSchema } from '../../common/agentHostSchema.js';
 import { AgentHostTrustConfigKey, AgentHostTrustKey, trustConfigSchema } from '../../common/trustConfigSchema.js';
 import { IAgentConfigurationService } from '../agentConfigurationService.js';
 
 /**
- * Resolve the trust STATE for a session from the forwarded trust config. Absent config => dormant TRUSTED
- * (preserving current behaviour until a trust source connects). A forwarded-but-schema-invalid config fails closed
- * (untrusted), so a malformed value cannot invert the deny-by-default posture.
+ * Resolve the trust STATE for a session from the forwarded trust config. Absent config => the opt-in
+ * deny-by-default policy decides: dormant TRUSTED when off (the default, preserving current behaviour until a
+ * trust source connects), or UNTRUSTED (fail closed) when on. A forwarded-but-schema-invalid config always fails
+ * closed, so a malformed value cannot invert the deny-by-default posture.
  */
 export function resolveTrustState(configurationService: IAgentConfigurationService, sessionUri: URI): ITrustState {
 	// Session-first fail-closed: a trust value forwarded at the SESSION layer decides THIS session's trust. If it
@@ -44,8 +46,20 @@ export function resolveTrustState(configurationService: IAgentConfigurationServi
 	if (hasRawTrustKey(configurationService, sessionUri)) {
 		return UNTRUSTED;
 	}
-	// Truly absent: no trust source has connected yet - dormant, trusted.
-	return { trusted: true };
+	// Truly absent: no trust source has connected yet. The opt-in deny-by-default policy (forwarded to root by the
+	// agent-host clients, default off) decides whether this dormant state fails closed or preserves the legacy
+	// dormant-trusted behaviour. Off => dormant TRUSTED (unchanged); on => UNTRUSTED, so a surface a trust decision
+	// never reached (e.g. a remote root the window-wide trust forwarder does not push to) fails closed.
+	return isDenyByDefaultEnabled(configurationService) ? UNTRUSTED : { trusted: true };
+}
+
+/**
+ * Whether the opt-in deny-by-default policy is enabled. Read from the root config (forwarded there by the local
+ * and remote agent-host clients from the `clawdius.agent.workspaceTrust.denyByDefault` setting). Default off, so
+ * an absent/false value preserves the legacy dormant-trusted behaviour.
+ */
+function isDenyByDefaultEnabled(configurationService: IAgentConfigurationService): boolean {
+	return configurationService.getRootValue(platformRootSchema, AgentHostWorkspaceTrustDenyByDefaultConfigKey) === true;
 }
 
 /**

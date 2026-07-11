@@ -20,6 +20,7 @@ import { IClawdiusCliConfigService } from '../../../clawdius/common/clawdiusCliC
 import { IClaudeMcpTool, IClaudeMcpToolDiscoveryResult, IClaudeMcpToolDiscoveryService } from '../../common/claudeMcpToolDiscovery.js';
 import { IClaudeAgentSdkService } from './claudeAgentSdkService.js';
 import { buildOptions } from './claudeSdkOptions.js';
+import { redactSecrets } from '../agentHostSecretRedact.js';
 
 /** Total budget for one discovery: enough for a remote server to connect, capped so a hang cannot pin a process. */
 const DISCOVERY_TIMEOUT_MS = 25_000;
@@ -56,7 +57,7 @@ export class ClaudeMcpToolDiscoveryService implements IClaudeMcpToolDiscoverySer
 					mcpServers: undefined,
 					cliResolution,
 				},
-				data => this.logService.trace(`[mcp-discovery stderr] ${data}`),
+				data => this.logService.trace(`[mcp-discovery stderr] ${redactSecrets(data)}`),
 				msg => this.logService.trace(`[mcp-discovery] declined elicitation: ${msg}`),
 			);
 

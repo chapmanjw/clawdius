@@ -12,6 +12,7 @@ import { IFileService } from '../../files/common/files.js';
 import { ILogService } from '../../log/common/log.js';
 import { FileEditKind, type ISessionFileDiff, type ISessionGitState } from '../common/state/sessionState.js';
 import { buildGitBlobUri } from './gitDiffContent.js';
+import { redactSecrets } from './agentHostSecretRedact.js';
 import { EMPTY_TREE_OBJECT, getBranchCompletions, IAgentHostGitService, IComputeSessionFileDiffsOptions, IPullOptions, IPushOptions } from '../common/agentHostGitService.js';
 import { LRUCache } from '../../../base/common/map.js';
 import { SequencerByKey } from '../../../base/common/async.js';
@@ -506,14 +507,17 @@ export class AgentHostGitService implements IAgentHostGitService {
 			// causes execFile to error and we'd silently drop the diff.
 			const child = cp.execFile('git', [...args], { cwd: workingDirectory.fsPath, env, maxBuffer: options?.maxBuffer ?? 32 * 1024 * 1024 }, (error, stdout, stderr) => {
 				if (error) {
+					// Node folds the raw stderr into error.message; redact it in place so neither the thrown error's
+					// cause nor the formatGitError fallback (which uses error.message) can carry a secret off-box.
+					error.message = redactSecrets(error.message);
 					// stderr is summarized in the thrown error message to keep
-					// it readable; log the full unmodified output here so the
+					// it readable; log the full output here (secret-redacted) so the
 					// raw progress/diagnostic text is still available.
 					if (stderr) {
-						this._logService.warn(`[agentHostGitService] > git ${args.join(' ')} failed; full stderr:\n${stderr}`);
+						this._logService.warn(`[agentHostGitService] > git ${args.join(' ')} failed; full stderr:\n${redactSecrets(stderr)}`);
 					}
 					if (options?.throwOnError) {
-						reject(new Error(formatGitError(args, timeoutMs, didTimeOut, error, stderr), { cause: error }));
+						reject(new Error(formatGitError(args, timeoutMs, didTimeOut, error, redactSecrets(stderr)), { cause: error }));
 						return;
 					}
 					resolve(undefined);

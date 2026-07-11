@@ -28,6 +28,7 @@ import { PendingMessage, ChatInputAnswer, ChatInputRequest, ChatInputResponseKin
 import { buildDefaultChatUri, type Customization, type ToolCallResult } from '../../common/state/sessionState.js';
 import { IClaudeAgentSdkService } from './claudeAgentSdkService.js';
 import { buildClientMcpServers, buildOptions } from './claudeSdkOptions.js';
+import { redactSecrets } from '../agentHostSecretRedact.js';
 import { buildServerToolMcpServer, CLAUDE_SERVER_TOOL_MCP_SERVER_NAME, serverToolAllowList } from './claudeServerToolMcpServer.js';
 import { ClaudeSessionMetadataStore } from './claudeSessionMetadataStore.js';
 import { convertToolCallResult } from './clientTools/claudeClientToolResult.js';
@@ -392,7 +393,7 @@ export class ClaudeAgentSession extends Disposable {
 				agent: agentName,
 				cliResolution: await this._cliConfigService.resolveCliBackend(), // CLAWDIUS cli backend resolution
 			},
-			data => this._logService.error(`[Claude SDK stderr] ${data}`),
+			data => this._logService.error(`[Claude SDK stderr] ${redactSecrets(data)}`),
 			msg => this._logService.info(`[Claude] declining elicitation from MCP server (stub): ${msg}`),
 		);
 
@@ -490,7 +491,7 @@ export class ClaudeAgentSession extends Disposable {
 						agent: rebuildAgentName,
 						cliResolution: await this._cliConfigService.resolveCliBackend(), // CLAWDIUS cli backend resolution
 					},
-					data => this._logService.error(`[Claude SDK stderr] ${data}`),
+					data => this._logService.error(`[Claude SDK stderr] ${redactSecrets(data)}`),
 					msg => this._logService.info(`[Claude] declining elicitation from MCP server (stub): ${msg}`),
 				);
 				this._logService.info(`[Claude] session ${this.sessionId}: resume rebuild agent=${rebuildOptions.agent ?? '(none)'}`);

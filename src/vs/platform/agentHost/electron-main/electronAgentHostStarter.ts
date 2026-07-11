@@ -19,6 +19,7 @@ import { getResolvedShellEnv } from '../../shell/node/shellEnv.js';
 import { NullTelemetryService } from '../../telemetry/common/telemetryUtils.js';
 import { UtilityProcess } from '../../utilityProcess/electron-main/utilityProcess.js';
 import { IAgentHostConnection, IAgentHostStarter } from '../common/agent.js';
+import { redactSecrets } from '../node/agentHostSecretRedact.js';
 import { AgentHostClaudeAgentEnabledSettingId, AgentHostOTelCaptureContentSettingId, AgentHostOTelDbSpanExporterEnabledSettingId, AgentHostOTelEnabledSettingId, AgentHostOTelExporterTypeSettingId, AgentHostOTelOtlpEndpointSettingId, AgentHostOTelOtlpProtocolSettingId, AgentHostOTelOutfileSettingId, AgentHostOTelResourceAttributesSettingId, AgentHostOTelServiceNameSettingId, AgentHostOTelPolicyIpcChannel, buildAgentHostOTelEnv, buildAgentSdkEnv, IAgentHostOTelSettings, sanitizeAgentHostOTelPolicySettings } from '../common/agentService.js';
 import { deepClone } from '../../../base/common/objects.js';
 import '../common/agentHost.config.contribution.js';
@@ -157,7 +158,7 @@ export class ElectronAgentHostStarter extends Disposable implements IAgentHostSt
 			if (this._isExpectedStderr(data)) {
 				return;
 			}
-			this._logService.error(`[AgentHost:stderr] ${data}`);
+			this._logService.error(`[AgentHost:stderr] ${redactSecrets(data)}`);
 		}));
 		store.add(toDisposable(() => {
 			this.utilityProcess?.kill();

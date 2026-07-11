@@ -182,6 +182,14 @@ export class ClaudeSdkPipeline extends Disposable {
 
 	/** Set when the consumer loop ends in error (cancellation OR crash). Read by {@link send} to trigger rebind. */
 	private _needsRebind = false;
+	/**
+	 * Single-flight guard for {@link _rebindQuery}. Rebinds are driven from two independent places: the
+	 * send-path recovery gate AND the out-of-band workspace-trust revocation teardown. If two ran
+	 * concurrently each would capture the same old WarmQuery and orphan one freshly built one (leaked
+	 * subprocess) / collide on the shared --session-id. Chaining every rebind through this promise
+	 * serializes them so each starts only after the previous settles and captures the correct WarmQuery.
+	 */
+	private _rebindChain: Promise<void> = Promise.resolve();
 
 	/** Tracks whether the consumer loop is currently draining {@link _query}. */
 	private _consumerLoopRunning = false;
@@ -274,6 +282,17 @@ export class ClaudeSdkPipeline extends Disposable {
 	 */
 	rebindForRestart(): Promise<void> {
 		return this._rebindQuery('restart');
+	}
+
+	/**
+	 * Serializing wrapper around {@link _doRebindQuery}. A second rebind chains behind any in-flight one
+	 * rather than running concurrently, so two rebinds can never capture the same old WarmQuery. Rejections
+	 * are surfaced to the caller but swallowed on the chain so one failed rebind never poisons later ones.
+	 */
+	private _rebindQuery(reason: 'restart' | 'recover'): Promise<void> {
+		const run = this._rebindChain.then(() => this._doRebindQuery(reason), () => this._doRebindQuery(reason));
+		this._rebindChain = run.then(() => { }, () => { });
+		return run;
 	}
 
 	/**
@@ -516,7 +535,7 @@ export class ClaudeSdkPipeline extends Disposable {
 	 * rematerializer in `resume` mode. Re-applies the current model /
 	 * effort / permission mode to the fresh Query.
 	 */
-	private async _rebindQuery(reason: 'restart' | 'recover'): Promise<void> {
+	private async _doRebindQuery(reason: 'restart' | 'recover'): Promise<void> {
 		if (!this._rematerializer) {
 			throw new Error(`ClaudeSdkPipeline.rebind: no rematerializer attached (reason=${reason})`);
 		}

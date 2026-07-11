@@ -4581,6 +4581,46 @@ suite('ClaudeAgent — customizations', () => {
 		assert.strictEqual(sdk.startupCallCount, 2);
 		assert.strictEqual(sdk.capturedStartupOptions[1]?.agent, undefined, 'cleared agent omitted from rebuilt Options');
 	});
+
+	test('workspace-trust revocation rebuilds the session to drop trusted engine state', async () => {
+		const ctx = createTestContext(disposables);
+		const { agent, sdk, configService } = ctx;
+		const created = await agent.createSession({ workingDirectory: URI.file('/work') });
+		const sessionId = AgentSession.id(created.session);
+		sdk.nextQueryMessages = [makeSystemInitMessage(sessionId), makeResultSuccess(sessionId)];
+		await agent.sendMessage(created.session, URI.parse(buildDefaultChatUri(created.session)), 'first', undefined, 'turn-1');
+		// createTestContext seeds a trusted root config, so the first materialize loads the trusted settings sources.
+		assert.deepStrictEqual(sdk.capturedStartupOptions[0]?.settingSources, ['user', 'project', 'local'], 'trusted materialize loads settings sources');
+
+		// Revoke workspace trust: forward trusted:false to the root config.
+		configService.updateRootConfig({ [AgentHostTrustConfigKey.Trust]: { [AgentHostTrustKey.Trusted]: false } });
+		const session = agent.getSessionForTesting(created.session);
+		assert.ok(session, 'session is retrievable');
+		await session.whenTrustTeardownIdle();
+
+		assert.strictEqual(sdk.startupCallCount, 2, 'revocation triggered a rebuild');
+		assert.deepStrictEqual(
+			{ settingSources: sdk.capturedStartupOptions[1]?.settingSources, strictMcpConfig: sdk.capturedStartupOptions[1]?.strictMcpConfig },
+			{ settingSources: [], strictMcpConfig: true },
+			'rebuilt session drops trusted engine state',
+		);
+	});
+
+	test('a non-trust root-config change does not rebuild a trusted session', async () => {
+		const ctx = createTestContext(disposables);
+		const { agent, sdk, configService } = ctx;
+		const created = await agent.createSession({ workingDirectory: URI.file('/work') });
+		const sessionId = AgentSession.id(created.session);
+		sdk.nextQueryMessages = [makeSystemInitMessage(sessionId), makeResultSuccess(sessionId)];
+		await agent.sendMessage(created.session, URI.parse(buildDefaultChatUri(created.session)), 'first', undefined, 'turn-1');
+
+		// A root-config change that leaves trust unchanged (still trusted) must not churn the Query.
+		configService.updateRootConfig({ some_unrelated_key: 'x' });
+		const session = agent.getSessionForTesting(created.session);
+		await session!.whenTrustTeardownIdle();
+
+		assert.strictEqual(sdk.startupCallCount, 1, 'no rebuild for a non-trust config change');
+	});
 });
 
 // #endregion

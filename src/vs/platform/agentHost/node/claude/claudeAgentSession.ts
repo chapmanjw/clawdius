@@ -5,7 +5,7 @@
 
 import type { McpSdkServerConfigWithInstance, Options, PermissionMode, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { CancellationError } from '../../../../base/common/errors.js';
+import { CancellationError, isCancellationError } from '../../../../base/common/errors.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -92,6 +92,15 @@ function resolveCurrentPermissionMode(
 export class ClaudeAgentSession extends Disposable {
 
 	private _pipeline: ClaudeSdkPipeline | undefined;
+	/**
+	 * The workspace-trust value baked into the LIVE SDK Query at the last (re)materialize. Undefined until
+	 * the first materialize. A forwarded trust change that flips this from true to false triggers a rebuild
+	 * ({@link _tearDownRevokedTrust}) so the Query drops the trusted-only engine state (settings-MCP / repo
+	 * project MCP servers, hooks, plugins, permission mode) it would otherwise keep for its whole life.
+	 */
+	private _materializedTrusted: boolean | undefined;
+	/** Serializes trust-revocation teardowns so overlapping config events never drive two concurrent rebuilds. */
+	private _trustTeardown: Promise<void> = Promise.resolve();
 	private readonly _chatChannelUri: URI;
 
 	/** Pre-materialize model selection. Mutable; flows into `Options.model` on first installPipeline. */
@@ -302,6 +311,16 @@ export class ClaudeAgentSession extends Disposable {
 			this._logService,
 		));
 		this._register(customizationWatcher.onDidChange(() => this._onDidCustomizationsChange.fire()));
+
+		// Workspace-trust revocation: rebuild the live session to drop trusted-only engine state the moment a
+		// forwarded trust value flips this session's baked trusted from true to false. Both layers matter - the
+		// sessions window forwards trust at the SESSION layer, the main window at the ROOT layer.
+		this._register(this._configurationService.onDidRootConfigChange(() => this._onTrustConfigMaybeChanged()));
+		this._register(this._configurationService.onDidSessionConfigChange(changed => {
+			if (changed === this.sessionUri.toString()) {
+				this._onTrustConfigMaybeChanged();
+			}
+		}));
 	}
 
 	/**
@@ -383,6 +402,10 @@ export class ClaudeAgentSession extends Disposable {
 		const permissionMode = readClaudePermissionMode(this._configurationService, this.sessionUri) ?? this._permissionModeFallback;
 		const { mcpServers, allowedTools } = await this._buildStartupToolWiring(ctx.serverToolHost);
 		const agentName = await resolveClaudeAgentName(this._provisionalAgent, this._fileService, this._logService, this.sessionId);
+		// Resolve trust ONCE and remember it: a later revocation rebuilds to drop the trusted engine state this
+		// baked value would otherwise keep alive for the Query's life (see _onTrustConfigMaybeChanged).
+		const materializedTrusted = resolveTrusted(this._configurationService, this.sessionUri);
+		this._materializedTrusted = materializedTrusted;
 
 		const options = await buildOptions(
 			{
@@ -391,7 +414,7 @@ export class ClaudeAgentSession extends Disposable {
 				model: this._provisionalModel,
 				abortController: this.abortController,
 				permissionMode,
-				trusted: resolveTrusted(this._configurationService, this.sessionUri),
+				trusted: materializedTrusted,
 				canUseTool: ctx.canUseTool,
 				isResume: ctx.isResume,
 				resumeSessionAt: this._pendingResumeSessionAt,
@@ -482,6 +505,10 @@ export class ClaudeAgentSession extends Disposable {
 				const { mcpServers: rebuildMcp, allowedTools: rebuildAllowedTools } = await this._buildStartupToolWiring(ctx.serverToolHost);
 				const rebuildAgentName = await resolveClaudeAgentName(this._provisionalAgent, this._fileService, this._logService, this.sessionId);
 				const rebuildAbort = new AbortController();
+				// Re-resolve trust on every rebuild and remember it, so a later revocation is detected against the
+				// value currently baked into the live Query.
+				const rebuildTrusted = resolveTrusted(this._configurationService, this.sessionUri);
+				this._materializedTrusted = rebuildTrusted;
 				const rebuildOptions = await buildOptions(
 					{
 						sessionId: this.sessionId,
@@ -489,7 +516,7 @@ export class ClaudeAgentSession extends Disposable {
 						model: this._provisionalModel,
 						abortController: rebuildAbort,
 						permissionMode: liveMode,
-						trusted: resolveTrusted(this._configurationService, this.sessionUri),
+						trusted: rebuildTrusted,
 						canUseTool: ctx.canUseTool,
 						isResume: true,
 						resumeSessionAt: this._pendingResumeSessionAt,
@@ -657,6 +684,52 @@ export class ClaudeAgentSession extends Disposable {
 		this._pendingClientToolCalls.rejectAll(new CancellationError());
 		await this._requirePipeline().rebindForRestart();
 		this._onDidCustomizationsChange.fire();
+	}
+
+	/**
+	 * React to a forwarded workspace-trust change. Only a true -> false transition of THIS session's baked
+	 * trust triggers a teardown; unrelated config changes (and re-grants) are ignored. Pre-materialize the
+	 * barrier ({@link whenTrustForwarded}) covers trust, so there is nothing baked to tear down yet.
+	 */
+	private _onTrustConfigMaybeChanged(): void {
+		if (this._store.isDisposed || this._materializedTrusted !== true) {
+			return;
+		}
+		if (resolveTrusted(this._configurationService, this.sessionUri)) {
+			return; // still trusted
+		}
+		// Flip now so a duplicate root+session event for the same revocation coalesces onto one teardown; the
+		// rebuild's rematerializer re-resolves and re-confirms the value.
+		this._materializedTrusted = false;
+		this._trustTeardown = this._trustTeardown.then(() => this._tearDownRevokedTrust());
+	}
+
+	/**
+	 * Rebuild the live session so the SDK Query drops the trusted-only engine state (settings-MCP / repo
+	 * project MCP servers, hooks, plugins, permission mode) after workspace trust is revoked. Aborts any
+	 * in-flight (trusted) turn first - {@link abort} fails the queue and marks the pipeline for rebind - so
+	 * the rebuild is not racing a live stream; the rematerializer then re-resolves trust and produces the
+	 * untrusted Options (settingSources:[], strictMcpConfig:true, plugins dropped, mode clamped). The per-tool
+	 * canUseTool gate already denies trusted actions on the old Query in the meantime.
+	 */
+	private async _tearDownRevokedTrust(): Promise<void> {
+		if (this._store.isDisposed || !this._pipeline) {
+			return;
+		}
+		this._logService.info(`[Claude] session ${this.sessionId}: workspace trust revoked; rebuilding to drop trusted engine state`);
+		this.abort();
+		try {
+			await this._rebindForSyncedState();
+		} catch (err) {
+			if (!isCancellationError(err)) {
+				this._logService.error(`[Claude] session ${this.sessionId}: trust-revocation teardown failed`, err);
+			}
+		}
+	}
+
+	/** Resolves once any in-flight workspace-trust revocation teardown has settled (diagnostic / test hook). */
+	whenTrustTeardownIdle(): Promise<void> {
+		return this._trustTeardown;
 	}
 
 	/**

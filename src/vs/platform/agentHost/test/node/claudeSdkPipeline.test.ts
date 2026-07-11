@@ -385,6 +385,41 @@ suite('ClaudeSdkPipeline', () => {
 			assert.strictEqual(calls, 1);
 		});
 
+		test('rebinds are single-flight: a second rebind chains behind an in-flight one (no concurrent rematerialize)', async () => {
+			const { pipeline } = createPipeline(disposables);
+			const built: FakeWarmQuery[] = [];
+			const gate1 = new DeferredPromise<void>();
+			let calls = 0;
+			pipeline.attachRematerializer(async () => {
+				calls++;
+				// Hold ONLY the first rebuild suspended so the test can observe whether a second rebind starts
+				// its rematerialize concurrently (the pre-fix bug) or waits its turn (the single-flight guard).
+				if (calls === 1) { await gate1.p; }
+				const warm = new FakeWarmQuery();
+				built.push(warm);
+				return { warm, abortController: new AbortController() };
+			});
+
+			// Fire two rebinds concurrently (models the trust-revocation teardown rebind racing a send-path rebind).
+			const r1 = pipeline.rebindForRestart();
+			const r2 = pipeline.rebindForRestart();
+			await flushMicrotasks();
+
+			// While the first rebind is suspended, the second must not have started its rematerialize.
+			assert.strictEqual(calls, 1, 'the second rebind did not run its rematerialize concurrently with the first');
+
+			// Release the first; both rebinds now complete, in order.
+			gate1.complete();
+			await Promise.all([r1, r2]);
+
+			assert.strictEqual(calls, 2, 'both rebinds ran their rematerialize');
+			assert.strictEqual(built.length, 2, 'two fresh WarmQueries were built, serially');
+			// No orphan: the serialized second rebind captured the first-built warm as its old warm and disposed
+			// it, leaving exactly one live (undisposed) warm.
+			assert.strictEqual(built[0].asyncDisposeCount, 1, 'the first rebuilt warm was disposed by the second rebind, not orphaned');
+			assert.strictEqual(built[1].asyncDisposeCount, 0, 'the final warm is live');
+		});
+
 		test('abort issued while the rematerializer is still resolving cancels the freshly-built controller (rebind-window race)', async () => {
 			const { pipeline } = createPipeline(disposables);
 			const releaseRebuild = new DeferredPromise<{ warm: FakeWarmQuery; controller: AbortController }>();

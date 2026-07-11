@@ -332,6 +332,7 @@ jobs:
             "out/vs/platform/agentHost/test/node/claudeTrustGate.test.js" \
             "out/vs/platform/agentHost/test/node/agentHostSecretRedact.test.js" \
             "out/vs/platform/agentHost/test/node/claudeMcpToolDiscoveryService.test.js" \
+            "out/vs/platform/agentHost/test/node/claudeSdkPipeline.test.js" \
             "out/vs/platform/agentHost/test/common/claudeTrust.test.js"; do
             if [ ! -f "$t" ]; then echo "::error::compiled test missing ($t) — transpile path drift"; exit 1; fi
             log="$(basename "$t").node.log"

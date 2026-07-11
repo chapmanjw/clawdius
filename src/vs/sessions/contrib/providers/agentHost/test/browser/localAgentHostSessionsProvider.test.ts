@@ -18,6 +18,7 @@ import type { ResolveSessionConfigResult } from '../../../../../../platform/agen
 import { CustomizationLoadStatus, CustomizationType, MessageKind, SessionLifecycle, type AgentInfo, type ChangesSummary, type Customization, type RootState, type SessionConfigState, type SessionState, type SessionSummary } from '../../../../../../platform/agentHost/common/state/protocol/state.js';
 import { buildChatUri, buildDefaultChatUri, ChangesetStatus, ChatState, SessionStatus as ProtocolSessionStatus, StateComponents, type ChangesetState, type ChatSummary } from '../../../../../../platform/agentHost/common/state/sessionState.js';
 import { ActionType, NotificationType, type ActionEnvelope, type IRootConfigChangedAction, type ChatAction, type SessionAction, type TerminalAction, type INotification, type ClientAnnotationsAction } from '../../../../../../platform/agentHost/common/state/sessionActions.js';
+import { AgentHostTrustConfigKey, AgentHostTrustKey } from '../../../../../../platform/agentHost/common/trustConfigSchema.js';
 import { SessionConfigKey } from '../../../../../../platform/agentHost/common/sessionConfigKeys.js';
 import { ConfigurationTarget, IConfigurationService } from '../../../../../../platform/configuration/common/configuration.js';
 import { TestConfigurationService } from '../../../../../../platform/configuration/test/common/testConfigurationService.js';
@@ -313,14 +314,16 @@ function createPolicyRestrictedConfigurationService(): TestConfigurationService 
 
 function createProvider(disposables: DisposableStore, agentHostService: MockAgentHostService, contributions = [
 	{ type: 'agent-host-copilotcli', name: 'copilot', displayName: 'Copilot', description: 'test', icon: undefined },
-], options?: { sendRequest?: (resource: URI, message: string, options?: IChatSendRequestOptions) => Promise<ChatSendResult>; acquireOrLoadSession?: (resource: URI) => Promise<IChatModelReference | undefined>; lookupLanguageModel?: (modelId: string) => ILanguageModelChatMetadata | undefined; openSession?: boolean; configurationService?: IConfigurationService; activeSession?: IObservable<IActiveSession | undefined>; storageService?: IStorageService; isSessionsWindow?: boolean; confirmDelete?: boolean; workspaceTrusted?: boolean; gitHubService?: IGitHubService }): LocalAgentHostSessionsProvider {
+], options?: { sendRequest?: (resource: URI, message: string, options?: IChatSendRequestOptions) => Promise<ChatSendResult>; acquireOrLoadSession?: (resource: URI) => Promise<IChatModelReference | undefined>; lookupLanguageModel?: (modelId: string) => ILanguageModelChatMetadata | undefined; openSession?: boolean; configurationService?: IConfigurationService; activeSession?: IObservable<IActiveSession | undefined>; storageService?: IStorageService; isSessionsWindow?: boolean; confirmDelete?: boolean; workspaceTrusted?: boolean; getTrusted?: () => boolean; onDidChangeTrust?: Event<boolean>; gitHubService?: IGitHubService }): LocalAgentHostSessionsProvider {
 	const instantiationService = disposables.add(new TestInstantiationService());
 
 	instantiationService.stub(IAgentHostService, agentHostService);
 	instantiationService.stub(IConfigurationService, options?.configurationService ?? new TestConfigurationService());
 	instantiationService.stub(IWorkspaceTrustManagementService, new class extends mock<IWorkspaceTrustManagementService>() {
-		override isWorkspaceTrusted(): boolean { return options?.workspaceTrusted ?? true; }
-		override async getUriTrustInfo(uri: URI) { return { uri, trusted: options?.workspaceTrusted ?? true }; }
+		override isWorkspaceTrusted(): boolean { return options?.getTrusted ? options.getTrusted() : (options?.workspaceTrusted ?? true); }
+		override async getUriTrustInfo(uri: URI) { return { uri, trusted: options?.getTrusted ? options.getTrusted() : (options?.workspaceTrusted ?? true) }; }
+		override readonly onDidChangeTrust = options?.onDidChangeTrust ?? Event.None;
+		override readonly onDidChangeTrustedFolders = Event.None;
 	});
 	instantiationService.stub(IWorkbenchEnvironmentService, { isSessionsWindow: options?.isSessionsWindow ?? true } as IWorkbenchEnvironmentService);
 	instantiationService.stub(IFileDialogService, {});
@@ -426,6 +429,20 @@ function fireSessionSummaryChanged(agentHost: MockAgentHostService, rawId: strin
 		session: sessionUri.toString(),
 		changes,
 	});
+}
+
+/** A minimal Ready SessionState with a non-empty config so `_seedRunningConfigFromState` materializes it. */
+function makeReadyState(title: string): SessionState {
+	return {
+		provider: 'copilotcli', title, status: ProtocolSessionStatus.Idle,
+		lifecycle: SessionLifecycle.Ready, activeClients: [], chats: [],
+		config: { schema: { type: 'object', properties: { isolation: { type: 'string', title: 'Isolation' } } }, values: { isolation: 'worktree' } },
+	};
+}
+
+/** Extract the forwarded trust config from a recorded SessionConfigChanged dispatch, if any. */
+function forwardedTrust(action: { type: unknown; config?: Record<string, unknown> }): unknown {
+	return action.type === ActionType.SessionConfigChanged ? action.config?.[AgentHostTrustConfigKey.Trust] : undefined;
 }
 
 suite('LocalAgentHostSessionsProvider', () => {
@@ -3092,6 +3109,55 @@ suite('LocalAgentHostSessionsProvider', () => {
 		// `mode` is dropped because it wasn't re-asserted in the replace payload.
 		const updated = provider.getSessionConfig(session!.sessionId);
 		assert.deepStrictEqual(updated?.values, { autoApprove: 'autoApprove', isolation: 'worktree' });
+	}));
+
+	// CLAWDIUS B4a: forward each local session's per-directory workspace trust into its session config layer.
+	test('B4a forwards trusted:false to an untrusted local session when its config materializes', () => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {
+		agentHost.addSession(createSession('trust-untrusted', { summary: 'Untrusted', workingDirectory: URI.file('/repo/untrusted') }));
+		const provider = createProvider(disposables, agentHost, undefined, { workspaceTrusted: false });
+		provider.getSessions();
+		await timeout(0);
+		const session = provider.getSessions().find(s => s.title.get() === 'Untrusted');
+		assert.ok(session);
+		agentHost.setSessionState('trust-untrusted', 'copilotcli', makeReadyState('Untrusted'));
+		await waitForSessionConfig(provider, session!.sessionId, c => c !== undefined);
+		await timeout(0);
+		const trust = agentHost.dispatchedActions.map(d => forwardedTrust(d.action)).find(v => v !== undefined);
+		assert.deepStrictEqual(trust, { [AgentHostTrustKey.Trusted]: false });
+	}));
+
+	test('B4a forwards trusted:true to a trusted local session when its config materializes', () => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {
+		agentHost.addSession(createSession('trust-trusted', { summary: 'Trusted', workingDirectory: URI.file('/repo/trusted') }));
+		const provider = createProvider(disposables, agentHost, undefined, { workspaceTrusted: true });
+		provider.getSessions();
+		await timeout(0);
+		const session = provider.getSessions().find(s => s.title.get() === 'Trusted');
+		assert.ok(session);
+		agentHost.setSessionState('trust-trusted', 'copilotcli', makeReadyState('Trusted'));
+		await waitForSessionConfig(provider, session!.sessionId, c => c !== undefined);
+		await timeout(0);
+		const trust = agentHost.dispatchedActions.map(d => forwardedTrust(d.action)).find(v => v !== undefined);
+		assert.deepStrictEqual(trust, { [AgentHostTrustKey.Trusted]: true });
+	}));
+
+	test('B4a re-forwards trusted:false to a live local session when workspace trust is revoked', () => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {
+		const trustEmitter = disposables.add(new Emitter<boolean>());
+		let currentlyTrusted = true;
+		agentHost.addSession(createSession('trust-revoke', { summary: 'Revoke', workingDirectory: URI.file('/repo/revoke') }));
+		const provider = createProvider(disposables, agentHost, undefined, { getTrusted: () => currentlyTrusted, onDidChangeTrust: trustEmitter.event });
+		provider.getSessions();
+		await timeout(0);
+		const session = provider.getSessions().find(s => s.title.get() === 'Revoke');
+		assert.ok(session);
+		agentHost.setSessionState('trust-revoke', 'copilotcli', makeReadyState('Revoke'));
+		await waitForSessionConfig(provider, session!.sessionId, c => c !== undefined);
+		await timeout(0);
+		// Revoke: the trust change must re-forward trusted:false for the live session (drives the node teardown).
+		currentlyTrusted = false;
+		trustEmitter.fire(false);
+		await timeout(0);
+		const forwarded = agentHost.dispatchedActions.map(d => forwardedTrust(d.action)).filter(v => v !== undefined);
+		assert.ok(forwarded.some(v => JSON.stringify(v) === JSON.stringify({ [AgentHostTrustKey.Trusted]: false })), 'trusted:false was forwarded after revocation');
 	}));
 });
 

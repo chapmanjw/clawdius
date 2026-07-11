@@ -15,6 +15,7 @@ import { constObservable, derived, derivedObservableWithCache, derivedOpts, IObs
 import { isEqual, isEqualOrParent, relativePath } from '../../../../../base/common/resources.js';
 import { ThemeIcon } from '../../../../../base/common/themables.js';
 import { isDefined } from '../../../../../base/common/types.js';
+import { AGENT_HOST_SCHEME } from '../../../../../platform/agentHost/common/agentHostUri.js';
 import { Schemas } from '../../../../../base/common/network.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { generateUuid } from '../../../../../base/common/uuid.js';
@@ -1685,8 +1686,9 @@ export abstract class BaseAgentHostSessionsProvider extends Disposable implement
 	 * Push a running session's per-directory workspace-trust decision into its session config layer, so an
 	 * untrusted folder clamps that session's engine (settings sources / MCP / plugins) via the node trust gate,
 	 * and a revocation drives the session rebuild. Session-layer trust WINS over the window-wide root value the
-	 * main window forwards, giving true per-directory enforcement. Local file-scheme folders only: remote
-	 * working directories are agent-host URIs with their own root config (a follow-on). Must run only once the
+	 * main window forwards, giving true per-directory enforcement. Covers local (file) and remote (agent-host)
+	 * folders - both carry a real per-folder trust decision the workspace-trust service resolves; other schemes
+	 * (e.g. auto-trusted virtual / GitHub project URIs) are skipped. Must run only once the
 	 * session config has materialized on the node, or the SessionConfigChanged merge is dropped.
 	 */
 	protected _forwardTrustForSession(sessionId: string, cached: AgentHostSessionAdapter): void {
@@ -1696,7 +1698,7 @@ export abstract class BaseAgentHostSessionsProvider extends Disposable implement
 		}
 		const folder = cached.workspace.get()?.folders[0];
 		const workspaceUri = folder?.workingDirectory ?? folder?.root;
-		if (!workspaceUri || workspaceUri.scheme !== Schemas.file) {
+		if (!workspaceUri || (workspaceUri.scheme !== Schemas.file && workspaceUri.scheme !== AGENT_HOST_SCHEME)) {
 			return;
 		}
 		void (async () => {

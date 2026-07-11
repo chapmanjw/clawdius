@@ -15,7 +15,7 @@ import { IInstantiationService } from '../../../instantiation/common/instantiati
 import { ILogService } from '../../../log/common/log.js';
 import { IClawdiusCliConfigService } from '../../../clawdius/common/clawdiusCliConfig.js';
 import { IAgentConfigurationService } from '../agentConfigurationService.js';
-import { resolveTrusted } from './claudeTrustGate.js';
+import { resolveTrusted, TRUST_FORWARD_TIMEOUT_MS, whenTrustForwarded } from './claudeTrustGate.js';
 import { ISyncedCustomization } from '../../common/agentPluginManager.js';
 import { ClaudePermissionMode } from '../../common/claudeSessionConfigKeys.js';
 import { ClaudeRuntimeEffortLevel, clampEffortForRuntime, resolveClaudeEffort } from '../../common/claudeModelConfig.js';
@@ -371,6 +371,14 @@ export class ClaudeAgentSession extends Disposable {
 			throw new Error(`Cannot materialize Claude session ${this.sessionId}: workingDirectory is required`);
 		}
 		// CLAWDIUS native ~/.claude auth: no CAPI proxy transport, so _transportKind stays 'native' (its default).
+
+		// Trust materialize-barrier: `trusted` is resolved ONCE below and baked into the SDK options for the
+		// Query's life, so a transiently-absent trust config (a trust source connected, first write still in
+		// flight) must not silently bake the dormant default. Bounded: on timeout, proceed with the dormant
+		// default rather than hang session startup.
+		if (await whenTrustForwarded(this._configurationService, this.sessionUri, TRUST_FORWARD_TIMEOUT_MS, this.abortController.signal) === 'timeout') {
+			this._logService.info(`[Claude] session ${this.sessionId}: no trust source connected after ${TRUST_FORWARD_TIMEOUT_MS}ms; proceeding with the dormant trust default`);
+		}
 
 		const permissionMode = readClaudePermissionMode(this._configurationService, this.sessionUri) ?? this._permissionModeFallback;
 		const { mcpServers, allowedTools } = await this._buildStartupToolWiring(ctx.serverToolHost);

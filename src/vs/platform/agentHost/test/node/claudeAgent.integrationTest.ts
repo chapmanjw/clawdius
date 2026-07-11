@@ -26,6 +26,8 @@ import { URI } from '../../../../base/common/uri.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
+import { AgentHostTrustConfigKey, AgentHostTrustKey } from '../../common/trustConfigSchema.js';
+import { IClawdiusCliConfigService, projectCliResolution } from '../../../clawdius/common/clawdiusCliConfig.js';
 import { ServiceCollection } from '../../../instantiation/common/serviceCollection.js';
 import { InstantiationService } from '../../../instantiation/common/instantiationService.js';
 import { ILogService, NullLogService } from '../../../log/common/log.js';
@@ -168,6 +170,13 @@ class RecordingSdkService implements IClaudeAgentSdkService {
 
 	readonly capturedStartupOptions: Options[] = [];
 
+	/** The REAL session's startup Options: constructor-time model discovery (best-effort, a DIFFERENT cwd —
+	 *  os.tmpdir() or homedir, never /integration-cwd) may also record here first, so index 0 is a race.
+	 *  Both tests create their session at /integration-cwd; select it by that cwd. */
+	sessionStartup(): Options | undefined {
+		return this.capturedStartupOptions.find(o => o.cwd === URI.file('/integration-cwd').fsPath);
+	}
+
 	/**
 	 * Items the produced WarmQuery's Query will yield in order. SDK
 	 * messages flow through unchanged; {@link CanUseToolMarker} entries
@@ -270,7 +279,7 @@ class RoundTripQuery implements AsyncGenerator<SDKMessage, void> {
 		while (this._index < this._sdk.queryMessages.length) {
 			const item = this._sdk.queryMessages[this._index++];
 			if (isCanUseToolMarker(item)) {
-				const startup = this._sdk.capturedStartupOptions[0];
+				const startup = this._sdk.sessionStartup();
 				if (!startup?.canUseTool) {
 					throw new Error('integration test: canUseTool marker but Options.canUseTool not wired');
 				}
@@ -354,12 +363,17 @@ suite('ClaudeAgent integration', function () {
 		const logService = new NullLogService();
 		const stateManager = disposables.add(new AgentHostStateManager(logService));
 		const configService = disposables.add(new AgentConfigurationService(stateManager, logService));
+		// Seed a trusted root config so materialize's trust barrier resolves immediately ('present');
+		// trusted:true matches the dormant default these tests ran under before the barrier existed.
+		configService.updateRootConfig({ [AgentHostTrustConfigKey.Trust]: { [AgentHostTrustKey.Trusted]: true } });
 
 		const services = new ServiceCollection(
 			[ILogService, logService],
 			[IProductService, productService],
 			[ISessionDataService, createSessionDataService()],
 			[IClaudeAgentSdkService, sdk],
+			// CLAWDIUS: materialize resolves the CLI backend unconditionally; provide the bundled-default stub.
+			[IClawdiusCliConfigService, { _serviceBrand: undefined, resolveCliBackend: async () => projectCliResolution({}, { nodeCliPathExists: false, wrapperPathExists: false }) }],
 			[IAgentPluginManager, {
 				_serviceBrand: undefined,
 				basePath: URI.from({ scheme: 'inmemory', path: '/agentPlugins' }),
@@ -378,7 +392,8 @@ suite('ClaudeAgent integration', function () {
 
 		await agent.sendMessage(created.session, URI.parse(buildDefaultChatUri(created.session)), 'hi', undefined, 'turn-1');
 
-		const startup = sdk.capturedStartupOptions[0];
+		const startup = sdk.sessionStartup();
+		assert.ok(startup, 'the session startup Options were recorded');
 		assert.ok(typeof startup.canUseTool === 'function', 'canUseTool was wired into Options');
 		assert.ok(typeof startup.onElicitation === 'function', 'onElicitation was wired into Options');
 
@@ -407,12 +422,17 @@ suite('ClaudeAgent integration', function () {
 		const logService = new NullLogService();
 		const stateManager = disposables.add(new AgentHostStateManager(logService));
 		const configService = disposables.add(new AgentConfigurationService(stateManager, logService));
+		// Seed a trusted root config so materialize's trust barrier resolves immediately ('present');
+		// trusted:true matches the dormant default these tests ran under before the barrier existed.
+		configService.updateRootConfig({ [AgentHostTrustConfigKey.Trust]: { [AgentHostTrustKey.Trusted]: true } });
 
 		const services = new ServiceCollection(
 			[ILogService, logService],
 			[IProductService, productService],
 			[ISessionDataService, createSessionDataService()],
 			[IClaudeAgentSdkService, sdk],
+			// CLAWDIUS: materialize resolves the CLI backend unconditionally; provide the bundled-default stub.
+			[IClawdiusCliConfigService, { _serviceBrand: undefined, resolveCliBackend: async () => projectCliResolution({}, { nodeCliPathExists: false, wrapperPathExists: false }) }],
 			[IAgentPluginManager, {
 				_serviceBrand: undefined,
 				basePath: URI.from({ scheme: 'inmemory', path: '/agentPlugins' }),

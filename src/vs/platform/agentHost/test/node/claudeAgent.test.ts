@@ -27,6 +27,7 @@ import { URI } from '../../../../base/common/uri.js';
 import { isUUID } from '../../../../base/common/uuid.js';
 import { isCancellationError } from '../../../../base/common/errors.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
+import { AgentHostTrustConfigKey, AgentHostTrustKey } from '../../common/trustConfigSchema.js';
 import { ServiceCollection } from '../../../instantiation/common/serviceCollection.js';
 import { InstantiationService } from '../../../instantiation/common/instantiationService.js';
 import { IInstantiationService } from '../../../instantiation/common/instantiation.js';
@@ -570,6 +571,9 @@ function createTestContext(
 	const logService = overrides?.logService ?? new NullLogService();
 	const stateManager = disposables.add(new AgentHostStateManager(logService));
 	const configService = disposables.add(new AgentConfigurationService(stateManager, logService));
+	// Seed a trusted root config so materialize's trust barrier resolves immediately ('present');
+	// trusted:true matches the dormant default these tests ran under before the barrier existed.
+	configService.updateRootConfig({ [AgentHostTrustConfigKey.Trust]: { [AgentHostTrustKey.Trusted]: true } });
 
 	const services = new ServiceCollection(
 		...claudeFileEnvServices(disposables),
@@ -1573,6 +1577,9 @@ suite('ClaudeAgent', () => {
 		const logService = new NullLogService();
 		const stateManager = disposables.add(new AgentHostStateManager(logService));
 		const configService = disposables.add(new AgentConfigurationService(stateManager, logService));
+		// Seed a trusted root config so materialize's trust barrier resolves immediately ('present');
+		// trusted:true matches the dormant default these tests ran under before the barrier existed.
+		configService.updateRootConfig({ [AgentHostTrustConfigKey.Trust]: { [AgentHostTrustKey.Trusted]: true } });
 
 		const services = new ServiceCollection(
 			...claudeFileEnvServices(disposables),
@@ -2687,6 +2694,9 @@ suite('ClaudeAgent', () => {
 		const logService = new NullLogService();
 		const stateManager = disposables.add(new AgentHostStateManager(logService));
 		const configService = disposables.add(new AgentConfigurationService(stateManager, logService));
+		// Seed a trusted root config so materialize's trust barrier resolves immediately ('present');
+		// trusted:true matches the dormant default these tests ran under before the barrier existed.
+		configService.updateRootConfig({ [AgentHostTrustConfigKey.Trust]: { [AgentHostTrustKey.Trusted]: true } });
 
 		const services = new ServiceCollection(
 			...claudeFileEnvServices(disposables),
@@ -3034,7 +3044,11 @@ suite('ClaudeAgentSession', () => {
 		const fakeConfigService: IAgentConfigurationService = {
 			getSessionConfigValues: () => undefined,
 			getRootConfigValues: () => undefined,
-			getEffectiveValue: () => undefined,
+			// The trust key resolves trusted so materialize's trust barrier is immediately 'present'; every
+			// other key stays absent, as before.
+			getEffectiveValue: (_session: string, _schema: unknown, key: string) => key === AgentHostTrustConfigKey.Trust ? { [AgentHostTrustKey.Trusted]: true } : undefined,
+			onDidRootConfigChange: Event.None,
+			onDidSessionConfigChange: Event.None,
 		} as unknown as IAgentConfigurationService;
 		const sessionData = new RecordingSessionDataService(createSessionDataService());
 		const services = new ServiceCollection(
@@ -4302,6 +4316,9 @@ suite('ClaudeAgent — customizations', () => {
 		const logService = new NullLogService();
 		const stateManager = disposables.add(new AgentHostStateManager(logService));
 		const configService = disposables.add(new AgentConfigurationService(stateManager, logService));
+		// Seed a trusted root config so materialize's trust barrier resolves immediately ('present');
+		// trusted:true matches the dormant default these tests ran under before the barrier existed.
+		configService.updateRootConfig({ [AgentHostTrustConfigKey.Trust]: { [AgentHostTrustKey.Trusted]: true } });
 
 		const services = new ServiceCollection(
 			...claudeFileEnvServices(disposables),

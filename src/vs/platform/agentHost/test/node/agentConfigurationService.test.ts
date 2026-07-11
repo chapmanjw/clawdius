@@ -173,7 +173,7 @@ suite('AgentConfigurationService', () => {
 	suite('config change events', () => {
 
 		test('onDidSessionConfigChange fires with the session URI for session merges; root merges fire onDidRootConfigChange only', () => {
-			const uri = URI.from({ scheme: 'copilot', path: '/evt' }).toString();
+			const uri = URI.from({ scheme: 'claude', path: '/evt' }).toString();
 			manager.createSession(makeSummary(uri));
 			const sessionEvents: string[] = [];
 			let rootEvents = 0;

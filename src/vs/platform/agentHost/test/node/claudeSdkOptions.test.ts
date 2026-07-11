@@ -186,6 +186,13 @@ suite('claudeSdkOptions / buildOptions plugins projection', () => {
 		assert.deepStrictEqual(opts.settingSources, []);
 	});
 
+	test('Barrier 1: an untrusted workspace sets strictMcpConfig; a trusted one does not', async () => {
+		const untrusted = await buildOptions(input(undefined, BUNDLED, /*trusted*/ false), () => { }, () => { });
+		const trusted = await buildOptions(input(undefined, BUNDLED, /*trusted*/ true), () => { }, () => { });
+		assert.strictEqual(untrusted.strictMcpConfig, true);
+		assert.strictEqual(trusted.strictMcpConfig, false);
+	});
+
 	test('Barrier 1: an untrusted workspace drops local plugins', async () => {
 		const opts = await buildOptions(input([URI.file('/p/a')], BUNDLED, /*trusted*/ false), () => { }, () => { });
 		assert.strictEqual(opts.plugins, undefined);

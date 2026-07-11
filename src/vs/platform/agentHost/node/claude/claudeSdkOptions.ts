@@ -176,6 +176,10 @@ export async function buildOptions(
 		// Workspace-trust clamp: an untrusted workspace loads NO settings sources - not user, project, or local - so no hooks
 		// (which bypass canUseTool entirely), permission allow-rules, or MCP servers from any settings file can run.
 		settingSources: input.trusted ? ['user', 'project', 'local'] : [],
+		// Workspace-trust clamp: settingSources governs only .claude/settings*.json; the project-root .mcp.json is a
+		// SEPARATE source gated by strictMcpConfig (SDK default false), so an untrusted workspace must set it too, or a
+		// repo .mcp.json stdio server would still spawn its command at startup. Trusted keeps the SDK default.
+		strictMcpConfig: !input.trusted,
 		settings: { env: settingsEnv },
 		systemPrompt: { type: 'preset', preset: 'claude_code' },
 		stderr: logStderr,

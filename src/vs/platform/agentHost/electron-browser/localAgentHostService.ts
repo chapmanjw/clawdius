@@ -447,7 +447,7 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 	}
 
 	// CLAWDIUS-BEGIN live MCP tool discovery (#93)
-	async discoverMcpServerTools(serverName: string, workingDirectoryPath: string): Promise<IClaudeMcpToolDiscoveryResult> {
+	async discoverMcpServerTools(serverName: string, workingDirectoryPath: string, trusted: boolean): Promise<IClaudeMcpToolDiscoveryResult> {
 		// Readiness guard: when the agent host is disabled the delayed channel would queue forever; report it
 		// instead of hanging. We never auto-_connect() from a config dropdown.
 		if (!isAgentHostEnabled(this._configurationService)) {
@@ -465,7 +465,7 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 		if (!ready) {
 			return { status: 'timeout', tools: [], message: 'Timed out reaching the Agent Host.' };
 		}
-		return this._mcpDiscoveryProxy.discoverServerTools(serverName, workingDirectoryPath);
+		return this._mcpDiscoveryProxy.discoverServerTools(serverName, workingDirectoryPath, trusted);
 	}
 	// CLAWDIUS-END
 

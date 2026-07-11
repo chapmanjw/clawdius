@@ -165,7 +165,7 @@ export class EditorRemoteAgentHostServiceClient extends Disposable implements IA
 	}
 
 	// CLAWDIUS-BEGIN live MCP tool discovery (#93): not wired for the remote agent host (local SDK session only).
-	async discoverMcpServerTools(_serverName: string, _workingDirectoryPath: string): Promise<IClaudeMcpToolDiscoveryResult> {
+	async discoverMcpServerTools(_serverName: string, _workingDirectoryPath: string, _trusted: boolean): Promise<IClaudeMcpToolDiscoveryResult> {
 		return { status: 'error', tools: [], message: 'MCP tool discovery is only available with the local Agent Host.' };
 	}
 	async fetchUsageContribution(_workingDirectoryPath: string): Promise<IClaudeUsageContributionResult> {

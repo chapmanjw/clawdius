@@ -165,7 +165,11 @@ export async function buildOptions(
 			: { sessionId: input.sessionId }),
 		...(input.mcpServers ? { mcpServers: input.mcpServers } : {}),
 		...(input.allowedTools && input.allowedTools.length > 0 ? { allowedTools: [...input.allowedTools] } : {}),
-		...(input.plugins && input.plugins.length > 0
+		// Workspace-trust clamp: an untrusted workspace loads NO local plugins - a plugin dir can carry startup
+		// hooks that bypass canUseTool, so plugins load only for a trusted workspace. (mcpServers/allowedTools above
+		// are host-owned server-tool wiring, not repo-injectable; if either ever becomes repo-derived it MUST be
+		// clamped here too.)
+		...(input.trusted && input.plugins && input.plugins.length > 0
 			? { plugins: input.plugins.map(p => ({ type: 'local' as const, path: p.fsPath })) }
 			: {}),
 		...(input.agent ? { agent: input.agent } : {}),

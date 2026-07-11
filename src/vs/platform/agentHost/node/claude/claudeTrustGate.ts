@@ -20,15 +20,27 @@ import { IAgentConfigurationService } from '../agentConfigurationService.js';
  * (untrusted), so a malformed value cannot invert the deny-by-default posture.
  */
 export function resolveTrustState(configurationService: IAgentConfigurationService, sessionUri: URI): ITrustState {
+	// Session-first fail-closed: a trust value forwarded at the SESSION layer decides THIS session's trust. If it
+	// is present but MALFORMED, fail closed for the session rather than letting getEffectiveValue skip it and
+	// silently inherit a (valid) root value - a per-session value that was forwarded but validated away must
+	// never inherit trust from another layer.
+	const rawSession = configurationService.getSessionConfigValues(sessionUri.toString());
+	const sessionTrustRaw = rawSession?.[AgentHostTrustConfigKey.Trust];
+	if (sessionTrustRaw !== undefined) {
+		// validate() is a boolean type-guard (narrows to ITrustConfigValue) - a malformed value returns false.
+		if (trustConfigSchema.validate(AgentHostTrustConfigKey.Trust, sessionTrustRaw)) {
+			return { trusted: sessionTrustRaw[AgentHostTrustKey.Trusted] === true };
+		}
+		return UNTRUSTED;
+	}
+
+	// No session-layer value: resolve from the remaining chain (parent subagent -> root).
 	const trust = configurationService.getEffectiveValue(sessionUri.toString(), trustConfigSchema, AgentHostTrustConfigKey.Trust);
 	if (trust !== undefined) {
 		return { trusted: trust[AgentHostTrustKey.Trusted] === true };
 	}
-	// getEffectiveValue is undefined for BOTH a truly-absent config AND a present-but-schema-invalid one. A trust
-	// value that WAS forwarded but validated away must FAIL CLOSED rather than fall back to dormant-trusted.
-	// hasRawTrustKey checks the raw root AND session layers, so a malformed value at either cannot invert the
-	// deny-by-default posture (getEffectiveValue was already consulted above, so this path does not re-read it
-	// or log its schema warning twice).
+	// getEffectiveValue is undefined for a truly-absent config AND a present-but-schema-invalid ROOT value. A
+	// root value that WAS forwarded but validated away must FAIL CLOSED rather than fall back to dormant-trusted.
 	if (hasRawTrustKey(configurationService, sessionUri)) {
 		return UNTRUSTED;
 	}

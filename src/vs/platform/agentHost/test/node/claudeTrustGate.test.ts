@@ -66,6 +66,21 @@ suite('Clawdius workspace-trust gate (node)', () => {
 		assert.deepStrictEqual(resolveTrustState(fakeConfig(undefined, { trust: { trusted: 'false' } }), URI.file('/s')), { trusted: false });
 	});
 
+	test('resolveTrustState (B5): a malformed session-layer trust fails closed even when the effective/root value is valid-trusted', () => {
+		// getEffectiveValue would skip the malformed session value and return the VALID root value (trusted:true);
+		// the session-first check reads the session layer directly and fails closed for this session.
+		assert.deepStrictEqual(
+			resolveTrustState(fakeConfig({ [AgentHostTrustKey.Trusted]: true }, { trust: { trusted: 'garbage' } }), URI.file('/s')),
+			{ trusted: false },
+		);
+	});
+
+	test('resolveTrustState (B5): a valid session-layer trust decides the session over a differing effective value', () => {
+		// The session's OWN forwarded value is authoritative and read directly, not via the effective chain.
+		assert.strictEqual(resolveTrustState(fakeConfig({ [AgentHostTrustKey.Trusted]: false }, { trust: { trusted: true } }), URI.file('/s')).trusted, true);
+		assert.strictEqual(resolveTrustState(fakeConfig({ [AgentHostTrustKey.Trusted]: true }, { trust: { trusted: false } }), URI.file('/s')).trusted, false);
+	});
+
 	test('isTrustForwarded: absent => false; effective value or raw key at either layer => true', () => {
 		assert.deepStrictEqual(
 			[

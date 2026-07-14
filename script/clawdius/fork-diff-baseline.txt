@@ -14,7 +14,16 @@
 # upstream_commit pins the base by SHA so the ratchet resolves even on a shallow CI checkout that
 # has no upstream remote and cannot see the tag name; CI fetches this SHA before running --check.
 
+# Disposition 2026-07-13 (+3 files, +1021 insertions): macOS login-Keychain credential resolution.
+# The Claude Code CLI stores its OAuth credentials in the macOS login Keychain, not in the plaintext
+# ~/.claude/.credentials.json (that file is only the fallback when the Keychain write fails, and the
+# only store at all on Windows/Linux). Reading the file alone reported every signed-in mac user as
+# "Signed out". The growth is three new files - the node credential resolver plus its two test suites -
+# and the wiring to route the renderer's signed-in probe to the host that owns ~/.claude. Isolated to
+# the clawdius-owned surface (platform/clawdius, contrib/clawdius, the clawdius-chat extension); no
+# upstream file grows beyond the call-site edits needed to pass the probe through.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
-recorded: 2026-07-11
-baseline: 5594 files changed, 39663 insertions(+), 1456101 deletions(-)
+recorded: 2026-07-13
+baseline: 5597 files changed, 40693 insertions(+), 1456101 deletions(-)

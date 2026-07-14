@@ -277,6 +277,7 @@ jobs:
             "out/vs/workbench/contrib/clawdius/test/browser/claudeUsageProvider.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/clawdiusUpdate.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeUsageCapacityRefresh.test.js" \
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeUsageAccount.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeControlTabsModel.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeControlCenterEditor.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeUsageDashboardView.test.js" \
@@ -333,7 +334,8 @@ jobs:
             "out/vs/platform/agentHost/test/node/agentHostSecretRedact.test.js" \
             "out/vs/platform/agentHost/test/node/claudeMcpToolDiscoveryService.test.js" \
             "out/vs/platform/agentHost/test/node/claudeSdkPipeline.test.js" \
-            "out/vs/platform/agentHost/test/common/claudeTrust.test.js"; do
+            "out/vs/platform/agentHost/test/common/claudeTrust.test.js" \
+            "out/vs/platform/clawdius/test/node/claudeCredentials.test.js"; do
             if [ ! -f "$t" ]; then echo "::error::compiled test missing ($t) — transpile path drift"; exit 1; fi
             log="$(basename "$t").node.log"
             node test/unit/node/index.js --run "$t" 2>&1 | tee "$log"

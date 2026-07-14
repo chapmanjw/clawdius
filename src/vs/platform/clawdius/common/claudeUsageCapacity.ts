@@ -25,5 +25,13 @@ export interface IClaudeUsageCapacityService {
 	 * single allowed usage egress; there is no startup fetch and no background timer.
 	 */
 	refreshCapacity(homeDirPath: string, force: boolean): Promise<void>;
+	/**
+	 * Whether the host that owns `<homeDirPath>/.claude` has usable Claude Code CLI credentials - the "signed in"
+	 * gate. The renderer cannot answer this itself: on macOS the credentials live in the login Keychain, which needs
+	 * a /usr/bin/security spawn (node only). Returns `undefined` when the answer is INDETERMINATE (a locked keychain
+	 * / a spawn failure); the caller must then keep its last known value and never render "Signed out".
+	 * Local-only - reads the user's own credentials, makes no network call, and the token never crosses this boundary.
+	 */
+	hasCredentials(homeDirPath: string): Promise<boolean | undefined>;
 }
 // CLAWDIUS-END

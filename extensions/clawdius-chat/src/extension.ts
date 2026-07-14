@@ -4,7 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
+import { spawn, execFile, ChildProcessWithoutNullStreams } from 'child_process';
+import { createHash } from 'crypto';
 import { createInterface } from 'readline';
 import * as os from 'os';
 import * as path from 'path';
@@ -332,6 +333,157 @@ function engineIsAnthropic(): boolean {
 /** Minimum age of the cached limits before an automatic (non-forced) refresh re-hits the network. */
 const USAGE_CAPACITY_TTL_MS = 60_000;
 
+// --- Claude Code credential resolution (DELIBERATE HAND-MIRROR) ---
+// A hand-mirror of src/vs/platform/clawdius/node/claudeCredentials.ts (extensions cannot import src/vs);
+// branding-guard.ts pins both copies so they can't drift. This copy serves LOCAL windows.
+//
+// The CLI's secure-storage backend is "keychain-with-plaintext-fallback": on macOS the credentials live in the
+// LOGIN KEYCHAIN as a generic-password item, and ~/.claude/.credentials.json is written ONLY when the Keychain
+// write fails; on Windows/Linux there is no secret store, so the file is the only place they ever land. Reading
+// the file alone is therefore a TOTAL MISS on macOS - the bug that reported signed-in mac users as "Signed out".
+//
+// We read the Keychain by SPAWNING /usr/bin/security, never a native binding (Electron safeStorage / keytar /
+// node-keychain / @napi-rs/keyring): macOS evaluates the item's ACL against the process that CALLS the Keychain
+// API. The item's trusted-application list contains /usr/bin/security and nothing else, so spawning it reads
+// silently, whereas a native binding would make Clawdius.app the caller and pop a blocking "wants to use your
+// confidential information" dialog at every launch. No network calls here. The token is NEVER logged.
+
+/** The macOS login-Keychain generic-password service the CLI stores its OAuth credentials under. */
+const KEYCHAIN_SERVICE = 'Claude Code-credentials';
+/** The CLI's fallback Keychain account when the unix username is not a safe attribute value. */
+const KEYCHAIN_FALLBACK_ACCOUNT = 'claude-code-user';
+/** Apple's keychain CLI, by ABSOLUTE path: no PATH lookup (no hijack, no GUI-launch PATH ambiguity). */
+const SECURITY_BIN = '/usr/bin/security';
+/** Bound the Keychain read - a locked keychain awaiting UI could otherwise stall the awaiting status bar. */
+const KEYCHAIN_TIMEOUT_MS = 3_000;
+/** errSecItemNotFound: the item genuinely does not exist (a definitive "signed out"). */
+const ERR_SEC_ITEM_NOT_FOUND = 44;
+
+interface ClaudeCredentials {
+	readonly claudeAiOauth?: { readonly accessToken?: string };
+}
+
+/**
+ * The Keychain SERVICE name, derived exactly as the CLI derives it: plain "Claude Code-credentials", except that a
+ * CLAUDE_CONFIG_DIR / CLAUDE_SECURESTORAGE_CONFIG_DIR override appends `-<first 8 hex of sha256(NFC(dir))>`.
+ * Hardcoding the base name would silently miss those users.
+ */
+function keychainServiceName(): string {
+	const secureDir = process.env['CLAUDE_SECURESTORAGE_CONFIG_DIR'];
+	const configDir = process.env['CLAUDE_CONFIG_DIR'];
+	const noSuffix = secureDir !== undefined ? !secureDir : !configDir;
+	if (noSuffix) {
+		return KEYCHAIN_SERVICE;
+	}
+	const dir = (secureDir !== undefined ? secureDir : configDir!).normalize('NFC');
+	return `${KEYCHAIN_SERVICE}-${createHash('sha256').update(dir).digest('hex').substring(0, 8)}`;
+}
+
+/** The Keychain ACCOUNT name, derived exactly as the CLI derives it: $USER (or the unix username), else a constant. */
+function keychainAccountName(): string {
+	let username: string | undefined;
+	try {
+		username = os.userInfo().username;
+	} catch {
+		username = undefined;
+	}
+	const account = process.env['USER'] || username;
+	return account && /^[a-zA-Z0-9._-]+$/.test(account) ? account : KEYCHAIN_FALLBACK_ACCOUNT;
+}
+
+/**
+ * One `security` invocation. RESOLVES, never rejects: `-w` prints the raw secret on stdout, so this must never be
+ * able to smuggle the token into a rejected Error that an outer catch logs. A non-zero exit is reported as a CODE.
+ */
+function runSecurity(args: readonly string[]): Promise<{ code: number; stdout: string }> {
+	return new Promise(resolve => {
+		execFile(SECURITY_BIN, [...args], { encoding: 'utf8', timeout: KEYCHAIN_TIMEOUT_MS, windowsHide: true }, (err, stdout) => {
+			const code = err ? (typeof (err as { code?: unknown }).code === 'number' ? (err as { code: number }).code : -1) : 0;
+			resolve({ code, stdout: typeof stdout === 'string' ? stdout : '' });
+		});
+	});
+}
+
+/** Parse a credential document, keeping it only when it actually carries an OAuth access token. */
+function parseCredentials(raw: string): ClaudeCredentials | undefined {
+	try {
+		const parsed = JSON.parse(raw.trim());
+		const token = parsed?.claudeAiOauth?.accessToken;
+		return typeof token === 'string' && token.length > 0 ? parsed as ClaudeCredentials : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+type KeychainRead =
+	| { readonly kind: 'found'; readonly creds: ClaudeCredentials }
+	| { readonly kind: 'absent' }
+	| { readonly kind: 'transient' };
+
+async function readKeychainCredentials(): Promise<KeychainRead> {
+	const service = keychainServiceName();
+	const account = keychainAccountName();
+	let res = await runSecurity(['find-generic-password', '-a', account, '-w', '-s', service]);
+	if (res.code === ERR_SEC_ITEM_NOT_FOUND) {
+		// `security` matches on whichever attributes you supply. Retry once WITHOUT -a before concluding the user is
+		// signed out: the item may carry a different `acct` (e.g. the CLI last ran under another unix account).
+		res = await runSecurity(['find-generic-password', '-w', '-s', service]);
+	}
+	if (res.code === 0) {
+		const creds = parseCredentials(res.stdout);
+		return creds ? { kind: 'found', creds } : { kind: 'absent' };
+	}
+	if (res.code === ERR_SEC_ITEM_NOT_FOUND) {
+		return { kind: 'absent' };
+	}
+	// 36 (errSecInteractionNotAllowed - a locked keychain / headless SSH / launchd session), a timeout, or a spawn
+	// failure. INDETERMINATE, NOT "signed out": rendering "Signed out" here would lie to a signed-in user.
+	return { kind: 'transient' };
+}
+
+/** Resolution order, mirroring the CLI exactly: env token, then the macOS Keychain, then the plaintext file. */
+async function resolveCredentials(claudeDir: string): Promise<{ creds?: ClaudeCredentials; indeterminate: boolean }> {
+	// An explicit CLAUDE_CODE_OAUTH_TOKEN short-circuits every store in the CLI - such a user is signed in with
+	// NEITHER a Keychain item NOR a file, so honour it first or we would call them signed out.
+	const envToken = process.env['CLAUDE_CODE_OAUTH_TOKEN'];
+	if (typeof envToken === 'string' && envToken.length > 0) {
+		return { creds: { claudeAiOauth: { accessToken: envToken } }, indeterminate: false };
+	}
+	let indeterminate = false;
+	if (process.platform === 'darwin') {
+		// Keychain FIRST (the CLI's primary store). Reading the file first would let a stale plaintext fallback, left
+		// behind by an old failed write, shadow the live token - and every capacity fetch would then 401 forever.
+		const read = await readKeychainCredentials();
+		if (read.kind === 'found') {
+			return { creds: read.creds, indeterminate: false };
+		}
+		indeterminate = read.kind === 'transient';
+	}
+	try {
+		const fromFile = parseCredentials(fs.readFileSync(path.join(claudeDir, '.credentials.json'), 'utf8'));
+		if (fromFile) {
+			return { creds: fromFile, indeterminate: false };
+		}
+	} catch {
+		// absent / unreadable - fall through
+	}
+	return { creds: undefined, indeterminate };
+}
+
+/**
+ * The "signed in" gate for a LOCAL window, invoked by the renderer over the `clawdius.hasClaudeCredentials` command
+ * (the renderer has no child_process, so it cannot read the Keychain itself). `true` = a token exists; `false` =
+ * definitively absent; `undefined` = INDETERMINATE (locked keychain / spawn failure) - the caller must then keep its
+ * last known value rather than flipping the UI to "Signed out".
+ */
+async function hasCredentials(): Promise<boolean | undefined> {
+	const { creds, indeterminate } = await resolveCredentials(path.join(os.homedir(), '.claude'));
+	if (creds) {
+		return true;
+	}
+	return indeterminate ? undefined : false;
+}
+
 async function fetchUsageCapacity(force = false): Promise<void> {
 	// DELIBERATE MIRROR of ClaudeUsageCapacityService.refreshCapacity in src/vs/platform/clawdius/node (which
 	// serves WSL/SSH remote windows against the remote ~/.claude); this copy serves LOCAL windows. Extensions
@@ -357,7 +509,9 @@ async function fetchUsageCapacity(force = false): Promise<void> {
 				// no cache yet - fetch
 			}
 		}
-		const token = JSON.parse(fs.readFileSync(path.join(claudeDir, '.credentials.json'), 'utf8'))?.claudeAiOauth?.accessToken;
+		// The macOS login Keychain first (the CLI's primary store), then the plaintext file (the only store on
+		// Windows/Linux). A file-only read here would 401-forever for a mac user with a stale plaintext fallback.
+		const token = (await resolveCredentials(claudeDir)).creds?.claudeAiOauth?.accessToken;
 		if (!token) {
 			return;
 		}
@@ -381,6 +535,14 @@ export function activate(context: vscode.ExtensionContext): void {
 	// when the user opens/hovers the usage UI. No startup fetch, no background poll - the zero-uninitiated-
 	// network-egress guarantee (the fetch is api.anthropic.com egress with the user's CLI OAuth token).
 	context.subscriptions.push(vscode.commands.registerCommand('clawdius.refreshUsageCapacity', (force?: unknown) => fetchUsageCapacity(force === true)));
+
+	// The "signed in" probe for a LOCAL window. The renderer's usage surfaces stat ~/.claude/.credentials.json as a
+	// zero-IPC fast path and fall back to this command on a miss, because on macOS the credentials live in the login
+	// Keychain and only a node-side host can spawn /usr/bin/security to read them. Pull-only (the status-bar poll /
+	// a view load drives it): no timer, and NO network egress - this reads the user's own local credentials.
+	// NOTE: package.json must carry an `onCommand:clawdius.hasClaudeCredentials` activation event, or the renderer's
+	// FIRST probe races extension-host activation, rejects, and the status bar paints "Signed out" until the 15s poll.
+	context.subscriptions.push(vscode.commands.registerCommand('clawdius.hasClaudeCredentials', () => hasCredentials()));
 
 	// Register Claude as a language model (the model picker + any model-using flow can now select it).
 	const claudeProvider = new ClaudeLanguageModelProvider();

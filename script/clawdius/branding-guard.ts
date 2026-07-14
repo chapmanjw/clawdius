@@ -129,6 +129,53 @@ ok(chatExt.includes('api.anthropic.com/api/oauth/usage'), 'clawdius-chat: capaci
 ok(chatExt.includes('.clawdius-usage-cache.json'), 'clawdius-chat: capacity cache filename drifted from the shared spec');
 ok(chatExt.includes('oauth-2025-04-20'), 'clawdius-chat: the anthropic-beta header value drifted from the shared spec');
 
+// Credential-resolution parity + the "never a native keychain binding" rule.
+// The Claude Code CLI stores its OAuth credentials in the macOS LOGIN KEYCHAIN (plaintext ~/.claude/.credentials.json
+// is only its FALLBACK when the Keychain write fails, and the only store at all on Windows/Linux). A regression to a
+// file-only read reports every signed-in mac user as "Signed out". claudeCredentials.ts (node, serves remote windows)
+// and the clawdius-chat hand-mirror (serves local windows) must both keep the full resolution: the env-token
+// short-circuit, the Keychain service name, and the /usr/bin/security spawn.
+// Assert on CODE, never a bare substring: both files NAME "/usr/bin/security" and the service in the long comments
+// explaining this design, so a plain `.includes(...)` would be satisfied by the PROSE and would happily pass a
+// file-only regression (verified: it does). Each pattern below matches a construct only real code can produce.
+const credSvc = fs.readFileSync('src/vs/platform/clawdius/node/claudeCredentials.ts', 'utf8');
+const CREDENTIAL_SPEC: ReadonlyArray<{ readonly re: RegExp; readonly what: string }> = [
+	{ re: /const SECURITY_BIN = '\/usr\/bin\/security'/, what: "the /usr/bin/security ABSOLUTE path (a bare 'security' is PATH-hijackable)" },
+	{ re: /const KEYCHAIN_SERVICE = 'Claude Code-credentials'/, what: 'the Keychain service name' },
+	{ re: /'find-generic-password'/, what: 'the `security find-generic-password` read' },
+	{ re: /platform === 'darwin'/, what: 'the darwin gate that decides to read the Keychain at all' },
+	{ re: /claudeAiOauth\?\.accessToken/, what: 'the OAuth access-token read' },
+	{ re: /env\['CLAUDE_CODE_OAUTH_TOKEN'\]/, what: 'the CLAUDE_CODE_OAUTH_TOKEN short-circuit (such a user has NEITHER a Keychain item NOR a file)' },
+	// The RETURN, not the type union that also spells 'transient' - otherwise mapping exit 36 to a definitive
+	// 'absent' (the exact "Signed out" lie) would still satisfy this. Behavioural backstop: claudeCredentials.test.ts
+	// ("exit 36 is INDETERMINATE - undefined, never false"); this grep is defense in depth.
+	{ re: /return \{ kind: 'transient' \}/, what: 'the INDETERMINATE result (exit 36 / a locked keychain must never render "Signed out")' },
+];
+for (const { re, what } of CREDENTIAL_SPEC) {
+	ok(re.test(chatExt), `clawdius-chat: credential resolution drifted from the shared spec (missing ${what})`);
+	ok(re.test(credSvc), `claudeCredentials: credential resolution drifted from the clawdius-chat mirror (missing ${what})`);
+}
+ok(/registerCommand\('clawdius\.hasClaudeCredentials'/.test(chatExt), 'clawdius-chat: the local signed-in credential probe command is missing');
+// Registering the command is NOT enough: without an onCommand activation event the renderer's FIRST probe races
+// extension-host activation (onStartupFinished always fires after `*`), rejects with "command not found", and the
+// status bar paints "Signed out" until the 15s poll self-heals. Pin the activation events so that can't regress.
+const chatPkg = fs.readFileSync('extensions/clawdius-chat/package.json', 'utf8');
+for (const command of ['clawdius.hasClaudeCredentials', 'clawdius.refreshUsageCapacity']) {
+	ok(chatPkg.includes(`"onCommand:${command}"`), `clawdius-chat: ${command} has no onCommand activation event - the renderer would race the extension host and mis-render the signed-in state`);
+}
+// Ban NATIVE keychain bindings outright. macOS evaluates a Keychain item's ACL against the process that CALLS the
+// Keychain API: the item's trusted-application list contains /usr/bin/security and nothing else, so spawning that
+// binary reads silently, while a native binding makes Clawdius.app the caller and pops a blocking "wants to use your
+// confidential information" dialog at EVERY launch. This is a dev-only trap - once a developer clicks "Always Allow"
+// they can never reproduce the prompt - so it is pinned here rather than left to review.
+// Match on actual USE (import/require, or a safeStorage member access), NOT a bare mention, so both files can still
+// NAME these bindings in the comment explaining why they are forbidden. (A substring ban self-trips on that comment.)
+const NATIVE_KEYCHAIN_USE = /(?:from|require\(|import\()\s*['"](?:keytar|node-keychain|@napi-rs\/keyring)['"]|\bsafeStorage\s*\./;
+ok(!NATIVE_KEYCHAIN_USE.test(credSvc), 'claudeCredentials: must read the Keychain via /usr/bin/security, never a native binding (keytar/safeStorage/node-keychain/@napi-rs/keyring)');
+ok(!NATIVE_KEYCHAIN_USE.test(chatExt), 'clawdius-chat: must read the Keychain via /usr/bin/security, never a native binding (keytar/safeStorage/node-keychain/@napi-rs/keyring)');
+// The credential resolver spawns the Apple keychain CLI and reads a local file - it must never reach the network.
+ok(!/\bfetch\s*\(|['"]node:https?['"]|['"]https?:\/\//.test(credSvc), 'claudeCredentials: must not perform network I/O');
+
 // Same zero-egress backstop for the REMOTE-side mirror of the capacity fetch: the REH server's capacity service
 // (which serves WSL/SSH windows against the remote ~/.claude) must be ON DEMAND only - invoked via its IPC
 // channel, with NO background timer and NO constructor/startup self-call. A regression to a timer or a self-call

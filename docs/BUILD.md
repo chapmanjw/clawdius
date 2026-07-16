@@ -47,7 +47,7 @@ VS 2022 baseline above is preferred:
 1. `set vs2022_install=<VS 2026 path>` because preinstall only whitelists "2022" and "2019".
 2. Run inside the VS 2026 x64 dev env (`vcvarsall.bat x64`) for `VCINSTALLDIR`.
 
-## Verification (Phase 0)
+## Verification
 
 A build launches as Clawdius and boots as a normal multi-process Electron app (main, renderers,
 extension host, GPU, utilities, and the Claude agent-host utility process) with no crash, and shuts
@@ -60,4 +60,4 @@ down cleanly. `.build/electron` downloads on first launch.
   needed to build.
 - Full incremental development uses the watch tasks, not `npm run compile`; see the inherited
   `.claude/CLAUDE.md`. `npm run compile` is the correct one-shot full build used here.
-- Cross-platform packaging (NSIS, dmg, deb, rpm), signing, and the full CI matrix are Phase 6 / Phase 7.
+- Cross-platform packaging (NSIS, dmg, deb, rpm), signing, and the full CI matrix are future work.

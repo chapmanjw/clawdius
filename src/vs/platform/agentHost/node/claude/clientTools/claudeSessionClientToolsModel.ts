@@ -62,7 +62,7 @@ export class SessionClientToolsModel {
  * Tracks "has {@link SessionClientToolsModel.merged} changed since the
  * last successful {@link consume}?". Subscribes to the model's observable
  * and flips a private dirty bit on every change; {@link consume} captures
- * the current merged snapshot and clears the bit — preserving the C6 pin
+ * the current merged snapshot and clears the bit — preserving the pin
  * invariant from the previous `ClientToolDiff` implementation: a `setTools`
  * call that races the in-flight builder re-flips the bit via the autorun, so
  * the next sendMessage detects the stale set and triggers another rebind.

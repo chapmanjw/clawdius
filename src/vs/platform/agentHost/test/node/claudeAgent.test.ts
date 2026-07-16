@@ -27,6 +27,7 @@ import { URI } from '../../../../base/common/uri.js';
 import { isUUID } from '../../../../base/common/uuid.js';
 import { isCancellationError } from '../../../../base/common/errors.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
+import { AgentHostTrustConfigKey, AgentHostTrustKey } from '../../common/trustConfigSchema.js';
 import { ServiceCollection } from '../../../instantiation/common/serviceCollection.js';
 import { InstantiationService } from '../../../instantiation/common/instantiationService.js';
 import { IInstantiationService } from '../../../instantiation/common/instantiation.js';
@@ -107,7 +108,7 @@ function claudeFileEnvServices(disposables: Pick<DisposableStore, 'add'>): [type
 	];
 }
 
-// FakeClaudeSubagentResolver removed in the Phase 12 refactor (the
+// FakeClaudeSubagentResolver removed (the
 // IClaudeSubagentResolver service no longer exists). Per-session
 // subagent state lives on `ClaudeAgentSession.subagents`
 // (SubagentRegistry); tests that need to inject inner-tool edges or
@@ -125,7 +126,7 @@ class FakeClaudeAgentSdkService implements IClaudeAgentSdkService {
 	listSessionsCallCount = 0;
 
 	/**
-	 * Phase 6: counts {@link startup} invocations. The Phase-6 contract
+	 * Counts {@link startup} invocations. The contract
 	 * is that materialization is the FIRST `startup()` call, so this
 	 * field anchors invariants like "non-fork createSession does not
 	 * touch the SDK" and "materialize fires exactly once".
@@ -218,7 +219,7 @@ class FakeClaudeAgentSdkService implements IClaudeAgentSdkService {
 	}
 
 	/**
-	 * Phase 13: programmable transcript fetch. Tests stage canned
+	 * Programmable transcript fetch. Tests stage canned
 	 * `SessionMessage[]` per session id; absence resolves to `[]` to match
 	 * the SDK's own "session not found" semantics. `getSessionMessagesRejection`
 	 * lets tests simulate SDK throw paths (corrupt JSONL, dynamic-import fault).
@@ -237,7 +238,7 @@ class FakeClaudeAgentSdkService implements IClaudeAgentSdkService {
 	}
 
 	/**
-	 * Phase 12: programmable subagent enumeration. Tests stage
+	 * Programmable subagent enumeration. Tests stage
 	 * `subagentsBySessionId` keyed by parent session id; absent entries
 	 * resolve to `[]`. `listSubagentsRejection` simulates SDK throw paths.
 	 */
@@ -254,7 +255,7 @@ class FakeClaudeAgentSdkService implements IClaudeAgentSdkService {
 	}
 
 	/**
-	 * Phase 12: programmable subagent transcript fetch. Tests stage canned
+	 * Programmable subagent transcript fetch. Tests stage canned
 	 * messages keyed by `${sessionId}::${agentId}`. Absent entries resolve
 	 * to `[]`. `getSubagentMessagesRejection` simulates SDK throw paths.
 	 */
@@ -294,7 +295,7 @@ class FakeClaudeAgentSdkService implements IClaudeAgentSdkService {
 	startupAdvance: ((callIndex: number) => Promise<void>) | undefined;
 
 	/**
-	 * Phase 10 — records each per-tool `tool()` call and each
+	 * Records each per-tool `tool()` call and each
 	 * `createSdkMcpServer()` call the agent makes via the
 	 * {@link buildClientToolMcpServer} factory. Tests inspect these to
 	 * assert the right snapshot reached the SDK; they also inspect
@@ -390,10 +391,10 @@ class FakeQuery implements AsyncGenerator<SDKMessage, void> {
 	/** Modes recorded by `setPermissionMode` calls in plan/turn order. */
 	readonly recordedPermissionModes: PermissionMode[] = [];
 
-	/** Phase 9 — SDK ids recorded by `setModel` calls (yield-boundary fan-out). */
+	/** SDK ids recorded by `setModel` calls (yield-boundary fan-out). */
 	readonly recordedModels: (string | undefined)[] = [];
 
-	/** Phase 9 — settings recorded by `applyFlagSettings` (effortLevel hot-swap). */
+	/** Settings recorded by `applyFlagSettings` (effortLevel hot-swap). */
 	readonly recordedFlagSettings: Settings[] = [];
 
 	private _yieldIndex = 0;
@@ -446,7 +447,7 @@ class FakeQuery implements AsyncGenerator<SDKMessage, void> {
 		return undefined;
 	}
 
-	// Phase 6 doesn't exercise the rest of the Query control surface; if a
+	// This suite doesn't exercise the rest of the Query control surface; if a
 	// test trips one of these, surface it loudly so we know to model it.
 	async setPermissionMode(mode: PermissionMode): Promise<void> {
 		this.recordedPermissionModes.push(mode);
@@ -466,7 +467,7 @@ class FakeQuery implements AsyncGenerator<SDKMessage, void> {
 	mcpServerStatus(): never { throw new Error('FakeQuery: mcpServerStatus not modeled'); }
 	getContextUsage(): never { throw new Error('FakeQuery: getContextUsage not modeled'); }
 	usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(): never { throw new Error('FakeQuery: usage_EXPERIMENTAL not modeled'); }
-	/** Phase 11 — programmable tool-name snapshot returned by `reloadPlugins()`. */
+	/** Programmable tool-name snapshot returned by `reloadPlugins()`. */
 	reloadPluginsResults: readonly string[][] = [];
 	reloadPluginsCallCount = 0;
 	reloadPlugins(): never {
@@ -571,6 +572,9 @@ function createTestContext(
 	const logService = overrides?.logService ?? new NullLogService();
 	const stateManager = disposables.add(new AgentHostStateManager(logService));
 	const configService = disposables.add(new AgentConfigurationService(stateManager, logService));
+	// Seed a trusted root config so materialize's trust barrier resolves immediately ('present');
+	// trusted:true matches the dormant default these tests ran under before the barrier existed.
+	configService.updateRootConfig({ [AgentHostTrustConfigKey.Trust]: { [AgentHostTrustKey.Trusted]: true } });
 
 	const services = new ServiceCollection(
 		...claudeFileEnvServices(disposables),
@@ -632,13 +636,13 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('phase-stub graduation: abortSession + changeModel no longer throw', async () => {
-		// Phase 9 graduation: both methods land in this phase. They are
+		// Both methods are
 		// idempotent on unknown session URIs (no-op rather than throw)
 		// because the workbench may race a session dispose with these
 		// calls; matching CopilotAgent's permissive surface keeps the
 		// AgentSideEffects.handleAction `.catch()` path quiet on common
 		// paths. Behavior on known sessions is exercised by the dedicated
-		// Phase 9 suites below.
+		// suites below.
 		const { agent } = createTestContext(disposables);
 		await agent.abortSession(URI.parse('claude:/unknown'));
 		await agent.changeModel(URI.parse('claude:/unknown'), { id: 'claude-opus-4.6' });
@@ -667,10 +671,10 @@ suite('ClaudeAgent', () => {
 		);
 	});
 
-	// #region Phase 5 — session lifecycle
+	// #region session lifecycle
 
 	test('createSession (non-fork) returns a claude:/<uuid> URI with provisional: true; no DB or SDK contact', async () => {
-		// Phase 6 §5.1 Test 1. Per-session DB is overlay/cache only and
+		// Per-session DB is overlay/cache only and
 		// the SDK subprocess fork is deferred until first sendMessage.
 		// `provisional: true` opts the session into the AgentService's
 		// deferred-`sessionAdded` protocol. Workbench eagerly creates
@@ -767,7 +771,7 @@ suite('ClaudeAgent', () => {
 		// whatever default `_resumeSession` had to fall back to.
 		const { agent, sdk } = createTestContext(disposables);
 
-		// Phase 1: fresh materialize so the overlay is seeded with the
+		// Fresh materialize so the overlay is seeded with the
 		// session's initial model.
 		const initialModel = { id: 'claude-sonnet-4.6', config: { thinkingLevel: 'high' } };
 		const created = await agent.createSession({ workingDirectory: URI.file('/work-resume'), model: initialModel });
@@ -775,20 +779,20 @@ suite('ClaudeAgent', () => {
 		sdk.nextQueryMessages = [makeSystemInitMessage(sessionId), makeResultSuccess(sessionId)];
 		await agent.sendMessage(created.session, URI.parse(buildDefaultChatUri(created.session)), 'hi', undefined, 'turn-1');
 
-		// Phase 2: user changes the model post-materialize — this hits the
+		// User changes the model post-materialize — this hits the
 		// runtime path inside session.setModel and rewrites the overlay.
 		const updatedModel = { id: 'claude-opus-4.6', config: { thinkingLevel: 'medium' } };
 		await agent.changeModel(created.session, updatedModel);
 
-		// Phase 3: simulate cross-window resume by tearing the in-memory
+		// Simulate cross-window resume by tearing the in-memory
 		// entry down and forcing the resume branch on the next send.
 		await agent.disposeSession(created.session);
 		sdk.sessionList = [{ sessionId, cwd: '/work-resume', summary: '', lastModified: Date.now() }];
 		sdk.nextQueryMessages = [makeSystemInitMessage(sessionId), makeResultSuccess(sessionId)];
 		await agent.sendMessage(created.session, URI.parse(buildDefaultChatUri(created.session)), 'turn 2', undefined, 'turn-2');
 
-		// Phase 4: confirm the overlay still carries the updated model from
-		// Phase 2. If materialize wrote unconditionally on resume, the
+		// Confirm the overlay still carries the updated model from
+		// the earlier change. If materialize wrote unconditionally on resume, the
 		// overlay would carry whatever model the resume path passed in
 		// (typically the initial materialize-time model).
 		// NOTE: `model` was removed from IAgentSessionMetadata upstream in 1.127, so the
@@ -825,7 +829,7 @@ suite('ClaudeAgent', () => {
 		// calls `sdk.forkSession(id, { upToMessageId })`, inherits the source
 		// overlay, and returns a NON-provisional session whose Query starts
 		// lazily on the first sendMessage — so no eager `startup()` /
-		// `listSessions()` here (M9). Stage a source transcript so `turn-1`
+		// `listSessions()` here. Stage a source transcript so `turn-1`
 		// resolves to its last assistant reply (`a1`), the inclusive anchor.
 		const { agent, sdk } = createTestContext(disposables);
 
@@ -877,7 +881,7 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('first sendMessage on a provisional session materializes it (single startup, single materialize event)', async () => {
-		// Phase 6 §5.1 Test 3 (tracer). Forces the materialize spine into
+		// (tracer). Forces the materialize spine into
 		// existence: `_provisionalSessions` map, `_materializeProvisional`,
 		// `IClaudeAgentSdkService.startup()`, `_onDidMaterializeSession`
 		// event, and `entry.send` plumbing in `ClaudeAgentSession`.
@@ -925,7 +929,7 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('materialize event payload shape — { session, workingDirectory, project: undefined }', async () => {
-		// Phase 6 §5.1 Test 4. Pins the {@link IAgentMaterializeSessionEvent}
+		// Pins the {@link IAgentMaterializeSessionEvent}
 		// payload independently of the tracer in Test 3. The default
 		// {@link createNoopGitService} produces no project metadata, so
 		// `project` is `undefined`. AgentService relies on this exact
@@ -960,8 +964,8 @@ suite('ClaudeAgent', () => {
 		});
 	});
 
-	test('createSession config.model + config.config.permissionMode flow into Options on first send (M11 / Phase 6.1 C2)', async () => {
-		// Phase 6.1 Cycle E (drift C2). M11 mandates that the
+	test('createSession config.model + config.config.permissionMode flow into Options on first send', async () => {
+		// The
 		// `IAgentCreateSessionConfig` bag (`model` + `config.*`) survives
 		// from `createSession` → provisional record → first `query()`'s
 		// `Options.*`. The pre-fix surface dropped both: `provisional`
@@ -991,9 +995,8 @@ suite('ClaudeAgent', () => {
 		});
 	});
 
-	test('createSession model.config.thinkingLevel flows into Options.effort on first send (M11 / Phase 6.1 C2)', async () => {
-		// Phase 6.1 Cycle E. Per CONTEXT.md M11 + the M-portrait at
-		// CONTEXT.md:1497, `effort` is the third leg of the
+	test('createSession model.config.thinkingLevel flows into Options.effort on first send', async () => {
+		// `effort` is the third leg of the
 		// `IAgentCreateSessionConfig` → `Options.*` triplet (alongside
 		// model and permissionMode). Unlike the other two, effort is
 		// nested inside `ModelSelection.config.thinkingLevel` rather
@@ -1002,7 +1005,7 @@ suite('ClaudeAgent', () => {
 		// copilotAgent.ts:487. The SDK's `Options.effort` accepts the
 		// full 5-value `EffortLevel` union (sdk.d.ts:443 + sdk.d.ts:1214);
 		// the 4-value clamp at sdk.d.ts:4292 only applies to the live
-		// `applyFlagSettings` hot-swap path (Phase 9).
+		// `applyFlagSettings` hot-swap path.
 		const { agent, sdk } = createTestContext(disposables);
 
 		const created = await agent.createSession({
@@ -1024,7 +1027,7 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('two sendMessage calls reuse the materialized Query', async () => {
-		// Phase 6 §5.1 Test 5. After the first send materializes the
+		// After the first send materializes the
 		// session, subsequent sends MUST push onto the same prompt
 		// iterable / SDK Query — they MUST NOT re-fork the subprocess
 		// (`startup()` is expensive and would lose conversational state
@@ -1041,8 +1044,7 @@ suite('ClaudeAgent', () => {
 		// Stage two turns. Park the iterator at index 2 (right after the
 		// first `result`) until the test releases it; this proves the
 		// second send reuses the same Query rather than spawning a new
-		// one (the gate would otherwise be irrelevant). Index choice
-		// mirrors plan §5.1 test 5.
+		// one (the gate would otherwise be irrelevant).
 		const advance = new DeferredPromise<void>();
 		sdk.queryAdvance = async (idx: number) => {
 			if (idx === 2) {
@@ -1094,7 +1096,7 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('text content_block emits SessionResponsePart(Markdown) before SessionDelta', async () => {
-		// Phase 6 §5.1 Test 6 + §3.6. The protocol reducer at
+		// The protocol reducer at
 		// `actions.ts:233 (SessionDelta)` requires the targeted
 		// `SessionResponsePart` to have already been emitted, otherwise
 		// the delta has nowhere to land. This test pins that ordering by
@@ -1170,7 +1172,7 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('thinking content_block emits SessionResponsePart(Reasoning) before SessionReasoning', async () => {
-		// Phase 6 §5.1 Test 7. Same ordering invariant as Test 6 but for
+		// Same ordering invariant as the previous test but for
 		// extended-thinking blocks: `SessionResponsePart(Reasoning)` MUST
 		// precede every `SessionReasoning(partId)` for the same partId
 		// (`actions.ts:540` reducer requires the part to exist).
@@ -1237,7 +1239,7 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('result emits SessionUsage immediately before SessionTurnComplete', async () => {
-		// Phase 6 §5.1 Test 8 + §4 mapping table. The protocol contract
+		// The protocol contract
 		// requires usage to be reported BEFORE the turn is marked
 		// complete (otherwise consumers that flush state on
 		// `SessionTurnComplete` lose the usage attribution). Both
@@ -1307,7 +1309,7 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('multiple text blocks each get a distinct partId; deltas route correctly', async () => {
-		// Phase 6 §5.1 Test 9. Anthropic streams interleave text blocks
+		// Anthropic streams interleave text blocks
 		// (e.g. assistant emits two paragraphs in the same turn). Each
 		// `content_block_start` event has a distinct `index`; the mapper
 		// allocates a fresh partId per index and routes deltas via the
@@ -1375,11 +1377,11 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('canonical SDKAssistantMessage with tool_use content drops silently (partial stream owns SessionToolCallStart)', async () => {
-		// Phase 7 §3.3: the canonical `SDKAssistantMessage` (`type:
+		// The canonical `SDKAssistantMessage` (`type:
 		// 'assistant'`) is no longer special-cased for `tool_use`. The
 		// `stream_event` partials already emitted `SessionToolCallStart`
 		// — the reducer is append-only, so re-emitting from the canonical
-		// envelope would duplicate. Drop silently. The Phase 6.1
+		// envelope would duplicate. Drop silently. The prior
 		// warn-and-drop is gone alongside `canUseTool: deny`.
 		const logService = new CapturingLogService();
 		const { agent, sdk } = createTestContext(disposables, { logService });
@@ -1412,10 +1414,10 @@ suite('ClaudeAgent', () => {
 		});
 	});
 
-	test('canonical SDKAssistantMessage with text content does not double-emit signals already produced by stream_event partials (Phase 6.1 / Cycle F)', async () => {
-		// CONTEXT.md M8:875 — partials are advisory, final
+	test('canonical SDKAssistantMessage with text content does not double-emit signals already produced by stream_event partials', async () => {
+		// Partials are advisory, final
 		// `SDKAssistantMessage` is canonical. With `includePartialMessages:
-		// true` (Phase 6 §3.4) the `stream_event` partials already drove
+		// true` the `stream_event` partials already drove
 		// the response part + per-token deltas. The terminal `'assistant'`
 		// envelope MUST NOT add a second copy: the reducer is append-only
 		// (no replace path), so a double-emit would corrupt the activeTurn
@@ -1463,11 +1465,11 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('_isResumed flips on first system:init', async () => {
-		// Phase 6 §5.1 Test 10. The SDK's `system:init` message marks
-		// the start of a session. Phase 7+ teardown+recreate uses
+		// The SDK's `system:init` message marks
+		// the start of a session. Teardown+recreate uses
 		// `_isResumed` to drive `Options.resume = sessionId` on the
 		// second `startup()`, signalling the SDK to reuse the existing
-		// transcript. Phase 6 has no teardown+recreate yet, so the test
+		// transcript. This suite has no teardown+recreate yet, so the test
 		// asserts the flag flip directly through a session getter.
 		const { agent, sdk } = createTestContext(disposables);
 
@@ -1484,7 +1486,7 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('disposing a materialized session aborts the controller and rejects the in-flight send', async () => {
-		// Phase 6 §5.1 Test 11. The dispose chain registered in
+		// The dispose chain registered in
 		// `ClaudeAgentSession`'s constructor calls
 		// `abortController.abort()`. The for-await loop sees
 		// `signal.aborted` and throws `CancellationError`, and the
@@ -1544,8 +1546,8 @@ suite('ClaudeAgent', () => {
 		});
 	});
 
-	test('dispose racing _writeCustomizationDirectory does not orphan the materialized session (C1)', async () => {
-		// Council-review C1 regression. The plan's Q8 belt-and-suspenders
+	test('dispose racing _writeCustomizationDirectory does not orphan the materialized session', async () => {
+		// Regression. A belt-and-suspenders
 		// abort guard at `_materializeProvisional` only catches an abort
 		// that lands while `await sdk.startup()` is in flight.
 		// `_writeCustomizationDirectory` is a SECOND async boundary where
@@ -1578,6 +1580,9 @@ suite('ClaudeAgent', () => {
 		const logService = new NullLogService();
 		const stateManager = disposables.add(new AgentHostStateManager(logService));
 		const configService = disposables.add(new AgentConfigurationService(stateManager, logService));
+		// Seed a trusted root config so materialize's trust barrier resolves immediately ('present');
+		// trusted:true matches the dormant default these tests ran under before the barrier existed.
+		configService.updateRootConfig({ [AgentHostTrustConfigKey.Trust]: { [AgentHostTrustKey.Trusted]: true } });
 
 		const services = new ServiceCollection(
 			...claudeFileEnvServices(disposables),
@@ -1639,7 +1644,7 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('disposing a provisional session never calls SDK startup and removes the record', async () => {
-		// Phase 6 §5.1 Test 12. Symmetric with createSession's
+		// Symmetric with createSession's
 		// "no SDK contact" invariant: provisional dispose must NOT
 		// reach `sdk.startup` (no subprocess spawn for an
 		// already-cancelled session). Pinned by:
@@ -1811,7 +1816,7 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('shutdown drains a mix of provisional and materialized sessions', async () => {
-		// Phase 6 §5.1 Test 13. The shutdown spec is two-phase:
+		// The shutdown spec is two-phase:
 		//  1) Provisional sessions: abort each AbortController + clear
 		//     the map. No SDK contact (mirrors `disposeSession`'s
 		//     provisional branch). This unblocks any racing
@@ -1879,7 +1884,7 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('mapper throwing on a malformed stream_event is logged and the turn continues', async () => {
-		// Phase 6 §5.1 Test 14. The mapper does its OWN warn-and-skip
+		// The mapper does its OWN warn-and-skip
 		// for known malformed shapes (e.g. tool_use streams while
 		// `canUseTool: deny`). The try/catch in `_processMessages` is
 		// defense-in-depth for everything else: a programming bug in
@@ -1945,11 +1950,11 @@ suite('ClaudeAgent', () => {
 		});
 	});
 
-	test('sendMessage tags SDKUserMessage.uuid with the effective turn id (M1 / Turn.id ↔ uuid invariant)', async () => {
-		// Phase 6.1 Cycle C / drift C1. M1 + the Glossary mandate that
+	test('sendMessage tags SDKUserMessage.uuid with the effective turn id (Turn.id ↔ uuid invariant)', async () => {
+		// The protocol mandates that
 		// the outbound `SDKUserMessage.uuid` carries the agent host's
-		// `effectiveTurnId` (`turnId ?? generateUuid()`). Phase 6.5 fork
-		// (`sdk.getSessionMessages` → message-UUID lookup) and Phase 13
+		// `effectiveTurnId` (`turnId ?? generateUuid()`). Fork
+		// (`sdk.getSessionMessages` → message-UUID lookup) and
 		// replay (`SDKUserMessageReplay.uuid`) both depend on this id
 		// being our turn id, NOT a fresh SDK-generated uuid.
 		const { agent, sdk } = createTestContext(disposables);
@@ -1974,12 +1979,12 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('attachments (File and Directory) become a system-reminder block on the user message', async () => {
-		// Phase 6 §5.1 Test 15. The prompt resolver must produce two
+		// The prompt resolver must produce two
 		// content blocks for an attachment-bearing send: a `text`
 		// block carrying the prompt, then a `text` block wrapped in
 		// `<system-reminder>` listing the attached URIs (one line
 		// per entry, prefix `- `, paths via fsPath for `file:` URIs).
-		// Phase 6 only round-trips File and Directory — the Selection
+		// This suite only round-trips File and Directory — the Selection
 		// branch is dead-code (AgentSideEffects strips text/selection
 		// at the protocol → agent boundary).
 		const { agent, sdk } = createTestContext(disposables);
@@ -2072,11 +2077,10 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('shutdown clears provisional sessions; concurrent disposeSession is safe', async () => {
-		// Phase-6 update: createSession is provisional, so no
+		// createSession is provisional, so no
 		// `ClaudeAgentSession` wrappers exist before the first
 		// `sendMessage`. The wrapper-disposal-once invariant moves to
-		// the materialized-session shutdown drain in Cycle 13 (§5.1
-		// Test 13). What this test still pins: shutdown + a concurrent
+		// the materialized-session shutdown drain. What this test still pins: shutdown + a concurrent
 		// `disposeSession` for a provisional URI complete without
 		// throwing, both share the `_disposeSequencer` for the same
 		// key, and the agent does not surface a double-dispose error.
@@ -2096,22 +2100,22 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('disposeSession removes the wrapper but does NOT delete the SDK or DB session', async () => {
-		// Plan section 3.3.4 — `disposeSession` is wrapper teardown, NOT
+		// `disposeSession` is wrapper teardown, NOT
 		// session deletion. The SDK session and the per-session DB
-		// outlive `disposeSession`; permanent deletion is a Phase 13
-		// concern (deletion command) and goes through a different code
+		// outlive `disposeSession`; permanent deletion is a
+		// separate concern (deletion command) and goes through a different code
 		// path. The user-visible consequence: closing a tab in the
 		// workbench drops the wrapper but the session reappears in the
 		// session list (and its history is still on disk) until
 		// explicitly deleted. This invariant prevents accidental
-		// regression in Phase 6+ where wrapper teardown will gain real
+		// regression where wrapper teardown will gain real
 		// cleanup work (Query.interrupt) — that work MUST NOT spill
 		// into SDK-side or DB-side deletion.
 		const { agent, sdk } = createTestContext(disposables);
 		const created = await agent.createSession({});
 		// Make the SDK report the just-created session as if its
 		// metadata had been written by an earlier `query()` turn —
-		// that's the steady state once Phase 6 sendMessage lands.
+		// that's the steady state once sendMessage lands.
 		sdk.sessionList = [{
 			sessionId: AgentSession.id(created.session),
 			summary: 'Hello world',
@@ -2133,8 +2137,8 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('getSessionMessages returns an empty transcript for any session', async () => {
-		// Phase 5 doesn't reconstruct transcripts. Real history reconstruction
-		// from the SDK event log lands in Phase 13; the bare method shape is
+		// This suite doesn't reconstruct transcripts. Real history reconstruction
+		// from the SDK event log lands separately; the bare method shape is
 		// required by IAgent so callers can subscribe before any messages
 		// exist. Returning `[]` is correct: the agent service supplies its
 		// own provisional turns from in-memory state until this method
@@ -2148,7 +2152,7 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('listSessions returns SDK entries decorated with the per-session DB overlay', async () => {
-		// Plan section 3.3.2: the SDK is the source of truth; the per-session DB
+		// The SDK is the source of truth; the per-session DB
 		// is a pure overlay/cache. We seed two SDK entries and a single
 		// DB carrying `claude.customizationDirectory` for entry 'a'. The
 		// result must include both entries; the overlay value must
@@ -2210,7 +2214,7 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('listSessions tolerates a corrupt DB without poisoning the rest of the listing', async () => {
-		// Plan section 3.3.2 risk: a single corrupt per-session DB MUST NOT
+		// Risk: a single corrupt per-session DB MUST NOT
 		// drop the other entries from the listing. CopilotAgent's
 		// `Promise.all`-with-throwing-mapper pattern at copilotAgent.ts:519
 		// has this latent bug; we follow AgentService.listSessions's
@@ -2273,8 +2277,8 @@ suite('ClaudeAgent', () => {
 		});
 	});
 
-	test('createSession.model round-trips through the per-session DB to listSessions[].model (Phase 6.1 I8 + I7 + C2)', async () => {
-		// Phase 6.1 Cycle E (drift I8). Closes the missing-metadata leak:
+	test('createSession.model round-trips through the per-session DB to listSessions[].model', async () => {
+		// Closes the missing-metadata leak:
 		// `IAgentCreateSessionConfig.model` is supposed to be persisted
 		// per-session and surface back via `listSessions(): IAgentSessionMetadata.model`.
 		// Pre-fix, only `customizationDirectory` was overlayed; `model`
@@ -2343,9 +2347,8 @@ suite('ClaudeAgent', () => {
 		assert.deepStrictEqual(result, []);
 	});
 
-	test('getSessionMetadata joins SDK info with sidecar overlay, returns SDK-only fields for external sessions, and undefined for unknown ids (Phase 6.1 / Cycle D4 / I7)', async () => {
-		// Phase 6.1 plan / Cycle D4 + drift I7. CONTEXT.md M11 / agents.md
-		// section "Lazy session metadata" (~line 2125) require Claude to
+	test('getSessionMetadata joins SDK info with sidecar overlay, returns SDK-only fields for external sessions, and undefined for unknown ids', async () => {
+		// Lazy session metadata requires Claude to
 		// expose a per-session lookup that mirrors the
 		// `IAgent.getSessionMetadata` shape so AgentService can hydrate
 		// stale session URIs without enumerating the full provider
@@ -2436,13 +2439,13 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('shutdown is idempotent and returns the same memoized promise on concurrent calls', async () => {
-		// Phase 6+ INVARIANT: the SDK Query subprocess for each live
+		// INVARIANT: the SDK Query subprocess for each live
 		// session is aborted inside `shutdown()`. If two callers race
 		// (e.g. ChatService.onDidShutdown + the host's own teardown),
 		// they MUST share one drain pass — otherwise we double-abort
-		// and risk EBUSY on the SQLite handle. Phase 5 has no async
+		// and risk EBUSY on the SQLite handle. This suite has no async
 		// work yet, so the race is benign in practice; the memoization
-		// is locked NOW so Phase 6 inherits the contract for free.
+		// is locked NOW so later work inherits the contract for free.
 		// Mirror of `CopilotAgent.shutdown()` at copilotAgent.ts:1246.
 		const { agent } = createTestContext(disposables);
 		await agent.createSession({});
@@ -2464,7 +2467,7 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('ClaudeAgentSdkService caches the resolved module and logs the first load failure exactly once', async () => {
-		// Plan section 3.1 risk: a corrupt postinstall (missing native binding,
+		// Risk: a corrupt postinstall (missing native binding,
 		// bad node_modules) will fault every `import()` call. We MUST
 		// surface the first failure clearly so it's diagnosable, but
 		// MUST NOT spam the log on every subsequent call (listSessions
@@ -2552,8 +2555,8 @@ suite('ClaudeAgent', () => {
 		});
 	});
 
-	test('ClaudeAgentSdkService forwards listSubagents + getSubagentMessages to the underlying bindings (Phase 12 step 2)', async () => {
-		// Phase 12 needs two new SDK reads. `listSubagents(sessionId)`
+	test('ClaudeAgentSdkService forwards listSubagents + getSubagentMessages to the underlying bindings', async () => {
+		// `listSubagents(sessionId)`
 		// returns alphabetical subagent ids for replay enumeration;
 		// `getSubagentMessages(sessionId, agentId)` returns the SDK-parsed
 		// transcript for the child session. Both mirror `getSessionMessages`'
@@ -2609,7 +2612,7 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('resolveSessionConfig returns Claude-native permissionMode + reused Permissions schema', async () => {
-		// Plan section 3.3.5 / decision B5 — Claude collapses the platform's
+		// Claude collapses the platform's
 		// two-axis approval model (`autoApprove` × `mode`) onto a single
 		// `permissionMode` axis matching the SDK's native
 		// `PermissionMode` enum. `Permissions` (allow/deny tool lists)
@@ -2617,7 +2620,7 @@ suite('ClaudeAgent', () => {
 		// SDK accepts `allowedTools` / `disallowedTools` natively.
 		// Tested keys: presence + ordering of enum + the six-value
 		// canonical set (matching SDK `PermissionMode` typedef at
-		// `sdk.d.ts:1560`, ratified in Phase 6.1 Cycle A under I2) +
+		// `sdk.d.ts:1560`) +
 		// default. Skipped keys (AutoApprove, Mode, Isolation, Branch,
 		// BranchNameHint) MUST be absent — workbench
 		// `AgentHostModePicker` and friends key off these property names
@@ -2656,11 +2659,11 @@ suite('ClaudeAgent', () => {
 	});
 
 	test('sessionConfigCompletions returns no items (permissionMode is a static enum)', async () => {
-		// Plan section 3.3.5 — Claude's only schema property is the
+		// Claude's only schema property is the
 		// `permissionMode` static enum, so dynamic completion is
-		// definitionally empty. Locks the contract before Phase 6's
-		// branch picker (subject to the worktree-extraction prerequisite
-		// in section 8) might want to plug into this method.
+		// definitionally empty. Locks the contract before a future
+		// branch picker (subject to the worktree-extraction prerequisite)
+		// might want to plug into this method.
 		const { agent } = createTestContext(disposables);
 		const result = await agent.sessionConfigCompletions({ property: 'permissionMode', query: 'def' });
 		assert.deepStrictEqual(result, { items: [] });
@@ -2694,6 +2697,9 @@ suite('ClaudeAgent', () => {
 		const logService = new NullLogService();
 		const stateManager = disposables.add(new AgentHostStateManager(logService));
 		const configService = disposables.add(new AgentConfigurationService(stateManager, logService));
+		// Seed a trusted root config so materialize's trust barrier resolves immediately ('present');
+		// trusted:true matches the dormant default these tests ran under before the barrier existed.
+		configService.updateRootConfig({ [AgentHostTrustConfigKey.Trust]: { [AgentHostTrustKey.Trusted]: true } });
 
 		const services = new ServiceCollection(
 			...claudeFileEnvServices(disposables),
@@ -2738,7 +2744,7 @@ suite('ClaudeAgent', () => {
 		});
 	});
 
-	test('onClientToolCallComplete is a benign no-op for an unknown toolCallId (Phase 10)', () => {
+	test('onClientToolCallComplete is a benign no-op for an unknown toolCallId', () => {
 		// `AgentSideEffects` fires `onClientToolCallComplete` for every
 		// server-dispatched `SessionToolCallComplete` envelope, including
 		// the ones the Claude mapper emits for normal SDK tool completions.
@@ -2750,7 +2756,7 @@ suite('ClaudeAgent', () => {
 		});
 	});
 
-	// #region Phase 10 — client (MCP) tools
+	// #region client (MCP) tools
 
 	test('setClientTools registers tools that flow into Options.mcpServers on first materialize', async () => {
 		const { agent, sdk } = createTestContext(disposables);
@@ -2883,7 +2889,7 @@ suite('ClaudeAgent', () => {
 		await assert.doesNotReject(agent.disposeSession(created.session));
 	});
 
-	test('FakeQuery.setMcpServers stays unmodeled (Phase 10 never calls Query.setMcpServers for client tools)', async () => {
+	test('FakeQuery.setMcpServers stays unmodeled (Query.setMcpServers is never called for client tools)', async () => {
 		const { agent, sdk } = createTestContext(disposables);
 		const created = await agent.createSession({ workingDirectory: URI.file('/work') });
 		const sessionId = AgentSession.id(created.session);
@@ -3028,11 +3034,11 @@ suite('ClaudeAgent', () => {
 	// #endregion
 });
 
-suite('ClaudeAgentSession (Phase 7 §3.2)', () => {
+suite('ClaudeAgentSession', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
 	test('dispose with parked permission unblocks SDK (Test 17)', async () => {
-		// Phase 7 plan Step 1 / §3.2 / Test 17: the SDK parks inside its
+		// The SDK parks inside its
 		// `canUseTool` callback on the deferred returned from
 		// `requestPermission`. If the session is disposed mid-park, the
 		// deferred MUST resolve with `false` so the SDK's `for await`
@@ -3041,7 +3047,11 @@ suite('ClaudeAgentSession (Phase 7 §3.2)', () => {
 		const fakeConfigService: IAgentConfigurationService = {
 			getSessionConfigValues: () => undefined,
 			getRootConfigValues: () => undefined,
-			getEffectiveValue: () => undefined,
+			// The trust key resolves trusted so materialize's trust barrier is immediately 'present'; every
+			// other key stays absent, as before.
+			getEffectiveValue: (_session: string, _schema: unknown, key: string) => key === AgentHostTrustConfigKey.Trust ? { [AgentHostTrustKey.Trusted]: true } : undefined,
+			onDidRootConfigChange: Event.None,
+			onDidSessionConfigChange: Event.None,
 		} as unknown as IAgentConfigurationService;
 		const sessionData = new RecordingSessionDataService(createSessionDataService());
 		const services = new ServiceCollection(
@@ -3091,7 +3101,7 @@ suite('ClaudeAgentSession (Phase 7 §3.2)', () => {
 	});
 });
 
-suite('ClaudeAgent (Phase 7 §3.4 — _handleCanUseTool)', () => {
+suite('ClaudeAgent (_handleCanUseTool)', () => {
 
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
@@ -3189,7 +3199,7 @@ suite('ClaudeAgent (Phase 7 §3.4 — _handleCanUseTool)', () => {
 	// omitted: `_handleCanUseTool` is a pure UI bridge and makes no
 	// permission-mode-aware decisions; whatever the SDK delegates is
 	// surfaced to the user verbatim. Mode-driven behavior is covered by
-	// the §3.6 SDK-forwarding tests (live `setPermissionMode`).
+	// the SDK-forwarding tests (live `setPermissionMode`).
 
 	test('Test 7 — pending_confirmation signal carries the correct shape', async () => {
 		const { ctx, canUseTool, sessionUri } = await materialize();
@@ -3292,7 +3302,7 @@ suite('ClaudeAgent (Phase 7 §3.4 — _handleCanUseTool)', () => {
 		ctx.agent.respondToPermissionRequest('nope', true);
 	});
 
-	test('Phase 12 step 5 — canUseTool inside a subagent context tags pending_confirmation with parentToolCallId and feeds the resolver cache', async () => {
+	test('canUseTool inside a subagent context tags pending_confirmation with parentToolCallId and feeds the resolver cache', async () => {
 		const { ctx, canUseTool, sessionUri } = await materialize();
 
 		// Prime the session's registry with an inner-tool→parent edge.
@@ -3327,7 +3337,7 @@ suite('ClaudeAgent (Phase 7 §3.4 — _handleCanUseTool)', () => {
 		});
 	});
 
-	test('Phase 12 step 5 — AskUserQuestion + ExitPlanMode inside a subagent context tag their emitted signals with parentToolCallId', async () => {
+	test('AskUserQuestion + ExitPlanMode inside a subagent context tag their emitted signals with parentToolCallId', async () => {
 		const { ctx, canUseTool, sessionUri } = await materialize();
 
 		const session = ctx.agent.getSessionForTesting(sessionUri);
@@ -3376,7 +3386,7 @@ suite('ClaudeAgent (Phase 7 §3.4 — _handleCanUseTool)', () => {
 	});
 });
 
-suite('ClaudeAgent (Phase 7 §3.5 — INTERACTIVE_CLAUDE_TOOLS)', () => {
+suite('ClaudeAgent (INTERACTIVE_CLAUDE_TOOLS)', () => {
 
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
@@ -3591,12 +3601,12 @@ suite('ClaudeAgent (Phase 7 §3.5 — INTERACTIVE_CLAUDE_TOOLS)', () => {
 	});
 });
 
-suite('ClaudeAgent (Phase 7 §3.6 / §3.8 — permissionMode propagation)', () => {
+suite('ClaudeAgent (permissionMode propagation)', () => {
 
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
 	test('Test 16 — live permissionMode update forwards via Query.setPermissionMode on the next sendMessage', async () => {
-		// Plan §3.6 / §3.8: a `SessionConfigChanged` action arriving
+		// A `SessionConfigChanged` action arriving
 		// between turns must reach the SDK before the next user
 		// message yields. The agent re-reads the live state in
 		// `sendMessage` and forwards via `Query.setPermissionMode`
@@ -3659,7 +3669,7 @@ suite('ClaudeAgent (Phase 7 §3.6 / §3.8 — permissionMode propagation)', () =
 	});
 
 	test('Test 16b — live state seeded BEFORE first sendMessage flows into Options.permissionMode at materialize', async () => {
-		// Plan §3.6: `Options.permissionMode` reads live state first,
+		// `Options.permissionMode` reads live state first,
 		// falling back to `provisional.config` only when state has not
 		// been seeded. Production AgentService seeds state.config on
 		// createSession, so the live read wins there. This test
@@ -3695,12 +3705,12 @@ suite('ClaudeAgent (Phase 7 §3.6 / §3.8 — permissionMode propagation)', () =
 	});
 });
 
-suite('ClaudeAgent (Phase 7 §3.7 — onElicitation cancel stub)', () => {
+suite('ClaudeAgent (onElicitation cancel stub)', () => {
 
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
 	test('Test 18 — Options.onElicitation returns { action: cancel } and logs the decline', async () => {
-		// Plan §3.7: full MCP wiring is Phase 10. Until then, the agent
+		// Full MCP wiring comes later. Until then, the agent
 		// installs a `cancel` stub so any incidental MCP elicitation
 		// gets a deterministic response (instead of the SDK's auto-
 		// decline path) and a log line surfaces for diagnostics.
@@ -3728,7 +3738,7 @@ suite('ClaudeAgent (Phase 7 §3.7 — onElicitation cancel stub)', () => {
 	});
 });
 
-suite('ClaudeAgent (Phase 8 — file edit tracking via SDK message stream)', () => {
+suite('ClaudeAgent (file edit tracking via SDK message stream)', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
 	async function materialize(): Promise<{ ctx: ITestContext; sessionId: string; sessionUri: URI }> {
@@ -3741,7 +3751,7 @@ suite('ClaudeAgent (Phase 8 — file edit tracking via SDK message stream)', () 
 	}
 
 	test('Options carries enableFileCheckpointing on and no SDK hooks (file-edit tracking is observed off the message stream, not via user-bypassable hooks)', async () => {
-		// Phase 8 refactor. Pins the Options shape that
+		// Pins the Options shape that
 		// `_materializeProvisional` ships to the SDK: file checkpointing
 		// must be on (a startup option, not user-bypassable), and
 		// `Options.hooks` must be absent — file-edit tracking is wired
@@ -3762,7 +3772,7 @@ suite('ClaudeAgent (Phase 8 — file edit tracking via SDK message stream)', () 
 		});
 	});
 
-	test('Options carries forwardSubagentText: true so live subagent text + thinking flow through (Phase 12 step 1)', async () => {
+	test('Options carries forwardSubagentText: true so live subagent text + thinking flow through', async () => {
 		// Without this, the SDK emits only tool_use / tool_result blocks
 		// from subagent contexts; text and thinking are dropped. Replay
 		// via `getSubagentMessages` would then return the full transcript
@@ -3775,9 +3785,9 @@ suite('ClaudeAgent (Phase 8 — file edit tracking via SDK message stream)', () 
 	});
 });
 
-// #region Phase 9 — abort + steering + changeModel + crash recovery
+// #region abort + steering + changeModel + crash recovery
 
-suite('ClaudeAgent (Phase 9 — runtime mutation surface)', () => {
+suite('ClaudeAgent (runtime mutation surface)', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
 	/**
@@ -3788,7 +3798,7 @@ suite('ClaudeAgent (Phase 9 — runtime mutation surface)', () => {
 	 * one full turn and then parks at index 2 for the test to release.
 	 *
 	 * Returns the parked-iterator gate (`advance`) so the test can let
-	 * the second turn flow through after queuing whatever Phase 9 mutation
+	 * the second turn flow through after queuing whatever mutation
 	 * it's exercising.
 	 */
 	async function materialize(opts?: { extraMessages?: SDKMessage[]; logService?: ILogService }): Promise<{
@@ -4060,7 +4070,7 @@ suite('ClaudeAgent (Phase 9 — runtime mutation surface)', () => {
 	});
 
 	test('intermediate result during steering does NOT complete the in-flight sendMessage or fire SessionTurnComplete', async () => {
-		// CONTEXT.md M10: when the SDK preempts via `'now'`-priority, it
+		// When the SDK preempts via `'now'`-priority, it
 		// emits one `result` message per turn it ran (the aborted
 		// original + the steering reply). Protocol-wise this is ONE Turn,
 		// so the agent must suppress the intermediate result: do not
@@ -4124,7 +4134,7 @@ suite('ClaudeAgent (Phase 9 — runtime mutation surface)', () => {
 		});
 	});
 
-	test('intermediate result during steering does NOT settle the original sendMessage promise (regression for C1)', async () => {
+	test('intermediate result during steering does NOT settle the original sendMessage promise (regression)', async () => {
 		// Tightens the previous test: result#1 is consumed BEFORE result#2
 		// is staged, so we can directly observe whether `inFlight`
 		// resolved early. The PromptQueue must defer entry-deferred
@@ -4175,9 +4185,9 @@ suite('ClaudeAgent (Phase 9 — runtime mutation surface)', () => {
 
 // #endregion
 
-// #region Phase 13 — Session restoration
+// #region Session restoration
 
-suite('ClaudeAgent (Phase 13 — getSessionMessages)', () => {
+suite('ClaudeAgent (getSessionMessages)', () => {
 
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
@@ -4264,9 +4274,9 @@ suite('ClaudeAgent (Phase 13 — getSessionMessages)', () => {
 			`expected warn-log; got: ${log.warns.join(' | ')}`);
 	});
 
-	// Note: Phase 12 step 8 priming used to be tested here against a
+	// Note: priming used to be tested here against a
 	// `FakeClaudeSubagentResolver`. With the per-session
-	// `SubagentRegistry`, priming is exercised by Phase D's
+	// `SubagentRegistry`, priming is exercised by
 	// `claudeSubagentRegistry.test.ts` (`primeFromTranscript`) and by
 	// `claudeTranscriptService.test.ts`'s integration tests on
 	// `loadParentTranscript`. The `getSessionMessages` integration is
@@ -4275,9 +4285,9 @@ suite('ClaudeAgent (Phase 13 — getSessionMessages)', () => {
 
 // #endregion
 
-// #region Phase 11 — customizations / plugins
+// #region customizations / plugins
 
-suite('ClaudeAgent — Phase 11 customizations', () => {
+suite('ClaudeAgent — customizations', () => {
 
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
@@ -4311,6 +4321,9 @@ suite('ClaudeAgent — Phase 11 customizations', () => {
 		const logService = new NullLogService();
 		const stateManager = disposables.add(new AgentHostStateManager(logService));
 		const configService = disposables.add(new AgentConfigurationService(stateManager, logService));
+		// Seed a trusted root config so materialize's trust barrier resolves immediately ('present');
+		// trusted:true matches the dormant default these tests ran under before the barrier existed.
+		configService.updateRootConfig({ [AgentHostTrustConfigKey.Trust]: { [AgentHostTrustKey.Trusted]: true } });
 
 		const services = new ServiceCollection(
 			...claudeFileEnvServices(disposables),
@@ -4572,6 +4585,79 @@ suite('ClaudeAgent — Phase 11 customizations', () => {
 
 		assert.strictEqual(sdk.startupCallCount, 2);
 		assert.strictEqual(sdk.capturedStartupOptions[1]?.agent, undefined, 'cleared agent omitted from rebuilt Options');
+	});
+
+	test('workspace-trust revocation rebuilds the session to drop trusted engine state', async () => {
+		const ctx = createTestContext(disposables);
+		const { agent, sdk, configService } = ctx;
+		const created = await agent.createSession({ workingDirectory: URI.file('/work') });
+		const sessionId = AgentSession.id(created.session);
+		sdk.nextQueryMessages = [makeSystemInitMessage(sessionId), makeResultSuccess(sessionId)];
+		await agent.sendMessage(created.session, URI.parse(buildDefaultChatUri(created.session)), 'first', undefined, 'turn-1');
+		// createTestContext seeds a trusted root config, so the first materialize loads the trusted settings sources.
+		assert.deepStrictEqual(sdk.capturedStartupOptions[0]?.settingSources, ['user', 'project', 'local'], 'trusted materialize loads settings sources');
+
+		// Revoke workspace trust: forward trusted:false to the root config.
+		configService.updateRootConfig({ [AgentHostTrustConfigKey.Trust]: { [AgentHostTrustKey.Trusted]: false } });
+		const session = agent.getSessionForTesting(created.session);
+		assert.ok(session, 'session is retrievable');
+		await session.whenTrustTeardownIdle();
+
+		assert.strictEqual(sdk.startupCallCount, 2, 'revocation triggered a rebuild');
+		assert.deepStrictEqual(
+			{ settingSources: sdk.capturedStartupOptions[1]?.settingSources, strictMcpConfig: sdk.capturedStartupOptions[1]?.strictMcpConfig },
+			{ settingSources: [], strictMcpConfig: true },
+			'rebuilt session drops trusted engine state',
+		);
+	});
+
+	test('a late workspace-trust grant rebuilds the session on the next send to restore trusted engine state', async () => {
+		const ctx = createTestContext(disposables);
+		const { agent, sdk, configService } = ctx;
+		// Materialize UNTRUSTED: forward trusted:false before the first send so the barrier sees a forwarded value and
+		// bakes _materializedTrusted=false - the same baked-untrusted state B6's deny-by-default default produces when
+		// the materialize barrier times out with no trust forwarded.
+		configService.updateRootConfig({ [AgentHostTrustConfigKey.Trust]: { [AgentHostTrustKey.Trusted]: false } });
+		const created = await agent.createSession({ workingDirectory: URI.file('/work') });
+		const sessionId = AgentSession.id(created.session);
+		sdk.nextQueryMessages = [
+			makeSystemInitMessage(sessionId), makeResultSuccess(sessionId),
+			makeSystemInitMessage(sessionId), makeResultSuccess(sessionId),
+		];
+		await agent.sendMessage(created.session, URI.parse(buildDefaultChatUri(created.session)), 'first', undefined, 'turn-1');
+		assert.deepStrictEqual(
+			{ settingSources: sdk.capturedStartupOptions[0]?.settingSources, strictMcpConfig: sdk.capturedStartupOptions[0]?.strictMcpConfig },
+			{ settingSources: [], strictMcpConfig: true },
+			'untrusted materialize drops trusted engine state',
+		);
+
+		// A late trust GRANT: forward trusted:true. The eager revocation handler ignores a false->true transition, so
+		// the trusted engine state is restored non-disruptively at the next send via the trust-divergence rebuild.
+		configService.updateRootConfig({ [AgentHostTrustConfigKey.Trust]: { [AgentHostTrustKey.Trusted]: true } });
+		await agent.sendMessage(created.session, URI.parse(buildDefaultChatUri(created.session)), 'second', undefined, 'turn-2');
+
+		assert.strictEqual(sdk.startupCallCount, 2, 'the late trust grant triggered a rebuild on the next send');
+		assert.deepStrictEqual(
+			sdk.capturedStartupOptions[1]?.settingSources,
+			['user', 'project', 'local'],
+			'rebuilt session restores trusted settings sources',
+		);
+	});
+
+	test('a non-trust root-config change does not rebuild a trusted session', async () => {
+		const ctx = createTestContext(disposables);
+		const { agent, sdk, configService } = ctx;
+		const created = await agent.createSession({ workingDirectory: URI.file('/work') });
+		const sessionId = AgentSession.id(created.session);
+		sdk.nextQueryMessages = [makeSystemInitMessage(sessionId), makeResultSuccess(sessionId)];
+		await agent.sendMessage(created.session, URI.parse(buildDefaultChatUri(created.session)), 'first', undefined, 'turn-1');
+
+		// A root-config change that leaves trust unchanged (still trusted) must not churn the Query.
+		configService.updateRootConfig({ some_unrelated_key: 'x' });
+		const session = agent.getSessionForTesting(created.session);
+		await session!.whenTrustTeardownIdle();
+
+		assert.strictEqual(sdk.startupCallCount, 1, 'no rebuild for a non-trust config change');
 	});
 });
 

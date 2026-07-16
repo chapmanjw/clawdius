@@ -23,7 +23,7 @@ export interface IClaudeMcpTool {
 }
 
 /** Terminal outcome of a discovery attempt. `connected` carries tools; the rest explain why none were read. */
-export type McpDiscoveryStatus = 'connected' | 'failed' | 'needs-auth' | 'disabled' | 'not-found' | 'timeout' | 'error';
+export type McpDiscoveryStatus = 'connected' | 'failed' | 'needs-auth' | 'disabled' | 'untrusted' | 'not-found' | 'timeout' | 'error';
 
 export interface IClaudeMcpToolDiscoveryResult {
 	readonly status: McpDiscoveryStatus;
@@ -38,11 +38,13 @@ export interface IClaudeMcpToolDiscoveryService {
 	readonly _serviceBrand: undefined;
 	/**
 	 * Connect to the named MCP server (via a short-lived SDK session rooted at `workingDirectoryPath`, which
-	 * scopes which project `.mcp.json` servers load) and return its tools. Resolves to a `connected` result
+	 * scopes which project `.mcp.json` servers load) and return its tools. `trusted` is the caller's
+	 * workspace-trust decision (the renderer owns trust): when false the service refuses (`untrusted`) without
+	 * starting a session, so repo-controlled `.mcp.json` server commands never spawn. Resolves to a `connected` result
 	 * with tools, or a non-connected status with a message. No CancellationToken arg: tokens do not round-trip
 	 * through the agentHost ProxyChannel, so the node side self-caps (25s) and the renderer races its own
 	 * timeout.
 	 */
-	discoverServerTools(serverName: string, workingDirectoryPath: string): Promise<IClaudeMcpToolDiscoveryResult>;
+	discoverServerTools(serverName: string, workingDirectoryPath: string, trusted: boolean): Promise<IClaudeMcpToolDiscoveryResult>;
 }
 // CLAWDIUS-END

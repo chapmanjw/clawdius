@@ -2471,7 +2471,7 @@ suite('AgentService (node dispatcher)', () => {
 		});
 
 		test('restoreSession drains a pending uncommitted refresh deferred by an earlier addSubscriber', async () => {
-			// Reproduces the cold-open race that broke §3:
+			// Reproduces the cold-open race:
 			// 1. Client subscribes to `<session>/changeset/uncommitted`
 			//    before the session has been restored on the server.
 			// 2. addSubscriber's 0→1 trigger fires `_triggerUncommittedRefresh`,

@@ -53,7 +53,7 @@ suite('SessionClientToolsDiff', () => {
 		assert.strictEqual(diff.hasDifference, false);
 	});
 
-	test('C6: setTools racing async work after consume re-flips dirty via autorun', async () => {
+	test('setTools racing async work after consume re-flips dirty via autorun', async () => {
 		const diff = disposables.add(new SessionClientToolsDiff());
 		diff.model.setTools('c1', [tool({ name: 'original' })]);
 		const merged = diff.consume();

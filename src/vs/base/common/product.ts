@@ -75,8 +75,7 @@ export type ExtensionVirtualWorkspaceSupport = {
  * `https://main.vscode-cdn.net/agent-sdk/claude/0.3.168/{sdkTarget}.tgz`
  * and the runtime substitutes `darwin-arm64`, `linux-x64-musl`, etc.
  *
- * See `src/vs/platform/agentHost/node/claude/roadmap.md` Phase 15 for
- * the rationale (macOS Universal compatibility, trust model).
+ * The rationale is macOS Universal compatibility and the agent-SDK trust model.
  */
 export interface IAgentSdkProductConfig {
 	readonly version: string;

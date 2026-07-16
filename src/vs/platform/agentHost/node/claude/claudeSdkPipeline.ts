@@ -55,7 +55,7 @@ export interface IRematerializer {
  *     {@link ClaudeSdkMessageRouter}, settle the matching entry's
  *     deferred on `result`, and emit `ChatTurnComplete` only when
  *     the queue fully drains (intermediate results during steering
- *     preemption do NOT fire turn-complete — CONTEXT.md M10).
+ *     preemption do NOT fire turn-complete).
  *
  * Disposing the pipeline aborts the controller (terminating the SDK
  * subprocess per `sdk.d.ts:982`) and async-disposes the WarmQuery.
@@ -85,7 +85,7 @@ export interface ISdkResolvedCustomizations {
 
 export class ClaudeSdkPipeline extends Disposable {
 	/**
-	 * Phase 11 — hot-swap the SDK's plugin set in place via
+	 * Hot-swap the SDK's plugin set in place via
 	 * `Query.reloadPlugins()`. Commands / agents / mcpServers added or
 	 * removed by the new plugin set become visible to the SDK
 	 * immediately, without a session restart. Throws if the query is
@@ -97,7 +97,7 @@ export class ClaudeSdkPipeline extends Disposable {
 	}
 
 	/**
-	 * Phase 11 — snapshot the SDK's currently-resolved customization
+	 * Snapshot the SDK's currently-resolved customization
 	 * surface (slash commands / skills, subagents, MCP servers). This
 	 * is the SDK's view of "what does this session actually have
 	 * access to right now" — covers everything the SDK loaded itself
@@ -182,6 +182,14 @@ export class ClaudeSdkPipeline extends Disposable {
 
 	/** Set when the consumer loop ends in error (cancellation OR crash). Read by {@link send} to trigger rebind. */
 	private _needsRebind = false;
+	/**
+	 * Single-flight guard for {@link _rebindQuery}. Rebinds are driven from two independent places: the
+	 * send-path recovery gate AND the out-of-band workspace-trust revocation teardown. If two ran
+	 * concurrently each would capture the same old WarmQuery and orphan one freshly built one (leaked
+	 * subprocess) / collide on the shared --session-id. Chaining every rebind through this promise
+	 * serializes them so each starts only after the previous settles and captures the correct WarmQuery.
+	 */
+	private _rebindChain: Promise<void> = Promise.resolve();
 
 	/** Tracks whether the consumer loop is currently draining {@link _query}. */
 	private _consumerLoopRunning = false;
@@ -193,7 +201,7 @@ export class ClaudeSdkPipeline extends Disposable {
 	 *     pending confirmations, etc.).
 	 *   • `ChatTurnComplete` action, fired when the LAST entry in the
 	 *     queue drains via `result` (intermediate results during steering
-	 *     preempt do NOT fire — CONTEXT.md M10).
+	 *     preempt do NOT fire).
 	 *   • `steering_consumed` signal, fired the moment the iterable yields
 	 *     a steering entry to the SDK.
 	 */
@@ -267,7 +275,7 @@ export class ClaudeSdkPipeline extends Disposable {
 	}
 
 	/**
-	 * Phase 10 \u2014 narrow public wrapper around the internal
+	 * Narrow public wrapper around the internal
 	 * {@link _rebindQuery} so {@link ClaudeAgentSession.rebindForClientTools}
 	 * can drive a yield-restart without exposing the private rebind
 	 * machinery to every collaborator.
@@ -277,7 +285,18 @@ export class ClaudeSdkPipeline extends Disposable {
 	}
 
 	/**
-	 * Phase 10 — update the resolver the stream mapper uses to stamp the
+	 * Serializing wrapper around {@link _doRebindQuery}. A second rebind chains behind any in-flight one
+	 * rather than running concurrently, so two rebinds can never capture the same old WarmQuery. Rejections
+	 * are surfaced to the caller but swallowed on the chain so one failed rebind never poisons later ones.
+	 */
+	private _rebindQuery(reason: 'restart' | 'recover'): Promise<void> {
+		const run = this._rebindChain.then(() => this._doRebindQuery(reason), () => this._doRebindQuery(reason));
+		this._rebindChain = run.then(() => { }, () => { });
+		return run;
+	}
+
+	/**
+	 * Update the resolver the stream mapper uses to stamp the
 	 * owning workbench `clientId` onto subsequent `ChatToolCallStart` events.
 	 */
 	setClientToolOwner(clientToolOwner: ((toolName: string) => string | undefined) | undefined): void {
@@ -382,8 +401,8 @@ export class ClaudeSdkPipeline extends Disposable {
 	 * carry when the SDK accepts the message.
 	 *
 	 * No-op if the pipeline is aborted or no in-flight / queued request
-	 * exists to inherit a `turnId` from (CONTEXT.md M10: steering folds
-	 * into the in-progress protocol Turn).
+	 * exists to inherit a `turnId` from (steering folds into the
+	 * in-progress protocol Turn).
 	 */
 	injectSteering(prompt: SDKUserMessage, pendingMessageId: string): void {
 		if (this._abortController.signal.aborted) {
@@ -516,7 +535,7 @@ export class ClaudeSdkPipeline extends Disposable {
 	 * rematerializer in `resume` mode. Re-applies the current model /
 	 * effort / permission mode to the fresh Query.
 	 */
-	private async _rebindQuery(reason: 'restart' | 'recover'): Promise<void> {
+	private async _doRebindQuery(reason: 'restart' | 'recover'): Promise<void> {
 		if (!this._rematerializer) {
 			throw new Error(`ClaudeSdkPipeline.rebind: no rematerializer attached (reason=${reason})`);
 		}

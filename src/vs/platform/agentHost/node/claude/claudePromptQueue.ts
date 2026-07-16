@@ -51,7 +51,7 @@ export class ClaudePromptQueue extends Disposable {
 	 * Entries that have been popped by {@link settleHead} during the
 	 * current turn but whose deferreds haven't been completed yet — we
 	 * batch-complete them when the turn fully drains so an intermediate
-	 * `result` (steering preempt; CONTEXT.md M10) does NOT settle the
+	 * `result` (steering preempt) does NOT settle the
 	 * original `sendMessage`'s deferred.
 	 */
 	private _popped: IPendingSdkMessage[] = [];
@@ -106,7 +106,7 @@ export class ClaudePromptQueue extends Disposable {
 	/**
 	 * Most-recent in-flight or queued entry, used by steering to inherit
 	 * its parent's `turnId`. Prefers the in-flight head over the latest
-	 * queued entry (matches CONTEXT.md M10: steering folds into the
+	 * queued entry (steering folds into the
 	 * in-progress protocol Turn).
 	 */
 	peekParent(): IPendingSdkMessage | undefined {
@@ -118,7 +118,7 @@ export class ClaudePromptQueue extends Disposable {
 	 * drained (no more pending or in-flight entries), batch-complete
 	 * every popped-but-deferred deferred from this turn including the
 	 * one we just popped. Otherwise hold the popped entry's deferred
-	 * until the turn ends — the M10 invariant for steering preempt.
+	 * until the turn ends — the invariant for steering preempt.
 	 * Called by the consumer on every `result` message.
 	 */
 	settleHead(): IPendingSdkMessage | undefined {

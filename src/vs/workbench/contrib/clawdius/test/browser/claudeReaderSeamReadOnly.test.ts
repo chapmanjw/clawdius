@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Reader-seam read-only / no-write guard (SC-002)
+// CLAWDIUS-BEGIN Reader-seam read-only / no-write guard
 // The seam is read-only and index-only. This exercises every transcript read path over a fixture tree through
 // an instrumented file service (a Proxy that records any mutating call and otherwise delegates to a real
 // FileService) and asserts ZERO write/create/delete/rename occurs under the config root. It also asserts the
@@ -50,7 +50,7 @@ function instrument(inner: IFileService, calls: string[]): IFileService {
 	});
 }
 
-suite('Clawdius reader seam - read-only / no-write guard (SC-002)', () => {
+suite('Clawdius reader seam - read-only / no-write guard', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	const ROOT = URI.file('/home/tester/.claude');

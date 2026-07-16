@@ -1633,9 +1633,10 @@ export interface IAgentHostService extends IAgentConnection {
 	/**
 	 * Connect to a configured MCP server (a short-lived Claude SDK session rooted at `workingDirectoryPath`)
 	 * and return its tools. User-initiated only (the Control Center "Load tool names..." action). Returns a
-	 * `disabled` result when the agent host is off, and self-caps so the renderer never hangs.
+	 * `disabled` result when the agent host is off, and self-caps so the renderer never hangs. `trusted` is
+	 * the caller's workspace-trust decision; an untrusted discovery is refused before any session spawn.
 	 */
-	discoverMcpServerTools(serverName: string, workingDirectoryPath: string): Promise<IClaudeMcpToolDiscoveryResult>;
+	discoverMcpServerTools(serverName: string, workingDirectoryPath: string, trusted: boolean): Promise<IClaudeMcpToolDiscoveryResult>;
 	// CLAWDIUS-END
 
 	// CLAWDIUS-BEGIN usage-contribution fetch (#usage)

@@ -102,7 +102,12 @@ export interface IStreaks {
 // the common module above; detectProvider / providerHasLimits below build on the re-exported ClaudeProvider.
 
 export interface IClaudeAccount {
-	readonly signedIn: boolean;
+	/**
+	 * `true` = signed in, `false` = definitively signed out, `undefined` = UNKNOWN (the credential probe was
+	 * indeterminate - a locked macOS login keychain, or a host we could not reach - and we have no prior answer).
+	 * Render the unknown case as unknown: asserting "Signed out" here is the exact bug this probe exists to fix.
+	 */
+	readonly signedIn: boolean | undefined;
 	readonly email?: string;
 	readonly organization?: string;
 	readonly planTier?: string;
@@ -128,6 +133,8 @@ export const STATS_CACHE_FILE = 'stats-cache.json';
 
 /** Command (clawdius-chat extension) that performs the single allowed, user-initiated /api/oauth/usage fetch. */
 export const REFRESH_CAPACITY_COMMAND_ID = 'clawdius.refreshUsageCapacity';
+/** Command (clawdius-chat extension) that answers the "signed in" probe for a LOCAL window (Keychain-aware). */
+export const HAS_CREDENTIALS_COMMAND_ID = 'clawdius.hasClaudeCredentials';
 /** Command (registered by the dashboard contribution) that opens the full usage dashboard editor. */
 export const OPEN_USAGE_DASHBOARD_COMMAND_ID = 'clawdius.openUsageDashboard';
 
@@ -485,18 +492,32 @@ export async function readCapacity(fileService: IFileService, claudeDir: URI): P
 }
 
 /**
+ * The "signed in" probe, satisfied by IClaudeUsageCapacityRefresh: it routes to whichever host owns ~/.claude (the
+ * REH server in a remote window, the clawdius-chat extension host locally) - the only places that can reach the
+ * macOS login Keychain. The renderer has no child_process, so it cannot answer this itself.
+ */
+export interface IClaudeCredentialsProbe {
+	/** `undefined` = INDETERMINATE (a locked keychain / an unreachable host): render UNKNOWN, never "Signed out". */
+	hasCredentials(): Promise<boolean | undefined>;
+}
+
+/**
  * Resolve account identity + engine provider from local files only.
- * - signedIn: whether ~/.claude/.credentials.json exists (we never read the token itself).
+ * - signedIn: the ~/.claude/.credentials.json stat is a zero-IPC FAST PATH (its presence is sufficient, and on
+ *   Windows/Linux it is the only store). On a miss we ask the `probe`, because on macOS the credentials live in
+ *   the login Keychain instead - absence of the file there means nothing. We never read the token itself.
  * - email/organization/planTier: from the cached oauth/usage response when present (no secrets).
  * - provider: inferred from ~/.claude/settings.json env (Bedrock/Vertex/custom base URL) else Anthropic.
  */
-export async function readAccount(fileService: IFileService, claudeDir: URI, capacity: IClaudeCapacity | undefined): Promise<IClaudeAccount> {
-	let signedIn = false;
+export async function readAccount(fileService: IFileService, claudeDir: URI, capacity: IClaudeCapacity | undefined, probe?: IClaudeCredentialsProbe): Promise<IClaudeAccount> {
+	let signedIn: boolean | undefined = false;
 	try {
 		await fileService.stat(URI.joinPath(claudeDir, CREDENTIALS_FILE));
 		signedIn = true;
 	} catch {
-		signedIn = false;
+		// The probe may answer `undefined` (INDETERMINATE). Propagate that as UNKNOWN rather than collapsing it to
+		// "signed out" - a locked macOS login keychain would otherwise render a signed-in user as "Signed out".
+		signedIn = probe ? await probe.hasCredentials() : false;
 	}
 
 	const provider = await detectProvider(fileService, claudeDir);

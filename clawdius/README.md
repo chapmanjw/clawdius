@@ -1,11 +1,11 @@
 # Clawdius overlay
 
 This directory holds Clawdius-specific assets and configuration that live in new paths so they
-never conflict on an upstream merge (the small-diff doctrine). Contents grow over the phases:
+never conflict on an upstream merge (the small-diff doctrine). Contents grow over time:
 
-- `branding/` (Phase 5): drop-in logos, icons, watermark, walkthrough imagery. Replacing an asset
+- `branding/`: drop-in logos, icons, watermark, walkthrough imagery. Replacing an asset
   is dropping a file here.
-- `themes/` (Phase 4): `clawdius-dark.json`, `clawdius-light.json`, and the accent tokens file
+- `themes/`: `clawdius-dark.json`, `clawdius-light.json`, and the accent tokens file
   (canonical orange `#d97757`).
 - `SECURITY-SCANNING.md`: the secret and forbidden-content scan standards.
 

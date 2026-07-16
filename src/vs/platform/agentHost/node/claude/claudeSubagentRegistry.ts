@@ -115,7 +115,7 @@ export interface ISubagentSpawnInit {
  * by `ClaudeAgentSession` (the registry dies with the session).
  *
  * Replaces the singleton-keyed-by-URI `IClaudeSubagentResolver`
- * tracker surface from earlier Phase 12: lifecycle is implicit, no
+ * tracker surface: lifecycle is implicit, no
  * `parentUri` parameter on any method, no `disposeParent` needed, and
  * the parallel `noteX` / `getX` accessor pairs collapse to one
  * `getSpawn(toolUseId)` plus direct field reads/writes on the spawn.

@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 /**
- * Integration test for the Phase 6+ ClaudeAgent.
+ * Integration test for the ClaudeAgent.
  *
  * Wires a real {@link ClaudeAgent} (built via the instantiation service) to a
  * recording {@link IClaudeAgentSdkService} test double and drives the
@@ -13,7 +13,7 @@
  * the smoke run (`smoke.md`). What this test guarantees in CI is the
  * cross-component wiring between the agent and the SDK boundary:
  *  - The `canUseTool` / `onElicitation` closures survive the
- *    materialize-to-SDK boundary intact (Phase 7 §5.3).
+ *    materialize-to-SDK boundary intact.
  *  - An assistant `tool_use`, its `pending_confirmation` card,
  *    `respondToPermissionRequest`, the synthetic `tool_result`, and the
  *    assistant continuation produce the expected ordered progress signals.
@@ -26,6 +26,8 @@ import { URI } from '../../../../base/common/uri.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
+import { AgentHostTrustConfigKey, AgentHostTrustKey } from '../../common/trustConfigSchema.js';
+import { IClawdiusCliConfigService, projectCliResolution } from '../../../clawdius/common/clawdiusCliConfig.js';
 import { ServiceCollection } from '../../../instantiation/common/serviceCollection.js';
 import { InstantiationService } from '../../../instantiation/common/instantiationService.js';
 import { ILogService, NullLogService } from '../../../log/common/log.js';
@@ -62,7 +64,7 @@ import {
 
 /**
  * The {@link IFileService} + {@link INativeEnvironmentService} pair the
- * Phase 16 customization disk scan / watcher needs at session construction
+ * customization disk scan / watcher needs at session construction
  * time. Nothing is seeded under `userHome`, so the scan is deterministically
  * empty — these only exist so `new ClaudeAgentSession` can read `userHome`
  * and start its watcher without throwing.
@@ -168,6 +170,13 @@ class RecordingSdkService implements IClaudeAgentSdkService {
 
 	readonly capturedStartupOptions: Options[] = [];
 
+	/** The REAL session's startup Options: constructor-time model discovery (best-effort, a DIFFERENT cwd —
+	 *  os.tmpdir() or homedir, never /integration-cwd) may also record here first, so index 0 is a race.
+	 *  Both tests create their session at /integration-cwd; select it by that cwd. */
+	sessionStartup(): Options | undefined {
+		return this.capturedStartupOptions.find(o => o.cwd === URI.file('/integration-cwd').fsPath);
+	}
+
 	/**
 	 * Items the produced WarmQuery's Query will yield in order. SDK
 	 * messages flow through unchanged; {@link CanUseToolMarker} entries
@@ -270,7 +279,7 @@ class RoundTripQuery implements AsyncGenerator<SDKMessage, void> {
 		while (this._index < this._sdk.queryMessages.length) {
 			const item = this._sdk.queryMessages[this._index++];
 			if (isCanUseToolMarker(item)) {
-				const startup = this._sdk.capturedStartupOptions[0];
+				const startup = this._sdk.sessionStartup();
 				if (!startup?.canUseTool) {
 					throw new Error('integration test: canUseTool marker but Options.canUseTool not wired');
 				}
@@ -341,11 +350,11 @@ suite('ClaudeAgent integration', function () {
 	// catalog at construction and authenticate via native ~/.claude OAuth (there is no Copilot/CAPI path).
 	const productService = upcastDeepPartial<IProductService>({ _serviceBrand: undefined });
 
-	test('Phase 7 §5.3 — canUseTool / onElicitation closures wired through to Options on materialize', async () => {
-		// Phase 7 §5.3. Pins the Phase-7 callback surface — `canUseTool`
+	test('canUseTool / onElicitation closures wired through to Options on materialize', async () => {
+		// Pins the callback surface — `canUseTool`
 		// and `onElicitation` must both be present in the Options the SDK
 		// service receives from `_materializeProvisional` and behave per
-		// §3.4 / §3.7. We don't need a full SDK message stream with
+		// expectations. We don't need a full SDK message stream with
 		// tool_use blocks to validate the wiring — the unit suites in
 		// `claudeAgent.test.ts` cover the in-process tool round-trip
 		// exhaustively. What this integration adds: the closures survive
@@ -354,12 +363,17 @@ suite('ClaudeAgent integration', function () {
 		const logService = new NullLogService();
 		const stateManager = disposables.add(new AgentHostStateManager(logService));
 		const configService = disposables.add(new AgentConfigurationService(stateManager, logService));
+		// Seed a trusted root config so materialize's trust barrier resolves immediately ('present');
+		// trusted:true matches the dormant default these tests ran under before the barrier existed.
+		configService.updateRootConfig({ [AgentHostTrustConfigKey.Trust]: { [AgentHostTrustKey.Trusted]: true } });
 
 		const services = new ServiceCollection(
 			[ILogService, logService],
 			[IProductService, productService],
 			[ISessionDataService, createSessionDataService()],
 			[IClaudeAgentSdkService, sdk],
+			// CLAWDIUS: materialize resolves the CLI backend unconditionally; provide the bundled-default stub.
+			[IClawdiusCliConfigService, { _serviceBrand: undefined, resolveCliBackend: async () => projectCliResolution({}, { nodeCliPathExists: false, wrapperPathExists: false }) }],
 			[IAgentPluginManager, {
 				_serviceBrand: undefined,
 				basePath: URI.from({ scheme: 'inmemory', path: '/agentPlugins' }),
@@ -378,7 +392,8 @@ suite('ClaudeAgent integration', function () {
 
 		await agent.sendMessage(created.session, URI.parse(buildDefaultChatUri(created.session)), 'hi', undefined, 'turn-1');
 
-		const startup = sdk.capturedStartupOptions[0];
+		const startup = sdk.sessionStartup();
+		assert.ok(startup, 'the session startup Options were recorded');
 		assert.ok(typeof startup.canUseTool === 'function', 'canUseTool was wired into Options');
 		assert.ok(typeof startup.onElicitation === 'function', 'onElicitation was wired into Options');
 
@@ -396,8 +411,8 @@ suite('ClaudeAgent integration', function () {
 		});
 	});
 
-	test('Phase 7 §5.3 — Read tool round-trip: SDK tool_use → pending_confirmation → respondToPermissionRequest(true) → tool_result → continuation', async () => {
-		// §5.3 of the Phase-7 plan: drive a one-tool round-trip end-to-end
+	test('Read tool round-trip: SDK tool_use → pending_confirmation → respondToPermissionRequest(true) → tool_result → continuation', async () => {
+		// Drive a one-tool round-trip end-to-end
 		// through a materialized agent. Unit tests in `claudeAgent.test.ts`
 		// already cover the in-process `_handleCanUseTool` mechanics; what
 		// this test pins is the agent-to-mapper progress-event ordering when
@@ -407,12 +422,17 @@ suite('ClaudeAgent integration', function () {
 		const logService = new NullLogService();
 		const stateManager = disposables.add(new AgentHostStateManager(logService));
 		const configService = disposables.add(new AgentConfigurationService(stateManager, logService));
+		// Seed a trusted root config so materialize's trust barrier resolves immediately ('present');
+		// trusted:true matches the dormant default these tests ran under before the barrier existed.
+		configService.updateRootConfig({ [AgentHostTrustConfigKey.Trust]: { [AgentHostTrustKey.Trusted]: true } });
 
 		const services = new ServiceCollection(
 			[ILogService, logService],
 			[IProductService, productService],
 			[ISessionDataService, createSessionDataService()],
 			[IClaudeAgentSdkService, sdk],
+			// CLAWDIUS: materialize resolves the CLI backend unconditionally; provide the bundled-default stub.
+			[IClawdiusCliConfigService, { _serviceBrand: undefined, resolveCliBackend: async () => projectCliResolution({}, { nodeCliPathExists: false, wrapperPathExists: false }) }],
 			[IAgentPluginManager, {
 				_serviceBrand: undefined,
 				basePath: URI.from({ scheme: 'inmemory', path: '/agentPlugins' }),
@@ -507,7 +527,7 @@ suite('ClaudeAgent integration', function () {
 				{ kind: 'action', type: ActionType.ChatDelta, content: 'reading' },
 				{ kind: 'action', type: ActionType.ChatToolCallStart, toolCallId: TOOL_USE_ID, toolName: 'Read' },
 				{ kind: 'action', type: ActionType.ChatToolCallDelta, toolCallId: TOOL_USE_ID, content: '{"file_path":"/tmp/x"}' },
-				// Phase 8.5 — mapper emits `ChatToolCallReady` at
+				// mapper emits `ChatToolCallReady` at
 				// `content_block_stop` so auto-allowed tools transition out of
 				// `Streaming`; `sessionPermissions` then emits a second Ready
 				// for the pending_confirmation card below.

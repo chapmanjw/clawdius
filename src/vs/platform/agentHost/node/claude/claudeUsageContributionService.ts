@@ -16,6 +16,7 @@ import { ILogService } from '../../../log/common/log.js';
 import { IClawdiusCliConfigService } from '../../../clawdius/common/clawdiusCliConfig.js';
 import { IClaudeUsageContributionResult, IClaudeUsageContributionService } from '../../common/claudeUsageContribution.js';
 import { buildSubprocessEnv } from './claudeSdkOptions.js';
+import { redactSecrets } from '../agentHostSecretRedact.js';
 
 /** Total budget for one /usage fetch. The local command is fast; capped so a hang cannot pin a process. */
 const USAGE_TIMEOUT_MS = 25_000;
@@ -90,7 +91,7 @@ export class ClaudeUsageContributionService implements IClaudeUsageContributionS
 				child.on('error', () => finish(undefined));
 				child.on('close', (code: number | null) => {
 					if (code !== 0 && stdout.length === 0) {
-						this.logService.warn(`[usage-contrib] cli exited ${code}: ${stderr.slice(0, 300)}`);
+						this.logService.warn(`[usage-contrib] cli exited ${code}: ${redactSecrets(stderr).slice(0, 300)}`);
 						finish(undefined);
 					} else {
 						finish(stdout);

@@ -31,7 +31,7 @@ import { URI } from '../../../base/common/uri.js';
 import { AGENT_HOST_CLIENT_RESOURCE_CHANNEL, AgentHostClientResourceChannel } from '../common/agentHostClientResourceChannel.js';
 import { TELEMETRY_CRASH_REPORTER_SETTING_ID, TELEMETRY_OLD_SETTING_ID, TELEMETRY_SETTING_ID } from '../../telemetry/common/telemetry.js';
 import { getTelemetryLevel } from '../../telemetry/common/telemetryUtils.js';
-import { AgentHostTelemetryLevelConfigKey, AgentHostSessionSyncEnabledConfigKey, AgentHostTerminalAutoApproveEnabledConfigKey, AgentHostGlobalAutoApproveEnabledConfigKey, AgentHostAutoReplyEnabledConfigKey, AgentHostTerminalAutoApproveRulesConfigKey, getAgentHostTerminalAutoApproveRulesConfig, SESSION_SYNC_ENABLED_SETTING_ID, TERMINAL_AUTO_APPROVE_ENABLED_SETTING_ID, GLOBAL_AUTO_APPROVE_SETTING_ID, AUTO_REPLY_SETTING_ID, TERMINAL_AUTO_APPROVE_SETTING_ID, TERMINAL_IGNORE_DEFAULT_AUTO_APPROVE_RULES_SETTING_ID, telemetryLevelToAgentHostConfigValue } from '../common/agentHostSchema.js';
+import { AgentHostTelemetryLevelConfigKey, AgentHostSessionSyncEnabledConfigKey, AgentHostTerminalAutoApproveEnabledConfigKey, AgentHostGlobalAutoApproveEnabledConfigKey, AgentHostWorkspaceTrustDenyByDefaultConfigKey, AgentHostAutoReplyEnabledConfigKey, AgentHostTerminalAutoApproveRulesConfigKey, getAgentHostTerminalAutoApproveRulesConfig, SESSION_SYNC_ENABLED_SETTING_ID, TERMINAL_AUTO_APPROVE_ENABLED_SETTING_ID, GLOBAL_AUTO_APPROVE_SETTING_ID, WORKSPACE_TRUST_DENY_BY_DEFAULT_SETTING_ID, AUTO_REPLY_SETTING_ID, TERMINAL_AUTO_APPROVE_SETTING_ID, TERMINAL_IGNORE_DEFAULT_AUTO_APPROVE_RULES_SETTING_ID, telemetryLevelToAgentHostConfigValue } from '../common/agentHostSchema.js';
 import { ClaudeMcpToolDiscoveryChannelName, IClaudeMcpToolDiscoveryResult, IClaudeMcpToolDiscoveryService } from '../common/claudeMcpToolDiscovery.js';
 import { ClaudeUsageContributionChannelName, IClaudeUsageContributionResult, IClaudeUsageContributionService } from '../common/claudeUsageContribution.js';
 import { ClaudeUsageStatsChannelName, IClaudeUsageStatsResult, IClaudeUsageStatsService } from '../../clawdius/common/claudeUsageStats.js';
@@ -156,6 +156,9 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 			if (e.affectsConfiguration(GLOBAL_AUTO_APPROVE_SETTING_ID)) {
 				this._updateGlobalAutoApproveEnabled();
 			}
+			if (e.affectsConfiguration(WORKSPACE_TRUST_DENY_BY_DEFAULT_SETTING_ID)) {
+				this._updateWorkspaceTrustDenyByDefault();
+			}
 			if (e.affectsConfiguration(AUTO_REPLY_SETTING_ID)) {
 				this._updateAutoReplyEnabled();
 			}
@@ -195,6 +198,7 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 		this._updateSessionSyncEnabled();
 		this._updateTerminalAutoApproveEnabled();
 		this._updateGlobalAutoApproveEnabled();
+		this._updateWorkspaceTrustDenyByDefault();
 		this._updateAutoReplyEnabled();
 		this._updateTerminalAutoApproveRules();
 
@@ -257,6 +261,14 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 		this.dispatchAction(ROOT_STATE_URI, {
 			type: ActionType.RootConfigChanged,
 			config: { [AgentHostGlobalAutoApproveEnabledConfigKey]: enabled },
+		}, this.clientId, 0);
+	}
+
+	private _updateWorkspaceTrustDenyByDefault(): void {
+		const enabled = this._configurationService.getValue<boolean>(WORKSPACE_TRUST_DENY_BY_DEFAULT_SETTING_ID) === true;
+		this.dispatchAction(ROOT_STATE_URI, {
+			type: ActionType.RootConfigChanged,
+			config: { [AgentHostWorkspaceTrustDenyByDefaultConfigKey]: enabled },
 		}, this.clientId, 0);
 	}
 
@@ -447,7 +459,7 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 	}
 
 	// CLAWDIUS-BEGIN live MCP tool discovery (#93)
-	async discoverMcpServerTools(serverName: string, workingDirectoryPath: string): Promise<IClaudeMcpToolDiscoveryResult> {
+	async discoverMcpServerTools(serverName: string, workingDirectoryPath: string, trusted: boolean): Promise<IClaudeMcpToolDiscoveryResult> {
 		// Readiness guard: when the agent host is disabled the delayed channel would queue forever; report it
 		// instead of hanging. We never auto-_connect() from a config dropdown.
 		if (!isAgentHostEnabled(this._configurationService)) {
@@ -465,7 +477,7 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 		if (!ready) {
 			return { status: 'timeout', tools: [], message: 'Timed out reaching the Agent Host.' };
 		}
-		return this._mcpDiscoveryProxy.discoverServerTools(serverName, workingDirectoryPath);
+		return this._mcpDiscoveryProxy.discoverServerTools(serverName, workingDirectoryPath, trusted);
 	}
 	// CLAWDIUS-END
 

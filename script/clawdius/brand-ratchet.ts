@@ -20,7 +20,7 @@
 // SCOPE (deliberately stated, not overclaimed): this ratchet + scan-forbidden (owned/marked) + branding-guard
 // (product.json) cover the SHIPPED SOURCE brand surface - src/, extensions/, cli/, and product.json. They do
 // NOT cover: (a) the build/ PACKAGING pipeline, which still bundles the upstream Copilot extension + @github/
-// copilot prebuilds - a tracked Phase-6 built-product item, separate from a source brand leak; (b) non-shipped
+// copilot prebuilds - a tracked built-product item, separate from a source brand leak; (b) non-shipped
 // test fixtures. A new user-visible Copilot string in src/extensions/cli is caught; the build de-Copilot is its
 // own follow-up.
 //

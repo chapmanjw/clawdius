@@ -18,7 +18,7 @@ class CapturingLog implements Partial<ILogService> {
 	getLevel(): LogLevel { return LogLevel.Off; }
 }
 
-suite('claudeToolCallRegistry — Phase 8.5 input/info tracking', () => {
+suite('claudeToolCallRegistry — input/info tracking', () => {
 
 	ensureNoDisposablesAreLeakedInTestSuite();
 

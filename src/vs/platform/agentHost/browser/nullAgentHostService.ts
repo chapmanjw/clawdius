@@ -56,7 +56,7 @@ export class NullAgentHostService implements IAgentHostService {
 	async getCompletionTriggerCharacters(): Promise<readonly string[]> { return []; }
 	async startWebSocketServer(): Promise<IAgentHostSocketInfo> { return notSupported(); }
 	async getInspectInfo(_tryEnable: boolean): Promise<IAgentHostInspectInfo | undefined> { return undefined; }
-	async discoverMcpServerTools(_serverName: string, _workingDirectoryPath: string): Promise<IClaudeMcpToolDiscoveryResult> { return { status: 'disabled', tools: [], message: 'The Agent Host is not available in this context.' }; }
+	async discoverMcpServerTools(_serverName: string, _workingDirectoryPath: string, _trusted: boolean): Promise<IClaudeMcpToolDiscoveryResult> { return { status: 'disabled', tools: [], message: 'The Agent Host is not available in this context.' }; }
 	async fetchUsageContribution(_workingDirectoryPath: string): Promise<IClaudeUsageContributionResult> { return { text: undefined, status: 'disabled' }; }
 	async getUsageStats(_homeDirPath: string): Promise<IClaudeUsageStatsResult> { return { status: 'unavailable', message: 'The Agent Host is not available in this context.' }; }
 	async disposeSession(_session: URI): Promise<void> { }

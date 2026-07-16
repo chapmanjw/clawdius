@@ -8,7 +8,7 @@
 // fleet, the transcript vault, local cost) binds to for the user's own Claude Code activity. This module holds
 // ONLY the vocabulary and the pure config-root resolver - the label enums, the adapter-version stamp, the
 // labeled result wrapper, the index-only read-model entity types, the request shape, the `IReaderSeam`
-// interface, and `resolveConfigRoot`. There is NO file access and NO parsing here (that is Slice 2+): this
+// interface, and `resolveConfigRoot`. There is NO file access and NO parsing here (that comes later): this
 // layer stays pure so it can be unit-tested without a host. Purity is enforced by `valid-layers-check`, whose
 // browser tsconfig has no `@types/node`, so a Node/`process`/renderer import here fails it. The only imports
 // are `URI` (base/common) and the `CLAUDE_DIR` constant, reused from `clawdiusTierPaths.ts`.
@@ -87,8 +87,8 @@ export interface IReaderResult<T> {
 
 /**
  * A durable index handle into a transcript JSONL file: the stable file identity plus a byte offset into it.
- * This LOCATES a record; it is not a copy of the record's content. Per the data model, `fileIdentity` is the
- * durable index key while `mtime` (used at read time, not stored here) selects the active/newest file.
+ * This LOCATES a record; it is not a copy of the record's content. `fileIdentity` is the durable index key
+ * while `mtime` (used at read time, not stored here) selects the active/newest file.
  */
 export interface TranscriptIndexKey {
 	/** Durable identity of the transcript file (stable as the append-only file grows). */
@@ -128,9 +128,9 @@ export interface Transcript {
 	readonly index: TranscriptIndexKey;
 }
 
-// The teams/tasks/cost read model (Slice 3). Like the transcript entities above, these are INDEX-ONLY and
+// The teams/tasks/cost read model. Like the transcript entities above, these are INDEX-ONLY and
 // derived: a live-and-recent view of local Claude state, never an authoritative copy. Teams/tasks ship behind
-// the TEAMS-14 experimental probe; cost is token-first (FR-011).
+// an experimental probe; cost is token-first.
 
 /** One teammate in a team roster: a stable id and a coarse status string. */
 export interface TeamMember {
@@ -165,7 +165,7 @@ export interface TaskList {
 	readonly tasks: readonly TaskEntry[];
 }
 
-/** A per-model token rollup: authoritative token counts, never a derived US-dollar figure (FR-011). */
+/** A per-model token rollup: authoritative token counts, never a derived US-dollar figure. */
 export interface ModelTokenRollup {
 	readonly model: string;
 	readonly inputTokens: number;
@@ -173,8 +173,8 @@ export interface ModelTokenRollup {
 }
 
 /**
- * The token-first local cost read model (Slice 3). Authoritative TOKEN counts only, computed locally from the
- * transcript; it deliberately carries NO US-dollar field. Per FR-011 / the no-estimated-USD-cost decision, a
+ * The token-first local cost read model. Authoritative TOKEN counts only, computed locally from the
+ * transcript; it deliberately carries NO US-dollar field. Per the no-estimated-USD-cost decision, a
  * list-price USD figure is never shown; only an authoritative, provider-accurate USD may ever appear (labeled,
  * and suppressed where a list price is meaningless - subscription / Bedrock / wrapper), and that is out of this
  * read model's scope.
@@ -197,13 +197,13 @@ export type ReaderEntityKind =
 
 /**
  * The optional scope filter on a request. NOTE: consent-scope ENFORCEMENT (and the identity-join across id
- * namespaces) is out of scope for the seam - this flag is carried, not enforced, here (FR-013).
+ * namespaces) is out of scope for the seam - this flag is carried, not enforced, here.
  */
 export type ReaderScope = 'workspace' | 'all-consented';
 
 /**
  * The resolved config root, or an explicit "no Claude config found here" outcome. The resolved root preserves
- * its URI scheme + authority, so a remote (WSL/SSH) window resolves the remote host's root (FR-002).
+ * its URI scheme + authority, so a remote (WSL/SSH) window resolves the remote host's root.
  */
 export type ReaderConfigRoot =
 	| { readonly kind: 'resolved'; readonly root: URI }
@@ -229,11 +229,11 @@ export interface IReaderSeam {
  * Resolve the config root of the ACTIVE window's host, purely over injected inputs. When `env`
  * (`CLAUDE_CONFIG_DIR`) is a non-empty string, that directory is used - but it is REBASED onto the active
  * window's host: when a home URI is provided the env path is resolved against the home's scheme + authority, so
- * a `CLAUDE_CONFIG_DIR` set inside a remote (WSL/SSH) window resolves the REMOTE host, not the local one
- * (FR-002); only when there is no home is a bare local `file:` URI used. When `env` is unset, the `CLAUDE_DIR`
+ * a `CLAUDE_CONFIG_DIR` set inside a remote (WSL/SSH) window resolves the REMOTE host, not the local one;
+ * only when there is no home is a bare local `file:` URI used. When `env` is unset, the `CLAUDE_DIR`
  * (`.claude`) default under the home is used - and because {@link URI.joinPath} preserves the URI's scheme +
  * authority, a remote-authority home again resolves the remote host's root. Else (no env AND no home - e.g. an
- * unresolvable/headless host) an honest `no-config` result is returned. Never hardcodes `~/.claude` (FR-001).
+ * unresolvable/headless host) an honest `no-config` result is returned. Never hardcodes `~/.claude`.
  * No Node/`process`/renderer import - pure over its arguments.
  */
 export function resolveConfigRoot(env: string | undefined, homeUri: URI | undefined): ReaderConfigRoot {

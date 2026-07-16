@@ -12,7 +12,7 @@ import { getClaudeToolDisplayName } from './claudeToolDisplay.js';
  * Pure projections between the Claude SDK's interactive built-in tool
  * inputs/outputs and the agentHost workbench protocol.
  *
- * Phase 7 S3.5. The two interactive tools (`ExitPlanMode`,
+ * The two interactive tools (`ExitPlanMode`,
  * `AskUserQuestion`) are exempt from the SDK's `permissionMode` auto-
  * approval and always reach `canUseTool`. The agent's job for each is
  * to render a workbench prompt and translate the user's answer back

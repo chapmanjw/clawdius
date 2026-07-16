@@ -302,7 +302,9 @@ export class ClaudeUsageDashboardView extends Disposable {
 		if (token.isCancellationRequested || this.disposed) { return; }
 		const cls = classifySettings(rawSettings);
 		this.horizonDays = cls.kind === 'ok' ? effectiveCleanupPeriodDays(cls.settings) : DEFAULT_CLEANUP_PERIOD_DAYS;
-		const account = await readAccount(this.fileService, dir, capacity);
+		// The capacity refresh router doubles as the "signed in" probe: on a .credentials.json miss it asks whichever
+		// host owns ~/.claude, the only place that can read the macOS login Keychain (the renderer cannot).
+		const account = await readAccount(this.fileService, dir, capacity, this.capacityRefresh);
 		let refreshedAt: Date | undefined;
 		try {
 			const stat = await this.fileService.stat(URI.joinPath(dir, '.clawdius-usage-cache.json'));
@@ -440,7 +442,15 @@ export class ClaudeUsageDashboardView extends Disposable {
 		if (account.email) { part(localize('clawdius.usage.dash.account', "Account"), account.email, true); }
 		if (account.planTier) { part(localize('clawdius.usage.dash.plan', "Plan"), account.planTier, true); }
 		part(localize('clawdius.usage.dash.engine', "Engine"), providerLabel(account.provider), true);
-		part(localize('clawdius.usage.dash.auth', "Auth"), account.signedIn ? localize('clawdius.usage.dash.signedIn', "Signed in") : localize('clawdius.usage.dash.signedOut', "Signed out"));
+		// Three states, not two. `undefined` = the credential probe was indeterminate (a locked macOS login keychain,
+		// or a host we could not reach) and we have no prior answer - report that honestly instead of asserting
+		// "Signed out", which is precisely the false report this probe was added to eliminate.
+		const authLabel = account.signedIn === undefined
+			? localize('clawdius.usage.dash.authUnknown', "Checking...")
+			: account.signedIn
+				? localize('clawdius.usage.dash.signedIn', "Signed in")
+				: localize('clawdius.usage.dash.signedOut', "Signed out");
+		part(localize('clawdius.usage.dash.auth', "Auth"), authLabel);
 
 		// Honest scope statement: the lifetime tiles summarize only the sessions still within the retention window.
 		// Computation is live from local transcripts - there is no "as of" / cached freshness to report.

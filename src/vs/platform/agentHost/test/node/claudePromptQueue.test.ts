@@ -80,7 +80,7 @@ suite('ClaudePromptQueue', () => {
 		assert.strictEqual(queue.isEmpty, true);
 	});
 
-	test('intermediate settleHead while another entry is queued does NOT settle the popped entry — batches until full drain (M10 invariant)', async () => {
+	test('intermediate settleHead while another entry is queued does NOT settle the popped entry — batches until full drain', async () => {
 		const { queue } = createQueue(disposables);
 		const iter = queue.iterable[Symbol.asyncIterator]();
 
@@ -151,7 +151,7 @@ suite('ClaudePromptQueue', () => {
 		assert.strictEqual(r.done, true);
 	});
 
-	test('peekParent prefers the in-flight head over the latest queued entry (CONTEXT M10: steering inherits in-flight turnId)', async () => {
+	test('peekParent prefers the in-flight head over the latest queued entry (steering inherits in-flight turnId)', async () => {
 		const { queue } = createQueue(disposables);
 		const iter = queue.iterable[Symbol.asyncIterator]();
 

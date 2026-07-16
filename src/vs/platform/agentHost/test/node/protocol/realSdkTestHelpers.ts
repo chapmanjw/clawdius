@@ -110,13 +110,13 @@ export interface IRealSdkProviderConfig {
 	/**
 	 * Provider implements `config.isolation: 'worktree'` and resolves the
 	 * working directory to a `.worktrees/...` path on materialization.
-	 * Claude has not landed worktree isolation yet (Phase 12 in roadmap).
+	 * Claude has not landed worktree isolation yet.
 	 */
 	readonly supportsWorktreeIsolation: boolean;
 	/**
 	 * Provider exposes a subagent tool (`task` / `Task`) that produces
 	 * `ToolResultSubagentContent` and routes inner tool calls to a child
-	 * session. Claude has not landed subagents yet (Phase 12 in roadmap).
+	 * session. Claude has not landed subagents yet.
 	 */
 	readonly supportsSubagents: boolean;
 	/**

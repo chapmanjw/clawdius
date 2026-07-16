@@ -3,8 +3,8 @@ name: Clawdius CI
 # Clawdius runs its own CI. The inherited microsoft/vscode workflows were removed because they
 # depend on Microsoft secrets, self-hosted runners, and the distro repo and fail on any fork.
 # This minimal job validates the fork scaffolding and works on a private repo with no secrets.
-# Phase 6 expands it into the full matrix (build, branding guard against the built product,
-# network-egress guard, gitleaks).
+# A later change expands it into the full matrix (build, branding guard against the built product,
+# network-egress guard).
 
 on:
   push:
@@ -47,12 +47,12 @@ jobs:
           set -e
           # PREFLIGHT: this self-test plants and then rm -rf's these sentinel names. If any already exists in
           # the checkout, refuse to run - otherwise a genuinely committed root specs/ or .specify/ (the exact
-          # SC-012 artifact) would be deleted by the cleanup below and masked. A pre-existing specs/.specify is
-          # itself an SC-012 violation; __sk_selftest__ signals stale state. Fail loud either way.
+          # Spec-Kit artifact) would be deleted by the cleanup below and masked. A pre-existing specs/.specify is
+          # itself a Spec-Kit-artifact violation; __sk_selftest__ signals stale state. Fail loud either way.
           for s in specs .specify __sk_selftest__; do
-            if [ -e "$s" ]; then echo "::error::\"$s\" already exists before the spec-kit self-test - a committed SC-012 artifact or stale state; refusing to run destructive self-test"; exit 1; fi
+            if [ -e "$s" ]; then echo "::error::\"$s\" already exists before the spec-kit self-test - a committed Spec-Kit artifact or stale state; refusing to run destructive self-test"; exit 1; fi
           done
-          # SC-012 / FR-018: the scanner must flag a Spec-Kit directory ANYWHERE in the public tree - at the
+          # the scanner must flag a Spec-Kit directory ANYWHERE in the public tree - at the
           # root AND nested. Root cases live at the repo root; nested cases go under a throwaway parent so
           # cleanup never touches a real tracked directory. Each must trip the scan (run with no file args).
           for d in specs .specify __sk_selftest__/docs/specs __sk_selftest__/deep/nest/.specify; do
@@ -72,7 +72,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          owned=$(git ls-files 'clawdius/**' 'src/vs/workbench/contrib/clawdius/**' 'src/vs/platform/clawdius/**' 'script/clawdius/**' 'extensions/clawdius-*/**' docs/CHANGES_AGAINST_UPSTREAM.md docs/MERGING.md docs/BUILD.md docs/CONTRIBUTING.md docs/SECURITY.md 'README-CLAWDIUS*')
+          owned=$(git ls-files 'clawdius/**' 'src/vs/workbench/contrib/clawdius/**' 'src/vs/platform/clawdius/**' 'src/vs/platform/agentHost/**' 'script/clawdius/**' 'extensions/clawdius-*/**' docs/CHANGES_AGAINST_UPSTREAM.md docs/MERGING.md docs/BUILD.md docs/CONTRIBUTING.md docs/SECURITY.md 'README-CLAWDIUS*')
           # Discover in-place upstream edits by their begin-marker across ALL tracked files (built at
           # runtime so this workflow does not match itself). The scanner self-selects: it skips its own
           # source, scans owned files in full, and inspects only the marked regions of everything else, so
@@ -110,6 +110,27 @@ jobs:
           # is the CI backstop. node_modules/out/.build are excluded in .gitleaks.toml.
           GLV=8.21.2
           curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GLV}/gitleaks_${GLV}_linux_x64.tar.gz" | tar -xz -C /tmp gitleaks
+          # Falsifiability: a real-shaped secret planted under a Clawdius TEST path MUST trip the gate. Proves the
+          # test/ trees are actually scanned (the allowlist no longer blanket-exempts them, which had let a real
+          # credential in a mock/test file slip). If the planted secret does not trip, the gate is dead - fail.
+          probe=src/vs/workbench/contrib/clawdius/test/browser/__gitleaks_selftest__.test.ts
+          printf 'const k = "sk-ant-api03-FAKE00000000000000000000000000";\n' > "$probe"
+          if /tmp/gitleaks detect --no-git --source src/vs/workbench/contrib/clawdius --config .gitleaks.toml --redact --no-banner --exit-code 1 >/dev/null 2>&1; then
+            rm -f "$probe"; echo "FAIL: gitleaks did not flag a planted secret in a Clawdius test path"; exit 1
+          fi
+          rm -f "$probe"
+          echo "gitleaks falsifiability: a planted Clawdius-test secret correctly tripped the gate"
+          # Second probe: prove Clawdius extension MANIFESTS are scanned. The blanket extensions/*/package.json path
+          # exemption was removed (upstream aiKeys are allowlisted by VALUE), so a real credential in a Clawdius
+          # extension package.json must now trip. Plant into a temp package.json under the extension dir, then remove.
+          mdir=extensions/clawdius-chat/__gitleaks_probe__
+          mkdir -p "$mdir"
+          printf '{ "__probe": "sk-ant-api03-FAKE00000000000000000000000000" }\n' > "$mdir/package.json"
+          if /tmp/gitleaks detect --no-git --source extensions/clawdius-chat --config .gitleaks.toml --redact --no-banner --exit-code 1 >/dev/null 2>&1; then
+            rm -rf "$mdir"; echo "FAIL: gitleaks did not flag a planted secret in a Clawdius extension package.json"; exit 1
+          fi
+          rm -rf "$mdir"
+          echo "gitleaks falsifiability: a planted Clawdius extension-manifest secret correctly tripped the gate"
           for d in src/vs/workbench/contrib/clawdius src/vs/platform/clawdius \
                    src/vs/platform/agentHost/node/claude extensions/clawdius-chat \
                    extensions/clawdius-themes script/clawdius docs; do
@@ -156,7 +177,7 @@ jobs:
           echo "fork-diff ratchet is falsifiable (over-baseline growth trips) and clean on the current tree"
       - name: Branding guard (Clawdius branding, Open VSX, no telemetry, Clawdius theme)
         run: node script/clawdius/branding-guard.ts
-      - name: Recommended-extension namespace guard is falsifiable (FR-003 / GlassWorm)
+      - name: Recommended-extension namespace guard is falsifiable (GlassWorm)
         shell: bash
         run: |
           set -e
@@ -173,7 +194,7 @@ jobs:
           fi
           git checkout -- product.json
           node script/clawdius/branding-guard.ts >/dev/null
-          echo "FR-003 recommended-extension namespace guard is falsifiable and clean after restore"
+          echo "recommended-extension namespace guard is falsifiable and clean after restore"
       - name: Brand ratchet (Copilot icon/string/asset may only shrink) + per-probe falsifiability
         shell: bash
         run: |
@@ -202,7 +223,7 @@ jobs:
   # no-default-account egress regression plus the workflow-store/transcript and Claude-CLI-plugin-discovery
   # suites. Targeted on purpose: --run loads only the named test files, not the full upstream suite (which
   # carries unrelated upstream tests). Kept as a separate job so the fast fork-hygiene checks are never
-  # gated on the heavy dev install. Phase 6 broadens this to the full matrix.
+  # gated on the heavy dev install. Later work broadens this to the full matrix.
   unit-test-browser:
     runs-on: ubuntu-latest
     steps:
@@ -256,6 +277,7 @@ jobs:
             "out/vs/workbench/contrib/clawdius/test/browser/claudeUsageProvider.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/clawdiusUpdate.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeUsageCapacityRefresh.test.js" \
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeUsageAccount.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeControlTabsModel.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeControlCenterEditor.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeUsageDashboardView.test.js" \
@@ -275,7 +297,14 @@ jobs:
             "out/vs/workbench/contrib/clawdius/test/browser/claudeReaderSeam.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeReaderSeamTranscript.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeReaderSeamReadOnly.test.js" \
-            "out/vs/workbench/contrib/clawdius/test/browser/claudeReaderSeamFormats.test.js"; do
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeReaderSeamFormats.test.js" \
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeFleetEnumeration.test.js" \
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeMissionsView.test.js" \
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeMissionTranscriptEditor.test.js" \
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeMissionOwnership.test.js" \
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeMissionBadges.test.js" \
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeMissionControls.test.js" \
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeFleetIdentityJoin.test.js"; do
             if [ ! -f "$t" ]; then echo "::error::compiled test missing ($t) — transpile path drift"; exit 1; fi
             log="$(basename "$t").log"
             node test/unit/browser/index.js --run "$t" --browser chromium 2>&1 | tee "$log"
@@ -302,7 +331,11 @@ jobs:
             "out/vs/platform/agentHost/test/node/claudeMapSessionEvents.test.js" \
             "out/vs/platform/agentHost/test/node/claudeSubagentResolver.test.js" \
             "out/vs/platform/agentHost/test/node/claudeTrustGate.test.js" \
-            "out/vs/platform/agentHost/test/common/claudeTrust.test.js"; do
+            "out/vs/platform/agentHost/test/node/agentHostSecretRedact.test.js" \
+            "out/vs/platform/agentHost/test/node/claudeMcpToolDiscoveryService.test.js" \
+            "out/vs/platform/agentHost/test/node/claudeSdkPipeline.test.js" \
+            "out/vs/platform/agentHost/test/common/claudeTrust.test.js" \
+            "out/vs/platform/clawdius/test/node/claudeCredentials.test.js"; do
             if [ ! -f "$t" ]; then echo "::error::compiled test missing ($t) — transpile path drift"; exit 1; fi
             log="$(basename "$t").node.log"
             node test/unit/node/index.js --run "$t" 2>&1 | tee "$log"

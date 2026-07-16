@@ -111,7 +111,7 @@ async function* discoveryInput(signal: AbortSignal): AsyncIterable<SDKUserMessag
 // Provisional session state is hosted directly on {@link ClaudeAgentSession}
 // (pre-materialize fields: project, abortController, provisionalModel,
 // provisionalConfig). The legacy `IClaudeProvisionalSession` map shape
-// was retired in Phase 10.5 Step 3a.
+// was retired.
 
 /**
  * Claude active-client handle. Tools read/write through the live session's
@@ -179,8 +179,8 @@ export class ClaudeAgent extends Disposable implements IAgent {
 	/**
 	 * Memoized teardown promise. Set on the first call to {@link shutdown},
 	 * returned by every subsequent call. Mirrors `CopilotAgent.shutdown`
-	 * at copilotAgent.ts:1246. Phase 5 has no async work so the race
-	 * is benign, but the contract is locked now so Phase 6's real
+	 * at copilotAgent.ts:1246. There is no async work yet so the race
+	 * is benign, but the contract is locked now so the real
 	 * async teardown (Query.interrupt(), in-flight metadata writes)
 	 * cannot regress.
 	 */
@@ -203,7 +203,7 @@ export class ClaudeAgent extends Disposable implements IAgent {
 	private readonly _activeClientHandles = new Map<string, ClaudeActiveClientHandle>();
 
 	/**
-	 * Phase 6: fired once per session when {@link _materializeProvisional}
+	 * Fired once per session when {@link _materializeProvisional}
 	 * promotes a provisional record into a real {@link ClaudeAgentSession}.
 	 * The {@link IAgentService} subscribes via the platform contract
 	 * (`agentService.ts:412`) to dispatch the deferred `sessionAdded`
@@ -215,18 +215,18 @@ export class ClaudeAgent extends Disposable implements IAgent {
 
 	/**
 	 * Per-session-id serializer shared by {@link disposeSession} and
-	 * {@link shutdown}. Phase 5 dispose work is synchronous, so the queued
+	 * {@link shutdown}. Dispose work is synchronous today, so the queued
 	 * tasks resolve immediately and the sequencer is mostly a no-op. The
-	 * routing is locked in now (per plan section 3.3.4 / section 3.3.6) so
-	 * Phase 6's real async teardown (`Query.interrupt()`, in-flight metadata
-	 * writes) inherits per-session serialization for free — a concurrent
+	 * routing is locked in now so the real async teardown (`Query.interrupt()`,
+	 * in-flight metadata writes) inherits per-session serialization for free
+	 * once it lands — a concurrent
 	 * `disposeSession(uri)` already in flight is awaited before
 	 * `shutdown()` reuses the same key.
 	 */
 	private readonly _disposeSequencer = new SequencerByKey<string>();
 
 	/**
-	 * Phase 6: per-session-id serializer for {@link sendMessage}. Held
+	 * Per-session-id serializer for {@link sendMessage}. Held
 	 * across both {@link _materializeProvisional} AND `entry.send()` so
 	 * two concurrent first-message calls on the same session collapse
 	 * into one materialize plus two ordered sends. Separate from
@@ -534,7 +534,7 @@ export class ClaudeAgent extends Disposable implements IAgent {
 	/**
 	 * Fork an existing session at a protocol `turnId` (keep `[0..N]`
 	 * INCLUSIVE) into a new, non-provisional session. The SDK `Query` is
-	 * NOT started here (CONTEXT M9): `forkSession` writes the transcript to
+	 * NOT started here: `forkSession` writes the transcript to
 	 * disk and we return; the `Query` materializes lazily on the first
 	 * {@link sendMessage} via {@link _resumeSession}. `turnId` is translated
 	 * to the SDK envelope `uuid` by {@link resolveForkAnchorUuid};
@@ -563,7 +563,7 @@ export class ClaudeAgent extends Disposable implements IAgent {
 			// Inherit the source's model / permissionMode / agent (create-config
 			// overrides win) so the lazy `_resumeSession` seeds `Options` from
 			// it. `customizationDirectory` is NOT inherited — it is the source's
-			// per-session synced plugin dir (Phase 11); the fork re-syncs its own.
+			// per-session synced plugin dir; the fork re-syncs its own.
 			let sourceOverlay: IClaudeSessionOverlay = {};
 			try {
 				sourceOverlay = await this._metadataStore.read(fork.session);
@@ -740,7 +740,7 @@ export class ClaudeAgent extends Disposable implements IAgent {
 	disposeSession(session: URI): Promise<void> {
 		// Routed through {@link _disposeSequencer} so a concurrent
 		// {@link shutdown} already serializing teardown for this same
-		// session id awaits this work first (and vice versa). Phase 6
+		// session id awaits this work first (and vice versa). This
 		// adds a provisional branch: when the session has not yet been
 		// materialized, abort the controller (unblocks any racing
 		// `await sdk.startup()`) and drop the record. No SDK contact,
@@ -758,9 +758,9 @@ export class ClaudeAgent extends Disposable implements IAgent {
 
 	/**
 	 * Test-only accessor for the materialized {@link ClaudeAgentSession}.
-	 * Phase 6 section 5.1 Test 10 needs to inspect `_isResumed` directly because
-	 * Phase 6 has no teardown+recreate flow yet to observe its effect
-	 * (the flag drives `Options.resume = sessionId` in Phase 7+). Marked
+	 * This needs to inspect `_isResumed` directly because there is no
+	 * teardown+recreate flow yet to observe its effect
+	 * (the flag drives `Options.resume = sessionId`). Marked
 	 * `ForTesting` so the production surface stays unaware of its
 	 * existence; the protocol surface (`IAgent`) does not include it.
 	 */
@@ -770,10 +770,10 @@ export class ClaudeAgent extends Disposable implements IAgent {
 	}
 
 	/**
-	 * Phase 13 — reconstruct the full turn history from the SDK's on-disk
+	 * Reconstruct the full turn history from the SDK's on-disk
 	 * JSONL transcript. Out-of-process: no live `Query` required. Subagent
-	 * URIs (`<parent>/subagent/<toolCallId>`) throw `TODO: Phase 12` until
-	 * Phase 12 wires `getSubagentMessages`. Provisional sessions return `[]`.
+	 * URIs (`<parent>/subagent/<toolCallId>`) throw `TODO: not yet implemented`
+	 * until `getSubagentMessages` is wired. Provisional sessions return `[]`.
 	 * Resilient: any failure (transcript fetch, mapping, backfill) warn-logs
 	 * and returns `[]` rather than propagating — mirrors `listSessions`.
 	 */
@@ -831,11 +831,11 @@ export class ClaudeAgent extends Disposable implements IAgent {
 	}
 
 	async listSessions(): Promise<IAgentSessionMetadata[]> {
-		// Plan section 3.3.2: SDK is the source of truth; the per-session DB
+		// SDK is the source of truth; the per-session DB
 		// is a pure overlay/cache for Claude-namespaced fields like
 		// `customizationDirectory`. We deliberately do NOT filter
 		// entries that lack a DB — external Claude Code CLI sessions
-		// have no DB and must still surface (Phase-5 exit criterion).
+		// have no DB and must still surface.
 		//
 		// Each per-session overlay read is independently try/caught so a
 		// single corrupt DB cannot poison the wider listing. CopilotAgent's
@@ -869,7 +869,7 @@ export class ClaudeAgent extends Disposable implements IAgent {
 	}
 
 	/**
-	 * Phase 6.1 / Cycle D4 — per-session lookup. Mirrors
+	 * Per-session lookup. Mirrors
 	 * {@link CopilotAgent.getSessionMetadata} but accepts the
 	 * external-CLI case: a session that exists on disk via the raw
 	 * Anthropic CLI has no per-session DB, so we MUST NOT gate on the
@@ -947,15 +947,15 @@ export class ClaudeAgent extends Disposable implements IAgent {
 	}
 
 	sessionConfigCompletions(_params: IAgentSessionConfigCompletionsParams): Promise<SessionConfigCompletionsResult> {
-		// Plan section 3.3.5: Claude's only schema property is the
+		// Claude's only schema property is the
 		// `permissionMode` static enum, so dynamic completion is
-		// definitionally empty in Phase 5. Branch completion lands in
-		// Phase 6 once worktree extraction (section 8) is settled.
+		// definitionally empty today. Branch completion lands once
+		// worktree extraction is settled.
 		return Promise.resolve({ items: [] });
 	}
 
 	shutdown(): Promise<void> {
-		// Phase 6: drain provisional sessions FIRST so any in-flight
+		// Drain provisional sessions FIRST so any in-flight
 		// `await sdk.startup()` (kicked off by a racing `sendMessage`)
 		// observes the abort and unwinds. Each provisional record's
 		// AbortController is wired into Options.abortController at
@@ -964,7 +964,7 @@ export class ClaudeAgent extends Disposable implements IAgent {
 		//
 		// Then drain the materialized sessions through the existing
 		// per-session {@link _disposeSequencer} routing — that path
-		// inherits Phase 6's real async teardown (`Query.interrupt()`,
+		// inherits the real async teardown (`Query.interrupt()`,
 		// in-flight metadata writes) once those land.
 		//
 		// The promise is memoized so concurrent callers share a single
@@ -1019,7 +1019,7 @@ export class ClaudeAgent extends Disposable implements IAgent {
 				message: { role: 'user', content: contentBlocks },
 				session_id: sessionId,
 				parent_tool_use_id: null,
-				// M1 / Glossary: `Turn.id ↔ SDKUserMessage.uuid`. The SDK
+				// Protocol invariant: `Turn.id ↔ SDKUserMessage.uuid`. The SDK
 				// types this as a branded `${string}-…` template-literal
 				// alias of Node's `crypto.UUID`; cast at the boundary
 				// rather than threading the brand up to every caller.
@@ -1056,7 +1056,7 @@ export class ClaudeAgent extends Disposable implements IAgent {
 	}
 
 	async abortSession(session: URI): Promise<void> {
-		// Phase 9 D1: cancel via the abort controller, NOT `Query.interrupt()`.
+		// Cancel via the abort controller, NOT `Query.interrupt()`.
 		// Abort is a control-plane operation — it must NOT serialize
 		// through `_sessionSequencer` because an in-flight `sendMessage`
 		// task is parked on its turn deferred and would deadlock the abort
@@ -1077,8 +1077,8 @@ export class ClaudeAgent extends Disposable implements IAgent {
 	}
 
 	setPendingMessages(session: URI, steeringMessage: PendingMessage | undefined, _queuedMessages: readonly PendingMessage[]): void {
-		// Phase 9 D5: queued messages are intentionally a no-op. CONTEXT.md
-		// M10 + AgentSideEffects confirm queued messages are consumed
+		// Queued messages are intentionally a no-op. AgentSideEffects
+		// confirm queued messages are consumed
 		// server-side; the agent boundary always receives an empty queue.
 		const sessionId = AgentSession.id(session);
 		this._logService.info(`[Claude:${sessionId}] setPendingMessages called: steering=${steeringMessage?.id ?? 'none'} queued=${_queuedMessages.length}`);

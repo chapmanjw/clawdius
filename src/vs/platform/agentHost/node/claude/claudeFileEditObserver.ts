@@ -13,7 +13,7 @@ import type { ClaudeMapperState } from './claudeMapSessionEvents.js';
 import { getClaudeToolPath, isClaudeFileEditTool } from './claudeToolDisplay.js';
 
 /**
- * Phase 8 — file-edit observation off the SDK message stream.
+ * File-edit observation off the SDK message stream.
  *
  * Owns the {@link FileEditTracker}, the in-flight `tool_use_id → path`
  * map, and the dbRef whose lifetime gates persistence writes. Snapshots

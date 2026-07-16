@@ -21,15 +21,15 @@ import {
 
 /**
  * Pure-data snapshot tests for [claudeToolDisplay.ts](../../node/claude/claudeToolDisplay.ts).
- * Phase 7 plan §4: every cell of the mapping table must be reachable
- * from one assertion. The snapshot lives here, not in a fixture file,
- * so future renames flow through compile-checks.
+ * Every cell of the mapping table must be reachable from one assertion.
+ * The snapshot lives here, not in a fixture file, so future renames flow
+ * through compile-checks.
  */
-suite('claudeToolDisplay — §4 mapping table', () => {
+suite('claudeToolDisplay — mapping table', () => {
 
 	ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('mapping snapshot covers every Phase 7 §4 row', () => {
+	test('mapping snapshot covers every row', () => {
 		const TOOLS = [
 			'Bash', 'BashOutput', 'KillBash',
 			'Read', 'Glob', 'Grep', 'LS', 'NotebookRead',
@@ -152,7 +152,7 @@ suite('claudeToolDisplay — §4 mapping table', () => {
 		);
 	});
 
-	test('Phase 8 — isClaudeFileEditTool covers Write/Edit/MultiEdit/NotebookEdit, excludes TodoWrite/Bash/others', () => {
+	test('isClaudeFileEditTool covers Write/Edit/MultiEdit/NotebookEdit, excludes TodoWrite/Bash/others', () => {
 		assert.deepStrictEqual(
 			{
 				Write: isClaudeFileEditTool('Write'),
@@ -179,7 +179,7 @@ suite('claudeToolDisplay — §4 mapping table', () => {
 		);
 	});
 
-	test('Phase 8.5 — rich rendering snapshot covers every tool row', () => {
+	test('rich rendering snapshot covers every tool row', () => {
 		const SAMPLE_INPUT: Record<string, unknown> = {
 			Bash: { command: 'git status' },
 			BashOutput: { bash_id: 'b1' },
@@ -237,7 +237,7 @@ suite('claudeToolDisplay — §4 mapping table', () => {
 		]);
 	});
 
-	test('Phase 8.5 — defensive input handling falls back to static display strings', () => {
+	test('defensive input handling falls back to static display strings', () => {
 		assert.deepStrictEqual(
 			{
 				bashNoCommand: getClaudeInvocationMessage('Bash', 'Run shell command', {}),
@@ -266,7 +266,7 @@ suite('claudeToolDisplay — §4 mapping table', () => {
 		);
 	});
 
-	test('Phase 8.5 — Agent row mirrors Task (subagent kind, same display name)', () => {
+	test('Agent row mirrors Task (subagent kind, same display name)', () => {
 		assert.deepStrictEqual(
 			[
 				getClaudeToolKind('Agent'),
@@ -285,7 +285,7 @@ suite('claudeToolDisplay — §4 mapping table', () => {
 		);
 	});
 
-	test('Phase 8.5 — MCP tools have no toolKind, JSON input fallback', () => {
+	test('MCP tools have no toolKind, JSON input fallback', () => {
 		assert.deepStrictEqual(
 			{
 				kind: getClaudeToolKind('mcp__github__listIssues'),

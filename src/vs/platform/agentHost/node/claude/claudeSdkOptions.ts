@@ -165,13 +165,21 @@ export async function buildOptions(
 			: { sessionId: input.sessionId }),
 		...(input.mcpServers ? { mcpServers: input.mcpServers } : {}),
 		...(input.allowedTools && input.allowedTools.length > 0 ? { allowedTools: [...input.allowedTools] } : {}),
-		...(input.plugins && input.plugins.length > 0
+		// Workspace-trust clamp: an untrusted workspace loads NO local plugins - a plugin dir can carry startup
+		// hooks that bypass canUseTool, so plugins load only for a trusted workspace. (mcpServers/allowedTools above
+		// are host-owned server-tool wiring, not repo-injectable; if either ever becomes repo-derived it MUST be
+		// clamped here too.)
+		...(input.trusted && input.plugins && input.plugins.length > 0
 			? { plugins: input.plugins.map(p => ({ type: 'local' as const, path: p.fsPath })) }
 			: {}),
 		...(input.agent ? { agent: input.agent } : {}),
 		// Workspace-trust clamp: an untrusted workspace loads NO settings sources - not user, project, or local - so no hooks
 		// (which bypass canUseTool entirely), permission allow-rules, or MCP servers from any settings file can run.
 		settingSources: input.trusted ? ['user', 'project', 'local'] : [],
+		// Workspace-trust clamp: settingSources governs only .claude/settings*.json; the project-root .mcp.json is a
+		// SEPARATE source gated by strictMcpConfig (SDK default false), so an untrusted workspace must set it too, or a
+		// repo .mcp.json stdio server would still spawn its command at startup. Trusted keeps the SDK default.
+		strictMcpConfig: !input.trusted,
 		settings: { env: settingsEnv },
 		systemPrompt: { type: 'preset', preset: 'claude_code' },
 		stderr: logStderr,
@@ -203,7 +211,7 @@ export async function buildClientMcpServers(
 
 /**
  * Build a minimal {@link Options} bag for an ephemeral model-enumeration
- * query (Phase 19, native transport). No workspace (`cwd = os.tmpdir()`), no
+ * query (native transport). No workspace (`cwd = os.tmpdir()`), no
  * proxy env, and the user's `ANTHROPIC_API_KEY` preserved so the SDK can
  * authenticate. Reads the user's real `~/.claude` config so subscription
  * models (e.g. Opus) surface; verified not to write any session transcript

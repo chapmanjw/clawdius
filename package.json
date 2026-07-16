@@ -44,6 +44,7 @@
     "kill-watch-extensionsd": "deemon --kill npm run watch-extensions",
     "precommit": "node --experimental-strip-types build/hygiene.ts",
     "commitmsg": "node --experimental-strip-types script/clawdius/commit-msg-lint.ts",
+    "prepush": "node --experimental-strip-types script/clawdius/prepush-hygiene.ts",
     "gulp": "node --experimental-strip-types --max-old-space-size=8192 ./node_modules/gulp/bin/gulp.js",
     "electron": "node build/lib/electron.ts",
     "7z": "7z",

@@ -1463,6 +1463,12 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const a = this.adding;
 		if (!a) { return; }
 		if (!server) { this.toast(localize('clawdius.control.pickServerFirst', "Pick an MCP server first.")); a.mcpSelect = ''; this.render(); return; }
+		if (!this.trustService.isWorkspaceTrusted()) {
+			a.mcpSelect = '';
+			a.mcpLoadMessage = localize('clawdius.control.mcpUntrusted', "This workspace is not trusted - loading MCP tools is blocked until you trust it (see the Trust tab).");
+			this.render();
+			return;
+		}
 		a.mcpLoading = true;
 		a.mcpLoadMessage = '';
 		a.mcpSelect = '';
@@ -1470,7 +1476,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const cwd = (this.workspaceService.getWorkspace().folders[0]?.uri ?? await this.pathService.userHome()).fsPath;
 		let result: IClaudeMcpToolDiscoveryResult;
 		try {
-			result = await this.agentHostService.discoverMcpServerTools(server, cwd);
+			result = await this.agentHostService.discoverMcpServerTools(server, cwd, this.trustService.isWorkspaceTrusted());
 		} catch (err) {
 			result = { status: 'error', tools: [], message: err instanceof Error ? err.message : String(err) };
 		}
@@ -2828,12 +2834,17 @@ export class ClaudeControlCenterEditor extends EditorPane {
 
 	private async loadMcpToolsForServer(server: string): Promise<void> {
 		if (this.mcpTabTools.get(server)?.loading) { return; }
+		if (!this.trustService.isWorkspaceTrusted()) {
+			this.mcpTabTools.set(server, { loading: false, tools: [], message: localize('clawdius.control.mcpUntrusted', "This workspace is not trusted - loading MCP tools is blocked until you trust it (see the Trust tab).") });
+			this.render();
+			return;
+		}
 		this.mcpTabTools.set(server, { loading: true, tools: [], message: '' });
 		this.render();
 		const cwd = (this.workspaceService.getWorkspace().folders[0]?.uri ?? await this.pathService.userHome()).fsPath;
 		let result: IClaudeMcpToolDiscoveryResult;
 		try {
-			result = await this.agentHostService.discoverMcpServerTools(server, cwd);
+			result = await this.agentHostService.discoverMcpServerTools(server, cwd, this.trustService.isWorkspaceTrusted());
 		} catch (err) {
 			result = { status: 'error', tools: [], message: err instanceof Error ? err.message : String(err) };
 		}

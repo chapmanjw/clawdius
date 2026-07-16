@@ -23,7 +23,14 @@
 # the clawdius-owned surface (platform/clawdius, contrib/clawdius, the clawdius-chat extension); no
 # upstream file grows beyond the call-site edits needed to pass the probe through.
 
+# Disposition 2026-07-15 (+1 file, +25 insertions): bump @anthropic-ai/claude-agent-sdk from 0.3.201
+# to 0.3.205. The 0.3.205 types add a required SessionMessage.parent_agent_id and widen the result of
+# Query.interrupt, so the fork-owned agent-host test doubles and fixtures are updated to match
+# (production sources compile unchanged). Those test edits, plus git's inexact rename detection -
+# capped on this ~5500-file diff - no longer pairing claudeReplayMapper.test.ts against a deleted
+# upstream file, grow the counted surface. Test scaffolding only; no product code grows.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
-recorded: 2026-07-13
-baseline: 5597 files changed, 40693 insertions(+), 1456101 deletions(-)
+recorded: 2026-07-15
+baseline: 5598 files changed, 40725 insertions(+), 1456121 deletions(-)

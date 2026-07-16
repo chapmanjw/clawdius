@@ -46,7 +46,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           lfs: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
       # The hosted windows-2022 image ships VS2022 with the C++ workload + Spectre-
@@ -101,7 +101,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           lfs: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
       - name: Install packaging toolchain
@@ -155,7 +155,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           lfs: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
       - name: Install build toolchain
@@ -197,7 +197,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           lfs: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
       - name: Install toolchain
@@ -257,7 +257,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           lfs: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
       - name: Install dependencies

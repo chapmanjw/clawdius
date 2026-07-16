@@ -23,7 +23,16 @@
 # the clawdius-owned surface (platform/clawdius, contrib/clawdius, the clawdius-chat extension); no
 # upstream file grows beyond the call-site edits needed to pass the probe through.
 
+# Disposition 2026-07-15 (+1 file, +1 insertion): bump actions/checkout to v7.0.0 in
+# require-commit-trailer.yml. That workflow checks out untrusted PR-head code, so it pins checkout to
+# a full commit SHA (not the floating @v7 the other workflows use); the pin moves from v6.0.3 to
+# v7.0.0. Changing the SHA alters the file's content enough that git's inexact rename detection -
+# capped on this ~5500-file diff - stops pairing it against a deleted upstream file, so it newly
+# counts toward the fork surface. A measurement artifact, not real growth: the workflow is unchanged
+# in size. The +1 insertion above is the workflow change itself; the recorded baseline below moves by
+# more because this disposition block's own comment lines also count toward the fork surface.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
-recorded: 2026-07-13
-baseline: 5597 files changed, 40693 insertions(+), 1456101 deletions(-)
+recorded: 2026-07-15
+baseline: 5598 files changed, 40703 insertions(+), 1456102 deletions(-)

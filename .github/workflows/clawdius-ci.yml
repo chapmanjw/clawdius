@@ -21,7 +21,7 @@ jobs:
   fork-hygiene:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7
         with:
           lfs: false # upstream LFS test caches 404 and are not needed; never smudge in CI
       - uses: actions/setup-node@v4
@@ -227,7 +227,7 @@ jobs:
   unit-test-browser:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7
         with:
           lfs: false # upstream LFS test caches 404 and are not needed; never smudge in CI
       - uses: actions/setup-node@v4
@@ -352,7 +352,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7
         with:
           lfs: false
       - uses: actions/setup-node@v4

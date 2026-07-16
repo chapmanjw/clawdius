@@ -43,7 +43,7 @@ jobs:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7
         with:
           lfs: false
       - uses: actions/setup-node@v4
@@ -98,7 +98,7 @@ jobs:
       GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
       CLOUDSMITH_API_KEY: ${{ secrets.CLOUDSMITH_API_KEY }}
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7
         with:
           lfs: false
       - uses: actions/setup-node@v4
@@ -152,7 +152,7 @@ jobs:
       GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
       GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7
         with:
           lfs: false
       - uses: actions/setup-node@v4
@@ -194,7 +194,7 @@ jobs:
       # Mapped so the publish step can gate on presence (secrets can't be used in if:).
       SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7
         with:
           lfs: false
       - uses: actions/setup-node@v4
@@ -254,7 +254,7 @@ jobs:
       APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
       APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7
         with:
           lfs: false
       - uses: actions/setup-node@v4

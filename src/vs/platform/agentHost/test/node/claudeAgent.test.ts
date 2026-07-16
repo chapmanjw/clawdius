@@ -441,8 +441,9 @@ class FakeQuery implements AsyncGenerator<SDKMessage, void> {
 		throw err;
 	}
 
-	async interrupt(): Promise<void> {
+	async interrupt(): ReturnType<Query['interrupt']> {
 		this.interruptCount++;
+		return undefined;
 	}
 
 	// Phase 6 doesn't exercise the rest of the Query control surface; if a
@@ -834,6 +835,7 @@ suite('ClaudeAgent', () => {
 				uuid: 'turn-1',
 				session_id: 'src-uuid',
 				parent_tool_use_id: null,
+				parent_agent_id: null,
 				message: { role: 'user', content: [{ type: 'text', text: 'hello' }] },
 			},
 			{
@@ -841,6 +843,7 @@ suite('ClaudeAgent', () => {
 				uuid: 'a1',
 				session_id: 'src-uuid',
 				parent_tool_use_id: null,
+				parent_agent_id: null,
 				message: { id: 'msg_a1', role: 'assistant', content: [{ type: 'text', text: 'hi' }] },
 			},
 		]);
@@ -4184,6 +4187,7 @@ suite('ClaudeAgent (Phase 13 — getSessionMessages)', () => {
 			uuid,
 			session_id: 'sess-1',
 			parent_tool_use_id: null,
+			parent_agent_id: null,
 			message: { role: 'user', content: [{ type: 'text', text }] },
 		};
 	}
@@ -4194,6 +4198,7 @@ suite('ClaudeAgent (Phase 13 — getSessionMessages)', () => {
 			uuid,
 			session_id: 'sess-1',
 			parent_tool_use_id: null,
+			parent_agent_id: null,
 			message: { id: `msg_${uuid}`, role: 'assistant', content: [{ type: 'text', text }] },
 		};
 	}

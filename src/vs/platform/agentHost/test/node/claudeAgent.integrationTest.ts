@@ -298,7 +298,7 @@ class RoundTripQuery implements AsyncGenerator<SDKMessage, void> {
 		throw err;
 	}
 
-	async interrupt(): Promise<void> { /* not used */ }
+	async interrupt(): ReturnType<Query['interrupt']> { return undefined; }
 
 	setPermissionMode(): never { throw new Error('not modeled'); }
 	setMcpPermissionModeOverride(): never { throw new Error('not modeled'); }

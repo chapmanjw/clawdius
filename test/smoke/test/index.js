@@ -22,7 +22,10 @@ const options = {
 	color: true,
 	timeout: 2 * 60 * 1000,
 	slow: 30 * 1000,
-	grep: opts['f'] || opts['g']
+	grep: opts['f'] || opts['g'],
+	// Fail if the grep matches zero tests: a smoke run that filters to `-g "Clawdius"` and matches nothing must
+	// NOT exit 0. Without this, renaming/unregistering the Clawdius suite would silently turn the gate green.
+	failZero: true
 };
 
 if (process.env.BUILD_ARTIFACTSTAGINGDIRECTORY || process.env.GITHUB_WORKSPACE) {

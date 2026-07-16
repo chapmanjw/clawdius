@@ -50,7 +50,7 @@ interface VinylFileWithLines extends VinylFile {
  */
 export function checkCopilotEnginesVersion(repoRoot: string): string | undefined {
 	// CLAWDIUS-BEGIN copilot eliminated
-	// The GitHub Copilot extension was deleted wholesale (Phase 2 G1). With no extensions/copilot present
+	// The GitHub Copilot extension was deleted wholesale. With no extensions/copilot present
 	// there is no engines.vscode to validate - skip rather than crash on the missing manifest.
 	const copilotPkgPath = path.join(repoRoot, 'extensions/copilot/package.json');
 	if (!fs.existsSync(copilotPkgPath)) {

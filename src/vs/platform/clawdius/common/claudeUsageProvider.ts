@@ -46,7 +46,13 @@ export function engineIsAnthropic(env: { readonly [key: string]: unknown }): boo
 
 /** The cached /api/oauth/usage response (subscription rate-limit windows), written under ~/.claude. */
 export const CAPACITY_CACHE_FILE = '.clawdius-usage-cache.json';
-/** The CLI OAuth credentials file under ~/.claude (existence => signed in; the token itself is never logged). */
+/**
+ * The CLI OAuth credentials file under ~/.claude. Its existence is SUFFICIENT but NOT NECESSARY for "signed in":
+ * the CLI's store is keychain-with-plaintext-fallback, so on macOS the credentials normally live in the login
+ * Keychain and this file is written only when that write FAILS. On Windows/Linux there is no secret store, so the
+ * file is the only place they land. Treating absence as "signed out" is the exact bug that reported every
+ * signed-in mac user as signed out - see platform/clawdius/node/claudeCredentials.ts. The token is never logged.
+ */
 export const CREDENTIALS_FILE = '.credentials.json';
 /** The Claude Code settings file under ~/.claude (carries the engine-provider `env`). */
 export const SETTINGS_FILE = 'settings.json';

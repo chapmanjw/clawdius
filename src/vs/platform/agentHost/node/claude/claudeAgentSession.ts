@@ -5,7 +5,7 @@
 
 import type { McpSdkServerConfigWithInstance, Options, PermissionMode, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { CancellationError } from '../../../../base/common/errors.js';
+import { CancellationError, isCancellationError } from '../../../../base/common/errors.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -15,7 +15,7 @@ import { IInstantiationService } from '../../../instantiation/common/instantiati
 import { ILogService } from '../../../log/common/log.js';
 import { IClawdiusCliConfigService } from '../../../clawdius/common/clawdiusCliConfig.js';
 import { IAgentConfigurationService } from '../agentConfigurationService.js';
-import { resolveTrusted } from './claudeTrustGate.js';
+import { resolveTrusted, TRUST_FORWARD_TIMEOUT_MS, whenTrustForwarded } from './claudeTrustGate.js';
 import { ISyncedCustomization } from '../../common/agentPluginManager.js';
 import { ClaudePermissionMode } from '../../common/claudeSessionConfigKeys.js';
 import { ClaudeRuntimeEffortLevel, clampEffortForRuntime, resolveClaudeEffort } from '../../common/claudeModelConfig.js';
@@ -28,6 +28,7 @@ import { PendingMessage, ChatInputAnswer, ChatInputRequest, ChatInputResponseKin
 import { buildDefaultChatUri, type Customization, type ToolCallResult } from '../../common/state/sessionState.js';
 import { IClaudeAgentSdkService } from './claudeAgentSdkService.js';
 import { buildClientMcpServers, buildOptions } from './claudeSdkOptions.js';
+import { redactSecrets } from '../agentHostSecretRedact.js';
 import { buildServerToolMcpServer, CLAUDE_SERVER_TOOL_MCP_SERVER_NAME, serverToolAllowList } from './claudeServerToolMcpServer.js';
 import { ClaudeSessionMetadataStore } from './claudeSessionMetadataStore.js';
 import { convertToolCallResult } from './clientTools/claudeClientToolResult.js';
@@ -85,12 +86,24 @@ function resolveCurrentPermissionMode(
  *     and emits every {@link AgentSignal} for this session (router-
  *     mapped per-message signals plus `ChatTurnComplete` and
  *     `steering_consumed`).
- *   • Pending-permission and pending-user-input registries (Phase 7),
+ *   • Pending-permission and pending-user-input registries,
  *     surfaced via `requestPermission` / `requestUserInput`.
  */
 export class ClaudeAgentSession extends Disposable {
 
 	private _pipeline: ClaudeSdkPipeline | undefined;
+	/**
+	 * The workspace-trust value baked into the LIVE SDK Query at the last (re)materialize. Undefined until
+	 * the first materialize. A forwarded trust change that flips this from true to false triggers an eager rebuild
+	 * ({@link _tearDownRevokedTrust}) so the Query drops the trusted-only engine state (settings-MCP / repo
+	 * project MCP servers, hooks, plugins, permission mode) it would otherwise keep for its whole life. A late
+	 * false -> true grant (e.g. the materialize barrier timed out and baked the deny-by-default untrusted default,
+	 * then a trust source connected) is picked up at the next {@link send}, which rebuilds when this baked value
+	 * diverges from the live trust decision - restoring the trusted engine state without interrupting an in-flight turn.
+	 */
+	private _materializedTrusted: boolean | undefined;
+	/** Serializes trust-revocation teardowns so overlapping config events never drive two concurrent rebuilds. */
+	private _trustTeardown: Promise<void> = Promise.resolve();
 	private readonly _chatChannelUri: URI;
 
 	/** Pre-materialize model selection. Mutable; flows into `Options.model` on first installPipeline. */
@@ -148,7 +161,7 @@ export class ClaudeAgentSession extends Disposable {
 	}
 
 	/**
-	 * Phase 12 — per-session registry of Task tool calls that spawn
+	 * Per-session registry of Task tool calls that spawn
 	 * subagents (`SubagentSpawn` records keyed by `tool_use_id`, plus a
 	 * reverse index from inner `tool_use_id` to its parent Task). Owned
 	 * here so the registry dies with the session; consumers in the live
@@ -159,30 +172,30 @@ export class ClaudeAgentSession extends Disposable {
 	readonly subagents: SubagentRegistry = this._register(new SubagentRegistry());
 
 	/**
-	 * Phase 7 / S3.2. Tool-permission deferreds parked inside
+	 * Tool-permission deferreds parked inside
 	 * {@link Options.canUseTool}. Keyed by SDK `tool_use_id`.
 	 */
 	private readonly _pendingPermissions = new PendingRequestRegistry<boolean>();
 
 	/**
-	 * Phase 7 / S3.2. User-input deferreds parked for interactive tools
+	 * User-input deferreds parked for interactive tools
 	 * (`AskUserQuestion`, `ExitPlanMode`). Keyed by `ChatInputRequest.id`.
 	 */
 	private readonly _pendingUserInputs = new PendingRequestRegistry<{ response: ChatInputResponseKind; answers?: Record<string, ChatInputAnswer> }>();
 
 	/**
-	 * Phase 10 — owns the workbench-registered client-tool snapshot
+	 * Owns the workbench-registered client-tool snapshot
 	 * (via {@link SessionClientToolsDiff.model}) plus the
 	 * "changed since last successful build" dirty bit. Read by the
 	 * agent's sendMessage diff check; used by the materialize /
 	 * rematerializer flow to pin the SDK build against a specific
-	 * snapshot. See {@link SessionClientToolsDiff} for the C6 race
+	 * snapshot. See {@link SessionClientToolsDiff} for the race
 	 * semantics this collaborator enforces.
 	 */
 	readonly toolDiff: SessionClientToolsDiff;
 
 	/**
-	 * Phase 11 — per-session **client-pushed** synced customization
+	 * Per-session **client-pushed** synced customization
 	 * snapshot + enablement map. Owns the workbench-supplied
 	 * {@link ISyncedCustomization} list, the per-URI enablement bits,
 	 * and the dirty flag drained at the next {@link send} pre-flight.
@@ -301,6 +314,16 @@ export class ClaudeAgentSession extends Disposable {
 			this._logService,
 		));
 		this._register(customizationWatcher.onDidChange(() => this._onDidCustomizationsChange.fire()));
+
+		// Workspace-trust revocation: rebuild the live session to drop trusted-only engine state the moment a
+		// forwarded trust value flips this session's baked trusted from true to false. Both layers matter - the
+		// sessions window forwards trust at the SESSION layer, the main window at the ROOT layer.
+		this._register(this._configurationService.onDidRootConfigChange(() => this._onTrustConfigMaybeChanged()));
+		this._register(this._configurationService.onDidSessionConfigChange(changed => {
+			if (changed === this.sessionUri.toString()) {
+				this._onTrustConfigMaybeChanged();
+			}
+		}));
 	}
 
 	/**
@@ -360,7 +383,7 @@ export class ClaudeAgentSession extends Disposable {
 	 * If the session's `abortController` fires while `sdk.startup()` is in
 	 * flight, the SDK unwinds via the controller; if `startup` resolves
 	 * anyway, the `WarmQuery` is asyncDisposed and a {@link CancellationError}
-	 * is thrown (Q8 belt-and-suspenders).
+	 * is thrown (belt-and-suspenders).
 	 */
 	async materialize(ctx: IMaterializeContext): Promise<void> {
 		if (this._pipeline) {
@@ -371,9 +394,21 @@ export class ClaudeAgentSession extends Disposable {
 		}
 		// CLAWDIUS native ~/.claude auth: no CAPI proxy transport, so _transportKind stays 'native' (its default).
 
+		// Trust materialize-barrier: `trusted` is resolved ONCE below and baked into the SDK options for the
+		// Query's life, so a transiently-absent trust config (a trust source connected, first write still in
+		// flight) must not silently bake the dormant default. Bounded: on timeout, proceed with the dormant
+		// default rather than hang session startup.
+		if (await whenTrustForwarded(this._configurationService, this.sessionUri, TRUST_FORWARD_TIMEOUT_MS, this.abortController.signal) === 'timeout') {
+			this._logService.info(`[Claude] session ${this.sessionId}: no trust source connected after ${TRUST_FORWARD_TIMEOUT_MS}ms; proceeding with the dormant trust default`);
+		}
+
 		const permissionMode = readClaudePermissionMode(this._configurationService, this.sessionUri) ?? this._permissionModeFallback;
 		const { mcpServers, allowedTools } = await this._buildStartupToolWiring(ctx.serverToolHost);
 		const agentName = await resolveClaudeAgentName(this._provisionalAgent, this._fileService, this._logService, this.sessionId);
+		// Resolve trust ONCE and remember it: a later revocation rebuilds to drop the trusted engine state this
+		// baked value would otherwise keep alive for the Query's life (see _onTrustConfigMaybeChanged).
+		const materializedTrusted = resolveTrusted(this._configurationService, this.sessionUri);
+		this._materializedTrusted = materializedTrusted;
 
 		const options = await buildOptions(
 			{
@@ -382,7 +417,7 @@ export class ClaudeAgentSession extends Disposable {
 				model: this._provisionalModel,
 				abortController: this.abortController,
 				permissionMode,
-				trusted: resolveTrusted(this._configurationService, this.sessionUri),
+				trusted: materializedTrusted,
 				canUseTool: ctx.canUseTool,
 				isResume: ctx.isResume,
 				resumeSessionAt: this._pendingResumeSessionAt,
@@ -392,8 +427,8 @@ export class ClaudeAgentSession extends Disposable {
 				agent: agentName,
 				cliResolution: await this._cliConfigService.resolveCliBackend(), // CLAWDIUS cli backend resolution
 			},
-			data => this._logService.error(`[Claude SDK stderr] ${data}`),
-			msg => this._logService.info(`[Claude] declining elicitation from MCP server (Phase 7 stub): ${msg}`),
+			data => this._logService.error(`[Claude SDK stderr] ${redactSecrets(data)}`),
+			msg => this._logService.info(`[Claude] declining elicitation from MCP server (stub): ${msg}`),
 		);
 
 		this._logService.info(`[Claude] session ${this.sessionId}: enableFileCheckpointing=${options.enableFileCheckpointing} isResume=${ctx.isResume}`);
@@ -473,6 +508,10 @@ export class ClaudeAgentSession extends Disposable {
 				const { mcpServers: rebuildMcp, allowedTools: rebuildAllowedTools } = await this._buildStartupToolWiring(ctx.serverToolHost);
 				const rebuildAgentName = await resolveClaudeAgentName(this._provisionalAgent, this._fileService, this._logService, this.sessionId);
 				const rebuildAbort = new AbortController();
+				// Re-resolve trust on every rebuild and remember it, so a later revocation is detected against the
+				// value currently baked into the live Query.
+				const rebuildTrusted = resolveTrusted(this._configurationService, this.sessionUri);
+				this._materializedTrusted = rebuildTrusted;
 				const rebuildOptions = await buildOptions(
 					{
 						sessionId: this.sessionId,
@@ -480,7 +519,7 @@ export class ClaudeAgentSession extends Disposable {
 						model: this._provisionalModel,
 						abortController: rebuildAbort,
 						permissionMode: liveMode,
-						trusted: resolveTrusted(this._configurationService, this.sessionUri),
+						trusted: rebuildTrusted,
 						canUseTool: ctx.canUseTool,
 						isResume: true,
 						resumeSessionAt: this._pendingResumeSessionAt,
@@ -490,8 +529,8 @@ export class ClaudeAgentSession extends Disposable {
 						agent: rebuildAgentName,
 						cliResolution: await this._cliConfigService.resolveCliBackend(), // CLAWDIUS cli backend resolution
 					},
-					data => this._logService.error(`[Claude SDK stderr] ${data}`),
-					msg => this._logService.info(`[Claude] declining elicitation from MCP server (Phase 7 stub): ${msg}`),
+					data => this._logService.error(`[Claude SDK stderr] ${redactSecrets(data)}`),
+					msg => this._logService.info(`[Claude] declining elicitation from MCP server (stub): ${msg}`),
 				);
 				this._logService.info(`[Claude] session ${this.sessionId}: resume rebuild agent=${rebuildOptions.agent ?? '(none)'}`);
 				const rebuildWarm = await this._sdkService.startup({ options: rebuildOptions });
@@ -624,7 +663,15 @@ export class ClaudeAgentSession extends Disposable {
 		// New turn: reset the per-turn credit accumulator so proxy reports
 		// for this turn's `/v1/messages` calls sum from zero.
 		this._currentTurnNanoAiu = 0;
-		if (this.toolDiff.hasDifference || this.clientCustomizationsDiff.hasDifference || this._pendingResumeSessionAt !== undefined) {
+		// A late workspace-trust change since the last (re)materialize must rebuild so the SDK Query's engine state
+		// matches the current trust decision. The eager revocation path (_onTrustConfigMaybeChanged) already handles a
+		// true->false transition immediately; this covers the remaining divergence - notably a false->true GRANT after
+		// the materialize barrier timed out and baked the dormant (deny-by-default) UNTRUSTED default - non-disruptively
+		// at the next turn boundary, restoring the trusted engine state. The rebuild's rematerializer re-resolves trust
+		// and resets _materializedTrusted, so this self-clears once applied.
+		const trustDiverged = this._materializedTrusted !== undefined
+			&& resolveTrusted(this._configurationService, this.sessionUri) !== this._materializedTrusted;
+		if (trustDiverged || this.toolDiff.hasDifference || this.clientCustomizationsDiff.hasDifference || this._pendingResumeSessionAt !== undefined) {
 			await this._rebindForSyncedState();
 		} else {
 			await pipeline.setPermissionMode(resolveCurrentPermissionMode(this._configurationService, this.sessionUri, this._permissionModeFallback));
@@ -648,6 +695,54 @@ export class ClaudeAgentSession extends Disposable {
 		this._pendingClientToolCalls.rejectAll(new CancellationError());
 		await this._requirePipeline().rebindForRestart();
 		this._onDidCustomizationsChange.fire();
+	}
+
+	/**
+	 * React to a forwarded workspace-trust change. Only a true -> false transition of THIS session's baked
+	 * trust triggers an eager teardown here (trusted engine state must be dropped immediately on revocation); a
+	 * false -> true re-grant is handled non-eagerly at the next {@link send} (the trust-divergence rebuild there),
+	 * and unrelated config changes are ignored. Pre-materialize the barrier ({@link whenTrustForwarded}) covers
+	 * trust, so there is nothing baked to tear down yet.
+	 */
+	private _onTrustConfigMaybeChanged(): void {
+		if (this._store.isDisposed || this._materializedTrusted !== true) {
+			return;
+		}
+		if (resolveTrusted(this._configurationService, this.sessionUri)) {
+			return; // still trusted
+		}
+		// Flip now so a duplicate root+session event for the same revocation coalesces onto one teardown; the
+		// rebuild's rematerializer re-resolves and re-confirms the value.
+		this._materializedTrusted = false;
+		this._trustTeardown = this._trustTeardown.then(() => this._tearDownRevokedTrust());
+	}
+
+	/**
+	 * Rebuild the live session so the SDK Query drops the trusted-only engine state (settings-MCP / repo
+	 * project MCP servers, hooks, plugins, permission mode) after workspace trust is revoked. Aborts any
+	 * in-flight (trusted) turn first - {@link abort} fails the queue and marks the pipeline for rebind - so
+	 * the rebuild is not racing a live stream; the rematerializer then re-resolves trust and produces the
+	 * untrusted Options (settingSources:[], strictMcpConfig:true, plugins dropped, mode clamped). The per-tool
+	 * canUseTool gate already denies trusted actions on the old Query in the meantime.
+	 */
+	private async _tearDownRevokedTrust(): Promise<void> {
+		if (this._store.isDisposed || !this._pipeline) {
+			return;
+		}
+		this._logService.info(`[Claude] session ${this.sessionId}: workspace trust revoked; rebuilding to drop trusted engine state`);
+		this.abort();
+		try {
+			await this._rebindForSyncedState();
+		} catch (err) {
+			if (!isCancellationError(err)) {
+				this._logService.error(`[Claude] session ${this.sessionId}: trust-revocation teardown failed`, err);
+			}
+		}
+	}
+
+	/** Resolves once any in-flight workspace-trust revocation teardown has settled (diagnostic / test hook). */
+	whenTrustTeardownIdle(): Promise<void> {
+		return this._trustTeardown;
 	}
 
 	/**
@@ -730,7 +825,7 @@ export class ClaudeAgentSession extends Disposable {
 	/**
 	 * Inject a steering message. Builds the `priority: 'now'`
 	 * {@link SDKUserMessage} and hands it to the pipeline; the pipeline
-	 * inherits the parent's turnId (CONTEXT.md M10) and fires
+	 * inherits the parent's turnId and fires
 	 * `steering_consumed` when the SDK accepts it. No-op if the pipeline
 	 * is aborted.
 	 */
@@ -763,7 +858,7 @@ export class ClaudeAgentSession extends Disposable {
 		return this._requirePipeline().setPermissionMode(mode);
 	}
 
-	// #region Phase 7 / S3.2 — pending state
+	// #region pending state
 
 	/**
 	 * Atomically register a pending-permission deferred and fire the
@@ -777,7 +872,7 @@ export class ClaudeAgentSession extends Disposable {
 		readonly state: ToolCallPendingConfirmationState;
 		readonly permissionKind: ClaudePermissionKind;
 		readonly permissionPath?: string;
-		/** Phase 12 step 5 — when the confirmation belongs to a subagent context, route it to the subagent session. */
+		/** When the confirmation belongs to a subagent context, route it to the subagent session. */
 		readonly parentToolCallId?: string;
 	}): Promise<boolean> {
 		if (!this._pipeline || this._pipeline.isAborted) {
@@ -831,7 +926,7 @@ export class ClaudeAgentSession extends Disposable {
 
 	// #endregion
 
-	// #region Phase 10 — client tools
+	// #region client tools
 
 	/** Replace a client's registered tools (full replacement). */
 	setClientTools(clientId: string, tools: readonly ToolDefinition[]): void {
@@ -877,7 +972,7 @@ export class ClaudeAgentSession extends Disposable {
 
 	// #endregion
 
-	// #region Phase 11 — customizations / plugins
+	// #region customizations / plugins
 
 	/**
 	 * Merged fire-and-forget signal that this session's customization

@@ -167,4 +167,21 @@ suite('AgentConfigurationService', () => {
 			assert.deepStrictEqual(state?.config?.values, { level: 'low', limit: 42 });
 		});
 	});
+
+	// ---- config change events ----------------------------------------------
+
+	suite('config change events', () => {
+
+		test('onDidSessionConfigChange fires with the session URI for session merges; root merges fire onDidRootConfigChange only', () => {
+			const uri = URI.from({ scheme: 'claude', path: '/evt' }).toString();
+			manager.createSession(makeSummary(uri));
+			const sessionEvents: string[] = [];
+			let rootEvents = 0;
+			disposables.add(service.onDidSessionConfigChange(u => sessionEvents.push(u)));
+			disposables.add(service.onDidRootConfigChange(() => rootEvents++));
+			service.updateSessionConfig(uri, { level: 'high' });
+			service.updateRootConfig({ level: 'low' });
+			assert.deepStrictEqual({ sessionEvents, rootEvents }, { sessionEvents: [uri], rootEvents: 1 });
+		});
+	});
 });

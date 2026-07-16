@@ -1,6 +1,6 @@
 // Clawdius branding guard. Asserts the product is branded Clawdius, uses Open VSX, ships no telemetry,
-// drops the GitHub/Copilot default chat agent, and defaults to the Clawdius theme. Source-level guard for
-// M1; Phase 6 extends it to scan the BUILT product (and the egress guarantee). Run with: node branding-guard.ts
+// drops the GitHub/Copilot default chat agent, and defaults to the Clawdius theme. Source-level guard;
+// a companion guard extends it to scan the BUILT product (and the egress guarantee). Run with: node branding-guard.ts
 import fs from 'node:fs';
 
 const fail: string[] = [];
@@ -36,7 +36,7 @@ const trustedPubs = ((p.trustedExtensionPublishers || []) as string[]).map(s => 
 ok(!trustedPubs.includes('microsoft') && !trustedPubs.includes('github'),
 	'trustedExtensionPublishers re-added a Microsoft/GitHub publisher');
 
-// FR-003 recommended-extension supply-chain guard (GlassWorm risk). Two invariants:
+// Recommended-extension supply-chain guard (GlassWorm risk). Two invariants:
 //  (A) The fork must NOT inherit upstream's user-facing recommended-extension machinery - the large
 //      curated `*Tips` families product.json ships to steer users at the marketplace. Those keys stay
 //      stripped, so an upstream merge cannot silently re-seed a marketplace recommendation list.
@@ -52,7 +52,7 @@ const RECOMMENDATION_TIP_KEYS = ['extensionTips', 'extensionImportantTips', 'key
 for (const k of RECOMMENDATION_TIP_KEYS) {
 	const v = p[k];
 	const empty = v === undefined || (Array.isArray(v) ? v.length === 0 : Object.keys(v).length === 0);
-	ok(empty, `product.json carries an inherited recommended-extension list "${k}" (FR-003: upstream marketplace recommendations must stay stripped)`);
+	ok(empty, `product.json carries an inherited recommended-extension list "${k}" (upstream marketplace recommendations must stay stripped)`);
 }
 const VERIFIED_NAMESPACES = new Set(['clawdius', 'anthropic', 'ms-vscode', 'github', 'dbaeumer', 'typescriptteam', 'connor4312']);
 // .vscode/extensions.json is JSONC (line + block comments); strip them before parsing. The recommendation
@@ -61,10 +61,10 @@ const recText = fs.readFileSync('.vscode/extensions.json', 'utf8')
 	.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 let recommendations: string[] = [];
 try { recommendations = (JSON.parse(recText).recommendations || []) as string[]; }
-catch { ok(false, '.vscode/extensions.json is not parseable (FR-003 recommended-extension namespace guard cannot verify it)'); }
+catch { ok(false, '.vscode/extensions.json is not parseable (the recommended-extension namespace guard cannot verify it)'); }
 for (const id of recommendations) {
 	const ns = id.split('.')[0].toLowerCase();
-	ok(VERIFIED_NAMESPACES.has(ns), `.vscode/extensions.json recommends "${id}" from unverified namespace "${ns}" (FR-003 / GlassWorm: verify who owns the Open VSX namespace, then add it to VERIFIED_NAMESPACES)`);
+	ok(VERIFIED_NAMESPACES.has(ns), `.vscode/extensions.json recommends "${id}" from unverified namespace "${ns}" (GlassWorm risk: verify who owns the Open VSX namespace, then add it to VERIFIED_NAMESPACES)`);
 }
 
 // The startup-fetch URLs DefaultAccountProviderContribution would call at BlockStartup with the user's session
@@ -93,7 +93,7 @@ while ((hm = urlHostRe.exec(productText))) {
 }
 ok(badHosts.length === 0, `product.json has URL host(s) outside the allowlist (possible Microsoft/telemetry/Copilot egress): ${[...new Set(badHosts)].join(', ')}`);
 
-// Phase 6 zero-egress guarantee (audit: .research/egress-audit.md). Each of these product.json keys is the
+// Zero-egress guarantee. Each of these product.json keys is the
 // SOLE source of an uninitiated outbound request (startup/idle/background poll); when the key is absent the
 // call site short-circuits and no request is built. Asserting them absent locks in the "robustly dead"
 // Microsoft telemetry/experiment/update/crash/survey surface so an upstream merge cannot silently
@@ -110,7 +110,7 @@ ok(!gal.controlUrl, 'product.json extensionsGallery.controlUrl is set (extension
 // Zero-egress RUNTIME backstop (not just product keys): the clawdius-chat usage-capacity fetch to
 // api.anthropic.com must be ON DEMAND only - wired to the `clawdius.refreshUsageCapacity` command the usage
 // tooltip invokes - with NO startup call and NO background timer. (It previously fetched at activate() +
-// every 60s; see .research/egress-audit.md.) A regression to a timer or a bare activation call trips this.
+// every 60s.) A regression to a timer or a bare activation call trips this.
 const chatExt = fs.readFileSync('extensions/clawdius-chat/src/extension.ts', 'utf8');
 ok(/registerCommand\('clawdius\.refreshUsageCapacity'/.test(chatExt), 'clawdius-chat: the on-demand usage-refresh command is missing');
 ok(!/setInterval\([^)]*fetchUsageCapacity/.test(chatExt), 'clawdius-chat: usage capacity is fetched on a background timer (uninitiated egress)');
@@ -128,6 +128,53 @@ ok(/api\\?\.anthropic\\?\.com/.test(chatExt), 'clawdius-chat: provider gate drif
 ok(chatExt.includes('api.anthropic.com/api/oauth/usage'), 'clawdius-chat: capacity fetch drifted (the OAuth usage URL is missing)');
 ok(chatExt.includes('.clawdius-usage-cache.json'), 'clawdius-chat: capacity cache filename drifted from the shared spec');
 ok(chatExt.includes('oauth-2025-04-20'), 'clawdius-chat: the anthropic-beta header value drifted from the shared spec');
+
+// Credential-resolution parity + the "never a native keychain binding" rule.
+// The Claude Code CLI stores its OAuth credentials in the macOS LOGIN KEYCHAIN (plaintext ~/.claude/.credentials.json
+// is only its FALLBACK when the Keychain write fails, and the only store at all on Windows/Linux). A regression to a
+// file-only read reports every signed-in mac user as "Signed out". claudeCredentials.ts (node, serves remote windows)
+// and the clawdius-chat hand-mirror (serves local windows) must both keep the full resolution: the env-token
+// short-circuit, the Keychain service name, and the /usr/bin/security spawn.
+// Assert on CODE, never a bare substring: both files NAME "/usr/bin/security" and the service in the long comments
+// explaining this design, so a plain `.includes(...)` would be satisfied by the PROSE and would happily pass a
+// file-only regression (verified: it does). Each pattern below matches a construct only real code can produce.
+const credSvc = fs.readFileSync('src/vs/platform/clawdius/node/claudeCredentials.ts', 'utf8');
+const CREDENTIAL_SPEC: ReadonlyArray<{ readonly re: RegExp; readonly what: string }> = [
+	{ re: /const SECURITY_BIN = '\/usr\/bin\/security'/, what: "the /usr/bin/security ABSOLUTE path (a bare 'security' is PATH-hijackable)" },
+	{ re: /const KEYCHAIN_SERVICE = 'Claude Code-credentials'/, what: 'the Keychain service name' },
+	{ re: /'find-generic-password'/, what: 'the `security find-generic-password` read' },
+	{ re: /platform === 'darwin'/, what: 'the darwin gate that decides to read the Keychain at all' },
+	{ re: /claudeAiOauth\?\.accessToken/, what: 'the OAuth access-token read' },
+	{ re: /env\['CLAUDE_CODE_OAUTH_TOKEN'\]/, what: 'the CLAUDE_CODE_OAUTH_TOKEN short-circuit (such a user has NEITHER a Keychain item NOR a file)' },
+	// The RETURN, not the type union that also spells 'transient' - otherwise mapping exit 36 to a definitive
+	// 'absent' (the exact "Signed out" lie) would still satisfy this. Behavioural backstop: claudeCredentials.test.ts
+	// ("exit 36 is INDETERMINATE - undefined, never false"); this grep is defense in depth.
+	{ re: /return \{ kind: 'transient' \}/, what: 'the INDETERMINATE result (exit 36 / a locked keychain must never render "Signed out")' },
+];
+for (const { re, what } of CREDENTIAL_SPEC) {
+	ok(re.test(chatExt), `clawdius-chat: credential resolution drifted from the shared spec (missing ${what})`);
+	ok(re.test(credSvc), `claudeCredentials: credential resolution drifted from the clawdius-chat mirror (missing ${what})`);
+}
+ok(/registerCommand\('clawdius\.hasClaudeCredentials'/.test(chatExt), 'clawdius-chat: the local signed-in credential probe command is missing');
+// Registering the command is NOT enough: without an onCommand activation event the renderer's FIRST probe races
+// extension-host activation (onStartupFinished always fires after `*`), rejects with "command not found", and the
+// status bar paints "Signed out" until the 15s poll self-heals. Pin the activation events so that can't regress.
+const chatPkg = fs.readFileSync('extensions/clawdius-chat/package.json', 'utf8');
+for (const command of ['clawdius.hasClaudeCredentials', 'clawdius.refreshUsageCapacity']) {
+	ok(chatPkg.includes(`"onCommand:${command}"`), `clawdius-chat: ${command} has no onCommand activation event - the renderer would race the extension host and mis-render the signed-in state`);
+}
+// Ban NATIVE keychain bindings outright. macOS evaluates a Keychain item's ACL against the process that CALLS the
+// Keychain API: the item's trusted-application list contains /usr/bin/security and nothing else, so spawning that
+// binary reads silently, while a native binding makes Clawdius.app the caller and pops a blocking "wants to use your
+// confidential information" dialog at EVERY launch. This is a dev-only trap - once a developer clicks "Always Allow"
+// they can never reproduce the prompt - so it is pinned here rather than left to review.
+// Match on actual USE (import/require, or a safeStorage member access), NOT a bare mention, so both files can still
+// NAME these bindings in the comment explaining why they are forbidden. (A substring ban self-trips on that comment.)
+const NATIVE_KEYCHAIN_USE = /(?:from|require\(|import\()\s*['"](?:keytar|node-keychain|@napi-rs\/keyring)['"]|\bsafeStorage\s*\./;
+ok(!NATIVE_KEYCHAIN_USE.test(credSvc), 'claudeCredentials: must read the Keychain via /usr/bin/security, never a native binding (keytar/safeStorage/node-keychain/@napi-rs/keyring)');
+ok(!NATIVE_KEYCHAIN_USE.test(chatExt), 'clawdius-chat: must read the Keychain via /usr/bin/security, never a native binding (keytar/safeStorage/node-keychain/@napi-rs/keyring)');
+// The credential resolver spawns the Apple keychain CLI and reads a local file - it must never reach the network.
+ok(!/\bfetch\s*\(|['"]node:https?['"]|['"]https?:\/\//.test(credSvc), 'claudeCredentials: must not perform network I/O');
 
 // Same zero-egress backstop for the REMOTE-side mirror of the capacity fetch: the REH server's capacity service
 // (which serves WSL/SSH windows against the remote ~/.claude) must be ON DEMAND only - invoked via its IPC
@@ -222,7 +269,7 @@ for (const t of (p.onboardingThemes || []) as { themeId: string }[]) {
 	ok(ALLOWED_THEMES.has(t.themeId), `onboardingThemes references non-Clawdius theme "${t.themeId}"`);
 }
 
-// "Copilot eliminated" guarantee (Phase 2): the GitHub Copilot Chat extension (extensions/copilot) was
+// "Copilot eliminated" guarantee: the GitHub Copilot Chat extension (extensions/copilot) was
 // removed wholesale. The chat panel is powered by the bundled clawdius-chat extension, whose handler shells
 // out to the local Claude Code CLI. A future upstream merge that re-introduces extensions/copilot trips this
 // gate (it would re-register six competing isDefault panel participants + nine sign-in welcome views).
@@ -230,7 +277,7 @@ ok(!fs.existsSync('extensions/copilot'), 'extensions/copilot was re-introduced -
 ok(p.defaultChatAgent?.extensionId === 'vscode.clawdius-chat', 'defaultChatAgent.extensionId is not the clawdius-chat backend');
 ok(fs.existsSync('extensions/clawdius-chat/package.json'), 'the clawdius-chat extension (Claude CLI chat backend) is missing');
 
-// Phase 6 brand backstop: the user-visible Copilot/GitHub strings + logo icons rebranded by the brand
+// Brand backstop: the user-visible Copilot/GitHub strings + logo icons rebranded by the brand
 // sweeps must STAY rebranded, so an upstream merge can't silently re-introduce them in shipped UI. Each
 // site asserts the Claude/neutral wording is PRESENT and the exact old brand string/icon is ABSENT. The
 // `absent` patterns target the rebranded VALUE precisely (not the localize key or internal id), so the

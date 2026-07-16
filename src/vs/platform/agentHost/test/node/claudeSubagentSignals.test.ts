@@ -22,7 +22,7 @@ import {
 } from './claudeMapSessionEventsTestUtils.js';
 
 /**
- * Direct tests for Phase 12 subagent signal emission.
+ * Direct tests for subagent signal emission.
  *
  * Drives `mapSDKMessageToAgentSignals` end-to-end for the integrated
  * paths, and the two newly-exported `claudeSubagentSignals` functions
@@ -30,7 +30,7 @@ import {
  * {@link SubagentRegistry} per test so subagent state is visible
  * across mapper invocations and assertable directly on the spawn record.
  */
-suite('claudeSubagentSignals — Phase 12 emission', () => {
+suite('claudeSubagentSignals — subagent signal emission', () => {
 
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
@@ -239,7 +239,7 @@ suite('claudeSubagentSignals — Phase 12 emission', () => {
 			toolUseEdge: registry.getParentSpawn('toolu_inner_glob')?.toolUseId,
 			fromToolResultHasComplete: completeAction !== undefined,
 			everyActionTaggedWithParent: allParentIds.every(p => p === PARENT),
-			// D6 parity: inner-tool past-tense must use the rich helper
+			// Inner-tool past-tense must use the rich helper
 			// (seeded by `seedParsedInput` at start time), not fall back to
 			// the generic "{displayName} finished" — replay always renders
 			// rich text, so a generic live message would silently diverge.

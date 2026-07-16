@@ -21,7 +21,7 @@ export interface IClaudeSessionOverlay {
 	readonly permissionMode?: ClaudePermissionMode;
 	readonly agent?: AgentSelection;
 	/**
-	 * Transport the session most recently materialized under (Phase 19).
+	 * Transport the session most recently materialized under.
 	 * Forward-compat only — written at materialize time but NOT read for
 	 * transport resolution in v1 (transport is resolved host-level). Lets a
 	 * future per-session-transport feature land without a data migration.

@@ -18,7 +18,9 @@
     "ui"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onCommand:clawdius.hasClaudeCredentials",
+    "onCommand:clawdius.refreshUsageCapacity"
   ],
   "scripts": {
     "compile": "gulp compile-extension:clawdius-chat",

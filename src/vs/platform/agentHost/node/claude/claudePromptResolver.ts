@@ -13,9 +13,9 @@ import { MessageAttachmentKind, type MessageAttachment } from '../../common/stat
  * {@link SDKUserMessage} from a plain text prompt and the protocol
  * attachments accompanying the user message.
  *
- * Phase 6 keeps the resolver pure and minimal: a single `text` block
+ * The resolver stays pure and minimal: a single `text` block
  * carrying the prompt, plus additional text blocks for attachments. This
- * mirrors the production extension's resolver shape so a future phase that
+ * mirrors the production extension's resolver shape so future work that
  * adds image rendering or inline range substitution can extend without
  * restructuring.
  *

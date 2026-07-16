@@ -13,7 +13,7 @@ import type { StringOrMarkdown } from '../../common/state/protocol/state.js';
 import { getServerToolDisplay } from '../shared/serverToolGroups.js';
 
 /**
- * Phase 7 S4 — pure tool-name → display/permission helpers for Claude.
+ * S4 — pure tool-name → display/permission helpers for Claude.
  *
  * Mirrors the shape of [copilotToolDisplay.ts](../copilot/copilotToolDisplay.ts)
  * but is keyed off the SDK's built-in tool list. The mapping table lives
@@ -30,7 +30,7 @@ import { getServerToolDisplay } from '../shared/serverToolGroups.js';
  * (see `IAgentToolPendingConfirmationSignal.permissionKind` in
  * [agentService.ts:317](../../common/agentService.ts#L317)).
  *
- * Phase 7 only emits the subset relevant to Claude's built-in tools —
+ * Only the subset relevant to Claude's built-in tools is emitted —
  * `hook` and `memory` are reserved for later phases.
  */
 export type ClaudePermissionKind =
@@ -42,7 +42,7 @@ export type ClaudePermissionKind =
 	| 'custom-tool';
 
 /**
- * Phase 8.5 — rendering hint for the workbench. Drives terminal /
+ * Rendering hint for the workbench. Drives terminal /
  * search / subagent renderers (the workbench picks a renderer off
  * `_meta.toolKind`; unknown values fall through to the generic tool
  * renderer). Mirror of
@@ -52,7 +52,7 @@ export type ClaudeToolKind = ToolKind;
 
 /**
  * Which field on the SDK's `tool_input` carries the path/url surfaced
- * to the user (and tracked by Phase 8 for file-edit tools). One field
+ * to the user (and tracked for file-edit tools). One field
  * per tool — tools without a path-bearing field omit this.
  */
 type ClaudeToolPathField = 'file_path' | 'notebook_path' | 'path' | 'url';
@@ -74,7 +74,7 @@ interface ClaudeToolRow {
 	readonly permissionKind: ClaudePermissionKind;
 	/** Field on `tool_input` carrying the path/url for this tool, if any. */
 	readonly pathField?: ClaudeToolPathField;
-	/** True for tools whose execution writes to disk and is tracked by `FileEditTracker` (Phase 8). */
+	/** True for tools whose execution writes to disk and is tracked by `FileEditTracker`. */
 	readonly isFileEdit?: true;
 	/**
 	 * True for tools the SDK never auto-approves under any
@@ -83,7 +83,7 @@ interface ClaudeToolRow {
 	 */
 	readonly interactive?: true;
 	/**
-	 * Phase 8.5 — rendering hint for the workbench (drives the
+	 * Rendering hint for the workbench (drives the
 	 * terminal / search / subagent renderers). Omit for tools that
 	 * render in the generic tool renderer (read, write, MCP, …).
 	 */
@@ -183,7 +183,7 @@ export function getClaudeToolDisplayName(toolName: string): string {
  * `undefined` for tools without a path field, for missing fields, or
  * for wrong-typed fields (defensive against malformed SDK input).
  *
- * Used both for `pending_confirmation.permissionPath` (S4) and Phase 8
+ * Used both for `pending_confirmation.permissionPath` (S4) and
  * file-edit tracking — callers that only care about edits gate with
  * {@link isClaudeFileEditTool} first.
  */
@@ -197,7 +197,7 @@ export function getClaudeToolPath(toolName: string, input: unknown): string | un
 }
 
 /**
- * Phase 8 — true for tools that produce on-disk file edits tracked by
+ * True for tools that produce on-disk file edits tracked by
  * `FileEditTracker`. Excludes `TodoWrite` (in-memory) and `Bash` (edits
  * not surfaced as canonical SDK `tool_use` blocks the host can pair
  * with `tool_result`).
@@ -207,7 +207,7 @@ export function isClaudeFileEditTool(toolName: string): boolean {
 }
 
 /**
- * Phase 7 S3.5. Tools whose `canUseTool` invocation is satisfied by a
+ * S3.5. Tools whose `canUseTool` invocation is satisfied by a
  * host-driven round-trip rather than the SDK's auto-approval:
  * - `AskUserQuestion` — carousel (S3.5a).
  * - `ExitPlanMode` — `pending_confirmation` with custom Approve/Deny
@@ -260,10 +260,10 @@ export function getClaudeConfirmationTitle(toolName: string): string {
 	}
 }
 
-// #region Phase 8.5 — rich tool-call rendering helpers
+// #region rich tool-call rendering helpers
 
 /**
- * Phase 8.5 — workbench rendering hint. One-liner over `TOOL_ROWS`.
+ * Workbench rendering hint. One-liner over `TOOL_ROWS`.
  * Returns `'terminal'` for shell tools (drives the terminal renderer),
  * `'search'` for `Grep` / `Glob` (drives the search renderer),
  * `'subagent'` for `Task` / `Agent` (drives the subagent renderer),
@@ -274,7 +274,7 @@ export function getClaudeToolKind(toolName: string): ClaudeToolKind | undefined 
 }
 
 /**
- * Phase 8.5 — build the `_meta` bag stamped at the tool-open seam.
+ * Build the `_meta` bag stamped at the tool-open seam.
  * Returns `undefined` for tools that have no `toolKind` hint so the
  * resulting envelope stays minimal (a `Read` row gets no `_meta` at
  * all). Mirrors Copilot's
@@ -322,7 +322,7 @@ function readStringField(input: unknown, field: string): string | undefined {
 }
 
 /**
- * Phase 8.5 — first-line command extractor for shell tools. Mirrors
+ * First-line command extractor for shell tools. Mirrors
  * Copilot's `command.split('\n')[0]` pattern.
  */
 function firstShellLine(input: unknown): string | undefined {
@@ -331,7 +331,7 @@ function firstShellLine(input: unknown): string | undefined {
 }
 
 /**
- * Phase 8.5 — rich invocation message for a `pending_confirmation`
+ * Rich invocation message for a `pending_confirmation`
  * card or a streaming `ChatToolCallStart` action. Reads the
  * SDK's `tool_use.input` defensively and falls back to the static
  * `displayName` on any shape mismatch. Mirror of
@@ -420,7 +420,7 @@ export function getClaudeInvocationMessage(
 }
 
 /**
- * Phase 8.5 — success-aware rich past-tense message. Mirror of
+ * Success-aware rich past-tense message. Mirror of
  * [`copilotToolDisplay.getPastTenseMessage`](../copilot/copilotToolDisplay.ts#L572).
  * Failure path returns a generic "failed" message; success path
  * mirrors the {@link getClaudeInvocationMessage} structure with
@@ -509,7 +509,7 @@ export function getClaudePastTenseMessage(
 }
 
 /**
- * Phase 8.5 — canonical "input as code" string rendered under the
+ * Canonical "input as code" string rendered under the
  * tool-call row. Shell tools surface the raw `command`; search tools
  * surface the `pattern`; everything else falls back to pretty-printed
  * JSON. Returns `undefined` only when the input is itself absent.

@@ -15,10 +15,13 @@ import { constObservable, derived, derivedObservableWithCache, derivedOpts, IObs
 import { isEqual, isEqualOrParent, relativePath } from '../../../../../base/common/resources.js';
 import { ThemeIcon } from '../../../../../base/common/themables.js';
 import { isDefined } from '../../../../../base/common/types.js';
+import { AGENT_HOST_SCHEME } from '../../../../../platform/agentHost/common/agentHostUri.js';
+import { Schemas } from '../../../../../base/common/network.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { generateUuid } from '../../../../../base/common/uuid.js';
 import { localize } from '../../../../../nls.js';
 import { AgentSession, IAgentConnection, IAgentSessionMetadata } from '../../../../../platform/agentHost/common/agentService.js';
+import { AgentHostTrustConfigKey, AgentHostTrustKey } from '../../../../../platform/agentHost/common/trustConfigSchema.js';
 import { buildSessionChangesetUri } from '../../../../../platform/agentHost/common/changesetUri.js';
 import { buildAnnotationsUri } from '../../../../../platform/agentHost/common/annotationsUri.js';
 import { getEffectiveAgents } from '../../../../../platform/agentHost/common/customAgents.js';
@@ -1670,7 +1673,55 @@ export abstract class BaseAgentHostSessionsProvider extends Disposable implement
 			}
 			this._sessionCache.clear();
 		}));
+
+		// CLAWDIUS workspace-trust forwarding: a mid-session trust change (folder trusted/untrusted, or a change
+		// to the trusted-folder set) must reach each live session so an untrusted folder clamps its engine and a
+		// revocation triggers the session teardown. Re-forward per-session trust for every cached session.
+		this._register(this._workspaceTrustManagementService.onDidChangeTrust(() => this._forwardTrustForAllSessions()));
+		this._register(this._workspaceTrustManagementService.onDidChangeTrustedFolders(() => this._forwardTrustForAllSessions()));
 	}
+
+	// CLAWDIUS-BEGIN workspace-trust forwarding (per-directory, session layer)
+	/**
+	 * Push a running session's per-directory workspace-trust decision into its session config layer, so an
+	 * untrusted folder clamps that session's engine (settings sources / MCP / plugins) via the node trust gate,
+	 * and a revocation drives the session rebuild. Session-layer trust WINS over the window-wide root value the
+	 * main window forwards, giving true per-directory enforcement. Covers local (file) and remote (agent-host)
+	 * folders - both carry a real per-folder trust decision the workspace-trust service resolves; other schemes
+	 * (e.g. auto-trusted virtual / GitHub project URIs) are skipped. Must run only once the
+	 * session config has materialized on the node, or the SessionConfigChanged merge is dropped.
+	 */
+	protected _forwardTrustForSession(sessionId: string, cached: AgentHostSessionAdapter): void {
+		const connection = this.connection;
+		if (!connection) {
+			return;
+		}
+		const folder = cached.workspace.get()?.folders[0];
+		const workspaceUri = folder?.workingDirectory ?? folder?.root;
+		if (!workspaceUri || (workspaceUri.scheme !== Schemas.file && workspaceUri.scheme !== AGENT_HOST_SCHEME)) {
+			return;
+		}
+		void (async () => {
+			const { trusted } = await this._workspaceTrustManagementService.getUriTrustInfo(workspaceUri);
+			// Bail if the session was evicted or the connection changed while we awaited trust info.
+			if (this._sessionCache.get(sessionId) !== cached || this.connection !== connection) {
+				return;
+			}
+			const sessionUri = AgentSession.uri(cached.agentProvider, sessionId);
+			connection.dispatch(sessionUri.toString(), {
+				type: ActionType.SessionConfigChanged as const,
+				config: { [AgentHostTrustConfigKey.Trust]: { [AgentHostTrustKey.Trusted]: trusted } },
+			});
+		})();
+	}
+
+	/** Re-forward per-directory trust for every cached session (on a workspace-trust change). */
+	protected _forwardTrustForAllSessions(): void {
+		for (const [sessionId, cached] of this._sessionCache) {
+			this._forwardTrustForSession(sessionId, cached);
+		}
+	}
+	// CLAWDIUS-END
 
 	// -- Subclass hooks -------------------------------------------------------
 
@@ -3305,6 +3356,14 @@ export abstract class BaseAgentHostSessionsProvider extends Disposable implement
 		}
 		this._runningSessionConfigs.set(sessionId, seeded);
 		this._onDidChangeSessionConfig.fire(sessionId);
+		// CLAWDIUS: the session config just materialized on the node - the earliest point a SessionConfigChanged
+		// trust merge will stick - so forward this session's per-directory trust now. `sessionId` is the chat id;
+		// the session cache and dispatch URI are keyed by the raw agent-host id.
+		const rawIdForTrust = this._rawIdFromChatId(sessionId);
+		const cachedForTrust = rawIdForTrust ? this._sessionCache.get(rawIdForTrust) : undefined;
+		if (rawIdForTrust && cachedForTrust) {
+			this._forwardTrustForSession(rawIdForTrust, cachedForTrust);
+		}
 	}
 
 	// -- Session cache management --------------------------------------------

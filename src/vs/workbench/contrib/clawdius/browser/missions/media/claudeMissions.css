@@ -1,0 +1,242 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) 2026 John Chapman (Clawdius). All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/* CLAWDIUS-BEGIN Missions fleet Sidebar view styles */
+.clawdius-missions {
+	height: 100%;
+	overflow-y: auto;
+	padding: 4px 0;
+	user-select: text;
+}
+
+.clawdius-missions-empty {
+	padding: 8px 16px;
+	opacity: 0.7;
+	font-style: italic;
+}
+
+.clawdius-missions-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 12px;
+	line-height: 20px;
+	border-left: 2px solid transparent;
+}
+
+.clawdius-missions-row.foreign {
+	border-left-color: var(--vscode-editorWarning-foreground);
+	opacity: 0.9;
+}
+
+.clawdius-missions-run {
+	font-weight: 600;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 40%;
+}
+
+.clawdius-missions-status {
+	opacity: 0.8;
+	white-space: nowrap;
+}
+
+.clawdius-missions-labels {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	margin-left: auto;
+}
+
+.clawdius-missions-label {
+	font-size: 10px;
+	line-height: 15px;
+	padding: 0 5px;
+	border-radius: 3px;
+	white-space: nowrap;
+	background: var(--vscode-badge-background);
+	color: var(--vscode-badge-foreground);
+}
+
+.clawdius-missions-label.coverage-foreign {
+	background: var(--vscode-editorWarning-foreground);
+	color: var(--vscode-editor-background);
+}
+
+/* The badge host leads the labels area; display:contents so an empty host adds no gap. */
+.clawdius-missions-badgehost {
+	display: contents;
+}
+
+/* The LIVE needs-input/completion badge (owned run, real event); distinct from the seam labels. */
+.clawdius-missions-badge {
+	font-size: 10px;
+	font-weight: 600;
+	line-height: 15px;
+	padding: 0 6px;
+	border-radius: 3px;
+	white-space: nowrap;
+	text-transform: uppercase;
+	letter-spacing: 0.02em;
+}
+
+.clawdius-missions-badge.badge-needs-input {
+	background: var(--vscode-inputValidation-warningBackground, var(--vscode-editorWarning-foreground));
+	color: var(--vscode-inputValidation-warningForeground, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-editorWarning-foreground);
+}
+
+.clawdius-missions-badge.badge-completion {
+	background: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+	color: var(--vscode-editor-background);
+}
+
+.clawdius-missions-label.completeness-unknown-shape,
+.clawdius-missions-label.completeness-suppressed,
+.clawdius-missions-label.completeness-partial {
+	background: var(--vscode-editorWarning-foreground);
+	color: var(--vscode-editor-background);
+}
+
+/* An expandable run row (drill-in): a twistie leads the row and rotates when expanded. */
+.clawdius-missions-row.expandable {
+	cursor: pointer;
+}
+
+.clawdius-missions-twistie {
+	flex: 0 0 auto;
+	font-size: 14px;
+	opacity: 0.8;
+	transition: transform 0.1s ease;
+}
+
+.clawdius-missions-row.expanded .clawdius-missions-twistie {
+	transform: rotate(90deg);
+}
+
+/* The inline subagent list revealed when a run is expanded. */
+.clawdius-missions-subagents {
+	display: flex;
+	flex-direction: column;
+}
+
+.clawdius-missions-subempty {
+	padding: 3px 12px 3px 34px;
+	opacity: 0.7;
+	font-style: italic;
+}
+
+.clawdius-missions-subrow {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+	padding: 3px 12px 3px 34px;
+	line-height: 18px;
+	cursor: pointer;
+}
+
+.clawdius-missions-subrow:hover {
+	background: var(--vscode-list-hoverBackground);
+}
+
+.clawdius-missions-subagent {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 45%;
+}
+
+.clawdius-missions-sublabels {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	margin-left: auto;
+}
+
+/* Transcript drill-in editor pane. */
+.clawdius-transcript {
+	height: 100%;
+	overflow: auto;
+	user-select: text;
+}
+
+.clawdius-transcript-inner {
+	padding: 12px 16px;
+	font-family: var(--monaco-monospace-font);
+}
+
+.clawdius-transcript-header {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	padding-bottom: 8px;
+	margin-bottom: 8px;
+	border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.clawdius-transcript-title {
+	font-weight: 600;
+}
+
+.clawdius-transcript-labels {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	margin-left: auto;
+}
+
+.clawdius-transcript-label {
+	font-size: 10px;
+	line-height: 15px;
+	padding: 0 5px;
+	border-radius: 3px;
+	white-space: nowrap;
+	background: var(--vscode-badge-background);
+	color: var(--vscode-badge-foreground);
+}
+
+.clawdius-transcript-label.completeness-unknown-shape,
+.clawdius-transcript-label.completeness-suppressed,
+.clawdius-transcript-label.completeness-partial,
+.clawdius-transcript-label.coverage-foreign {
+	background: var(--vscode-editorWarning-foreground);
+	color: var(--vscode-editor-background);
+}
+
+.clawdius-transcript-empty {
+	opacity: 0.7;
+	font-style: italic;
+}
+
+.clawdius-transcript-record {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 2px 0;
+	line-height: 20px;
+}
+
+.clawdius-transcript-record.sidechain {
+	padding-left: 16px;
+	border-left: 2px solid var(--vscode-textLink-foreground);
+}
+
+.clawdius-transcript-record-type {
+	font-weight: 600;
+}
+
+.clawdius-transcript-record-badge {
+	font-size: 10px;
+	line-height: 15px;
+	padding: 0 5px;
+	border-radius: 3px;
+	background: var(--vscode-badge-background);
+	color: var(--vscode-badge-foreground);
+}
+/* CLAWDIUS-END */

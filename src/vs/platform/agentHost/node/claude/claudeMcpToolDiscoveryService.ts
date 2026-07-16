@@ -9,7 +9,9 @@
 // the server connects). The SDK connects to remote servers with the user's ~/.claude creds, so this works for
 // stdio AND remote servers without a hand-rolled MCP client. The session sends NO prompt (a non-yielding input
 // iterable keeps it open while MCP connects, then we tear it down) - so no model turn, no token cost. Strictly
-// user-initiated (the "Load tool names..." click); never on startup, never automatically.
+// user-initiated (the "Load tool names..." click); never on startup, never automatically. Untrusted workspaces
+// are refused before any session spawn: project `.mcp.json` servers are repo-controlled commands, and even
+// enumerating their tools would execute them.
 
 import type { CanUseTool, SDKUserMessage, WarmQuery } from '@anthropic-ai/claude-agent-sdk';
 import { timeout } from '../../../../base/common/async.js';
@@ -20,6 +22,7 @@ import { IClawdiusCliConfigService } from '../../../clawdius/common/clawdiusCliC
 import { IClaudeMcpTool, IClaudeMcpToolDiscoveryResult, IClaudeMcpToolDiscoveryService } from '../../common/claudeMcpToolDiscovery.js';
 import { IClaudeAgentSdkService } from './claudeAgentSdkService.js';
 import { buildOptions } from './claudeSdkOptions.js';
+import { redactSecrets } from '../agentHostSecretRedact.js';
 
 /** Total budget for one discovery: enough for a remote server to connect, capped so a hang cannot pin a process. */
 const DISCOVERY_TIMEOUT_MS = 25_000;
@@ -36,7 +39,12 @@ export class ClaudeMcpToolDiscoveryService implements IClaudeMcpToolDiscoverySer
 		@ILogService private readonly logService: ILogService,
 	) { }
 
-	async discoverServerTools(serverName: string, workingDirectoryPath: string): Promise<IClaudeMcpToolDiscoveryResult> {
+	async discoverServerTools(serverName: string, workingDirectoryPath: string, trusted: boolean): Promise<IClaudeMcpToolDiscoveryResult> {
+		// Trust backstop (the renderer gates the trigger too): never start a discovery session for an untrusted
+		// workspace - the SDK would spawn the repo's `.mcp.json` server commands just to enumerate their tools.
+		if (!trusted) {
+			return { status: 'untrusted', tools: [], message: 'This workspace is not trusted; MCP tool discovery is blocked until you trust it.' };
+		}
 		const abort = new AbortController();
 		let warm: WarmQuery | undefined;
 		try {
@@ -50,13 +58,13 @@ export class ClaudeMcpToolDiscoveryService implements IClaudeMcpToolDiscoverySer
 					model: undefined,
 					abortController: abort,
 					permissionMode: 'plan',
-					trusted: true, // discovery never runs a governed tool, so the trust clamp is moot here
+					trusted, // renderer-resolved workspace trust (always true here: untrusted callers were refused above)
 					canUseTool: denyTool,
 					isResume: false,
 					mcpServers: undefined,
 					cliResolution,
 				},
-				data => this.logService.trace(`[mcp-discovery stderr] ${data}`),
+				data => this.logService.trace(`[mcp-discovery stderr] ${redactSecrets(data)}`),
 				msg => this.logService.trace(`[mcp-discovery] declined elicitation: ${msg}`),
 			);
 

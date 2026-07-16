@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 // CLAWDIUS-BEGIN Reader-seam transcript adapter + version-keyed shell
-// The Slice-2 read implementation behind the pure `common/claudeReaderSeam.ts` interface: a version-keyed
+// The read implementation behind the pure `common/claudeReaderSeam.ts` interface: a version-keyed
 // adapter shell (a per-format version key + an unknown-shape canary that degrades a schema shift to a labeled
 // result instead of throwing) and the transcript JSONL adapter. The adapter builds the
 // `projects/<encodeProjectDir>/*.jsonl` path off the RESOLVED config root (never a hardcoded `~/.claude`),
@@ -20,21 +20,22 @@ import { IFileService } from '../../../../../platform/files/common/files.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import {
 	AdapterVersionStamp, CompletenessState, CostRecord, CoverageLabel, FreshnessLabel, IReaderRequest,
-	IReaderResult, IReaderSeam, ReaderEntityKind, Run, Session, Subagent, TaskList, TeamRoster, Transcript,
-	TranscriptIndexKey,
+	IReaderResult, IReaderSeam, ReaderConfigRoot, ReaderEntityKind, ReaderScope, Run, Session, Subagent, TaskList,
+	TeamRoster, Transcript, TranscriptIndexKey,
 } from '../../common/claudeReaderSeam.js';
+import { FleetRun, FleetSubagent, FleetTranscriptSlice } from '../../common/claudeFleetModel.js';
 import { encodeProjectDir } from '../clawdiusConfigStore.js';
 
 /** The transcript read-model entities this adapter can produce, by request kind. */
 type ReaderTranscriptEntity = Run | Session | Subagent | Transcript;
 
-/** Request kinds served by the transcript JSONL adapter (Slice 2). Cost (Slice 3) is derived from the same
- *  transcript records but routed separately; teams / tasks are their own adapters gated behind TEAMS-14. */
+/** Request kinds served by the transcript JSONL adapter. Cost is derived from the same
+ *  transcript records but routed separately; teams / tasks are their own adapters gated behind an experimental probe. */
 const TRANSCRIPT_KINDS: ReadonlySet<ReaderEntityKind> = new Set<ReaderEntityKind>([
 	'runs', 'session', 'subagent', 'transcript-slice',
 ]);
 
-/** Request kinds served by the teams / tasks adapters (Slice 3), gated behind the TEAMS-14 experimental probe. */
+/** Request kinds served by the teams / tasks adapters, gated behind the experimental teams probe. */
 const TEAMS_TASKS_KINDS: ReadonlySet<ReaderEntityKind> = new Set<ReaderEntityKind>(['team-roster', 'task-list']);
 
 /** The known transcript record types (Claude CLI transcript JSONL). A line the adapter RECOGNIZES is a JSON
@@ -225,6 +226,34 @@ function coverageOf(records: readonly ITranscriptRecord[], folder: URI): Coverag
 	return normalizePath(cwd) === normalizePath(folder.fsPath) ? CoverageLabel.InScope : CoverageLabel.Foreign;
 }
 
+/** The enumeration analogue of {@link coverageOf} against the set of active workspace folders: in-scope when the
+ *  run's declared cwd matches ANY active folder, foreign when it matches none (an other-workspace run is surfaced
+ *  with its label, never dropped), in-scope when the run declares no cwd (scope cannot be narrowed, so
+ *  the conservative choice is not to hide it). With no active folders a run that declares a cwd is foreign. */
+function coverageForEnum(records: readonly ITranscriptRecord[], folders: readonly URI[]): CoverageLabel {
+	const cwd = records.map(r => r.cwd).find(c => c !== undefined);
+	if (cwd === undefined) { return CoverageLabel.InScope; }
+	const c = normalizePath(cwd);
+	return folders.some(f => normalizePath(f.fsPath) === c) ? CoverageLabel.InScope : CoverageLabel.Foreign;
+}
+
+/** The honesty ladder for an enumerated session file, mirroring the transcript adapter's read: an empty file is
+ *  `absent`; JSON present but no recognized line is `unknown-shape` (the canary); a recognized read with an
+ *  unreadable record alongside OR a windowed tail (`base > 0`) is a known gap (`partial`); else `complete`. The
+ *  out-of-band completeness probe is a per-transcript drill-in concern, not run over every enumerated file. */
+function enumCompleteness(parsed: IParsedTranscript, base: number): CompletenessState {
+	if (!parsed.sawJson) { return CompletenessState.Absent; }
+	if (!parsed.recognized) { return CompletenessState.UnknownShape; }
+	return (parsed.sawForeign || base > 0) ? CompletenessState.Partial : CompletenessState.Complete;
+}
+
+/** The `<sessionId>` stem of a session file (Claude names each transcript `<sessionId>.jsonl`), used as a stable
+ *  id fallback when the file's records carry no session/run id (e.g. an empty or unknown-shape file). */
+function fileStem(file: URI): string {
+	const name = file.path.split('/').pop() ?? '';
+	return name.endsWith('.jsonl') ? name.slice(0, -'.jsonl'.length) : name;
+}
+
 /**
  * The transcript JSONL adapter. Reads the active session file under
  * `<root>/projects/<encodeProjectDir(folder)>/*.jsonl`, byte-offset tail-read, and produces the requested
@@ -283,8 +312,152 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		const projectsDir = URI.joinPath(root, 'projects', encodeProjectDir(folder));
 		const file = await this.selectActiveFile(projectsDir);
 		if (!file) { return undefined; }
+		const { parsed, base } = await this.parseFile(file);
+		return { parsed, file, base };
+	}
+
+	/** Tail-read + parse one specific session file - the shared read step behind both {@link readActive} (which
+	 *  selects the active file in a folder's project dir) and the cross-project enumeration (which reads every
+	 *  file it walked). Read-only. */
+	private async parseFile(file: URI): Promise<{ readonly parsed: IParsedTranscript; readonly base: number }> {
 		const { text, base } = await this.readTail(file);
-		return { parsed: parseTranscriptRecords(text, base), file, base };
+		return { parsed: parseTranscriptRecords(text, base), base };
+	}
+
+	/**
+	 * Enumerate every run across the resolved config root's `projects/*` dirs as a LABELED LIST of {@link FleetRun}
+	 * - the cross-project walk the fleet lists (the shipped {@link read} returns ONE entity for a
+	 * single folder's active file). Each session file becomes one run, carrying coverage (against `folders`) /
+	 * freshness=polled / completeness + the adapter-version stamp; a foreign or unknown-shape run is present WITH
+	 * its label, never omitted. `ownership` is always `foreign` here (the never-falsely-owned
+	 * floor). Deterministically ordered. Read-only - never reads outside `projects/` and never writes.
+	 */
+	async enumerateRuns(root: URI, folders: readonly URI[]): Promise<readonly FleetRun[]> {
+		const out: FleetRun[] = [];
+		for (const file of await this.listProjectFiles(root)) {
+			const { parsed, base } = await this.parseFile(file);
+			const runEntity = deriveEntity('runs', parsed.records, file.toString()) as Run;
+			const sessionId = runEntity.sessionId || fileStem(file);
+			const canary = parsed.sawJson && !parsed.recognized;
+			out.push({
+				runId: runEntity.runId || sessionId,
+				sessionId,
+				kind: 'single',
+				status: 'unknown',
+				ownership: 'foreign',
+				coverage: coverageForEnum(parsed.records, folders),
+				freshness: FreshnessLabel.Polled,
+				completeness: enumCompleteness(parsed, base),
+				adapterVersion: canary ? this.canaryStamp : this.stamp,
+			});
+		}
+		return out.sort((a, b) => a.runId.localeCompare(b.runId) || a.sessionId.localeCompare(b.sessionId));
+	}
+
+	/**
+	 * Enumerate a run's subagents as a LABELED LIST of {@link FleetSubagent}. A subagent is a sidechain
+	 * ROOT - a `isSidechain` record whose parent is a main-line record (i.e. where a Task spawned it) - so a
+	 * subagent's own multi-turn sidechain collapses to the single subagent that owns it. Each carries the run's
+	 * coverage / freshness / completeness and a `transcriptRef` (the file identity) drillable via the shipped
+	 * `subagent` / `transcript-slice` reads. Returns [] when the run's file cannot be located. Read-only.
+	 */
+	async enumerateSubagents(root: URI, run: FleetRun, folders: readonly URI[]): Promise<readonly FleetSubagent[]> {
+		const file = await this.findRunFile(root, run);
+		if (!file) { return []; }
+		const { parsed, base } = await this.parseFile(file);
+		const completeness = enumCompleteness(parsed, base);
+		const coverage = coverageForEnum(parsed.records, folders);
+		const transcriptRef = file.toString();
+		const sidechainUuids = new Set(parsed.records.filter(r => r.isSidechain && r.uuid).map(r => r.uuid));
+		const out: FleetSubagent[] = parsed.records
+			.filter(r => r.isSidechain && (r.parentUuid === undefined || !sidechainUuids.has(r.parentUuid)))
+			.map(r => ({
+				subagentId: r.uuid ?? '',
+				parentRunId: run.runId,
+				transcriptRef,
+				coverage,
+				freshness: FreshnessLabel.Polled,
+				completeness,
+			}));
+		return out.sort((a, b) => a.subagentId.localeCompare(b.subagentId));
+	}
+
+	/**
+	 * Read a subagent's on-disk transcript by its opaque `transcriptRef` (the file identity handed out at
+	 * enumeration) as a labeled {@link FleetTranscriptSlice} - the per-subagent drill-in read. Unlike the
+	 * coarse enumeration completeness, this runs the out-of-band tool-result probe, so a transcript referencing a
+	 * missing out-of-band file degrades to `partial`, not `complete`. The records are INDEX-ONLY (type +
+	 * sidechain flag; never the message body). Never throws: a missing/empty file is `absent`, an unrecognized
+	 * shape is `unknown-shape`. Read-only - reads only the seam's own indexed file, never writes.
+	 */
+	async readTranscriptSlice(subagent: FleetSubagent, folders: readonly URI[]): Promise<FleetTranscriptSlice> {
+		const ref = subagent.transcriptRef;
+		if (!ref) {
+			return { subagentId: subagent.subagentId, records: [], coverage: CoverageLabel.OutOfScope, freshness: FreshnessLabel.Stale, completeness: CompletenessState.Absent, adapterVersion: this.stamp };
+		}
+		let file: URI;
+		try {
+			file = URI.parse(ref);
+		} catch {
+			return { subagentId: subagent.subagentId, records: [], coverage: CoverageLabel.OutOfScope, freshness: FreshnessLabel.Stale, completeness: CompletenessState.Absent, adapterVersion: this.stamp };
+		}
+		const { parsed, base } = await this.parseFile(file);
+		if (!parsed.sawJson) {
+			// The file is missing / empty (a fresh or removed session): absent, not an error.
+			return { subagentId: subagent.subagentId, records: [], coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.Absent, adapterVersion: this.stamp };
+		}
+		if (!parsed.recognized) {
+			// JSON present but no recognized shape: a wholesale schema shift - trip the canary.
+			return { subagentId: subagent.subagentId, records: [], coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.UnknownShape, adapterVersion: this.canaryStamp };
+		}
+		// A known gap (partial), not complete, when a windowed tail dropped older records (`base > 0`) OR an
+		// unreadable record shape sat alongside recognized ones OR - the drill-in's extra probe - a referenced
+		// out-of-band tool-result file is missing. Otherwise the read is whole.
+		const completeness = (parsed.sawForeign || base > 0)
+			? CompletenessState.Partial
+			: await this.completenessOf(parsed.records, file);
+		return {
+			subagentId: subagent.subagentId,
+			records: parsed.records.map(r => ({ type: r.type, isSidechain: r.isSidechain })),
+			coverage: coverageForEnum(parsed.records, folders),
+			freshness: FreshnessLabel.Polled,
+			completeness,
+			adapterVersion: this.stamp,
+		};
+	}
+
+	/** Locate the session file for a run: first by the `<sessionId>.jsonl` naming convention (no read), else by
+	 *  parsing each file and matching the derived session/run id. Undefined when no file matches. Read-only. */
+	private async findRunFile(root: URI, run: FleetRun): Promise<URI | undefined> {
+		const files = await this.listProjectFiles(root);
+		const byStem = files.find(f => fileStem(f) === run.sessionId);
+		if (byStem) { return byStem; }
+		for (const file of files) {
+			const { parsed } = await this.parseFile(file);
+			const e = deriveEntity('runs', parsed.records, file.toString()) as Run;
+			if ((e.sessionId && e.sessionId === run.sessionId) || (e.runId && e.runId === run.runId)) { return file; }
+		}
+		return undefined;
+	}
+
+	/** Every `*.jsonl` session file under `<root>/projects/*` (one directory deep, matching Claude's per-project
+	 *  layout). A missing/unreadable `projects/` dir yields [] (no config -> empty labeled result). Read-only. */
+	private async listProjectFiles(root: URI): Promise<URI[]> {
+		const files: URI[] = [];
+		let projectDirs: readonly URI[];
+		try {
+			const stat = await this.fileService.resolve(URI.joinPath(root, 'projects'));
+			projectDirs = (stat.children ?? []).filter(c => c.isDirectory).map(c => c.resource);
+		} catch { return files; }
+		for (const dir of projectDirs) {
+			try {
+				const stat = await this.fileService.resolve(dir);
+				for (const c of stat.children ?? []) {
+					if (!c.isDirectory && c.name.endsWith('.jsonl')) { files.push(c.resource); }
+				}
+			} catch { /* skip an unreadable project dir */ }
+		}
+		return files;
 	}
 
 	/** The newest `*.jsonl` session file under the projects dir (mtime-latest), or undefined when there is none. */
@@ -384,7 +557,7 @@ abstract class JsonDocAdapter<E> extends VersionKeyedAdapter {
 }
 
 /**
- * The teams roster adapter (Slice 3, behind the TEAMS-14 probe): reads `<root>/teams/config.json` and produces
+ * The teams roster adapter (behind the experimental teams probe): reads `<root>/teams/config.json` and produces
  * a {@link TeamRoster} (members + the Mailbox sub-view). The recognized shape is version-keyed, so a real
  * teams-format drift trips the canary rather than mis-parsing.
  */
@@ -416,7 +589,7 @@ export class TeamsAdapter extends JsonDocAdapter<TeamRoster> {
 }
 
 /**
- * The tasks adapter (Slice 3, behind the TEAMS-14 probe): reads `<root>/tasks/tasks.json` and produces a
+ * The tasks adapter (behind the experimental teams probe): reads `<root>/tasks/tasks.json` and produces a
  * {@link TaskList} of file-locked tasks with their claims. Version-keyed + unknown-shape canary.
  */
 export class TasksAdapter extends JsonDocAdapter<TaskList> {
@@ -449,7 +622,7 @@ const EMPTY_COST: CostRecord = { totalInputTokens: 0, totalOutputTokens: 0, perM
 
 /**
  * Sum authoritative token counts per model from the transcript records. Token-first: this NEVER derives a
- * US-dollar figure - a list-price USD would be an estimate, so the cost read model carries tokens only (FR-011).
+ * US-dollar figure - a list-price USD would be an estimate, so the cost read model carries tokens only.
  */
 function computeCost(records: readonly ITranscriptRecord[]): CostRecord {
 	const perModel = new Map<string, { input: number; output: number }>();
@@ -472,8 +645,8 @@ function computeCost(records: readonly ITranscriptRecord[]): CostRecord {
 }
 
 /**
- * The token-first cost adapter (Slice 3): computes a {@link CostRecord} from the SAME active transcript the
- * transcript adapter reads (cost IS token-first from the transcript, FR-011), so it delegates to that adapter's
+ * The token-first cost adapter: computes a {@link CostRecord} from the SAME active transcript the
+ * transcript adapter reads (cost IS token-first from the transcript), so it delegates to that adapter's
  * shared read step rather than re-walking the tree. A windowed tail or an unreadable record among recognized
  * ones is an honest `partial` (some token usage is out of view), never a false complete. Read-only.
  */
@@ -509,10 +682,10 @@ function emptyEntityForKind(kind: ReaderEntityKind): Run | Session | Subagent | 
 }
 
 /**
- * The reader seam over every local Claude format (Slice 2 transcript + Slice 3 teams / tasks / cost). Read-only
+ * The reader seam over every local Claude format (transcript + teams / tasks / cost). Read-only
  * and index-only: it delegates to the per-format adapters for the active workspace folder / config root and is
  * NEVER the SDK `sessionStore`. The request carries the already-resolved config root (see `resolveConfigRoot`);
- * a `no-config` root degrades to an absent result. Teams / tasks are gated behind the TEAMS-14 experimental
+ * a `no-config` root degrades to an absent result. Teams / tasks are gated behind the experimental teams
  * probe: when it is off, a team-roster / task-list request degrades to an honest absent result rather than
  * half-lighting an unshipped surface.
  */
@@ -523,7 +696,7 @@ export class ClawdiusReaderSeamService implements IReaderSeam {
 	private readonly cost: CostAdapter;
 
 	/**
-	 * @param teamsProbeEnabled the TEAMS-14 gating probe: when false (the default), the experimental teams / tasks
+	 * @param teamsProbeEnabled the experimental teams gating probe: when false (the default), the experimental teams / tasks
 	 * read model is not exposed and a team-roster / task-list request degrades to an honest absent result.
 	 */
 	constructor(
@@ -542,7 +715,7 @@ export class ClawdiusReaderSeamService implements IReaderSeam {
 			return this.degradedAbsent(request.kind, CoverageLabel.OutOfScope) as IReaderResult<T>;
 		}
 		const root = request.root.root;
-		// Teams / tasks: global under the config root, gated behind the TEAMS-14 experimental probe.
+		// Teams / tasks: global under the config root, gated behind the experimental teams probe.
 		if (TEAMS_TASKS_KINDS.has(request.kind)) {
 			if (!this.teamsProbeEnabled) {
 				return this.degradedAbsent(request.kind, CoverageLabel.InScope) as IReaderResult<T>;
@@ -562,6 +735,44 @@ export class ClawdiusReaderSeamService implements IReaderSeam {
 			return await this.transcript.read(root, folder, request.kind) as IReaderResult<T>;
 		}
 		return this.degradedAbsent(request.kind, CoverageLabel.InScope) as IReaderResult<T>;
+	}
+
+	/**
+	 * Enumerate every observable run across the resolved config root's `projects/` dir as a labeled list of
+	 * {@link FleetRun} - the data foundation the fleet UI binds to. A `no-config` root degrades to an
+	 * empty list (honest, never an error). `scope` is CARRIED, not enforced here: coverage is computed
+	 * against the active workspace folders regardless, so a foreign run is surfaced with its label rather than
+	 * filtered out. Read-only.
+	 */
+	async listRuns(root: ReaderConfigRoot, scope?: ReaderScope): Promise<readonly FleetRun[]> {
+		if (root.kind === 'no-config') { return []; }
+		return this.transcript.enumerateRuns(root.root, this.scopeFolders(scope));
+	}
+
+	/**
+	 * Enumerate a run's subagents as a labeled list of {@link FleetSubagent} - the per-run drill-in
+	 * prerequisite. A `no-config` root degrades to an empty list. Read-only.
+	 */
+	async listSubagents(root: ReaderConfigRoot, run: FleetRun): Promise<readonly FleetSubagent[]> {
+		if (root.kind === 'no-config') { return []; }
+		return this.transcript.enumerateSubagents(root.root, run, this.scopeFolders());
+	}
+
+	/**
+	 * Read a subagent's transcript as a labeled {@link FleetTranscriptSlice} - the per-subagent drill-in read the
+	 * transcript editor binds to. Goes through the seam's own indexed file (the subagent's
+	 * `transcriptRef`), so a consuming surface never reads the Claude config tree directly. Coverage is
+	 * scored against the active workspace folders; the completeness label includes the out-of-band probe (a missing
+	 * tool-result ref -> `partial`). Read-only.
+	 */
+	async readSubagentTranscript(subagent: FleetSubagent): Promise<FleetTranscriptSlice> {
+		return this.transcript.readTranscriptSlice(subagent, this.scopeFolders());
+	}
+
+	/** The active workspace folders coverage is scored against. Consent-scope is CARRIED not enforced at the seam,
+	 *  so `scope` does not narrow the folder set here - a foreign run stays present-with-label. */
+	private scopeFolders(_scope?: ReaderScope): readonly URI[] {
+		return this.workspaceService.getWorkspace().folders.map(f => f.uri);
 	}
 
 	/** An honest fully-labeled empty result for a root/probe/workspace that cannot be read (freshness=stale: no

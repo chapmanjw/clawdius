@@ -16,14 +16,14 @@ import { buildClaudeToolCallMeta, buildClaudeToolMeta, getClaudeInvocationMessag
 import { stripClientToolNamePrefix } from './clientTools/claudeClientToolMcpServer.js';
 
 /**
- * Phase 12 — SDK tool names that spawn subagent sessions. Re-exported
+ * SDK tool names that spawn subagent sessions. Re-exported
  * from the registry's canonical set so callers can keep importing it
  * from this signals module (the live mapper, replay handling, etc.).
  */
 export const SUBAGENT_SPAWNING_TOOL_NAMES: ReadonlySet<string> = SUBAGENT_TOOL_NAMES;
 
 /**
- * Phase 12 — post-process the signals produced from a single SDK
+ * Post-process the signals produced from a single SDK
  * message envelope. When the envelope's `parent_tool_use_id` is set,
  * every action / pending_confirmation gets tagged with
  * `parentToolCallId` so {@link import('../agentSideEffects.js').AgentSideEffects}
@@ -71,7 +71,7 @@ export function tagWithParent(
 }
 
 /**
- * Phase 12 step 7 — handle the two `type: 'system'` subtypes that drive
+ * Handle the two `type: 'system'` subtypes that drive
  * background-subagent lifecycle. `task_started` flips the matching
  * spawning entry to background so the foreground `tool_result` path
  * skips its `subagent_completed`. `task_notification` (with a terminal
@@ -117,7 +117,7 @@ export function mapSubagentSystemMessage(
 }
 
 /**
- * Phase 12 fix — build the `ChatToolCallReady` signal for a top-level
+ * Build the `ChatToolCallReady` signal for a top-level
  * Task/Agent tool_use block AND record the spawn's metadata onto the
  * registry. The workbench's
  * [stateToProgressAdapter.ts](../../../../workbench/contrib/chat/browser/agentSessions/agentHost/stateToProgressAdapter.ts)
@@ -174,7 +174,7 @@ export function buildTopLevelSubagentReadyAction(
 }
 
 /**
- * Phase 12 fix — walk an inner subagent canonical assistant message
+ * Walk an inner subagent canonical assistant message
  * (`parent_tool_use_id !== null`) and emit one signal per content block.
  *
  * The SDK does NOT deliver inner subagent content via `stream_event`
@@ -248,7 +248,7 @@ export function emitInnerAssistantSignals(
 			// seed the registry directly. Without this the live
 			// `tool_result` handler falls back to a generic
 			// `"{displayName} finished"` past-tense and replay (which
-			// always computes rich text) drifts from live — violating D6.
+			// always computes rich text) drifts from live.
 			state.toolCalls.seedParsedInput(block.id, block.input);
 			registry.noteInnerTool(block.id, parentToolUseId);
 			const displayName = getClaudeToolDisplayName(toolName);

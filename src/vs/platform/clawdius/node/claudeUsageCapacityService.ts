@@ -17,10 +17,13 @@ import { readFile, stat, writeFile } from 'fs/promises';
 import { join } from '../../../base/common/path.js';
 import { ILogService } from '../../log/common/log.js';
 import { IClaudeUsageCapacityService } from '../common/claudeUsageCapacity.js';
+// Credential resolution (the macOS login Keychain OR the plaintext file) lives in one node module, hand-mirrored by
+// the clawdius-chat extension. See claudeCredentials.ts for why the Keychain is read by spawning /usr/bin/security.
+import { hasClaudeCredentials, readClaudeOAuthToken } from './claudeCredentials.js';
 // Provider gate + capacity constants come from the shared common module (the single source of truth, also imported
 // by the renderer usage data layer), so the node service and the renderer can never drift apart.
 import {
-	engineIsAnthropic, oauthUsageHeaders, CAPACITY_CACHE_FILE, CREDENTIALS_FILE, SETTINGS_FILE,
+	engineIsAnthropic, oauthUsageHeaders, CAPACITY_CACHE_FILE, SETTINGS_FILE,
 	USAGE_CAPACITY_TTL_MS, OAUTH_USAGE_URL,
 } from '../common/claudeUsageProvider.js';
 
@@ -90,15 +93,20 @@ export class ClaudeUsageCapacityService implements IClaudeUsageCapacityService {
 		}
 	}
 
-	/** Read the CLI OAuth access token from `<claudeDir>/.credentials.json`. Returned to the caller only; never logged. */
+	/**
+	 * The "signed in" probe for the renderer, which cannot spawn /usr/bin/security itself. On-demand only: driven by
+	 * the usage surfaces over the capacity IPC channel. Makes NO network call and never logs the token.
+	 */
+	async hasCredentials(homeDirPath: string): Promise<boolean | undefined> {
+		return hasClaudeCredentials(join(homeDirPath, '.claude'));
+	}
+
+	/**
+	 * The CLI OAuth access token: the macOS login Keychain first (the CLI's primary store), then the plaintext
+	 * `<claudeDir>/.credentials.json` (the only store on Windows/Linux). Returned to the caller only; never logged.
+	 */
 	private async readOAuthToken(claudeDir: string): Promise<string | undefined> {
-		try {
-			const creds = JSON.parse(await readFile(join(claudeDir, CREDENTIALS_FILE), 'utf8'));
-			const token = creds?.claudeAiOauth?.accessToken;
-			return typeof token === 'string' && token.length > 0 ? token : undefined;
-		} catch {
-			return undefined;
-		}
+		return readClaudeOAuthToken(claudeDir);
 	}
 }
 // CLAWDIUS-END

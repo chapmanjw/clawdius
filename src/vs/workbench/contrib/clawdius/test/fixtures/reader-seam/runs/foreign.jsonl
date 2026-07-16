@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"sess-fleet-foreign","uuid":"f-0001","parentUuid":null,"cwd":"/other/workspace/repo","timestamp":"2026-07-08T00:02:01.000Z"}
+{"type":"assistant","sessionId":"sess-fleet-foreign","uuid":"f-0002","parentUuid":"f-0001","cwd":"/other/workspace/repo","timestamp":"2026-07-08T00:02:02.000Z"}

@@ -168,7 +168,9 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 		const [stats, capacity] = await Promise.all([readStats(this.fileService, dir), readCapacity(this.fileService, dir)]);
 		this.stats = stats;
 		this.capacity = capacity;
-		this.account = await readAccount(this.fileService, dir, capacity);
+		// The capacity refresh router doubles as the "signed in" probe: on a .credentials.json miss it asks whichever
+		// host owns ~/.claude, the only place that can read the macOS login Keychain (the renderer cannot).
+		this.account = await readAccount(this.fileService, dir, capacity, this.capacityRefresh);
 		this.update();
 	}
 
@@ -260,7 +262,10 @@ export class ClaudeUsageStatusEntry extends Disposable implements IWorkbenchCont
 		if (account.planTier) { parts.push(account.planTier); }
 		parts.push(providerLabel(account.provider));
 		line.textContent = parts.join(` ${SEP} `);
-		if (!account.signedIn) {
+		// ONLY a definitive `false` claims "Signed out". `undefined` means the credential probe was indeterminate (a
+		// locked macOS login keychain, or a host we could not reach) - say nothing rather than assert a signed-out
+		// state we have not established. The hover corrects itself on the next poll once the probe lands.
+		if (account.signedIn === false) {
 			append(line, h('span.clawdius-usage-account-state')).textContent = localize('clawdius.usage.signedOut', "Signed out");
 		}
 	}

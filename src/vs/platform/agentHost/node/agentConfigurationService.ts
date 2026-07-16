@@ -47,6 +47,14 @@ export interface IAgentConfigurationService {
 	readonly onDidRootConfigChange: Event<void>;
 
 	/**
+	 * Fires with the session's protocol URI whenever a
+	 * {@link ActionType.SessionConfigChanged} action merges a config patch
+	 * into that session, so callers keyed on one session can re-read its
+	 * effective values without subscribing to the whole action stream.
+	 */
+	readonly onDidSessionConfigChange: Event<ProtocolURI>;
+
+	/**
 	 * Returns the effective value of `key` for `session`, walking the
 	 * `session → parent session → host` chain and returning the first
 	 * layer that provides a value which validates against
@@ -128,6 +136,9 @@ export class AgentConfigurationService extends Disposable implements IAgentConfi
 	private readonly _onDidRootConfigChange = this._register(new Emitter<void>());
 	readonly onDidRootConfigChange: Event<void> = this._onDidRootConfigChange.event;
 
+	private readonly _onDidSessionConfigChange = this._register(new Emitter<ProtocolURI>());
+	readonly onDidSessionConfigChange: Event<ProtocolURI> = this._onDidSessionConfigChange.event;
+
 	constructor(
 		private readonly _stateManager: AgentHostStateManager,
 		@ILogService private readonly _logService: ILogService,
@@ -152,6 +163,8 @@ export class AgentConfigurationService extends Disposable implements IAgentConfi
 		this._register(this._stateManager.onDidEmitEnvelope(envelope => {
 			if (envelope.action.type === ActionType.RootConfigChanged) {
 				this._onDidRootConfigChange.fire();
+			} else if (envelope.action.type === ActionType.SessionConfigChanged) {
+				this._onDidSessionConfigChange.fire(envelope.channel.toString());
 			}
 		}));
 	}

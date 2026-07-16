@@ -39,7 +39,7 @@ export enum ThemeSettings {
 }
 
 export namespace ThemeSettingDefaults {
-	// CLAWDIUS-BEGIN default theme (Phase 4): Clawdius Dark/Light/High-Contrast are the out-of-box defaults
+	// CLAWDIUS-BEGIN default theme: Clawdius Dark/Light/High-Contrast are the out-of-box defaults
 	export const COLOR_THEME_DARK = 'Clawdius Dark';
 	export const COLOR_THEME_LIGHT = 'Clawdius Light';
 	export const COLOR_THEME_HC_DARK = 'Clawdius High Contrast';
@@ -71,11 +71,11 @@ export function migrateThemeSettingsId(settingsId: string): string {
 	return settingsId;
 }
 
-// CLAWDIUS-BEGIN initial-colors accent recolor (Phase 4): the pre-theme first-paint maps below use the
+// CLAWDIUS-BEGIN initial-colors accent recolor: the pre-theme first-paint maps below use the
 // upstream Microsoft blue accent (#0078D4 dark / #005FB8 light). Clawdius recolors only the accent hexes
 // to the Clawdius orange family (#D97757 primary / #C6664A hover / #E8956F light) so first paint is
 // Clawdius, not blue, before the theme extension loads. Neutral grays and semantic add/delete/error
-// colors are intentionally untouched. Chat-surface accents are left for Phase 2.
+// colors are intentionally untouched. Chat-surface accents are left unchanged.
 export const COLOR_THEME_DARK_INITIAL_COLORS = {
 	'actionBar.toggledBackground': '#383a49',
 	'activityBar.activeBorder': '#D97757',

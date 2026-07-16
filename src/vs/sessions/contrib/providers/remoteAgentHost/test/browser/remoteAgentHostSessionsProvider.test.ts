@@ -15,6 +15,7 @@ import { AgentSession, type IAgentConnection, type IAgentSessionMetadata } from 
 import type { ResolveSessionConfigResult } from '../../../../../../platform/agentHost/common/state/protocol/commands.js';
 import { MessageKind, SessionLifecycle, type AgentInfo, type RootState, type SessionConfigState, type SessionState } from '../../../../../../platform/agentHost/common/state/protocol/state.js';
 import { ActionType, NotificationType, type ActionEnvelope, type IRootConfigChangedAction, type SessionAction, type TerminalAction, type INotification, type ClientAnnotationsAction } from '../../../../../../platform/agentHost/common/state/sessionActions.js';
+import { AgentHostTrustConfigKey, AgentHostTrustKey } from '../../../../../../platform/agentHost/common/trustConfigSchema.js';
 import { buildDefaultChatUri, SessionStatus as ProtocolSessionStatus, StateComponents } from '../../../../../../platform/agentHost/common/state/sessionState.js';
 import type { IAgentSubscription } from '../../../../../../platform/agentHost/common/state/agentSubscription.js';
 import { IConfigurationService } from '../../../../../../platform/configuration/common/configuration.js';
@@ -200,6 +201,8 @@ function createProvider(disposables: DisposableStore, connection: MockAgentConne
 	instantiationService.stub(IWorkspaceTrustManagementService, new class extends mock<IWorkspaceTrustManagementService>() {
 		override isWorkspaceTrusted(): boolean { return overrides?.workspaceTrusted ?? true; }
 		override async getUriTrustInfo(uri: URI) { return { uri, trusted: overrides?.workspaceTrusted ?? true }; }
+		override readonly onDidChangeTrust = Event.None;
+		override readonly onDidChangeTrustedFolders = Event.None;
 	});
 	instantiationService.stub(IChatSessionsService, {
 		getChatSessionContribution: () => ({ type: 'remote-test-copilot', name: 'test', displayName: 'Test', description: 'test', icon: undefined }),
@@ -1062,6 +1065,42 @@ suite('RemoteAgentHostSessionsProvider', () => {
 			properties: ['autoApprove', 'isolation'],
 			values: { autoApprove: 'default', isolation: 'worktree' },
 		});
+	}));
+
+	test('B4b forwards trusted:false to a untrusted remote (agent-host) session on config materialize', () => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {
+		connection.addSession(createSession('trust-remote-untrusted', { summary: 'RemoteUntrusted', workingDirectory: URI.parse('vscode-agent-host://localhost__4321/home/user/untrusted-remote') }));
+		const provider = createProvider(disposables, connection, { workspaceTrusted: false });
+		provider.getSessions();
+		await timeout(0);
+		const session = provider.getSessions().find(s => s.title.get() === 'RemoteUntrusted');
+		assert.ok(session);
+		const config: SessionConfigState = { schema: { type: 'object', properties: { isolation: { type: 'string', title: 'Isolation' } } }, values: { isolation: 'worktree' } };
+		connection.setSessionState('trust-remote-untrusted', 'copilotcli', { provider: 'copilotcli', title: 'RemoteUntrusted', status: ProtocolSessionStatus.Idle, lifecycle: SessionLifecycle.Ready, activeClients: [], chats: [], config });
+		await waitForSessionConfig(provider, session!.sessionId, c => c !== undefined);
+		await timeout(0);
+		// The remote working directory is an agent-host URI; B4b forwards its per-folder trust over the transport.
+		const trust = connection.dispatchedActions
+			.map(d => d.action.type === ActionType.SessionConfigChanged ? (d.action as { config?: Record<string, unknown> }).config?.[AgentHostTrustConfigKey.Trust] : undefined)
+			.find(v => v !== undefined);
+		assert.deepStrictEqual(trust, { [AgentHostTrustKey.Trusted]: false });
+	}));
+
+	test('B4b forwards trusted:true to a trusted remote (agent-host) session on config materialize', () => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {
+		connection.addSession(createSession('trust-remote-trusted', { summary: 'RemoteTrusted', workingDirectory: URI.parse('vscode-agent-host://localhost__4321/home/user/trusted-remote') }));
+		const provider = createProvider(disposables, connection, { workspaceTrusted: true });
+		provider.getSessions();
+		await timeout(0);
+		const session = provider.getSessions().find(s => s.title.get() === 'RemoteTrusted');
+		assert.ok(session);
+		const config: SessionConfigState = { schema: { type: 'object', properties: { isolation: { type: 'string', title: 'Isolation' } } }, values: { isolation: 'worktree' } };
+		connection.setSessionState('trust-remote-trusted', 'copilotcli', { provider: 'copilotcli', title: 'RemoteTrusted', status: ProtocolSessionStatus.Idle, lifecycle: SessionLifecycle.Ready, activeClients: [], chats: [], config });
+		await waitForSessionConfig(provider, session!.sessionId, c => c !== undefined);
+		await timeout(0);
+		// The remote working directory is an agent-host URI; B4b forwards its per-folder trust over the transport.
+		const trust = connection.dispatchedActions
+			.map(d => d.action.type === ActionType.SessionConfigChanged ? (d.action as { config?: Record<string, unknown> }).config?.[AgentHostTrustConfigKey.Trust] : undefined)
+			.find(v => v !== undefined);
+		assert.deepStrictEqual(trust, { [AgentHostTrustKey.Trusted]: true });
 	}));
 
 	test('removing a session disposes its session-state subscription', () => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {

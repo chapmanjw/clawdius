@@ -1,0 +1,42 @@
+{
+	"_comment": "Sanitized identity-join skeleton: an AMBIGUOUS run identity plus lifecycle cases. Two runs share the runId 'run-dup' (distinct sessions) - a duplicated identity that cannot uniquely own a subagent, so its groups are labeled ambiguous and the subagent naming it is held out. 'run-degraded' has an unknown-shape read (lifecycle unknown). An orphan subagent names a run that is not present. No real ~/.claude content.",
+	"runs": [
+		{
+			"runId": "run-dup",
+			"sessionId": "sess-dup-a-0001",
+			"kind": "single",
+			"status": "unknown",
+			"ownership": "foreign",
+			"coverage": "in-scope",
+			"freshness": "polled",
+			"completeness": "complete",
+			"adapterVersion": { "format": "transcript-jsonl", "versionKey": "v1" }
+		},
+		{
+			"runId": "run-dup",
+			"sessionId": "sess-dup-b-0002",
+			"kind": "single",
+			"status": "unknown",
+			"ownership": "foreign",
+			"coverage": "in-scope",
+			"freshness": "polled",
+			"completeness": "complete",
+			"adapterVersion": { "format": "transcript-jsonl", "versionKey": "v1" }
+		},
+		{
+			"runId": "run-degraded",
+			"sessionId": "sess-degraded-0003",
+			"kind": "single",
+			"status": "unknown",
+			"ownership": "foreign",
+			"coverage": "in-scope",
+			"freshness": "polled",
+			"completeness": "unknown-shape",
+			"adapterVersion": { "format": "transcript-jsonl", "versionKey": "unknown-shape" }
+		}
+	],
+	"subagents": [
+		{ "subagentId": "sub-dup-child", "parentRunId": "run-dup", "transcriptRef": "file:///c/root/projects/proj/run-dup.jsonl", "coverage": "in-scope", "freshness": "polled", "completeness": "complete" },
+		{ "subagentId": "sub-orphan", "parentRunId": "run-missing", "transcriptRef": "file:///c/root/projects/proj/gone.jsonl", "coverage": "in-scope", "freshness": "polled", "completeness": "complete" }
+	]
+}

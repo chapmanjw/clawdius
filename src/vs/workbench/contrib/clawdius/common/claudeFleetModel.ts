@@ -143,6 +143,20 @@ export interface MissionAgent {
 }
 
 /**
+ * A mission's agents PLUS the list's own completeness - the envelope exists because a gap can erase a row rather
+ * than mark one. A torn journal line, or an agent id too unsafe to join to a path, removes that agent from the list
+ * outright, and a row that was never built cannot carry a label. In the limit every agent is lost and the list is
+ * empty, where "this mission had no agents" and "this mission's agents were unreadable" are opposite facts that a
+ * bare `[]` states identically. The envelope lets an empty list still say `partial`.
+ */
+export interface MissionAgentList {
+	/** The agents that could be read, each carrying the list's label (never more confident than the whole). */
+	readonly agents: readonly MissionAgent[];
+	/** Whether the LIST is whole: `absent` with no journal, `partial` when any agent was dropped. */
+	readonly completeness: CompletenessState;
+}
+
+/**
  * Whether THIS Clawdius workbench holds the run (`owned`) or it is merely observed on disk (`foreign`). At
  * enumeration time this is ALWAYS `foreign`: `owned` is a positive signal resolved later by the registry probe,
  * never inferred from an on-disk read.

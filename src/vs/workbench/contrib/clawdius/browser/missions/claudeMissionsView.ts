@@ -38,8 +38,8 @@ import { IViewPaneOptions, ViewPane } from '../../../../browser/parts/views/view
 import { IViewDescriptorService } from '../../../../common/views.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IPathService } from '../../../../services/path/common/pathService.js';
-import { FleetSubagent, MissionAgent, MissionRun } from '../../common/claudeFleetModel.js';
-import { CoverageLabel, ReaderConfigRoot, resolveConfigRoot } from '../../common/claudeReaderSeam.js';
+import { FleetSubagent, MissionAgent, MissionAgentList, MissionRun } from '../../common/claudeFleetModel.js';
+import { CompletenessState, CoverageLabel, ReaderConfigRoot, resolveConfigRoot } from '../../common/claudeReaderSeam.js';
 import { ClawdiusReaderSeamService } from '../reader/claudeReaderSeamService.js';
 import { BadgeSignal, ClaudeMissionBadgeFeed } from './claudeMissionBadges.js';
 import { ownedSessionIdsFromHost } from './claudeMissionOwnership.js';
@@ -188,7 +188,7 @@ export function appendMissionAgentRow(parent: HTMLElement, agent: MissionAgent):
  *  without a workbench host): expand a mission to its agents, and open an agent's transcript in the editor area. */
 export interface IFleetRowInteractions {
 	/** List a mission's agents through the seam (present-with-label, never dropped). */
-	listAgents(mission: MissionRun): Promise<readonly MissionAgent[]>;
+	listAgents(mission: MissionRun): Promise<MissionAgentList>;
 	/** Open an agent's transcript in the editor area (the drill-in). */
 	openAgent(agent: MissionAgent): void;
 }
@@ -298,16 +298,24 @@ export class FleetRunsList extends Disposable {
 			const mine = $('.clawdius-missions-subagents', { 'data-parent-run-id': run.runId });
 			child = mine;
 			row.after(mine);
-			let subs: readonly MissionAgent[] = [];
-			try { subs = await interactions.listAgents(run); } catch { subs = []; }
+			let list: MissionAgentList = { agents: [], completeness: CompletenessState.UnknownShape };
+			try { list = await interactions.listAgents(run); } catch { list = { agents: [], completeness: CompletenessState.UnknownShape }; }
 			// Bail if this expansion is stale: a collapse/re-expand replaced this child (child !== mine), OR a
 			// full render() / disposal tore the row down (generation moved) - in the latter case mine is detached
 			// and childStore is already disposed, so appending or adding listeners would be a leak/no-op warning.
 			if (child !== mine || this.generation !== gen) { return; }
 			clearNode(mine);
+			const subs = list.agents;
 			if (subs.length === 0) {
-				append(mine, $('.clawdius-missions-subempty', { 'data-clawdius-missions-subempty': 'true' })).textContent =
-					localize('clawdius.missions.noAgents', "No agents for this mission.");
+				// An empty list is two different facts, and the label is the only thing that separates them: a
+				// mission that ran no agents, versus a read whose agents were unreadable. Say which.
+				const empty = append(mine, $('.clawdius-missions-subempty', {
+					'data-clawdius-missions-subempty': 'true',
+					'data-completeness': list.completeness,
+				}));
+				empty.textContent = list.completeness === CompletenessState.Partial
+					? localize('clawdius.missions.agentsUnreadable', "This mission's agents could not be read (the run's journal is damaged).")
+					: localize('clawdius.missions.noAgents', "No agents for this mission.");
 				return;
 			}
 			for (const sub of subs) {
@@ -397,12 +405,14 @@ export class ClawdiusMissionsView extends ViewPane {
 	}
 
 	/** List a mission's agents through the seam against the last-resolved root (the drill-in expand). */
-	private async listAgentsFor(mission: MissionRun): Promise<readonly MissionAgent[]> {
-		if (!this.root) { return []; }
+	private async listAgentsFor(mission: MissionRun): Promise<MissionAgentList> {
+		// No resolved root, or a read that threw: both are reads that did not happen, which is not the same claim as
+		// "this mission has no agents". Label them rather than return a bare empty list that reads as the latter.
+		if (!this.root) { return { agents: [], completeness: CompletenessState.Absent }; }
 		try {
 			return await this.seam.listMissionAgents(this.root, mission);
 		} catch {
-			return [];
+			return { agents: [], completeness: CompletenessState.Partial };
 		}
 	}
 

@@ -219,7 +219,7 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 		const mission = (await service.listMissions(RESOLVED))[0] as MissionRun;
 		const agents = await service.listMissionAgents(RESOLVED, mission);
 
-		assert.deepStrictEqual(agents.map(a => ({ agentId: a.agentId, runId: a.runId, agentType: a.agentType, finished: a.finished })), [
+		assert.deepStrictEqual(agents.agents.map(a => ({ agentId: a.agentId, runId: a.runId, agentType: a.agentType, finished: a.finished })), [
 			{ agentId: 'a1', runId: 'wf_f96a6688-77e', agentType: 'workflow-subagent', finished: true },
 			{ agentId: 'a2', runId: 'wf_f96a6688-77e', agentType: undefined, finished: false },
 		]);
@@ -258,12 +258,97 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 			{ status: 'running', started: 1, completeness: CompletenessState.Complete });
 	});
 
+	// F4 from review: the agent-list guards below were previously asserted by nothing - deleting them left the suite
+	// green. Each of these fails if its guard is removed, which is the only thing that makes the guard real.
+
+	test('a torn journal degrades the AGENT LIST, and every row it did produce, to partial', async () => {
+		const fs = makeFs();
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', manifestOf({ status: 'completed' }));
+		await stageJournalText(fs, 'wf_a1b2c3d4-e5f',
+			JSON.stringify({ type: 'started', agentId: 'a1' }) + '\n'
+			+ '{"type":"started","agen' + '\n'
+			+ JSON.stringify({ type: 'result', agentId: 'a1' }) + '\n');
+		const service = makeService(fs);
+		const mission = (await service.listMissions(RESOLVED))[0] as MissionRun;
+		const list = await service.listMissionAgents(RESOLVED, mission);
+		// The surviving row is real and still listed - but it must not read `complete` off a manifest while the
+		// journal beside it lost an agent the row cannot mention.
+		assert.deepStrictEqual(
+			{ completeness: list.completeness, rows: list.agents.map(a => ({ id: a.agentId, c: a.completeness })) },
+			{ completeness: CompletenessState.Partial, rows: [{ id: 'a1', c: CompletenessState.Partial }] });
+	});
+
+	test('an agent id that is not path-safe is dropped AND degrades the list', async () => {
+		const fs = makeFs();
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', manifestOf({ status: 'completed' }));
+		// `../../escape` would steer the `agent-<id>.jsonl` join outside the mission dir. Refusing to join it means
+		// that agent cannot be listed, which is a gap in the list, not a silent omission.
+		await stageJournal(fs, 'wf_a1b2c3d4-e5f', [
+			{ type: 'started', agentId: 'a1' },
+			{ type: 'started', agentId: '../../escape' },
+		]);
+		const service = makeService(fs);
+		const mission = (await service.listMissions(RESOLVED))[0] as MissionRun;
+		const list = await service.listMissionAgents(RESOLVED, mission);
+		assert.deepStrictEqual(
+			{ completeness: list.completeness, ids: list.agents.map(a => a.agentId) },
+			{ completeness: CompletenessState.Partial, ids: ['a1'] });
+	});
+
+	test('a non-string agent id is a dropped record on the LIVE path, not a silently uncounted agent', async () => {
+		const fs = makeFs();
+		// Found by mutation-testing the recognizer: without its `typeof agentId === 'string'` check this record
+		// survives with `agentId: undefined` (readString coerces it away), so `missionFromJournal`'s
+		// `type === 'started' && r.agentId` filter quietly skips it and NOTHING marks the read torn - the mission
+		// loses an agent and still reports `complete`. The agent-list path masks this (isAgentId drops it either
+		// way), so only the live counts expose it.
+		await stageJournalText(fs, 'wf_a1b2c3d4-e5f',
+			JSON.stringify({ type: 'started', agentId: 'a1' }) + '\n'
+			+ JSON.stringify({ type: 'started', agentId: 7 }) + '\n');
+		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+		assert.deepStrictEqual(
+			{ started: mission.startedCount, completeness: mission.completeness },
+			{ started: 1, completeness: CompletenessState.Partial });
+	});
+
+	test('a TERMINAL mission\'s unterminated last line is damage, not a live tail', async () => {
+		const fs = makeFs();
+		// The lifecycle distinction: nothing appends to a finished run, so a half-written last record can only be
+		// damage. Exempting it here - as the live path rightly does - would let a corrupt terminal journal report a
+		// whole read.
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', manifestOf({ status: 'completed' }));
+		await stageJournalText(fs, 'wf_a1b2c3d4-e5f',
+			JSON.stringify({ type: 'started', agentId: 'a1' }) + '\n'
+			+ '{"type":"started","agen');
+		const service = makeService(fs);
+		const mission = (await service.listMissions(RESOLVED))[0] as MissionRun;
+		const list = await service.listMissionAgents(RESOLVED, mission);
+		assert.deepStrictEqual(
+			{ completeness: list.completeness, ids: list.agents.map(a => a.agentId) },
+			{ completeness: CompletenessState.Partial, ids: ['a1'] });
+	});
+
+	test('when EVERY agent is unreadable the list is empty but still says partial, never a bare []', async () => {
+		const fs = makeFs();
+		// The limit case the envelope exists for: with no label, this is indistinguishable from a mission that ran
+		// no agents at all - opposite facts, identical output.
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', manifestOf({ status: 'completed' }));
+		await stageJournalText(fs, 'wf_a1b2c3d4-e5f', '{"type":"started","agen' + '\n' + '{"type":"star' + '\n');
+		const service = makeService(fs);
+		const mission = (await service.listMissions(RESOLVED))[0] as MissionRun;
+		assert.deepStrictEqual(await service.listMissionAgents(RESOLVED, mission),
+			{ agents: [], completeness: CompletenessState.Partial });
+	});
+
 	test('a mission with no journal lists no agents rather than throwing', async () => {
 		const fs = makeFs();
 		await stageManifest(fs, 'wf_f96a6688-77e', manifestOf());
 		const service = makeService(fs);
 		const mission = (await service.listMissions(RESOLVED))[0] as MissionRun;
-		assert.deepStrictEqual(await service.listMissionAgents(RESOLVED, mission), []);
+		// No journal at all is `absent` - there was nothing to read - which is a different claim from `partial` (a
+		// read that lost something) and from a mission that genuinely ran no agents.
+		assert.deepStrictEqual(await service.listMissionAgents(RESOLVED, mission),
+			{ agents: [], completeness: CompletenessState.Absent });
 	});
 });
 // CLAWDIUS-END

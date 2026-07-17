@@ -24,7 +24,7 @@ import {
 	IReaderResult, IReaderSeam, ReaderConfigRoot, ReaderEntityKind, ReaderScope, Run, Session, Subagent, TaskList,
 	TeamRoster, Transcript, TranscriptIndexKey,
 } from '../../common/claudeReaderSeam.js';
-import { FleetRun, FleetSubagent, FleetTranscriptSlice, MissionAgent, MissionPhase, MissionProgressEntry, MissionProgressKind, MissionRun, MissionStatus } from '../../common/claudeFleetModel.js';
+import { FleetRun, FleetSubagent, FleetTranscriptSlice, MissionAgent, MissionAgentList, MissionPhase, MissionProgressEntry, MissionProgressKind, MissionRun, MissionStatus } from '../../common/claudeFleetModel.js';
 import { encodeProjectDir } from '../clawdiusConfigStore.js';
 
 /** The transcript read-model entities this adapter can produce, by request kind. */
@@ -54,9 +54,35 @@ const RUN_ID_RE = /^wf_[a-z0-9-]{6,}$/;
  *  out-of-band ref. Matches the launcher's own ids, which are plain alphanumeric/dash/underscore. */
 const AGENT_ID_RE = /^[A-Za-z0-9_-]+$/;
 
-/** Whether an id read off the journal is safe to interpolate into a sibling `agent-<id>.*` path. */
-function isAgentId(id: string): boolean {
-	return AGENT_ID_RE.test(id);
+/**
+ * Whether a value read off the journal is a path-safe agent id. Takes `unknown` and narrows, deliberately: the id
+ * arrives as unvalidated JSON, and a regex `.test()` COERCES its argument - `AGENT_ID_RE.test(123)` tests the
+ * string "123" and passes. Typing this parameter `string` therefore did not make it one; only the explicit
+ * `typeof` check does.
+ */
+function isAgentId(id: unknown): id is string {
+	return typeof id === 'string' && AGENT_ID_RE.test(id);
+}
+
+/**
+ * Recognize one journal line as a {@link IWorkflowJournalRecord}, or `undefined` when its shape is not readable.
+ * The contract this seam holds everywhere else: validate what it reads rather than trust a schema. A record needs a
+ * string `type` to mean anything; `agentId` is optional (a phase / log record carries none) but must be a STRING
+ * when present - a non-string id is dropped rather than carried, because every consumer treats it as one. An
+ * unfamiliar-but-well-formed `type` is kept: the launcher adds record kinds, and this reader only cares about
+ * `started` / `result`, so an unknown kind is not damage.
+ */
+function toJournalRecord(parsed: unknown): IWorkflowJournalRecord | undefined {
+	if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) { return undefined; }
+	const obj = parsed as Record<string, unknown>;
+	const type = readString(obj, 'type');
+	if (type === undefined) { return undefined; }
+	// A record may legitimately carry no agentId (a phase / log line). But one that carries a NON-string id is not
+	// readable: `readString` would quietly coerce it to undefined, and the record would then look like a phase line
+	// and be counted as nothing at all - an agent lost with no trace. Reject it so the drop is recorded.
+	const agentId = obj.agentId;
+	if (agentId !== undefined && typeof agentId !== 'string') { return undefined; }
+	return { type, agentId };
 }
 
 /**
@@ -494,25 +520,38 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 	}
 
 	/**
-	 * Enumerate one mission's agents as a LABELED LIST of {@link MissionAgent}, resolved LAZILY on drill-in (never
-	 * during the mission list). Unlike a Task subagent - a sidechain record inside its parent's transcript - a
-	 * workflow agent is its OWN file, so the journal's `agentId` is the join key to the sibling
+	 * Enumerate one mission's agents as a LABELED LIST ({@link MissionAgentList}), resolved LAZILY on drill-in
+	 * (never during the mission list). Unlike a Task subagent - a sidechain record inside its parent's transcript -
+	 * a workflow agent is its OWN file, so the journal's `agentId` is the join key to the sibling
 	 * `agent-<agentId>.jsonl`. An agent that reported no `result` is `finished: false` (in flight, failed, or
-	 * aborted) and is listed WITH that label, never omitted. Returns [] when the mission has no journal.
+	 * aborted) and is listed WITH that label, never omitted.
+	 *
+	 * The result carries the LIST's own completeness, not just each row's. A gap here can erase an agent outright -
+	 * a torn `started` record, or one whose id is unusable - and a row that does not exist cannot carry a label. In
+	 * the limit every `started` record is lost and the list is EMPTY, where "no agents" and "the agents were
+	 * unreadable" are opposite facts that an unlabeled `[]` reports identically. So the envelope holds the label:
+	 * an empty list can still say `partial`.
 	 */
-	async enumerateMissionAgents(root: URI, mission: MissionRun): Promise<readonly MissionAgent[]> {
+	async enumerateMissionAgents(root: URI, mission: MissionRun): Promise<MissionAgentList> {
 		const dir = await this.findMissionJournalDir(root, mission);
-		if (!dir) { return []; }
-		const { records, sawTorn } = await this.readJournal(URI.joinPath(dir, JOURNAL_NAME));
+		if (!dir) { return { agents: [], completeness: CompletenessState.Absent }; }
+		// Only a `running` mission is still being appended to; for a terminal one an unterminated tail is damage.
+		const { records, sawTorn } = await this.readJournal(URI.joinPath(dir, JOURNAL_NAME), mission.status === 'running');
 		const finished = new Set(records.filter(r => r.type === 'result' && r.agentId).map(r => r.agentId));
+		// Settle the list's completeness BEFORE building any row. An agent's id is the join key to its sibling
+		// `agent-<id>.jsonl`, so it is a path component read off disk: hold it to the same charset guard `oobRef`
+		// applies to a transcript's out-of-band ref rather than interpolating it raw (a `..` or separator would
+		// steer the join outside the mission dir). An id refused here is an agent that cannot be listed - a gap, the
+		// same as a torn line. Deciding this up front is what keeps the rows consistent: computing it while
+		// appending would label rows by whether their agent happened to precede the damage.
+		const started = records.filter(r => r.type === 'started');
+		const dropped = sawTorn || started.some(r => !isAgentId(r.agentId));
+		const listCompleteness = dropped ? CompletenessState.Partial : mission.completeness;
 		const seen = new Set<string>();
 		const out: MissionAgent[] = [];
-		for (const record of records) {
+		for (const record of started) {
 			const agentId = record.agentId;
-			// An agent's id is the join key to its sibling `agent-<id>.jsonl`, so it is a path component read off
-			// disk: hold it to the same charset guard `oobRef` applies to a transcript's out-of-band ref rather than
-			// interpolating it raw. A `..` or separator here would steer the join outside the mission dir.
-			if (record.type !== 'started' || !agentId || !isAgentId(agentId) || seen.has(agentId)) { continue; }
+			if (!isAgentId(agentId) || seen.has(agentId)) { continue; }
 			seen.add(agentId);
 			out.push({
 				agentId,
@@ -522,13 +561,12 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 				transcriptRef: URI.joinPath(dir, `agent-${agentId}.jsonl`).toString(),
 				coverage: mission.coverage,
 				freshness: mission.freshness,
-				// A torn journal line may have DROPPED a `started` record, in which case that agent is missing from
-				// this list entirely and no row can carry its absence. Label every row `partial` so the gap is
-				// visible on the list the user actually reads: a short list that claims `complete` is the lie.
-				completeness: sawTorn ? CompletenessState.Partial : mission.completeness,
+				// Each row carries the LIST's label, so a row read on its own is never more confident than the read
+				// it came from.
+				completeness: listCompleteness,
 			});
 		}
-		return out.sort((a, b) => a.agentId.localeCompare(b.agentId));
+		return { agents: out.sort((a, b) => a.agentId.localeCompare(b.agentId)), completeness: listCompleteness };
 	}
 
 	/** Build a mission from its terminal manifest. Status comes straight off the record - never inferred. */
@@ -569,7 +607,9 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 	 * whole record of what has happened SO FAR; a run in progress is not a partial read.
 	 */
 	private async missionFromJournal(runId: string, sessionId: string, journal: URI): Promise<MissionRun> {
-		const { records, sawTorn } = await this.readJournal(journal);
+		// This path is only ever reached by a journal with NO manifest beside it - that absence is what defines the
+		// run as in flight - so the launcher is appending to it and its unterminated last line is the live tail.
+		const { records, sawTorn } = await this.readJournal(journal, true);
 		const started = new Set(records.filter(r => r.type === 'started' && r.agentId).map(r => r.agentId)).size;
 		const results = new Set(records.filter(r => r.type === 'result' && r.agentId).map(r => r.agentId)).size;
 		return {
@@ -660,8 +700,17 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		return undefined;
 	}
 
-	/** A journal's records. Never throws: a missing/torn ledger yields only the lines that did parse. */
-	private async readJournal(journal: URI): Promise<IParsedJournal> {
+	/**
+	 * A journal's records. Never throws: a missing / torn ledger yields only the lines that did parse, plus the flag
+	 * saying something was dropped.
+	 *
+	 * `live` decides how the FINAL unterminated line is read, and it is not a detail. A manifest-less run is being
+	 * appended to right now, so a half-written last record is the launcher mid-write - expected, not damage. A
+	 * TERMINAL run (its manifest exists) is finished: nothing is appending, so an unterminated last line is the one
+	 * thing it cannot innocently be, and skipping it unflagged would let a corrupt terminal journal report
+	 * `complete`. Same bytes, opposite meaning, decided by lifecycle - so the caller must say which it holds.
+	 */
+	private async readJournal(journal: URI, live: boolean): Promise<IParsedJournal> {
 		let text: string;
 		try { text = (await this.fileService.readFile(journal)).value.toString(); } catch { return { records: [], sawTorn: false }; }
 		const records: IWorkflowJournalRecord[] = [];
@@ -671,17 +720,21 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
 			if (!line.trim()) { continue; }
-			// A non-empty LAST line means the file did not end in '\n': the record the launcher is appending right
-			// now. Expected on a live run and not a tear - skip it without flagging, mirroring
-			// `parseTranscriptRecords`. Any OTHER unparseable line is a real tear: the journal is append-only, so a
-			// line with a terminator after it was fully written and then damaged.
-			if (i === lastIdx) { continue; }
+			// The live tail: a non-empty LAST line means the file did not end in '\n'. Exempt only on a live run.
+			if (i === lastIdx && live) { continue; }
+			let parsed: unknown;
 			try {
-				const parsed: unknown = JSON.parse(line);
-				if (parsed && typeof parsed === 'object') { records.push(parsed as IWorkflowJournalRecord); } else { sawTorn = true; }
+				parsed = JSON.parse(line);
 			} catch {
 				sawTorn = true;
+				continue;
 			}
+			// Recognize rather than cast. The record is JSON the launcher wrote, but nothing here has checked its
+			// shape: an unchecked `as` let a numeric agentId through typed as `string`, where the path guard's regex
+			// silently coerced it. A record whose `type` is not a string is one this reader cannot interpret at all,
+			// which is a dropped record and must be flagged like any other.
+			const record = toJournalRecord(parsed);
+			if (record) { records.push(record); } else { sawTorn = true; }
 		}
 		return { records, sawTorn };
 	}
@@ -1104,11 +1157,12 @@ export class ClawdiusReaderSeamService implements IReaderSeam {
 	}
 
 	/**
-	 * Enumerate one mission's agents as a labeled list of {@link MissionAgent} - the per-mission drill-in, resolved
-	 * lazily so the mission list never pays for it. A `no-config` root degrades to an empty list. Read-only.
+	 * Enumerate one mission's agents as a {@link MissionAgentList} - the per-mission drill-in, resolved lazily so the
+	 * mission list never pays for it. A `no-config` root degrades to an `absent` empty list (there is no tree to
+	 * read, which is not the same as a mission having no agents). Read-only.
 	 */
-	async listMissionAgents(root: ReaderConfigRoot, mission: MissionRun): Promise<readonly MissionAgent[]> {
-		if (root.kind === 'no-config') { return []; }
+	async listMissionAgents(root: ReaderConfigRoot, mission: MissionRun): Promise<MissionAgentList> {
+		if (root.kind === 'no-config') { return { agents: [], completeness: CompletenessState.Absent }; }
 		return this.transcript.enumerateMissionAgents(root.root, mission);
 	}
 

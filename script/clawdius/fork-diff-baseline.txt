@@ -101,7 +101,25 @@
 # path-safe charset before interpolating it into `agent-<id>.*`, matching the guard oobRef already applies, and
 # drops a dead DisposableStore plus two doc links left dangling by the Run->Mission rename.
 
+# Disposition 2026-07-16 (+0 files, +172 insertions): four MAJOR defects in the journal fix above. The first
+# three were holes the same series had already closed elsewhere and reopened here; all four are
+# recorded because the fork grew to fix them.
+#   1. The live-tail exemption masked terminal corruption. Skipping an unterminated last line is right for a
+#      manifest-less run (the launcher is mid-write) and wrong for a terminal one (nothing appends to a finished
+#      run, so the same bytes can only be damage). readJournal now takes the lifecycle and exempts the tail only
+#      for a live run.
+#   2. Journal records were cast, not recognized, so an unchecked `agentId` reached a regex guard that COERCES its
+#      argument - AGENT_ID_RE.test(7) tests "7" and passes. A recognizer now validates the shape, and isAgentId
+#      narrows from `unknown` rather than trusting a type that was never checked.
+#   3. An all-torn journal returned a bare [] - "this mission ran no agents" and "its agents were unreadable" are
+#      opposite facts that an unlabeled empty list states identically. The drill-in now returns a labeled
+#      MissionAgentList so an EMPTY list can still say `partial`, and the view says which it is.
+#   4. None of the above was falsifiable: the tests called only listMissions, so deleting the guards left the suite
+#      green. Every guard now has a test that fails without it, verified by mutating each one in turn - which also
+#      caught that one guard (the recognizer's typeof) was genuinely unproven and load-bearing only on the live
+#      count path, where its absence loses an agent while still reporting `complete`.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
 recorded: 2026-07-16
-baseline: 5596 files changed, 41134 insertions(+), 1456122 deletions(-)
+baseline: 5596 files changed, 41315 insertions(+), 1456122 deletions(-)

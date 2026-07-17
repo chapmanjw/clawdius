@@ -14,7 +14,7 @@ import assert from 'assert';
 import { $ } from '../../../../../base/browser/dom.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { MissionAgent, MissionRun } from '../../common/claudeFleetModel.js';
+import { MissionAgent, MissionAgentList, MissionRun } from '../../common/claudeFleetModel.js';
 import { CompletenessState, CoverageLabel, FreshnessLabel, ReaderConfigRoot } from '../../common/claudeReaderSeam.js';
 import { errorSummary, FleetRunsList, IFleetRowInteractions, IFleetRunSource } from '../../browser/missions/claudeMissionsView.js';
 
@@ -143,7 +143,7 @@ suite('Clawdius missions fleet - drill-in interactions', () => {
 	test('an interactive run row expands to its subagents; clicking one opens its transcript', async () => {
 		const opened: string[] = [];
 		const interactions: IFleetRowInteractions = {
-			listAgents: async () => [subagent('sub-1'), subagent('sub-2')],
+			listAgents: async () => ({ agents: [subagent('sub-1'), subagent('sub-2')], completeness: CompletenessState.Complete }),
 			openAgent: agent => { opened.push(agent.agentId); },
 		};
 		const container = $('div');
@@ -169,9 +169,9 @@ suite('Clawdius missions fleet - drill-in interactions', () => {
 	});
 
 	test('a render() while a subagent list is in flight discards the stale expansion (no detached rows, no leak)', async () => {
-		let resolveList: (subs: readonly MissionAgent[]) => void = () => { };
+		let resolveList: (list: MissionAgentList) => void = () => { };
 		const interactions: IFleetRowInteractions = {
-			listAgents: () => new Promise<readonly MissionAgent[]>(res => { resolveList = res; }),
+			listAgents: () => new Promise<MissionAgentList>(res => { resolveList = res; }),
 			openAgent: () => { },
 		};
 		const container = $('div');
@@ -181,7 +181,7 @@ suite('Clawdius missions fleet - drill-in interactions', () => {
 		// A full re-render tears the expanding row down before the list resolves.
 		list.render([run('b')]);
 		// The now-stale list resolves: the generation guard must drop it - no subagent rows, no listeners leaked.
-		resolveList([subagent('sub-1')]);
+		resolveList({ agents: [subagent('sub-1')], completeness: CompletenessState.Complete });
 		await Promise.resolve();
 		await Promise.resolve();
 		assert.strictEqual(container.querySelectorAll('.clawdius-missions-subrow').length, 0);

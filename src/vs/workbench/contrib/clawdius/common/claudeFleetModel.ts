@@ -26,7 +26,121 @@ import { AdapterVersionStamp, CompletenessState, CoverageLabel, FreshnessLabel }
 // `complete`. Pure `common/`: the only imports are the reader-seam label vocabulary.
 
 /** How a run was launched, as far as the fleet can tell. Refined by later slices; `single` is the default. */
-export type FleetRunKind = 'single' | 'background' | 'team';
+export type FleetRunKind = 'single' | 'background' | 'team' | 'workflow';
+
+/**
+ * The lifecycle of one ultracode workflow mission.
+ *
+ * The on-disk contract is asymmetric and this vocabulary encodes it: the run manifest
+ * (`projects/<enc>/<session>/workflows/<runId>.json`) is written ONLY when the run reaches a terminal state, so
+ * `completed` / `failed` are read straight off `manifest.status`, while `running` is INFERRED - a journal
+ * (`projects/<enc>/<session>/subagents/workflows/<runId>/journal.jsonl`) that exists with no manifest beside it is
+ * a run still in flight. `unknown` is the honest floor for a run whose journal and manifest disagree, never a
+ * guess.
+ */
+export type MissionStatus = 'running' | 'completed' | 'failed' | 'unknown';
+
+/** One phase a mission's script declared up front (the `phases` block of its `meta`). */
+export interface MissionPhase {
+	/** The phase title, as authored. Matched to progress entries by title. */
+	readonly title: string;
+	/** The optional one-line detail the script declared alongside the title. */
+	readonly detail?: string;
+}
+
+/** Whether a progress entry marks a phase boundary or one agent's participation. */
+export type MissionProgressKind = 'workflow_phase' | 'workflow_agent';
+
+/** One entry in a mission's progress ledger, in the order the run recorded it. */
+export interface MissionProgressEntry {
+	/** The entry's ordinal within its kind, as recorded by the run. */
+	readonly index: number;
+	/** The phase title or agent label this entry records. */
+	readonly title: string;
+	/** Whether this entry is a phase boundary or an agent. */
+	readonly kind: MissionProgressKind;
+}
+
+/**
+ * One ultracode workflow run - a Mission. This is the fleet's PRIMARY entity: Missions is a control surface for
+ * orchestrated multi-agent runs, not a transcript browser, so a plain chat session is not a mission and is never
+ * enumerated as one.
+ *
+ * A mission is identified by the existence of its run artifacts under the owning session's sidecar dir, NOT by any
+ * field inside a transcript record: the `workflows/<runId>.json` manifest (terminal runs) and the
+ * `subagents/workflows/<runId>/journal.jsonl` ledger (live runs). Both are small, so enumerating missions never
+ * reads a transcript. Child agents hang off {@link MissionAgent} and are resolved lazily on drill-in.
+ *
+ * Like every other seam projection this is a LABELED INDEX, never an authoritative copy: it carries the same
+ * honesty labels (coverage / freshness / completeness + the adapter-version stamp) as the rest of the read model,
+ * and `ownership` defaults to `foreign` until the registry probe positively promotes it.
+ */
+export interface MissionRun {
+	/** The run identity (`wf_<id>`), which is also its journal dir name and manifest stem. */
+	readonly runId: string;
+	/** The session that launched this mission - the join key for liveness and for stop/steer targeting. */
+	readonly sessionId: string;
+	/** The workflow's declared name (`meta.name`), shown as the mission's title. */
+	readonly name: string;
+	/** Terminal status from the manifest, or `running` inferred from a manifest-less journal. */
+	readonly status: MissionStatus;
+	/** How many agents the run declared (manifest) or has started (live journal). */
+	readonly agentCount: number;
+	/** Agents whose journal `started` record was seen. Present for live reads. */
+	readonly startedCount?: number;
+	/** Agents whose journal `result` record was seen. `started > result` means work still in flight. */
+	readonly resultCount?: number;
+	/** The phases the script declared up front. Empty when the run never reported any. */
+	readonly phases: readonly MissionPhase[];
+	/** The progress ledger, in recorded order. Empty for a live run whose manifest does not exist yet. */
+	readonly progress: readonly MissionProgressEntry[];
+	/** Wall-clock duration in ms. Terminal runs only - a live run has no recorded duration. */
+	readonly durationMs?: number;
+	/** Output tokens the run reported. Terminal runs only. */
+	readonly totalTokens?: number;
+	/** Tool calls the run reported. Terminal runs only. */
+	readonly totalToolCalls?: number;
+	/** The model the run defaulted its agents to. Terminal runs only. */
+	readonly defaultModel?: string;
+	/** Where the orchestration script was authored. May point OUTSIDE the session tree; never hard-require it. */
+	readonly scriptPath?: string;
+	/** The failure reason a `failed` run recorded. */
+	readonly error?: string;
+	/** `foreign` until the registry probe promotes it - a mission merely observed on disk stays `foreign`. */
+	readonly ownership: FleetOwnership;
+	/** How much of the mission is in view. */
+	readonly coverage: CoverageLabel;
+	/** `live` once the badge slice layers a running mission; `polled` for a plain enumeration read. */
+	readonly freshness: FreshnessLabel;
+	/** Whether the mission's artifacts were whole (a journal with no manifest is in-flight, NOT incomplete). */
+	readonly completeness: CompletenessState;
+	/** Which adapter/shape produced the mission, so a schema shift across Claude CLI versions is detectable. */
+	readonly adapterVersion: AdapterVersionStamp;
+}
+
+/**
+ * One agent inside a mission - a FILE with its own transcript, not a sidechain record inside a parent transcript.
+ * Resolved lazily when a mission is expanded, by joining the journal's `agentId` to the sibling
+ * `agent-<agentId>.jsonl` and its `agent-<agentId>.meta.json` sidecar.
+ */
+export interface MissionAgent {
+	/** The agent identity, and the join key to both its transcript and its meta sidecar. */
+	readonly agentId: string;
+	/** The mission that spawned this agent. */
+	readonly runId: string;
+	/** The agent role the sidecar recorded (e.g. `workflow-subagent`, `general-purpose`, `Explore`). */
+	readonly agentType?: string;
+	/** Whether the agent reported a result. `false` means started-but-unfinished (in flight, failed, or aborted). */
+	readonly finished: boolean;
+	/** An opaque reference locating the agent's transcript for a later drill-in read. */
+	readonly transcriptRef: string;
+	/** How much of the agent is in view (inherited from the parent mission's read). */
+	readonly coverage: CoverageLabel;
+	/** How current the read is. */
+	readonly freshness: FreshnessLabel;
+	/** Whether the read was whole, and if not, why. */
+	readonly completeness: CompletenessState;
+}
 
 /**
  * Whether THIS Clawdius workbench holds the run (`owned`) or it is merely observed on disk (`foreign`). At

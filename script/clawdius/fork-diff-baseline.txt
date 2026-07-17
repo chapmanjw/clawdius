@@ -40,7 +40,15 @@
 # upstream file, grow the counted surface. Test scaffolding only; no product code grows. As with the
 # entry above, the recorded baseline moves by more because this block's own comment lines also count.
 
+# Disposition 2026-07-16 (+1 file, +645 insertions): enumerate ultracode workflow missions from the launcher's
+# run artifacts. The Missions seam walked projects/<enc>/*.jsonl one level deep and therefore saw only plain chat
+# sessions - on a real config root, 1200 transcripts and zero workflow runs. The growth is one new file (the
+# mission-enumeration test suite) plus a MissionRun/MissionAgent read model and the manifest+journal enumeration
+# that replaces a per-session transcript tail-read with small JSON reads. Isolated to the clawdius-owned surface
+# (contrib/clawdius); no upstream file is touched. As with the entries above, the recorded baseline moves by more
+# than the code delta because this disposition block's own comment lines also count.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
-recorded: 2026-07-15
-baseline: 5599 files changed, 40736 insertions(+), 1456122 deletions(-)
+recorded: 2026-07-16
+baseline: 5600 files changed, 41389 insertions(+), 1456122 deletions(-)

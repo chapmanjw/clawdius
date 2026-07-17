@@ -299,6 +299,7 @@ jobs:
             "out/vs/workbench/contrib/clawdius/test/browser/claudeReaderSeamReadOnly.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeReaderSeamFormats.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeFleetEnumeration.test.js" \
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeMissionEnumeration.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeMissionsView.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeMissionTranscriptEditor.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeMissionOwnership.test.js" \

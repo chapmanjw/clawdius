@@ -15,6 +15,7 @@
 // window's scheme + authority), read-only, and never register as the SDK `sessionStore`.
 
 import { streamToBuffer, VSBuffer } from '../../../../../base/common/buffer.js';
+import { basename } from '../../../../../base/common/resources.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
@@ -23,7 +24,7 @@ import {
 	IReaderResult, IReaderSeam, ReaderConfigRoot, ReaderEntityKind, ReaderScope, Run, Session, Subagent, TaskList,
 	TeamRoster, Transcript, TranscriptIndexKey,
 } from '../../common/claudeReaderSeam.js';
-import { FleetRun, FleetSubagent, FleetTranscriptSlice } from '../../common/claudeFleetModel.js';
+import { FleetRun, FleetSubagent, FleetTranscriptSlice, MissionAgent, MissionPhase, MissionProgressEntry, MissionProgressKind, MissionRun, MissionStatus } from '../../common/claudeFleetModel.js';
 import { encodeProjectDir } from '../clawdiusConfigStore.js';
 
 /** The transcript read-model entities this adapter can produce, by request kind. */
@@ -41,6 +42,66 @@ const TEAMS_TASKS_KINDS: ReadonlySet<ReaderEntityKind> = new Set<ReaderEntityKin
 /** The known transcript record types (Claude CLI transcript JSONL). A line the adapter RECOGNIZES is a JSON
  *  object whose `type` is one of these; anything else is a foreign shape that trips the unknown-shape canary. */
 const KNOWN_RECORD_TYPES: ReadonlySet<string> = new Set(['user', 'assistant', 'system', 'summary']);
+
+/** The ledger file the launcher appends to DURING a workflow run (one `started`/`result` per agent). */
+const JOURNAL_NAME = 'journal.jsonl';
+
+/** A workflow run id, matching the launcher's own `wf_`-prefixed id contract. Guards against stray files. */
+const RUN_ID_RE = /^wf_[a-z0-9-]{6,}$/;
+
+/**
+ * The on-disk shape of a workflow run manifest (`workflows/<runId>.json`). Every field is optional here on
+ * purpose: this is UNDOCUMENTED launcher-internal surface, so the seam validates what it reads rather than
+ * trusting a schema, and degrades a manifest it cannot recognize to `unknown-shape` + the canary stamp instead of
+ * throwing.
+ */
+interface IWorkflowManifest {
+	readonly workflowName?: string;
+	readonly status?: string;
+	readonly agentCount?: number;
+	readonly durationMs?: number;
+	readonly totalTokens?: number;
+	readonly totalToolCalls?: number;
+	readonly defaultModel?: string;
+	readonly scriptPath?: string;
+	readonly error?: string;
+	readonly phases?: readonly { readonly title?: string; readonly detail?: string }[];
+	readonly workflowProgress?: readonly { readonly index?: number; readonly title?: string; readonly type?: string }[];
+}
+
+/** One record of a run journal: a `started` when an agent begins, a `result` when it reports back. */
+interface IWorkflowJournalRecord {
+	readonly type?: string;
+	readonly agentId?: string;
+}
+
+/** Whether a name is a run id (a stray file in the workflows dir is not a mission). */
+function isRunId(name: string): boolean {
+	return RUN_ID_RE.test(name);
+}
+
+/**
+ * The manifest's status vocabulary. There is deliberately no running state: the manifest is written only when a
+ * run finishes, so a live mission is recognized by its manifest-LESS journal, never by a status field.
+ */
+function isTerminalStatus(status: string | undefined): status is MissionStatus {
+	return status === 'completed' || status === 'failed';
+}
+
+/** Whether a progress entry's type is one the read model carries. */
+function isProgressKind(type: string | undefined): type is MissionProgressKind {
+	return type === 'workflow_phase' || type === 'workflow_agent';
+}
+
+/** Sort precedence: the missions a user can still act on come first, so a control surface leads with live work. */
+function statusRank(status: MissionStatus): number {
+	switch (status) {
+		case 'running': return 0;
+		case 'failed': return 1;
+		case 'completed': return 2;
+		default: return 3;
+	}
+}
 
 /** The version key stamped on a canary-tripped (unrecognized-shape) read - same format, an explicit key. */
 const UNKNOWN_SHAPE_KEY = 'unknown-shape';
@@ -352,6 +413,226 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 			});
 		}
 		return out.sort((a, b) => a.runId.localeCompare(b.runId) || a.sessionId.localeCompare(b.sessionId));
+	}
+
+	/**
+	 * Enumerate every ultracode workflow MISSION under the resolved config root as a LABELED LIST of
+	 * {@link MissionRun} - the fleet's primary read. A mission is identified by its RUN ARTIFACTS, never by a field
+	 * inside a transcript, because the launcher records a run in two places and the pair is what makes a mission
+	 * legible:
+	 *
+	 *  - `projects/<enc>/<session>/workflows/<runId>.json` - the manifest, written ONLY when the run reaches a
+	 *    terminal state. It carries the whole summary (name, status, phases, progress, agent count, totals), so a
+	 *    finished mission is described without opening a single transcript.
+	 *  - `projects/<enc>/<session>/subagents/workflows/<runId>/journal.jsonl` - the ledger, appended DURING the
+	 *    run (one `started` per agent, one `result` per agent that finished).
+	 *
+	 * The asymmetry is the whole design: a journal with NO manifest beside it is a run still IN FLIGHT, which is
+	 * the only way to see a live mission at all (the manifest's own status vocabulary has no running state). A
+	 * live mission is therefore `running` with counts read off its journal, and is NOT degraded for lacking a
+	 * manifest - in-flight is not incomplete.
+	 *
+	 * This walk never reads a transcript: it resolves session sidecar dirs and reads small JSON/ledger files, so
+	 * listing missions costs a bounded number of tiny reads rather than a tail-read per session file.
+	 * Deterministically ordered, most actionable first. Read-only.
+	 */
+	async enumerateMissions(root: URI): Promise<readonly MissionRun[]> {
+		const out: MissionRun[] = [];
+		for (const sessionDir of await this.listSessionSidecarDirs(root)) {
+			const sessionId = basename(sessionDir);
+			const manifests = await this.readMissionManifests(sessionDir);
+			for (const [runId, manifest] of manifests) {
+				out.push(this.missionFromManifest(runId, sessionId, manifest));
+			}
+			for (const [runId, journal] of await this.listMissionJournals(sessionDir)) {
+				// A manifest wins: it is the terminal record of the same run. Only a manifest-less journal is live.
+				if (!manifests.has(runId)) {
+					out.push(await this.missionFromJournal(runId, sessionId, journal));
+				}
+			}
+		}
+		return out.sort((a, b) => statusRank(a.status) - statusRank(b.status) || a.runId.localeCompare(b.runId));
+	}
+
+	/**
+	 * Enumerate one mission's agents as a LABELED LIST of {@link MissionAgent}, resolved LAZILY on drill-in (never
+	 * during the mission list). Unlike a Task subagent - a sidechain record inside its parent's transcript - a
+	 * workflow agent is its OWN file, so the journal's `agentId` is the join key to the sibling
+	 * `agent-<agentId>.jsonl`. An agent that reported no `result` is `finished: false` (in flight, failed, or
+	 * aborted) and is listed WITH that label, never omitted. Returns [] when the mission has no journal.
+	 */
+	async enumerateMissionAgents(root: URI, mission: MissionRun): Promise<readonly MissionAgent[]> {
+		const dir = await this.findMissionJournalDir(root, mission);
+		if (!dir) { return []; }
+		const records = await this.readJournal(URI.joinPath(dir, JOURNAL_NAME));
+		const finished = new Set(records.filter(r => r.type === 'result' && r.agentId).map(r => r.agentId));
+		const seen = new Set<string>();
+		const out: MissionAgent[] = [];
+		for (const record of records) {
+			const agentId = record.agentId;
+			if (record.type !== 'started' || !agentId || seen.has(agentId)) { continue; }
+			seen.add(agentId);
+			out.push({
+				agentId,
+				runId: mission.runId,
+				agentType: await this.readAgentType(dir, agentId),
+				finished: finished.has(agentId),
+				transcriptRef: URI.joinPath(dir, `agent-${agentId}.jsonl`).toString(),
+				coverage: mission.coverage,
+				freshness: mission.freshness,
+				completeness: mission.completeness,
+			});
+		}
+		return out.sort((a, b) => a.agentId.localeCompare(b.agentId));
+	}
+
+	/** Build a mission from its terminal manifest. Status comes straight off the record - never inferred. */
+	private missionFromManifest(runId: string, sessionId: string, m: IWorkflowManifest): MissionRun {
+		const phases: MissionPhase[] = (m.phases ?? [])
+			.filter(p => typeof p?.title === 'string')
+			.map(p => (p.detail !== undefined ? { title: p.title!, detail: p.detail } : { title: p.title! }));
+		const progress: MissionProgressEntry[] = (m.workflowProgress ?? [])
+			.filter(p => typeof p?.title === 'string' && isProgressKind(p.type))
+			.map(p => ({ index: p.index ?? 0, title: p.title!, kind: p.type as MissionProgressKind }));
+		const recognized = typeof m.workflowName === 'string' && isTerminalStatus(m.status);
+		return {
+			runId,
+			sessionId,
+			name: m.workflowName ?? runId,
+			status: isTerminalStatus(m.status) ? m.status as MissionStatus : 'unknown',
+			agentCount: m.agentCount ?? progress.filter(p => p.kind === 'workflow_agent').length,
+			phases,
+			progress,
+			durationMs: m.durationMs,
+			totalTokens: m.totalTokens,
+			totalToolCalls: m.totalToolCalls,
+			defaultModel: m.defaultModel,
+			scriptPath: m.scriptPath,
+			error: m.error,
+			ownership: 'foreign',
+			coverage: CoverageLabel.InScope,
+			freshness: FreshnessLabel.Polled,
+			completeness: recognized ? CompletenessState.Complete : CompletenessState.UnknownShape,
+			adapterVersion: recognized ? this.stamp : this.canaryStamp,
+		};
+	}
+
+	/**
+	 * Build a mission from a manifest-less journal: a run still IN FLIGHT. Everything the manifest would carry
+	 * (name, phases, totals) is simply not on disk yet, so this reports what the ledger actually proves - how many
+	 * agents started and how many finished - and labels the read `live`. It is `Complete` because the journal is a
+	 * whole record of what has happened SO FAR; a run in progress is not a partial read.
+	 */
+	private async missionFromJournal(runId: string, sessionId: string, journal: URI): Promise<MissionRun> {
+		const records = await this.readJournal(journal);
+		const started = new Set(records.filter(r => r.type === 'started' && r.agentId).map(r => r.agentId)).size;
+		const results = new Set(records.filter(r => r.type === 'result' && r.agentId).map(r => r.agentId)).size;
+		return {
+			runId,
+			sessionId,
+			name: runId,
+			status: 'running',
+			agentCount: started,
+			startedCount: started,
+			resultCount: results,
+			phases: [],
+			progress: [],
+			ownership: 'foreign',
+			coverage: CoverageLabel.InScope,
+			freshness: FreshnessLabel.Live,
+			completeness: records.length > 0 ? CompletenessState.Complete : CompletenessState.Absent,
+			adapterVersion: this.stamp,
+		};
+	}
+
+	/** Every `projects/<enc>/<session>/` sidecar dir (only sessions that produced run artifacts have one). */
+	private async listSessionSidecarDirs(root: URI): Promise<URI[]> {
+		const dirs: URI[] = [];
+		let projectDirs: readonly URI[];
+		try {
+			const stat = await this.fileService.resolve(URI.joinPath(root, 'projects'));
+			projectDirs = (stat.children ?? []).filter(c => c.isDirectory).map(c => c.resource);
+		} catch { return dirs; }
+		for (const dir of projectDirs) {
+			try {
+				const stat = await this.fileService.resolve(dir);
+				for (const c of stat.children ?? []) {
+					if (c.isDirectory && c.name !== 'memory') { dirs.push(c.resource); }
+				}
+			} catch { /* skip an unreadable project dir */ }
+		}
+		return dirs;
+	}
+
+	/** The terminal manifests under a session's `workflows/` dir, keyed by run id. Unparseable ones are skipped. */
+	private async readMissionManifests(sessionDir: URI): Promise<Map<string, IWorkflowManifest>> {
+		const out = new Map<string, IWorkflowManifest>();
+		let files: readonly URI[];
+		try {
+			const stat = await this.fileService.resolve(URI.joinPath(sessionDir, 'workflows'));
+			files = (stat.children ?? []).filter(c => !c.isDirectory && c.name.endsWith('.json')).map(c => c.resource);
+		} catch { return out; }
+		for (const file of files) {
+			const runId = basename(file).slice(0, -'.json'.length);
+			if (!isRunId(runId)) { continue; }
+			try {
+				const parsed: unknown = JSON.parse((await this.fileService.readFile(file)).value.toString());
+				if (parsed && typeof parsed === 'object') { out.set(runId, parsed as IWorkflowManifest); }
+			} catch { /* an unreadable/!JSON manifest is simply not a legible mission */ }
+		}
+		return out;
+	}
+
+	/** The run journals under a session's `subagents/workflows/` dir, keyed by run id. */
+	private async listMissionJournals(sessionDir: URI): Promise<Map<string, URI>> {
+		const out = new Map<string, URI>();
+		let runDirs: readonly URI[];
+		try {
+			const stat = await this.fileService.resolve(URI.joinPath(sessionDir, 'subagents', 'workflows'));
+			runDirs = (stat.children ?? []).filter(c => c.isDirectory).map(c => c.resource);
+		} catch { return out; }
+		for (const dir of runDirs) {
+			const runId = basename(dir);
+			if (!isRunId(runId)) { continue; }
+			const journal = URI.joinPath(dir, JOURNAL_NAME);
+			if (await this.fileService.exists(journal)) { out.set(runId, journal); }
+		}
+		return out;
+	}
+
+	/** Locate a mission's journal DIR (which also holds its agent transcripts), or undefined when it has none. */
+	private async findMissionJournalDir(root: URI, mission: MissionRun): Promise<URI | undefined> {
+		for (const sessionDir of await this.listSessionSidecarDirs(root)) {
+			if (basename(sessionDir) !== mission.sessionId) { continue; }
+			const dir = URI.joinPath(sessionDir, 'subagents', 'workflows', mission.runId);
+			if (await this.fileService.exists(URI.joinPath(dir, JOURNAL_NAME))) { return dir; }
+		}
+		return undefined;
+	}
+
+	/** A journal's records. Never throws: a missing/torn ledger yields only the lines that did parse. */
+	private async readJournal(journal: URI): Promise<IWorkflowJournalRecord[]> {
+		let text: string;
+		try { text = (await this.fileService.readFile(journal)).value.toString(); } catch { return []; }
+		const out: IWorkflowJournalRecord[] = [];
+		for (const line of text.split('\n')) {
+			if (!line.trim()) { continue; }
+			try {
+				const parsed: unknown = JSON.parse(line);
+				if (parsed && typeof parsed === 'object') { out.push(parsed as IWorkflowJournalRecord); }
+			} catch { /* a half-written trailing line is expected while a run is live */ }
+		}
+		return out;
+	}
+
+	/** The agent role from its `agent-<id>.meta.json` sidecar, or undefined when there is none. */
+	private async readAgentType(dir: URI, agentId: string): Promise<string | undefined> {
+		try {
+			const file = URI.joinPath(dir, `agent-${agentId}.meta.json`);
+			const parsed: unknown = JSON.parse((await this.fileService.readFile(file)).value.toString());
+			const agentType = (parsed as { agentType?: unknown } | null)?.agentType;
+			return typeof agentType === 'string' ? agentType : undefined;
+		} catch { return undefined; }
 	}
 
 	/**
@@ -747,6 +1028,26 @@ export class ClawdiusReaderSeamService implements IReaderSeam {
 	async listRuns(root: ReaderConfigRoot, scope?: ReaderScope): Promise<readonly FleetRun[]> {
 		if (root.kind === 'no-config') { return []; }
 		return this.transcript.enumerateRuns(root.root, this.scopeFolders(scope));
+	}
+
+	/**
+	 * Enumerate every ultracode workflow MISSION as a labeled list of {@link MissionRun} - the Missions view's
+	 * primary read. Unlike {@link listRuns} this is NOT scoped to workspace folders: a mission is identified by its
+	 * run artifacts under the owning session, and a run launched from another folder is still the user's own
+	 * mission to see. A `no-config` root degrades to an empty list. Read-only.
+	 */
+	async listMissions(root: ReaderConfigRoot): Promise<readonly MissionRun[]> {
+		if (root.kind === 'no-config') { return []; }
+		return this.transcript.enumerateMissions(root.root);
+	}
+
+	/**
+	 * Enumerate one mission's agents as a labeled list of {@link MissionAgent} - the per-mission drill-in, resolved
+	 * lazily so the mission list never pays for it. A `no-config` root degrades to an empty list. Read-only.
+	 */
+	async listMissionAgents(root: ReaderConfigRoot, mission: MissionRun): Promise<readonly MissionAgent[]> {
+		if (root.kind === 'no-config') { return []; }
+		return this.transcript.enumerateMissionAgents(root.root, mission);
 	}
 
 	/**

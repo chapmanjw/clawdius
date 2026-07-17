@@ -69,7 +69,26 @@
 # is skipped before any parse, so an actively-appended transcript stays `complete`. Growth is the flag, the shared
 # rule, and two tests pinning torn-vs-live-tail. No new files; isolated to the clawdius-owned reader seam.
 
+# Disposition 2026-07-16 (-4 files, -653 insertions): delete the unreachable mission control path, and CORRECT the
+# three blocks above. Missions ships read-only; launching workflows from Clawdius is a roadmap item. A control
+# cannot act on a mission Clawdius does not hold: it has a live SDK Query only for a session it launched itself, so
+# a CLI-launched run - which is every mission on disk - has no handle to stop or steer. Owned-gating was never a
+# policy choice, so the controls were unreachable by construction rather than merely unwired. Removed:
+# claudeMissionControls (stop/steer), claudeFleetIdentityJoin (it correlates sidechain subagents by parentRunId, a
+# problem missions do not have - a workflow agent is its own file in the mission's own directory - and its
+# lifecycleOf only speaks for owned runs), each one's test, and the view's now-callerless appendRunRow /
+# appendSubagentRow. Both modules had exactly one importer: their own test. The ownership probe stays: its id
+# namespaces provably coincide, so it reports `foreign` because the runs genuinely are foreign, and it would
+# resolve `owned` unchanged the day Clawdius launches a run.
+#
+# CORRECTION to the three blocks above: their numbers are each off by one commit. `diff-stat --check` measures
+# BASE..HEAD (committed state), so running it before a commit reports the PREVIOUS commit's growth; each block's
+# text therefore describes the right change but carries the prior one's delta, and the last commit's growth (+62)
+# was never recorded at all - the baseline read 41615 against a HEAD of 41677, which CI would have failed on push.
+# The prose in those blocks stands; only the arithmetic was misattributed. This number is measured against the
+# WORKTREE (what HEAD becomes on commit), which is the measurement the recorded baseline must match.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
 recorded: 2026-07-16
-baseline: 5600 files changed, 41615 insertions(+), 1456122 deletions(-)
+baseline: 5596 files changed, 41043 insertions(+), 1456122 deletions(-)

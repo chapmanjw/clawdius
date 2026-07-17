@@ -4,13 +4,20 @@
  *--------------------------------------------------------------------------------------------*/
 
 // CLAWDIUS-BEGIN Missions fleet - Sidebar (Activity Bar) ViewPane
-// A native-DOM ViewPane (pattern: clawdiusContextBudgetView) listing the runs the reader seam enumerates
-// (listRuns). Each FleetRun renders with its coarse status and the four honesty labels (coverage /
-// freshness / completeness + ownership); a foreign or suppressed run is rendered PRESENT-WITH-LABEL,
-// never hidden. The view consumes ONLY the seam: it resolves the config root from IPathService.userHome
-// (never a hardcoded ~/.claude) and calls the seam's listRuns - no direct Claude config-tree read, no egress.
-// Rows carry data-* hooks so the real-build Playwright render can assert them. A large fleet is appended in
-// animation-frame batches so enumeration of many runs never blocks the workbench thread.
+// A native-DOM ViewPane (pattern: clawdiusContextBudgetView) listing the ultracode MISSIONS the reader seam
+// enumerates (listMissions) - workflow runs, not chat sessions. Each MissionRun renders with the name its script
+// declared, its real status, and the honesty labels (coverage / freshness / completeness + ownership); a foreign
+// or suppressed mission is rendered PRESENT-WITH-LABEL, never hidden. The view consumes ONLY the seam: it
+// resolves the config root from IPathService.userHome (never a hardcoded ~/.claude) and calls listMissions - no
+// direct Claude config-tree read, no egress. Rows carry data-* hooks so the real-build Playwright render can
+// assert them. A large fleet is appended in animation-frame batches so enumeration never blocks the workbench
+// thread.
+//
+// READ-ONLY BY CONSTRUCTION, not by policy. The view observes; it cannot act on a mission. Clawdius holds a live
+// `Query` only for a session IT launched, so a mission launched by the Claude Code CLI - which today is every
+// mission on disk - has no handle to stop or steer. A control surface here would be unreachable, so there is
+// none. Launching workflows from Clawdius is the roadmap item that would make controls meaningful; until then
+// the honest product is an observatory.
 
 import './media/claudeMissions.css';
 import { $, addDisposableListener, append, clearNode, EventType, getWindow, scheduleAtNextAnimationFrame } from '../../../../../base/browser/dom.js';
@@ -31,7 +38,7 @@ import { IViewPaneOptions, ViewPane } from '../../../../browser/parts/views/view
 import { IViewDescriptorService } from '../../../../common/views.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IPathService } from '../../../../services/path/common/pathService.js';
-import { FleetRun, FleetSubagent, MissionAgent, MissionRun } from '../../common/claudeFleetModel.js';
+import { FleetSubagent, MissionAgent, MissionRun } from '../../common/claudeFleetModel.js';
 import { CoverageLabel, ReaderConfigRoot, resolveConfigRoot } from '../../common/claudeReaderSeam.js';
 import { ClawdiusReaderSeamService } from '../reader/claudeReaderSeamService.js';
 import { BadgeSignal, ClaudeMissionBadgeFeed } from './claudeMissionBadges.js';
@@ -75,39 +82,6 @@ export function renderRunBadge(host: HTMLElement, signal: BadgeSignal | undefine
 		'data-badge-kind': signal.kind,
 		'data-badge-freshness': signal.freshness,
 	}, text));
-}
-
-/** Append one FleetRun as a labeled row, carrying every honesty label as both a badge and a `data-*` hook so a
- *  Playwright render can assert it. A foreign/suppressed run gets a `foreign` marker class but is never omitted.
- *  When a live `BadgeSignal` is supplied (an owned run that fired an event), its needs-input/completion decoration
- *  is rendered too; otherwise only the seam's honest labels show (no fabricated live badge). */
-export function appendRunRow(parent: HTMLElement, run: FleetRun, badge?: BadgeSignal): HTMLElement {
-	const foreign = run.coverage === CoverageLabel.Foreign;
-	const row = append(parent, $(`.clawdius-missions-row${foreign ? '.foreign' : ''}`, {
-		'data-run-id': run.runId,
-		'data-session-id': run.sessionId,
-		'data-kind': run.kind,
-		'data-status': run.status,
-		'data-ownership': run.ownership,
-		'data-coverage': run.coverage,
-		'data-freshness': run.freshness,
-		'data-completeness': run.completeness,
-	}));
-	const name = append(row, $('.clawdius-missions-run'));
-	name.textContent = run.runId;
-	name.title = localize('clawdius.missions.runTitle', "Run {0} · session {1}", run.runId, run.sessionId);
-	append(row, $('.clawdius-missions-status', undefined, localize('clawdius.missions.status', "status: {0}", run.status)));
-	const labels = append(row, $('.clawdius-missions-labels'));
-	// A dedicated badge host leads the labels area; the live badge (if any) is rendered into it by direct
-	// reference, so no fragile selector lookup is needed to update it later.
-	const host = append(labels, $('.clawdius-missions-badgehost'));
-	badgeHosts.set(row, host);
-	append(labels, $(`.clawdius-missions-label.coverage-${run.coverage}`, undefined, localize('clawdius.missions.coverage', "coverage: {0}", run.coverage)));
-	append(labels, $(`.clawdius-missions-label.freshness-${run.freshness}`, undefined, localize('clawdius.missions.freshness', "freshness: {0}", run.freshness)));
-	append(labels, $(`.clawdius-missions-label.completeness-${run.completeness}`, undefined, localize('clawdius.missions.completeness', "completeness: {0}", run.completeness)));
-	append(labels, $(`.clawdius-missions-label.ownership-${run.ownership}`, undefined, localize('clawdius.missions.ownership', "ownership: {0}", run.ownership)));
-	renderRunBadge(host, badge);
-	return row;
 }
 
 /**
@@ -217,28 +191,6 @@ export interface IFleetRowInteractions {
 	listAgents(mission: MissionRun): Promise<readonly MissionAgent[]>;
 	/** Open an agent's transcript in the editor area (the drill-in). */
 	openAgent(agent: MissionAgent): void;
-}
-
-/** Append one FleetSubagent as a clickable child row under its run, carrying its honesty labels as `data-*` hooks
- *  so a Playwright render can assert them. Clicking (or Enter/Space) the row opens the subagent's transcript. */
-export function appendSubagentRow(parent: HTMLElement, sub: FleetSubagent): HTMLElement {
-	const row = append(parent, $('.clawdius-missions-subrow', {
-		'data-subagent-id': sub.subagentId,
-		'data-parent-run-id': sub.parentRunId,
-		'data-coverage': sub.coverage,
-		'data-freshness': sub.freshness,
-		'data-completeness': sub.completeness,
-	}));
-	row.setAttribute('role', 'button');
-	row.tabIndex = 0;
-	const name = append(row, $('.clawdius-missions-subagent'));
-	name.textContent = sub.subagentId || localize('clawdius.missions.subagentRoot', "subagent");
-	name.title = localize('clawdius.missions.subagentTitle', "Open transcript for subagent {0}", sub.subagentId || '');
-	const labels = append(row, $('.clawdius-missions-sublabels'));
-	append(labels, $(`.clawdius-missions-label.coverage-${sub.coverage}`, undefined, localize('clawdius.missions.coverage', "coverage: {0}", sub.coverage)));
-	append(labels, $(`.clawdius-missions-label.freshness-${sub.freshness}`, undefined, localize('clawdius.missions.freshness', "freshness: {0}", sub.freshness)));
-	append(labels, $(`.clawdius-missions-label.completeness-${sub.completeness}`, undefined, localize('clawdius.missions.completeness', "completeness: {0}", sub.completeness)));
-	return row;
 }
 
 /**

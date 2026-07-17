@@ -577,27 +577,41 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 
 	/** Build a mission from its terminal manifest. Status comes straight off the record - never inferred. */
 	private missionFromManifest(runId: string, sessionId: string, m: IWorkflowManifest): MissionRun {
+		// Read every field through the same guards the transcript path uses rather than trusting the cast. The
+		// manifest is the launcher's own JSON, but "our own writer produced it" is a claim about the writer, not
+		// about the bytes on disk, and this seam's contract is to validate what it READS. A field that slips through
+		// unchecked does not fail loudly: `{"durationMs":"5s"}` would flow a string into a slot the model declares
+		// `number`, under a `complete` label asserting a wholeness that field does not have.
+		const raw = m as unknown as Record<string, unknown>;
 		const phases: MissionPhase[] = (m.phases ?? [])
-			.filter(p => typeof p?.title === 'string')
-			.map(p => (p.detail !== undefined ? { title: p.title!, detail: p.detail } : { title: p.title! }));
+			.map(p => p as unknown as Record<string, unknown>)
+			.filter(p => readString(p, 'title') !== undefined)
+			.map(p => {
+				const detail = readString(p, 'detail');
+				return detail !== undefined ? { title: readString(p, 'title')!, detail } : { title: readString(p, 'title')! };
+			});
 		const progress: MissionProgressEntry[] = (m.workflowProgress ?? [])
-			.filter(p => typeof p?.title === 'string' && isProgressKind(p.type))
-			.map(p => ({ index: p.index ?? 0, title: p.title!, kind: p.type as MissionProgressKind }));
-		const recognized = typeof m.workflowName === 'string' && isTerminalStatus(m.status);
+			.map(p => p as unknown as Record<string, unknown>)
+			.filter(p => readString(p, 'title') !== undefined && isProgressKind(readString(p, 'type')))
+			.map(p => ({ index: readNumber(p, 'index') ?? 0, title: readString(p, 'title')!, kind: readString(p, 'type') as MissionProgressKind }));
+		// `name` must come from the validated read, not `m.workflowName ?? runId`: `??` only replaces null/undefined,
+		// so a non-string name would pass straight through the fallback it looks like it is guarded by.
+		const name = readString(raw, 'workflowName');
+		const recognized = name !== undefined && isTerminalStatus(m.status);
 		return {
 			runId,
 			sessionId,
-			name: m.workflowName ?? runId,
+			name: name ?? runId,
 			status: isTerminalStatus(m.status) ? m.status as MissionStatus : 'unknown',
-			agentCount: m.agentCount ?? progress.filter(p => p.kind === 'workflow_agent').length,
+			agentCount: readNumber(raw, 'agentCount') ?? progress.filter(p => p.kind === 'workflow_agent').length,
 			phases,
 			progress,
-			durationMs: m.durationMs,
-			totalTokens: m.totalTokens,
-			totalToolCalls: m.totalToolCalls,
-			defaultModel: m.defaultModel,
-			scriptPath: m.scriptPath,
-			error: m.error,
+			durationMs: readNumber(raw, 'durationMs'),
+			totalTokens: readNumber(raw, 'totalTokens'),
+			totalToolCalls: readNumber(raw, 'totalToolCalls'),
+			defaultModel: readString(raw, 'defaultModel'),
+			scriptPath: readString(raw, 'scriptPath'),
+			error: readString(raw, 'error'),
 			ownership: 'foreign',
 			coverage: CoverageLabel.InScope,
 			freshness: FreshnessLabel.Polled,

@@ -295,23 +295,32 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 			{ completeness: CompletenessState.Partial, ids: ['a1'] });
 	});
 
-	test('a started/result record with no agent id is a dropped record, not a silently uncounted agent', async () => {
-		const fs = makeFs();
-		// The nastiest shape: an agent-bearing record whose id is missing or empty does not look broken, it looks
-		// like a phase line - skipped by the `type === 'started' && r.agentId` filters and counted as nothing, so
-		// the agent vanishes and the read still calls itself whole. Both `started` and `result` are affected: a
-		// result with no id also leaves its agent reading unfinished forever.
-		await stageJournal(fs, 'wf_a1b2c3d4-e5f', [
-			{ type: 'started', agentId: 'a1' },
-			{ type: 'started' },
-			{ type: 'started', agentId: '' },
-			{ type: 'result' },
-		]);
-		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
-		assert.deepStrictEqual(
-			{ started: mission.startedCount, completeness: mission.completeness },
-			{ started: 1, completeness: CompletenessState.Partial });
-	});
+	// An agent-bearing record whose id is missing or empty does not look broken - it looks like a phase line, so the
+	// `type === 'started' && r.agentId` filters skip it, it is counted as nothing, and the read still calls itself
+	// whole while an agent has gone missing. ONE malformed record per case, deliberately: a fixture combining them
+	// asserts only that SOMETHING was torn, so a regression accepting (say) `result` but not `started` would still
+	// be masked by its neighbours. Each case below is the only reason its own branch is not dead.
+	for (const malformed of [
+		{ label: 'a started record with NO agent id', record: { type: 'started' } },
+		{ label: 'a started record with an EMPTY agent id', record: { type: 'started', agentId: '' } },
+		{ label: 'a result record with NO agent id', record: { type: 'result' } },
+		{ label: 'a result record with an EMPTY agent id', record: { type: 'result', agentId: '' } },
+	]) {
+		test(`${malformed.label} is a dropped record, not a silently uncounted agent`, async () => {
+			const fs = makeFs();
+			await stageJournal(fs, 'wf_a1b2c3d4-e5f', [
+				{ type: 'started', agentId: 'a1' },
+				{ type: 'result', agentId: 'a1' },
+				malformed.record,
+			]);
+			const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+			// The good agent is still counted and still finished; the malformed record degrades the read rather than
+			// vanishing from it.
+			assert.deepStrictEqual(
+				{ started: mission.startedCount, results: mission.resultCount, completeness: mission.completeness },
+				{ started: 1, results: 1, completeness: CompletenessState.Partial });
+		});
+	}
 
 	test('expanding a LIVE mission mid-append keeps its agent list complete (the tail is not damage)', async () => {
 		const fs = makeFs();
@@ -374,6 +383,57 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 		const mission = (await service.listMissions(RESOLVED))[0] as MissionRun;
 		assert.deepStrictEqual(await service.listMissionAgents(RESOLVED, mission),
 			{ agents: [], completeness: CompletenessState.Partial });
+	});
+
+	test('a manifest with no agentCount derives it from its own workflow_agent progress entries', async () => {
+		const fs = makeFs();
+		// The `?? progress.filter(...)` fallback: every other fixture sets agentCount, so this branch was dead code
+		// as far as the suite could tell, and breaking it would have changed nothing that any test observed.
+		const manifest = manifestOf({ status: 'completed' }) as Record<string, unknown>;
+		delete manifest.agentCount;
+		manifest.workflowProgress = [
+			{ index: 0, title: 'a-1', type: 'workflow_agent' },
+			{ index: 1, title: 'a-2', type: 'workflow_agent' },
+			{ index: 2, title: 'Phase one', type: 'workflow_phase' },
+		];
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', manifest);
+		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+		// Two agent entries, not three: a phase entry is progress, not an agent.
+		assert.strictEqual(mission.agentCount, 2);
+	});
+
+	test('a manifest field of the wrong type is not carried into the read model', async () => {
+		const fs = makeFs();
+		// "The launcher wrote it" is a claim about the writer, not about the bytes. A string where the model declares
+		// a number must read as absent rather than flow through under a `complete` label.
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', {
+			...manifestOf({ status: 'completed' }),
+			agentCount: 'two', durationMs: '5s', totalTokens: null, scriptPath: 42,
+		});
+		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+		assert.deepStrictEqual(
+			{ agentCount: mission.agentCount, durationMs: mission.durationMs, totalTokens: mission.totalTokens, scriptPath: mission.scriptPath },
+			// `agentCount: "two"` reads as absent and falls back to the progress-derived count (the fixture declares
+			// two workflow_agent entries) - the point being that it is a NUMBER derived from data, never the string
+			// carried through. The rest have no fallback, so they read undefined rather than a wrong-typed value.
+			{ agentCount: 2, durationMs: undefined, totalTokens: undefined, scriptPath: undefined });
+	});
+
+	test('an agent that reports started twice is listed once', async () => {
+		const fs = makeFs();
+		// The `seen` dedup: without a duplicate in any fixture, a regression emitting a row per record would pass.
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', manifestOf({ status: 'completed' }));
+		await stageJournal(fs, 'wf_a1b2c3d4-e5f', [
+			{ type: 'started', agentId: 'a1' },
+			{ type: 'started', agentId: 'a1' },
+			{ type: 'result', agentId: 'a1' },
+		]);
+		const service = makeService(fs);
+		const mission = (await service.listMissions(RESOLVED))[0] as MissionRun;
+		const list = await service.listMissionAgents(RESOLVED, mission);
+		assert.deepStrictEqual(
+			{ ids: list.agents.map(a => a.agentId), ref: list.agents[0].transcriptRef.endsWith('agent-a1.jsonl') },
+			{ ids: ['a1'], ref: true });
 	});
 
 	test('a mission with no journal lists no agents rather than throwing', async () => {

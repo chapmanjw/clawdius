@@ -133,7 +133,27 @@
 #      public-source convention keeps out of shipped code. Removed; the behavioral
 #      explanation stays.
 
+# Disposition 2026-07-16 (+0 files, +74 insertions): validate the manifest the way the journal is validated, and
+# isolate the id fixtures. Three defects:
+#   1. missionFromManifest still CAST its fields while the reader beside it recognizes them - agentCount,
+#      durationMs, totalTokens, totalToolCalls, defaultModel, scriptPath, error and each phase's detail/index went
+#      in unchecked, so `{"durationMs":"5s"}` would flow a string into a slot the model declares `number` under a
+#      `complete` label. `name` was worse than unguarded: `m.workflowName ?? runId` looks like a fallback but `??`
+#      only replaces null/undefined, so a non-string name passed straight through it. All now read through the same
+#      readString / readNumber guards the transcript path uses. "The launcher wrote it" is a claim about the writer,
+#      not about the bytes.
+#   2. The missing-id fixture combined several malformed records and asserted only that SOMETHING was torn, so a
+#      regression accepting `result` but rejecting `started` stayed green behind its neighbours. Split into one
+#      malformed record per case.
+#   3. Two branches were dead as far as the suite could see: the agentCount fallback (every fixture set the field)
+#      and the drill-in's duplicate-agent dedup (no fixture repeated a `started`). Both now pinned.
+# Every guard added here is verified by mutation - removing any one turns a test red.
+#
+# KNOWN, NOT FIXED: expanding a mission re-walks the whole projects tree to re-find its journal dir, which
+# listMissions had already resolved. User-initiated and correct, but the work grows with the tree; recorded as a
+# follow-up rather than addressed now.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
 recorded: 2026-07-16
-baseline: 5596 files changed, 41371 insertions(+), 1456122 deletions(-)
+baseline: 5596 files changed, 41465 insertions(+), 1456122 deletions(-)

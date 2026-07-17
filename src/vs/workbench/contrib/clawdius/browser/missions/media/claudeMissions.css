@@ -45,6 +45,19 @@
 	white-space: nowrap;
 }
 
+/* A failed mission's error takes its own line under the labels, clamped to that ONE line. The row is */
+/* `flex-wrap: wrap`, so an unclamped error wrapped to the full width of the sidebar and pushed the missions */
+/* below it off screen. The full text stays on the element's tooltip: this bounds what is painted, not what is kept. */
+.clawdius-missions-error {
+	flex-basis: 100%;
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	color: var(--vscode-errorForeground);
+	opacity: 0.9;
+}
+
 .clawdius-missions-labels {
 	display: flex;
 	flex-wrap: wrap;

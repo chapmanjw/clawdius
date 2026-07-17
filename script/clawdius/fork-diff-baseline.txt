@@ -48,7 +48,17 @@
 # (contrib/clawdius); no upstream file is touched. As with the entries above, the recorded baseline moves by more
 # than the code delta because this disposition block's own comment lines also count.
 
+# Disposition 2026-07-16 (+0 files, +111 insertions): clamp a failed mission's error to one line and gate the
+# Missions view on a real boot. A workflow failure arrives as a multi-line stack trace; rendered whole into a
+# `flex-wrap: wrap` row it wrapped to eight lines, so three failures filled the sidebar and pushed the missions
+# below them off screen. The row now paints the error's first line with the full text on its tooltip - what is
+# painted shortens, what is known does not. The unit suite could not have caught this: it asserted the `data-*`
+# hooks, which were correct throughout; only a real boot against a real config root showed it. So the e2e harness
+# gains a missions scenario that opens the view and asserts rows are named workflow runs carrying a real status,
+# which is now a standing gate. Growth is the clamp helper plus its two tests, the CSS rule, and that scenario;
+# no new files, no upstream file touched.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
 recorded: 2026-07-16
-baseline: 5600 files changed, 41389 insertions(+), 1456122 deletions(-)
+baseline: 5600 files changed, 41500 insertions(+), 1456122 deletions(-)

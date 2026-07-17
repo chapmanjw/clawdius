@@ -161,6 +161,49 @@ try {
 		return 'Usage/Permissions/MCP/Skills/Plugins/Hooks tabs present';
 	});
 
+	// 4b. Missions sidebar: the ultracode workflow control surface, driven against the REAL config root.
+	// This is the one scenario no unit test can stand in for. The suite's fixtures are synthetic by
+	// construction, and CI runners have no ~/.claude at all, so only a real boot proves what a user sees:
+	// that rows are named workflow runs carrying a real status - not chat sessions all reading
+	// "status: unknown / completeness: partial", which is what the pre-fix view painted for all 1200 of them.
+	await scenario('missions-sidebar', true, async () => {
+		// Open via the view's auto-registered focus command. `registerFocusViewAction` derives its title from the
+		// view descriptor's name ("Focus on {0} View"), so this string is the one the palette actually offers -
+		// an invented title would fuzzy-match some other command and silently leave the view closed, which would
+		// then read as a view defect rather than a broken test.
+		await runCommand('Focus on Claude Code Missions View');
+		// Distinguish "the view never opened" (a test-harness fault) from "the view opened and painted nothing"
+		// (a real defect). Without this the two collapse into one indistinguishable failure.
+		await win.waitForSelector('[data-clawdius-missions]', { state: 'attached', timeout: 15000 });
+		await win.waitForTimeout(2500);
+		const rows = await win.$$eval('.clawdius-missions-row', els => els.map(el => ({
+			name: el.getAttribute('data-mission-name'),
+			status: el.getAttribute('data-status'),
+			kind: el.getAttribute('data-kind'),
+			agents: el.getAttribute('data-agent-count'),
+			completeness: el.getAttribute('data-completeness'),
+		})));
+		if (rows.length === 0) {
+			// An honest empty state is a legitimate outcome (no workflows on this machine), not a pass.
+			const empty = await win.$$('[data-clawdius-missions-empty]');
+			assert(empty.length === 1, 'Missions rendered neither rows nor an empty state');
+			return 'no missions on this config root (honest empty state)';
+		}
+		// Every row must be a workflow, never a chat session.
+		const notWorkflow = rows.filter(r => r.kind !== 'workflow');
+		assert(notWorkflow.length === 0, `${notWorkflow.length} rows are not workflows`);
+		// Every row must be NAMED: the pre-fix view showed opaque run ids.
+		const unnamed = rows.filter(r => !r.name);
+		assert(unnamed.length === 0, `${unnamed.length} missions rendered without a name`);
+		// The status label must carry information. The pre-fix bug was a constant.
+		const statuses = [...new Set(rows.map(r => r.status))];
+		assert(!(statuses.length === 1 && statuses[0] === 'unknown'), 'every mission reads status=unknown (the label is a constant)');
+		// The completeness ladder must not be pinned to `partial` for every row.
+		const completeness = [...new Set(rows.map(r => r.completeness))];
+		assert(!(completeness.length === 1 && completeness[0] === 'partial'), 'every mission reads completeness=partial (the ladder collapsed)');
+		return `${rows.length} missions; statuses=${statuses.join('/')}; completeness=${completeness.join('/')}; e.g. "${rows[0].name}" (${rows[0].agents} agents)`;
+	});
+
 	// 5. Usage dashboard
 	await scenario('usage-dashboard', true, async () => {
 		await runCommand('Open Claude Code Usage Dashboard');

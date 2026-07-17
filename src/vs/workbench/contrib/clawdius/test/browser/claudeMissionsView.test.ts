@@ -16,7 +16,7 @@ import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { MissionAgent, MissionRun } from '../../common/claudeFleetModel.js';
 import { CompletenessState, CoverageLabel, FreshnessLabel, ReaderConfigRoot } from '../../common/claudeReaderSeam.js';
-import { FleetRunsList, IFleetRowInteractions, IFleetRunSource } from '../../browser/missions/claudeMissionsView.js';
+import { errorSummary, FleetRunsList, IFleetRowInteractions, IFleetRunSource } from '../../browser/missions/claudeMissionsView.js';
 
 /** A fake enumeration source: returns a fixed labeled list, so the view test binds to the SAME `listRuns` shape
  *  the seam produces without touching disk. */
@@ -78,6 +78,38 @@ suite('Clawdius missions fleet - Sidebar view', () => {
 			{ runId: 'a-0001', sessionId: 'sess-a', kind: 'workflow', status: 'completed', ownership: 'foreign', coverage: 'in-scope', freshness: 'polled', completeness: 'complete', foreignMarked: false, labelCount: 4 },
 			{ runId: 'f-0001', sessionId: 'sess-foreign', kind: 'workflow', status: 'completed', ownership: 'foreign', coverage: 'foreign', freshness: 'polled', completeness: 'complete', foreignMarked: true, labelCount: 4 },
 			{ runId: 'malformed', sessionId: 'malformed', kind: 'workflow', status: 'completed', ownership: 'foreign', coverage: 'in-scope', freshness: 'polled', completeness: 'unknown-shape', foreignMarked: false, labelCount: 4 },
+		]);
+	});
+
+	test('a failed mission shows its error clamped to one line, with the FULL text kept on the tooltip', () => {
+		// The real shape this regressed on: a workflow failure arrives as a multi-line stack trace whose frames are
+		// bundler paths. Rendered whole it wrapped to eight lines and pushed every mission below it off screen.
+		const stack = 'TelemetrySafeError: StructuredOutput retry cap (5) exceeded\n'
+			+ '    at <anonymous> (B:/~BUN/root/src/entrypoints/cli.js:6072:2729)\n'
+			+ '    at processTicksAndRejections (native:7:39)';
+		const container = $('div');
+		const list = store.add(new FleetRunsList(container));
+		list.render([run({ runId: 'boom', status: 'failed', error: stack })]);
+
+		const error = container.querySelector<HTMLElement>('.clawdius-missions-error')!;
+		// Present (never hidden - an invisible failure is the defect this view exists to prevent), summarised to the
+		// one line that names the fault, and STILL complete on the tooltip: painted short, never known short.
+		assert.deepStrictEqual(
+			{ text: error.textContent, title: error.title, marked: error.hasAttribute('data-mission-error') },
+			{ text: 'TelemetrySafeError: StructuredOutput retry cap (5) exceeded', title: stack, marked: true });
+	});
+
+	test('errorSummary keeps the fault line and collapses the frames; a blank-led error never yields a blank row', () => {
+		assert.deepStrictEqual([
+			errorSummary('Error: CLAUDE_PLUGIN_ROOT is not defined\n    at <anonymous> (workflow.js:245:225)'),
+			errorSummary('\n\n   Error:   spaced   out   \n    at frame'),
+			errorSummary('single line'),
+			errorSummary(''),
+		], [
+			'Error: CLAUDE_PLUGIN_ROOT is not defined',
+			'Error: spaced out',
+			'single line',
+			'',
 		]);
 	});
 

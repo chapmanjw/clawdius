@@ -111,6 +111,17 @@ export function appendRunRow(parent: HTMLElement, run: FleetRun, badge?: BadgeSi
 }
 
 /**
+ * The one-line summary of a mission's error: its first non-empty line, whitespace-collapsed. A workflow failure
+ * arrives as a multi-line stack trace, and only its leading line names the actual fault - the frames below it are
+ * bundler paths of no use in a 300px sidebar. PURE, so the clamp is unit-testable without a DOM. The row keeps the
+ * FULL error on its tooltip and the model keeps it whole: this shortens what is painted, never what is known.
+ */
+export function errorSummary(error: string): string {
+	const first = error.split('\n').find(line => line.trim().length > 0) ?? '';
+	return first.trim().replace(/\s+/g, ' ');
+}
+
+/**
  * Append one ultracode MISSION as a labeled row - the Missions list's primary row. A mission leads with the name
  * its script declared (a run is a thing the user named, not an opaque id) and carries its real status, agent count
  * and phase count, plus every honesty label as both a badge and a `data-*` hook so a Playwright render can assert
@@ -156,7 +167,13 @@ export function appendMissionRow(parent: HTMLElement, mission: MissionRun, badge
 	append(labels, $(`.clawdius-missions-label.completeness-${mission.completeness}`, undefined, localize('clawdius.missions.completeness', "completeness: {0}", mission.completeness)));
 	append(labels, $(`.clawdius-missions-label.ownership-${mission.ownership}`, undefined, localize('clawdius.missions.ownership', "ownership: {0}", mission.ownership)));
 	if (mission.error) {
-		append(row, $('.clawdius-missions-error', { 'data-mission-error': '' }, mission.error));
+		// A failed mission's error is usually a multi-line stack trace, so rendering it whole let a single
+		// failure wrap to eight lines and swallow the sidebar. Show its FIRST line, clamped to one row, with the
+		// full text on the tooltip: the error stays PRESENT and complete - a failure the user cannot see is the
+		// defect this view exists to prevent - it just no longer crowds out the missions around it.
+		const error = append(row, $('.clawdius-missions-error', { 'data-mission-error': '' }));
+		error.textContent = errorSummary(mission.error);
+		error.title = mission.error;
 	}
 	renderRunBadge(host, badge);
 	return row;

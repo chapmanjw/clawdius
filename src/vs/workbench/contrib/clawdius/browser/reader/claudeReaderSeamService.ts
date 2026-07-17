@@ -138,6 +138,11 @@ interface IParsedTranscript {
 	/** At least one complete JSON object line did NOT match a recognized shape (a schema drift / unreadable
 	 *  record). Distinct from an extra FIELD on a recognized record, which parses forward-compatibly. */
 	readonly sawForeign: boolean;
+	/** At least one line opened like a JSON object but did not parse - a torn or half-written record that was
+	 *  DROPPED from the read. The record is gone from the result, so this is a real gap and must degrade
+	 *  completeness; without it a lossy read reports `complete`, which is the one thing the ladder exists to
+	 *  prevent. Distinct from {@link sawForeign}, where the line parsed and the loss is one of interpretation. */
+	readonly sawTorn: boolean;
 }
 
 function readString(obj: Record<string, unknown>, key: string): string | undefined {
@@ -198,6 +203,7 @@ export function parseTranscriptRecords(text: string, baseOffset = 0): IParsedTra
 	let sawJson = false;
 	let recognized = false;
 	let sawForeign = false;
+	let sawTorn = false;
 	let offset = baseOffset;
 	const lines = text.split('\n');
 	const lastIdx = lines.length - 1;
@@ -214,12 +220,16 @@ export function parseTranscriptRecords(text: string, baseOffset = 0): IParsedTra
 				const rec = toRecord(parsed, offset);
 				if (rec) { records.push(rec); recognized = true; } else { sawForeign = true; }
 			} catch {
-				// A non-JSON or half-written line: skip it so a truncated record is never surfaced as complete.
+				// A non-JSON or half-written line. Skipping alone does NOT keep a truncated record from being
+				// surfaced as complete - it is precisely what surfaces the REST as complete, with the dropped
+				// record unaccounted for. So record that the drop happened; the completeness ladder ORs this in
+				// and degrades the read to `partial`, which is what a read that lost a record actually is.
+				sawTorn = true;
 			}
 		}
 		offset += byteLength(rawLine) + 1; // + the '\n' (always one byte) that split() removed
 	}
-	return { records, sawJson, recognized, sawForeign };
+	return { records, sawJson, recognized, sawForeign, sawTorn };
 }
 
 /**
@@ -298,14 +308,27 @@ function coverageForEnum(records: readonly ITranscriptRecord[], folders: readonl
 	return folders.some(f => normalizePath(f.fsPath) === c) ? CoverageLabel.InScope : CoverageLabel.Foreign;
 }
 
+/**
+ * Whether a parsed read has a KNOWN GAP - the single rule behind every `partial` this seam reports, expressed once
+ * because all four ladders below must agree on what a gap is. Three ways to be missing something, all real:
+ *   - `sawTorn`   - a line opened like JSON and did not parse, so the record was DROPPED from the result.
+ *   - `sawForeign`- a line parsed but matched no known shape, so the record is real content the read cannot surface.
+ *   - `base > 0`  - the tail window started mid-file, so records older than the window were never in view.
+ * `complete` therefore means what it says: nothing was dropped, nothing was unreadable, and nothing fell outside
+ * the window. Any doubt resolves DOWN to `partial` - the ladder's whole purpose is that it can never overclaim.
+ */
+function hasKnownGap(parsed: IParsedTranscript, base: number): boolean {
+	return parsed.sawTorn || parsed.sawForeign || base > 0;
+}
+
 /** The honesty ladder for an enumerated session file, mirroring the transcript adapter's read: an empty file is
- *  `absent`; JSON present but no recognized line is `unknown-shape` (the canary); a recognized read with an
- *  unreadable record alongside OR a windowed tail (`base > 0`) is a known gap (`partial`); else `complete`. The
- *  out-of-band completeness probe is a per-transcript drill-in concern, not run over every enumerated file. */
+ *  `absent`; JSON present but no recognized line is `unknown-shape` (the canary); a read with any known gap
+ *  ({@link hasKnownGap}) is `partial`; else `complete`. The out-of-band completeness probe is a per-transcript
+ *  drill-in concern, not run over every enumerated file. */
 function enumCompleteness(parsed: IParsedTranscript, base: number): CompletenessState {
 	if (!parsed.sawJson) { return CompletenessState.Absent; }
 	if (!parsed.recognized) { return CompletenessState.UnknownShape; }
-	return (parsed.sawForeign || base > 0) ? CompletenessState.Partial : CompletenessState.Complete;
+	return hasKnownGap(parsed, base) ? CompletenessState.Partial : CompletenessState.Complete;
 }
 
 /** The `<sessionId>` stem of a session file (Claude names each transcript `<sessionId>.jsonl`), used as a stable
@@ -354,11 +377,9 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 			return this.unknownShape(emptyEntity(kind), CoverageLabel.InScope, FreshnessLabel.Polled);
 		}
 		const coverage = coverageOf(parsed.records, folder);
-		// A read is a known GAP (partial), not complete, when EITHER an unreadable record shape was present
-		// alongside recognized ones (additive drift - never silently dropped under a `complete` claim) OR the
-		// tail window started mid-file (`base > 0`), so records older than the window are not in view. Otherwise
-		// defer to the out-of-band check.
-		const completeness = (parsed.sawForeign || base > 0)
+		// A read with any known gap ({@link hasKnownGap}: a dropped torn record, an unreadable shape, or a tail
+		// window that started mid-file) is `partial`. Otherwise defer to the out-of-band check.
+		const completeness = hasKnownGap(parsed, base)
 			? CompletenessState.Partial
 			: await this.completenessOf(parsed.records, file);
 		return this.result(deriveEntity(kind, parsed.records, file.toString()), coverage, FreshnessLabel.Polled, completeness);
@@ -691,10 +712,9 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 			// JSON present but no recognized shape: a wholesale schema shift - trip the canary.
 			return { subagentId: subagent.subagentId, records: [], coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.UnknownShape, adapterVersion: this.canaryStamp };
 		}
-		// A known gap (partial), not complete, when a windowed tail dropped older records (`base > 0`) OR an
-		// unreadable record shape sat alongside recognized ones OR - the drill-in's extra probe - a referenced
-		// out-of-band tool-result file is missing. Otherwise the read is whole.
-		const completeness = (parsed.sawForeign || base > 0)
+		// A known gap ({@link hasKnownGap}) is `partial`, as is - the drill-in's extra probe - a referenced
+		// out-of-band tool-result file that is missing. Otherwise the read is whole.
+		const completeness = hasKnownGap(parsed, base)
 			? CompletenessState.Partial
 			: await this.completenessOf(parsed.records, file);
 		return {
@@ -945,7 +965,9 @@ export class CostAdapter extends VersionKeyedAdapter {
 		if (!active.parsed.recognized) {
 			return this.unknownShape(EMPTY_COST, CoverageLabel.InScope, FreshnessLabel.Polled);
 		}
-		const completeness = (active.parsed.sawForeign || active.base > 0)
+		// Cost is a SUM, so a gap understates it: a dropped torn record's tokens are simply missing from the total.
+		// Labelling that `partial` is what stops a low number from being read as a confident one.
+		const completeness = hasKnownGap(active.parsed, active.base)
 			? CompletenessState.Partial
 			: CompletenessState.Complete;
 		return this.result(computeCost(active.parsed.records), coverageOf(active.parsed.records, folder), FreshnessLabel.Polled, completeness);

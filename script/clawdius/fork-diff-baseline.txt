@@ -58,7 +58,18 @@
 # which is now a standing gate. Growth is the clamp helper plus its two tests, the CSS rule, and that scenario;
 # no new files, no upstream file touched.
 
+# Disposition 2026-07-16 (+0 files, +115 insertions): report a torn record as a known gap. The transcript parser
+# dropped an unparseable line and recorded nothing, so a read that LOST a record still reported `complete` - the
+# one claim the completeness ladder exists to prevent. Probed against the compiled seam, a torn line returned
+# {records:1, sawForeign:false} -> `complete`, while a merely-unmodeled record type returned `partial`: the label
+# was backwards, degrading on readable content and staying silent on real loss. The parser now sets a `sawTorn`
+# flag where it drops the line, and the four ladders share one `hasKnownGap` rule (torn OR unmodeled shape OR a
+# windowed tail) instead of repeating it. `sawForeign` keeps degrading to `partial` - an unmodeled record is real
+# content the view cannot surface, which is a genuine gap. The live tail is unaffected: an unterminated final line
+# is skipped before any parse, so an actively-appended transcript stays `complete`. Growth is the flag, the shared
+# rule, and two tests pinning torn-vs-live-tail. No new files; isolated to the clawdius-owned reader seam.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
 recorded: 2026-07-16
-baseline: 5600 files changed, 41500 insertions(+), 1456122 deletions(-)
+baseline: 5600 files changed, 41615 insertions(+), 1456122 deletions(-)

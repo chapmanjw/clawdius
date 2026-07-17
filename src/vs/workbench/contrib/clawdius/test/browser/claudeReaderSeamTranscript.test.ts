@@ -177,5 +177,34 @@ suite('Clawdius reader seam - transcript adapter', () => {
 		assert.strictEqual(sub.subagentId, 'rec-0003');
 		assert.strictEqual(sub.parentRunId, 'sess-fixture-0001');
 	});
+
+	// The load-bearing one. A torn line is a record the read DROPPED, so a read containing one is not complete -
+	// it is exactly the "known gap" `partial` names. This regressed silently: the parser skipped the torn line
+	// without recording it, and the surviving records were then reported `complete`, so a lossy read was
+	// indistinguishable from a whole one. The `catch` comment even claimed skipping prevented that; skipping is
+	// what caused it. A torn line must be the ONLY difference between these two reads.
+	test('a torn record is a known gap: the read reports partial, never complete', () => {
+		const good = JSON.stringify({ type: 'user', message: { role: 'user', content: 'hi' }, sessionId: 's', cwd: '/work/fixture-proj' });
+		const whole = parseTranscriptRecords(good + '\n');
+		const torn = parseTranscriptRecords('{"type":"user","mess' + '\n' + good + '\n');
+
+		assert.deepStrictEqual({
+			whole: { records: whole.records.length, sawTorn: whole.sawTorn },
+			torn: { records: torn.records.length, sawTorn: torn.sawTorn },
+		}, {
+			// Both surface the one good record; only the torn read admits that something else was dropped.
+			whole: { records: 1, sawTorn: false },
+			torn: { records: 1, sawTorn: true },
+		});
+	});
+
+	test('an unterminated final line is the live tail, not a torn record (a growing file stays complete)', () => {
+		// The distinction the flag must not blur: a transcript being appended to right now always ends mid-record.
+		// That trailing fragment is skipped as the live tail (`unterminatedTail`) BEFORE any parse is attempted, so
+		// it must not set sawTorn - otherwise every actively-written transcript would read `partial` forever.
+		const good = JSON.stringify({ type: 'user', message: { role: 'user', content: 'hi' } });
+		const growing = parseTranscriptRecords(good + '\n' + '{"type":"user","mess');
+		assert.deepStrictEqual({ records: growing.records.length, sawTorn: growing.sawTorn }, { records: 1, sawTorn: false });
+	});
 });
 // CLAWDIUS-END

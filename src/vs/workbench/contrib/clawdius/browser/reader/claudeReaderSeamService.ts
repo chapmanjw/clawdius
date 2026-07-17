@@ -82,6 +82,12 @@ function toJournalRecord(parsed: unknown): IWorkflowJournalRecord | undefined {
 	// and be counted as nothing at all - an agent lost with no trace. Reject it so the drop is recorded.
 	const agentId = obj.agentId;
 	if (agentId !== undefined && typeof agentId !== 'string') { return undefined; }
+	// `started` / `result` are ABOUT an agent: the id is the record's whole point, and every consumer keys on it.
+	// One that arrives without a usable id cannot be counted or joined, and - this is the trap - it would not look
+	// broken either. It would look like a phase line: quietly skipped by the `type === 'started' && r.agentId`
+	// filters, counted as nothing, leaving the read to call itself whole while an agent went missing. Reject it so
+	// the drop is recorded as the gap it is. A non-agent record (phase, log) carrying no id is normal and kept.
+	if ((type === 'started' || type === 'result') && !agentId) { return undefined; }
 	return { type, agentId };
 }
 

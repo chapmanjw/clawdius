@@ -119,7 +119,21 @@
 #      caught that one guard (the recognizer's typeof) was genuinely unproven and load-bearing only on the live
 #      count path, where its absence loses an agent while still reporting `complete`.
 
+# Disposition 2026-07-16 (+0 files, +42 insertions): three more defects in the block above.
+#   1. An agent-bearing record with a missing or empty agentId passed the recognizer, and would then be skipped by
+#      the `type === 'started' && r.agentId` filters and counted as nothing - looking like a phase line rather than
+#      damage, so an agent vanished and the read still called itself whole. `started` / `result` now require a
+#      usable id or the record is a recorded drop.
+#   2. The lifecycle branch was only half-pinned. The earlier mutation pass mutated readJournal's USE of the `live`
+#      flag but never the caller's COMPUTATION of it, so flipping `mission.status === 'running'` to false left the
+#      suite green - the agent-list tests all used terminal missions. The previous commit message's claim that
+#      every guard had a failing test was therefore inaccurate. A live-mission drill-in now pins it, and the
+#      mutation matrix covers both sides of the flag.
+#   3. A test comment carried an internal-only identifier, meaningless to a later reader and the kind this repo's
+#      public-source convention keeps out of shipped code. Removed; the behavioral
+#      explanation stays.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
 recorded: 2026-07-16
-baseline: 5596 files changed, 41315 insertions(+), 1456122 deletions(-)
+baseline: 5596 files changed, 41371 insertions(+), 1456122 deletions(-)

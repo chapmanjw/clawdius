@@ -258,8 +258,8 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 			{ status: 'running', started: 1, completeness: CompletenessState.Complete });
 	});
 
-	// F4 from review: the agent-list guards below were previously asserted by nothing - deleting them left the suite
-	// green. Each of these fails if its guard is removed, which is the only thing that makes the guard real.
+	// The agent-list guards below are each pinned by a case that fails when that guard alone is removed - the only
+	// thing that makes a guard real rather than decorative.
 
 	test('a torn journal degrades the AGENT LIST, and every row it did produce, to partial', async () => {
 		const fs = makeFs();
@@ -293,6 +293,42 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 		assert.deepStrictEqual(
 			{ completeness: list.completeness, ids: list.agents.map(a => a.agentId) },
 			{ completeness: CompletenessState.Partial, ids: ['a1'] });
+	});
+
+	test('a started/result record with no agent id is a dropped record, not a silently uncounted agent', async () => {
+		const fs = makeFs();
+		// The nastiest shape: an agent-bearing record whose id is missing or empty does not look broken, it looks
+		// like a phase line - skipped by the `type === 'started' && r.agentId` filters and counted as nothing, so
+		// the agent vanishes and the read still calls itself whole. Both `started` and `result` are affected: a
+		// result with no id also leaves its agent reading unfinished forever.
+		await stageJournal(fs, 'wf_a1b2c3d4-e5f', [
+			{ type: 'started', agentId: 'a1' },
+			{ type: 'started' },
+			{ type: 'started', agentId: '' },
+			{ type: 'result' },
+		]);
+		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+		assert.deepStrictEqual(
+			{ started: mission.startedCount, completeness: mission.completeness },
+			{ started: 1, completeness: CompletenessState.Partial });
+	});
+
+	test('expanding a LIVE mission mid-append keeps its agent list complete (the tail is not damage)', async () => {
+		const fs = makeFs();
+		// The lifecycle branch on the AGENT-LIST path, which the mission-level live test does not reach: a
+		// manifest-less run is being appended to, so its half-written last line is the launcher mid-write. Treating
+		// it as damage here would label every in-flight drill-in `partial` for no reason but being in flight.
+		await stageJournalText(fs, 'wf_a1b2c3d4-e5f',
+			JSON.stringify({ type: 'started', agentId: 'a1' }) + '\n'
+			+ JSON.stringify({ type: 'result', agentId: 'a1' }) + '\n'
+			+ '{"type":"started","agen');
+		const service = makeService(fs);
+		const mission = (await service.listMissions(RESOLVED))[0] as MissionRun;
+		assert.strictEqual(mission.status, 'running');
+		const list = await service.listMissionAgents(RESOLVED, mission);
+		assert.deepStrictEqual(
+			{ completeness: list.completeness, rows: list.agents.map(a => ({ id: a.agentId, c: a.completeness })) },
+			{ completeness: CompletenessState.Complete, rows: [{ id: 'a1', c: CompletenessState.Complete }] });
 	});
 
 	test('a non-string agent id is a dropped record on the LIVE path, not a silently uncounted agent', async () => {

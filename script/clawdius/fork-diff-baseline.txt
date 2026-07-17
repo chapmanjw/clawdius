@@ -153,7 +153,23 @@
 # listMissions had already resolved. User-initiated and correct, but the work grows with the tree; recorded as a
 # follow-up rather than addressed now.
 
+# Disposition 2026-07-16 (+0 files, +99 insertions): guard the manifest's nested containers, and treat a dropped
+# field as a gap. The nested-container defect is worth naming:
+# the hardening one commit earlier validated every SCALAR manifest field and left the two collections cast, so
+# `phases: "oops"` reached `.map` (not a function) and `phases: [null]` reached `readString(null, ...)`. Both
+# THREW. Nothing catches that: missionFromManifest runs inside the enumeration loop with no try/catch, so a single
+# malformed manifest escaped listMissions and the view rendered NOTHING - one bad file taking out all 285 missions.
+# The containers are now guarded with Array.isArray + an isObject entry filter, exactly as the teams / tasks
+# adapters already did; the mission path was the inconsistent one.
+#
+# Second, a field that was PRESENT but wrong-typed was erased to undefined while the read still reported
+# `complete` - "the read got everything it asked for" said of a read that dropped something, and indistinguishable
+# from a field that was legitimately absent. A dropped field now degrades to `partial`, while an ABSENT optional
+# field stays `complete` (it lost nothing). Growth is the guards plus five tests: the throw case pins the blast
+# radius (a healthy mission beside the broken one still lists), and the wrong-type cases are parameterized per
+# field so no guard hides behind a neighbour's drop. All three new guards verified by mutation.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
 recorded: 2026-07-16
-baseline: 5596 files changed, 41465 insertions(+), 1456122 deletions(-)
+baseline: 5596 files changed, 41580 insertions(+), 1456122 deletions(-)

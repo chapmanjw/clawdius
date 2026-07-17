@@ -583,41 +583,75 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		// unchecked does not fail loudly: `{"durationMs":"5s"}` would flow a string into a slot the model declares
 		// `number`, under a `complete` label asserting a wholeness that field does not have.
 		const raw = m as unknown as Record<string, unknown>;
-		const phases: MissionPhase[] = (m.phases ?? [])
-			.map(p => p as unknown as Record<string, unknown>)
-			.filter(p => readString(p, 'title') !== undefined)
+		// A field that is PRESENT but the wrong type is data this read lost, so it must degrade the label the same
+		// as any other drop. Erasing it to `undefined` and still reporting `complete` would say "the read got
+		// everything it asked for" about a read that dropped something - and leave a consumer unable to tell a field
+		// that was legitimately absent from one that was corrupt. These wrappers read through the shared guards and
+		// record the drop; an ABSENT field is not a drop, it is simply absent.
+		let droppedField = false;
+		const str = (o: Record<string, unknown>, key: string): string | undefined => {
+			if (o[key] === undefined || o[key] === null) { return undefined; }
+			const v = readString(o, key);
+			if (v === undefined) { droppedField = true; }
+			return v;
+		};
+		const num = (o: Record<string, unknown>, key: string): number | undefined => {
+			if (o[key] === undefined || o[key] === null) { return undefined; }
+			const v = readNumber(o, key);
+			if (v === undefined) { droppedField = true; }
+			return v;
+		};
+		// The two collections need the SAME treatment as the scalars, and previously did not get it: `(m.phases ?? [])`
+		// keeps any non-nullish value, so a `phases: "oops"` reached `.map` (not a function) and a `phases: [null]`
+		// reached `readString(null, ...)`. Both THREW - and nothing catches this, so a single malformed manifest took
+		// out `enumerateMissions` and with it every other mission in the list. Guard the container, then each entry,
+		// exactly as the teams / tasks adapters already do.
+		const entries = (key: string): Record<string, unknown>[] => {
+			const v = raw[key];
+			if (v === undefined || v === null) { return []; }
+			if (!Array.isArray(v)) { droppedField = true; return []; }
+			const kept = v.filter(isObject);
+			if (kept.length !== v.length) { droppedField = true; }
+			return kept as Record<string, unknown>[];
+		};
+		const phases: MissionPhase[] = entries('phases')
+			.filter(p => str(p, 'title') !== undefined)
 			.map(p => {
-				const detail = readString(p, 'detail');
-				return detail !== undefined ? { title: readString(p, 'title')!, detail } : { title: readString(p, 'title')! };
+				const detail = str(p, 'detail');
+				return detail !== undefined ? { title: str(p, 'title')!, detail } : { title: str(p, 'title')! };
 			});
-		const progress: MissionProgressEntry[] = (m.workflowProgress ?? [])
-			.map(p => p as unknown as Record<string, unknown>)
-			.filter(p => readString(p, 'title') !== undefined && isProgressKind(readString(p, 'type')))
-			.map(p => ({ index: readNumber(p, 'index') ?? 0, title: readString(p, 'title')!, kind: readString(p, 'type') as MissionProgressKind }));
+		const progress: MissionProgressEntry[] = entries('workflowProgress')
+			.filter(p => str(p, 'title') !== undefined && isProgressKind(str(p, 'type')))
+			.map(p => ({ index: num(p, 'index') ?? 0, title: str(p, 'title')!, kind: str(p, 'type') as MissionProgressKind }));
 		// `name` must come from the validated read, not `m.workflowName ?? runId`: `??` only replaces null/undefined,
 		// so a non-string name would pass straight through the fallback it looks like it is guarded by.
-		const name = readString(raw, 'workflowName');
+		const name = str(raw, 'workflowName');
 		const recognized = name !== undefined && isTerminalStatus(m.status);
-		return {
+		const mission: MissionRun = {
 			runId,
 			sessionId,
 			name: name ?? runId,
 			status: isTerminalStatus(m.status) ? m.status as MissionStatus : 'unknown',
-			agentCount: readNumber(raw, 'agentCount') ?? progress.filter(p => p.kind === 'workflow_agent').length,
+			agentCount: num(raw, 'agentCount') ?? progress.filter(p => p.kind === 'workflow_agent').length,
 			phases,
 			progress,
-			durationMs: readNumber(raw, 'durationMs'),
-			totalTokens: readNumber(raw, 'totalTokens'),
-			totalToolCalls: readNumber(raw, 'totalToolCalls'),
-			defaultModel: readString(raw, 'defaultModel'),
-			scriptPath: readString(raw, 'scriptPath'),
-			error: readString(raw, 'error'),
+			durationMs: num(raw, 'durationMs'),
+			totalTokens: num(raw, 'totalTokens'),
+			totalToolCalls: num(raw, 'totalToolCalls'),
+			defaultModel: str(raw, 'defaultModel'),
+			scriptPath: str(raw, 'scriptPath'),
+			error: str(raw, 'error'),
 			ownership: 'foreign',
 			coverage: CoverageLabel.InScope,
 			freshness: FreshnessLabel.Polled,
-			completeness: recognized ? CompletenessState.Complete : CompletenessState.UnknownShape,
+			// An unrecognized core shape trips the canary; a recognized one that still dropped a field is a real but
+			// partial read, which is neither whole nor unreadable.
+			completeness: !recognized ? CompletenessState.UnknownShape
+				: droppedField ? CompletenessState.Partial
+					: CompletenessState.Complete,
 			adapterVersion: recognized ? this.stamp : this.canaryStamp,
 		};
+		return mission;
 	}
 
 	/**

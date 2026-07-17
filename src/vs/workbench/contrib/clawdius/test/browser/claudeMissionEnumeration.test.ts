@@ -412,11 +412,76 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 		});
 		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
 		assert.deepStrictEqual(
-			{ agentCount: mission.agentCount, durationMs: mission.durationMs, totalTokens: mission.totalTokens, scriptPath: mission.scriptPath },
+			{
+				agentCount: mission.agentCount, durationMs: mission.durationMs,
+				totalTokens: mission.totalTokens, scriptPath: mission.scriptPath, completeness: mission.completeness,
+			},
 			// `agentCount: "two"` reads as absent and falls back to the progress-derived count (the fixture declares
 			// two workflow_agent entries) - the point being that it is a NUMBER derived from data, never the string
-			// carried through. The rest have no fallback, so they read undefined rather than a wrong-typed value.
-			{ agentCount: 2, durationMs: undefined, totalTokens: undefined, scriptPath: undefined });
+			// carried through. The rest have no fallback, so they read undefined rather than a wrong-typed value -
+			// and because those fields were PRESENT and unreadable, the read is partial, not complete.
+			{ agentCount: 2, durationMs: undefined, totalTokens: undefined, scriptPath: undefined, completeness: CompletenessState.Partial });
+	});
+
+	test('a malformed phases/progress container degrades ONE mission and never throws out of the list', async () => {
+		const fs = makeFs();
+		// The blast radius is what makes this matter. `missionFromManifest` runs inside the enumeration loop with no
+		// try/catch, so a throw here does not degrade one mission - it escapes `listMissions` and the view renders
+		// NOTHING. `phases: 'oops'` reaches `.map` (not a function); `workflowProgress: [null]` reaches
+		// `readString(null, ...)`. Both threw before the container guard.
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', { ...manifestOf({ status: 'completed' }), phases: 'oops', workflowProgress: [null] });
+		await stageManifest(fs, 'wf_b2c3d4e5-f60', manifestOf({ status: 'completed' }));
+		const missions = await makeService(fs).listMissions(RESOLVED);
+		const broken = missions.find(m => m.runId === 'wf_a1b2c3d4-e5f')!;
+		assert.deepStrictEqual(
+			{ count: missions.length, phases: broken.phases, progress: broken.progress, completeness: broken.completeness },
+			// The healthy mission beside it still lists - the whole point of degrading rather than throwing.
+			{ count: 2, phases: [], progress: [], completeness: CompletenessState.Partial });
+	});
+
+	test('a null entry inside phases is dropped without taking the surrounding entries with it', async () => {
+		const fs = makeFs();
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', {
+			...manifestOf({ status: 'completed' }),
+			phases: [{ title: 'Analyze' }, null, 'nope', { title: 'Synthesize' }],
+		});
+		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+		assert.deepStrictEqual(
+			{ phases: mission.phases, completeness: mission.completeness },
+			// The two readable phases survive; the unreadable entries are a gap, so the read says partial.
+			{ phases: [{ title: 'Analyze' }, { title: 'Synthesize' }], completeness: CompletenessState.Partial });
+	});
+
+	test('a wrong-typed field is a DROP: erased from the model and the read stops claiming complete', async () => {
+		// `complete` means the read got everything it asked for. A field that was present but unreadable is data the
+		// read lost, so reporting `complete` beside it would make a corrupt field indistinguishable from an absent
+		// one. Parameterized per field: a single combined fixture would let a regression in one guard hide behind
+		// another guard's drop still setting the flag.
+		for (const [key, bad] of [
+			['durationMs', '5s'], ['totalTokens', '1e6'], ['totalToolCalls', []],
+			['defaultModel', 42], ['scriptPath', {}], ['error', true],
+		] as const) {
+			const fs = makeFs();
+			await stageManifest(fs, 'wf_a1b2c3d4-e5f', { ...manifestOf({ status: 'completed' }), [key]: bad });
+			const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+			assert.deepStrictEqual(
+				{ key, value: (mission as unknown as Record<string, unknown>)[key], completeness: mission.completeness },
+				{ key, value: undefined, completeness: CompletenessState.Partial });
+		}
+	});
+
+	test('an ABSENT optional field is not a drop - the read is still complete', async () => {
+		const fs = makeFs();
+		// The other half of the rule, and the reason the flag distinguishes present-but-unreadable from missing: a
+		// manifest that simply carries no error / scriptPath lost nothing, so degrading it would cry wolf on every
+		// successful run.
+		const manifest = manifestOf({ status: 'completed' }) as Record<string, unknown>;
+		delete manifest.error; delete manifest.scriptPath; delete manifest.totalToolCalls;
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', manifest);
+		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+		assert.deepStrictEqual(
+			{ error: mission.error, scriptPath: mission.scriptPath, completeness: mission.completeness },
+			{ error: undefined, scriptPath: undefined, completeness: CompletenessState.Complete });
 	});
 
 	test('an agent that reports started twice is listed once', async () => {

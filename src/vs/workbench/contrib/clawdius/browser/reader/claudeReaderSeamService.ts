@@ -634,7 +634,13 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		// `workflow_phase` carries `title`, a `workflow_agent` carries `label` (plus its own agentId / model /
 		// token counts). Requiring `title` of both dropped every agent entry - 897 of 1093 across 285 real
 		// manifests, 82% of the progress silently discarded - and left the agentCount fallback deriving 0 from a
-		// list its own filter had just emptied. Read whichever name the kind actually uses.
+		// list its own filter had just emptied.
+		//
+		// `title ?? label` is deliberately TOLERANT rather than keyed off `type`: it accepts either name from either
+		// kind. Keying on the kind would buy nothing here (the reader wants one display name, and the two kinds do
+		// not disagree about what it means) while adding a second way to drop an entry the moment the launcher
+		// names a future kind differently. Tolerance is the conservative choice for a reader whose whole job is to
+		// not lose things.
 		const progress: MissionProgressEntry[] = [];
 		for (const p of entries('workflowProgress')) {
 			const title = str(p, 'title') ?? str(p, 'label');

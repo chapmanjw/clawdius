@@ -554,24 +554,28 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		const dropped = sawTorn || started.some(r => !isAgentId(r.agentId));
 		const listCompleteness = dropped ? CompletenessState.Partial : mission.completeness;
 		const seen = new Set<string>();
-		const out: MissionAgent[] = [];
+		const ids: string[] = [];
 		for (const record of started) {
 			const agentId = record.agentId;
 			if (!isAgentId(agentId) || seen.has(agentId)) { continue; }
 			seen.add(agentId);
-			out.push({
-				agentId,
-				runId: mission.runId,
-				agentType: await this.readAgentType(dir, agentId),
-				finished: finished.has(agentId),
-				transcriptRef: URI.joinPath(dir, `agent-${agentId}.jsonl`).toString(),
-				coverage: mission.coverage,
-				freshness: mission.freshness,
-				// Each row carries the LIST's label, so a row read on its own is never more confident than the read
-				// it came from.
-				completeness: listCompleteness,
-			});
+			ids.push(agentId);
 		}
+		// Resolve the meta sidecars CONCURRENTLY. Awaiting inside the loop made a drill-in cost one sequential file
+		// read per agent - on a real 37-agent mission, 37 round trips in series for reads that have no dependency on
+		// each other. Every id is already past the charset guard above, so nothing about ordering was load-bearing.
+		const out: MissionAgent[] = await Promise.all(ids.map(async agentId => ({
+			agentId,
+			runId: mission.runId,
+			agentType: await this.readAgentType(dir, agentId),
+			finished: finished.has(agentId),
+			transcriptRef: URI.joinPath(dir, `agent-${agentId}.jsonl`).toString(),
+			coverage: mission.coverage,
+			freshness: mission.freshness,
+			// Each row carries the LIST's label, so a row read on its own is never more confident than the read it
+			// came from.
+			completeness: listCompleteness,
+		})));
 		return { agents: out.sort((a, b) => a.agentId.localeCompare(b.agentId)), completeness: listCompleteness };
 	}
 
@@ -614,15 +618,30 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 			if (kept.length !== v.length) { droppedField = true; }
 			return kept as Record<string, unknown>[];
 		};
-		const phases: MissionPhase[] = entries('phases')
-			.filter(p => str(p, 'title') !== undefined)
-			.map(p => {
-				const detail = str(p, 'detail');
-				return detail !== undefined ? { title: str(p, 'title')!, detail } : { title: str(p, 'title')! };
-			});
-		const progress: MissionProgressEntry[] = entries('workflowProgress')
-			.filter(p => str(p, 'title') !== undefined && isProgressKind(str(p, 'type')))
-			.map(p => ({ index: num(p, 'index') ?? 0, title: str(p, 'title')!, kind: str(p, 'type') as MissionProgressKind }));
+		// An entry DISCARDED by these predicates is a drop like any other, and must say so. A phase object with no
+		// title, or a progress entry whose kind this reader does not model, is real content that will not reach the
+		// view - the same thing `sawForeign` degrades a transcript for. Silently filtering it while reporting
+		// `complete` is the one claim the ladder exists to refuse, so the discard sets the flag rather than
+		// vanishing.
+		const phases: MissionPhase[] = [];
+		for (const p of entries('phases')) {
+			const title = str(p, 'title');
+			if (title === undefined) { droppedField = true; continue; }
+			const detail = str(p, 'detail');
+			phases.push(detail !== undefined ? { title, detail } : { title });
+		}
+		// A progress entry names itself differently by kind, measured against the real config root: a
+		// `workflow_phase` carries `title`, a `workflow_agent` carries `label` (plus its own agentId / model /
+		// token counts). Requiring `title` of both dropped every agent entry - 897 of 1093 across 285 real
+		// manifests, 82% of the progress silently discarded - and left the agentCount fallback deriving 0 from a
+		// list its own filter had just emptied. Read whichever name the kind actually uses.
+		const progress: MissionProgressEntry[] = [];
+		for (const p of entries('workflowProgress')) {
+			const title = str(p, 'title') ?? str(p, 'label');
+			const kind = str(p, 'type');
+			if (title === undefined || !isProgressKind(kind)) { droppedField = true; continue; }
+			progress.push({ index: num(p, 'index') ?? 0, title, kind: kind as MissionProgressKind });
+		}
 		// `name` must come from the validated read, not `m.workflowName ?? runId`: `??` only replaces null/undefined,
 		// so a non-string name would pass straight through the fallback it looks like it is guarded by.
 		const name = str(raw, 'workflowName');

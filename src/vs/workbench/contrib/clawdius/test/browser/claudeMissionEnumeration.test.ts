@@ -98,10 +98,13 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 			defaultModel: 'claude-opus-4-8[1m]',
 			scriptPath: '/home/tester/.claude/scripts/audit.js',
 			phases: [{ title: 'Analyze', detail: 'one agent per theme' }, { title: 'Synthesize' }],
+			// The REAL shapes, measured against the config root: a phase entry names itself `title`, an agent entry
+			// names itself `label` and carries its own agentId/model/counters. A fixture that gave agents a `title`
+			// tested a manifest the launcher never writes - and hid that the reader dropped every real agent entry.
 			workflowProgress: [
 				{ index: 1, title: 'Analyze', type: 'workflow_phase' },
-				{ index: 1, title: 'audit:fleet', type: 'workflow_agent' },
-				{ index: 2, title: 'audit:trust', type: 'workflow_agent' },
+				{ index: 1, label: 'audit:fleet', type: 'workflow_agent', agentId: 'a1', model: 'opus', state: 'done' },
+				{ index: 2, label: 'audit:trust', type: 'workflow_agent', agentId: 'a2', model: 'opus', state: 'done' },
 			],
 			...overrides,
 		};
@@ -468,6 +471,73 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 				{ key, value: (mission as unknown as Record<string, unknown>)[key], completeness: mission.completeness },
 				{ key, value: undefined, completeness: CompletenessState.Partial });
 		}
+	});
+
+	// The subtler half of the same rule. A phase object with no title, and a progress entry whose kind this reader
+	// does not model, are both real content that will not reach the view - the same thing the transcript reader
+	// degrades for on an unmodeled record type. Filtering them out silently under a `complete` label would be the
+	// ladder contradicting itself one level down. ONE discarded entry per case: a fixture carrying both let either
+	// guard regress behind the other still setting the flag, which is how the first draft of this test passed while
+	// both guards were broken.
+
+	test('an agent progress entry names itself `label`, a phase names itself `title` - both are read', async () => {
+		const fs = makeFs();
+		// The shape the launcher actually writes, and the bug this pins: requiring `title` of every entry dropped
+		// every workflow_agent - 897 of 1093 entries across 285 real manifests - while the read still reported
+		// `complete`, so 82% of the progress vanished with nothing to show it had. The honesty label is what
+		// surfaced it: the drop only became visible once a dropped entry started degrading the read.
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', manifestOf({ status: 'completed' }));
+		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+		assert.deepStrictEqual(
+			{
+				progress: mission.progress.map(p => ({ title: p.title, kind: p.kind })),
+				completeness: mission.completeness,
+			},
+			{
+				progress: [
+					{ title: 'Analyze', kind: 'workflow_phase' },
+					{ title: 'audit:fleet', kind: 'workflow_agent' },
+					{ title: 'audit:trust', kind: 'workflow_agent' },
+				],
+				// Nothing was dropped, so the read is whole - the label only cries wolf when something really went.
+				completeness: CompletenessState.Complete,
+			});
+	});
+
+	test('a phase entry with no title is a drop, not a silent filter', async () => {
+		const fs = makeFs();
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', {
+			...manifestOf({ status: 'completed' }),
+			phases: [{ title: 'Analyze' }, { detail: 'no title here' }],
+		});
+		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+		assert.deepStrictEqual(
+			{ phases: mission.phases, completeness: mission.completeness },
+			{ phases: [{ title: 'Analyze' }], completeness: CompletenessState.Partial });
+	});
+
+	test('a progress entry of an unmodeled kind is a drop, not a silent filter', async () => {
+		const fs = makeFs();
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', {
+			...manifestOf({ status: 'completed' }),
+			workflowProgress: [{ index: 1, title: 'audit', type: 'workflow_agent' }, { index: 2, title: 'a tool', type: 'workflow_tool' }],
+		});
+		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+		assert.deepStrictEqual(
+			{ progress: mission.progress.map(p => p.title), completeness: mission.completeness },
+			{ progress: ['audit'], completeness: CompletenessState.Partial });
+	});
+
+	test('an explicit null field is ABSENT, not a drop - it alone keeps the read complete', async () => {
+		const fs = makeFs();
+		// Isolated on purpose: the wrong-type cases would mask this, since their read is already partial for other
+		// reasons. Losing the null->absent branch would flip every ordinary run that serializes `"error": null` to
+		// partial - crying wolf on healthy data, which erodes the label exactly as fast as overclaiming does.
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', { ...manifestOf({ status: 'completed' }), error: null });
+		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+		assert.deepStrictEqual(
+			{ error: mission.error, completeness: mission.completeness },
+			{ error: undefined, completeness: CompletenessState.Complete });
 	});
 
 	test('an ABSENT optional field is not a drop - the read is still complete', async () => {

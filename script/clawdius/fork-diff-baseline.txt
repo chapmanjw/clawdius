@@ -169,7 +169,25 @@
 # radius (a healthy mission beside the broken one still lists), and the wrong-type cases are parameterized per
 # field so no guard hides behind a neighbour's drop. All three new guards verified by mutation.
 
+# Disposition 2026-07-17 (+0 files, +89 insertions): read an agent progress entry by the name it actually uses,
+# plus three MINOR fixes. The label found a real defect the moment it was sharp enough to:
+#   - A discarded entry now degrades the read (a phase object with no title, a progress entry of an unmodeled
+#     kind). Turning that on immediately flipped 283 of 285 REAL manifests to `partial`, all for one reason -
+#     which was not the label crying wolf, it was the label working. A progress entry names itself by KIND: a
+#     workflow_phase carries `title`, a workflow_agent carries `label`. Requiring `title` of both dropped every
+#     agent entry - 897 of 1093 across the real config root, 82% of the progress - silently, under a `complete`
+#     claim, and left the agentCount fallback deriving 0 from a list its own filter had just emptied. The model's
+#     doc had said "the phase title or agent label" all along; only the reader disagreed. Fixed, and the fixtures
+#     now carry the shapes the launcher really writes rather than an invented uniform one.
+#   - The null->absent branch is now pinned on its own: losing it would flip every ordinary run carrying
+#     `"error": null` to `partial`, and no test would have failed.
+#   - readAgentType no longer awaits serially inside the agent loop: a drill-in cost one sequential read per agent
+#     (37 in series on a real mission) for reads with no dependency on each other.
+# Mutation-tested with a no-op guard this time: the harness now fails loudly when a mutation pattern does not
+# match, which caught that two of these guards were masking each other inside one combined fixture and reported
+# themselves covered when they were not.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
-recorded: 2026-07-16
-baseline: 5596 files changed, 41580 insertions(+), 1456122 deletions(-)
+recorded: 2026-07-17
+baseline: 5596 files changed, 41687 insertions(+), 1456122 deletions(-)

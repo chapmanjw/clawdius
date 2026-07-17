@@ -63,11 +63,18 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 		await fs.writeFile(URI.joinPath(dir, `${runId}.json`), VSBuffer.fromString(JSON.stringify(manifest)));
 	}
 
-	/** Stage a run's journal ledger - written DURING the run, one `started`/`result` per agent. */
+	/** Stage a run's journal ledger - written DURING the run, one `started`/`result` per agent. Every record is
+	 *  newline-TERMINATED, as the launcher writes them: measured against the real config root, all journals on disk
+	 *  end in '\n'. A fixture that omitted the terminator would make the last record look like the half-written tail
+	 *  of a live run and quietly test a shape the launcher never emits. */
 	async function stageJournal(fs: FileService, runId: string, lines: readonly object[]): Promise<void> {
+		await stageJournalText(fs, runId, lines.map(l => JSON.stringify(l) + '\n').join(''));
+	}
+
+	/** Stage a journal's RAW text, for the shapes a record list cannot express (a torn line, a live partial tail). */
+	async function stageJournalText(fs: FileService, runId: string, text: string): Promise<void> {
 		const dir = URI.joinPath(sessionDir(), 'subagents', 'workflows', runId);
 		await fs.createFolder(dir);
-		const text = lines.map(l => JSON.stringify(l)).join('\n');
 		await fs.writeFile(URI.joinPath(dir, 'journal.jsonl'), VSBuffer.fromString(text));
 	}
 
@@ -216,6 +223,39 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 			{ agentId: 'a1', runId: 'wf_f96a6688-77e', agentType: 'workflow-subagent', finished: true },
 			{ agentId: 'a2', runId: 'wf_f96a6688-77e', agentType: undefined, finished: false },
 		]);
+	});
+
+	// The journal analogue of the transcript's torn-record hole, and the same lie: these counts are DERIVED from the
+	// journal's records, so a dropped `started`/`result` silently undercounts a live mission's agents. Reported as
+	// `complete` alongside `freshness: live`, a short count reads as a confident one. A tear must degrade to
+	// `partial` - the counts remain the best available, they just stop claiming to be whole.
+	test('a torn journal line is a known gap: the live mission counts what it can and reports partial', async () => {
+		const fs = makeFs();
+		// Two agents started, one finished, and a THIRD `started` record torn mid-file (the launcher wrote it, then
+		// it was damaged) - so the honest read is 2 started / 1 result, labeled as incomplete rather than whole.
+		await stageJournalText(fs, 'wf_a1b2c3d4-e5f',
+			JSON.stringify({ type: 'started', agentId: 'a-1' }) + '\n'
+			+ JSON.stringify({ type: 'started', agentId: 'a-2' }) + '\n'
+			+ '{"type":"started","agen' + '\n'
+			+ JSON.stringify({ type: 'result', agentId: 'a-1' }) + '\n');
+		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+		assert.deepStrictEqual(
+			{ status: mission.status, started: mission.startedCount, results: mission.resultCount, completeness: mission.completeness },
+			{ status: 'running', started: 2, results: 1, completeness: CompletenessState.Partial });
+	});
+
+	test('a live journal whose last record is still being written is NOT torn (an in-flight run stays whole)', async () => {
+		const fs = makeFs();
+		// The launcher appends record-by-record, so a journal read mid-write ends in a half-line. That is the live
+		// tail, not damage: skipped before any parse, exactly as the transcript reader does, so an in-flight mission
+		// is not permanently labeled `partial` merely for being in flight.
+		await stageJournalText(fs, 'wf_b2c3d4e5-f60',
+			JSON.stringify({ type: 'started', agentId: 'a-1' }) + '\n'
+			+ '{"type":"started","agen');
+		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+		assert.deepStrictEqual(
+			{ status: mission.status, started: mission.startedCount, completeness: mission.completeness },
+			{ status: 'running', started: 1, completeness: CompletenessState.Complete });
 	});
 
 	test('a mission with no journal lists no agents rather than throwing', async () => {

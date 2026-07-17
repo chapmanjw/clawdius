@@ -48,7 +48,7 @@ import { ClaudeMissionTranscriptInput } from './claudeMissionTranscriptInput.js'
 export const MISSIONS_VIEW_CONTAINER_ID = 'workbench.view.clawdiusMissions';
 export const MISSIONS_VIEW_ID = 'clawdius.missions';
 
-/** The minimal run-enumeration surface the fleet view binds to (listRuns). Structural so a unit test
+/** The minimal mission-enumeration surface the view binds to (listMissions). Structural so a unit test
  *  can supply a fake without instantiating the full seam service. */
 export interface IFleetRunSource {
 	listMissions(root: ReaderConfigRoot): Promise<readonly MissionRun[]>;
@@ -58,7 +58,7 @@ export interface IFleetRunSource {
  *  selector lookup). A `WeakMap` keyed by the row element releases automatically when the row is cleared. */
 const badgeHosts = new WeakMap<HTMLElement, HTMLElement>();
 
-/** The badge-host element for a rendered run row, if it has one (created by {@link appendRunRow}). */
+/** The badge-host element for a rendered run row, if it has one (created by {@link appendMissionRow}). */
 export function badgeHostOf(row: HTMLElement): HTMLElement | undefined {
 	return badgeHosts.get(row);
 }
@@ -338,7 +338,6 @@ export class ClawdiusMissionsView extends ViewPane {
 	private listEl: HTMLElement | undefined;
 	private list: FleetRunsList | undefined;
 	private readonly seam: ClawdiusReaderSeamService;
-	private readonly refreshStore = this._register(new DisposableStore());
 	private disposed = false;
 	/** The config root resolved on the last refresh, reused by the drill-in to list a run's subagents. */
 	private root: ReaderConfigRoot | undefined;
@@ -435,7 +434,6 @@ export class ClawdiusMissionsView extends ViewPane {
 	 *  through the seam (the only data path). Honest on failure: an empty labeled list renders the empty
 	 *  state rather than throwing. */
 	private async refresh(): Promise<void> {
-		this.refreshStore.clear();
 		const home = await this.pathService.userHome();
 		if (this.disposed) { return; }
 		const root = resolveConfigRoot(undefined, home);

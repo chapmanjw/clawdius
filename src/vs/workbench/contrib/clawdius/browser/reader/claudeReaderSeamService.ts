@@ -48,6 +48,16 @@ const JOURNAL_NAME = 'journal.jsonl';
 
 /** A workflow run id, matching the launcher's own `wf_`-prefixed id contract. Guards against stray files. */
 const RUN_ID_RE = /^wf_[a-z0-9-]{6,}$/;
+/** A workflow agent id, as a PATH-SAFE token. The id is read off the journal and interpolated into
+ *  `agent-<id>.jsonl` / `agent-<id>.meta.json`, so it is untrusted path input: anything outside this charset (a
+ *  separator, a `..`) is rejected rather than joined, mirroring the guard `oobRef` applies to a transcript's
+ *  out-of-band ref. Matches the launcher's own ids, which are plain alphanumeric/dash/underscore. */
+const AGENT_ID_RE = /^[A-Za-z0-9_-]+$/;
+
+/** Whether an id read off the journal is safe to interpolate into a sibling `agent-<id>.*` path. */
+function isAgentId(id: string): boolean {
+	return AGENT_ID_RE.test(id);
+}
 
 /**
  * The on-disk shape of a workflow run manifest (`workflows/<runId>.json`). Every field is optional here on
@@ -129,6 +139,14 @@ interface ITranscriptRecord {
 /** The outcome of parsing a transcript window: the recognized records plus the flags that let the adapter tell
  *  an empty file (absent) apart from a wholly-unknown shape (unknown-shape) apart from a recognized read that
  *  still contained an unreadable record shape (partial). */
+/** The outcome of reading a workflow journal: its records plus whether any line was DROPPED as unparseable. A
+ *  dropped `started` / `result` record silently undercounts a live mission's agents, so - exactly as for a torn
+ *  transcript record - the drop must degrade completeness rather than pass unmentioned under a `complete` claim. */
+interface IParsedJournal {
+	readonly records: readonly IWorkflowJournalRecord[];
+	readonly sawTorn: boolean;
+}
+
 interface IParsedTranscript {
 	readonly records: readonly ITranscriptRecord[];
 	/** At least one complete JSON object line was parsed. */
@@ -485,13 +503,16 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 	async enumerateMissionAgents(root: URI, mission: MissionRun): Promise<readonly MissionAgent[]> {
 		const dir = await this.findMissionJournalDir(root, mission);
 		if (!dir) { return []; }
-		const records = await this.readJournal(URI.joinPath(dir, JOURNAL_NAME));
+		const { records, sawTorn } = await this.readJournal(URI.joinPath(dir, JOURNAL_NAME));
 		const finished = new Set(records.filter(r => r.type === 'result' && r.agentId).map(r => r.agentId));
 		const seen = new Set<string>();
 		const out: MissionAgent[] = [];
 		for (const record of records) {
 			const agentId = record.agentId;
-			if (record.type !== 'started' || !agentId || seen.has(agentId)) { continue; }
+			// An agent's id is the join key to its sibling `agent-<id>.jsonl`, so it is a path component read off
+			// disk: hold it to the same charset guard `oobRef` applies to a transcript's out-of-band ref rather than
+			// interpolating it raw. A `..` or separator here would steer the join outside the mission dir.
+			if (record.type !== 'started' || !agentId || !isAgentId(agentId) || seen.has(agentId)) { continue; }
 			seen.add(agentId);
 			out.push({
 				agentId,
@@ -501,7 +522,10 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 				transcriptRef: URI.joinPath(dir, `agent-${agentId}.jsonl`).toString(),
 				coverage: mission.coverage,
 				freshness: mission.freshness,
-				completeness: mission.completeness,
+				// A torn journal line may have DROPPED a `started` record, in which case that agent is missing from
+				// this list entirely and no row can carry its absence. Label every row `partial` so the gap is
+				// visible on the list the user actually reads: a short list that claims `complete` is the lie.
+				completeness: sawTorn ? CompletenessState.Partial : mission.completeness,
 			});
 		}
 		return out.sort((a, b) => a.agentId.localeCompare(b.agentId));
@@ -545,7 +569,7 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 	 * whole record of what has happened SO FAR; a run in progress is not a partial read.
 	 */
 	private async missionFromJournal(runId: string, sessionId: string, journal: URI): Promise<MissionRun> {
-		const records = await this.readJournal(journal);
+		const { records, sawTorn } = await this.readJournal(journal);
 		const started = new Set(records.filter(r => r.type === 'started' && r.agentId).map(r => r.agentId)).size;
 		const results = new Set(records.filter(r => r.type === 'result' && r.agentId).map(r => r.agentId)).size;
 		return {
@@ -561,7 +585,12 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 			ownership: 'foreign',
 			coverage: CoverageLabel.InScope,
 			freshness: FreshnessLabel.Live,
-			completeness: records.length > 0 ? CompletenessState.Complete : CompletenessState.Absent,
+			// A torn journal line is a DROPPED record, and these counts are derived from exactly those records: a lost
+			// `started` / `result` silently undercounts the mission's agents, so a row would read "agents: 4/5" for a
+			// 5/6 run while claiming `complete`. Degrade to `partial` - the counts are still the best available, but
+			// they are no longer a whole read and must not be labeled as one.
+			completeness: sawTorn ? CompletenessState.Partial
+				: records.length > 0 ? CompletenessState.Complete : CompletenessState.Absent,
 			adapterVersion: this.stamp,
 		};
 	}
@@ -632,18 +661,29 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 	}
 
 	/** A journal's records. Never throws: a missing/torn ledger yields only the lines that did parse. */
-	private async readJournal(journal: URI): Promise<IWorkflowJournalRecord[]> {
+	private async readJournal(journal: URI): Promise<IParsedJournal> {
 		let text: string;
-		try { text = (await this.fileService.readFile(journal)).value.toString(); } catch { return []; }
-		const out: IWorkflowJournalRecord[] = [];
-		for (const line of text.split('\n')) {
+		try { text = (await this.fileService.readFile(journal)).value.toString(); } catch { return { records: [], sawTorn: false }; }
+		const records: IWorkflowJournalRecord[] = [];
+		let sawTorn = false;
+		const lines = text.split('\n');
+		const lastIdx = lines.length - 1;
+		for (let i = 0; i < lines.length; i++) {
+			const line = lines[i];
 			if (!line.trim()) { continue; }
+			// A non-empty LAST line means the file did not end in '\n': the record the launcher is appending right
+			// now. Expected on a live run and not a tear - skip it without flagging, mirroring
+			// `parseTranscriptRecords`. Any OTHER unparseable line is a real tear: the journal is append-only, so a
+			// line with a terminator after it was fully written and then damaged.
+			if (i === lastIdx) { continue; }
 			try {
 				const parsed: unknown = JSON.parse(line);
-				if (parsed && typeof parsed === 'object') { out.push(parsed as IWorkflowJournalRecord); }
-			} catch { /* a half-written trailing line is expected while a run is live */ }
+				if (parsed && typeof parsed === 'object') { records.push(parsed as IWorkflowJournalRecord); } else { sawTorn = true; }
+			} catch {
+				sawTorn = true;
+			}
 		}
-		return out;
+		return { records, sawTorn };
 	}
 
 	/** The agent role from its `agent-<id>.meta.json` sidecar, or undefined when there is none. */

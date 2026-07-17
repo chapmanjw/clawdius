@@ -88,7 +88,20 @@
 # The prose in those blocks stands; only the arithmetic was misattributed. This number is measured against the
 # WORKTREE (what HEAD becomes on commit), which is the measurement the recorded baseline must match.
 
+# Disposition 2026-07-16 (+0 files, +78 insertions): close the journal's torn-record hole - the same gap the
+# transcript reader had, in the same series. readJournal discarded every unparseable
+# line under a comment claiming they were the expected half-written trailing record, but the catch covered EVERY
+# line, so a tear mid-file dropped a `started`/`result` silently. Those records are what the agent counts are
+# derived from, so a live mission read "agents: 4/5" for a 5/6 run while reporting completeness `complete` beside
+# freshness `live` - a short count wearing a confident label. The reader now applies the transcript's own rule (skip
+# only a non-terminated LAST line as the live tail; flag any other drop) and a tear degrades the mission, and its
+# agent list, to `partial`. Measured against the real config root to settle which line is the tail: all 20 journals
+# sampled end in '\n', so a complete journal never trips the tail skip - and the test fixture, which omitted the
+# terminator, was the thing that was wrong; it now writes what the launcher writes. Also guards `agentId` with a
+# path-safe charset before interpolating it into `agent-<id>.*`, matching the guard oobRef already applies, and
+# drops a dead DisposableStore plus two doc links left dangling by the Run->Mission rename.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
 recorded: 2026-07-16
-baseline: 5596 files changed, 41043 insertions(+), 1456122 deletions(-)
+baseline: 5596 files changed, 41134 insertions(+), 1456122 deletions(-)

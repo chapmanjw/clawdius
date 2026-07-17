@@ -31,8 +31,8 @@ import { IViewPaneOptions, ViewPane } from '../../../../browser/parts/views/view
 import { IViewDescriptorService } from '../../../../common/views.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IPathService } from '../../../../services/path/common/pathService.js';
-import { FleetRun, FleetSubagent } from '../../common/claudeFleetModel.js';
-import { CoverageLabel, ReaderConfigRoot, ReaderScope, resolveConfigRoot } from '../../common/claudeReaderSeam.js';
+import { FleetRun, FleetSubagent, MissionAgent, MissionRun } from '../../common/claudeFleetModel.js';
+import { CoverageLabel, ReaderConfigRoot, resolveConfigRoot } from '../../common/claudeReaderSeam.js';
 import { ClawdiusReaderSeamService } from '../reader/claudeReaderSeamService.js';
 import { BadgeSignal, ClaudeMissionBadgeFeed } from './claudeMissionBadges.js';
 import { ownedSessionIdsFromHost } from './claudeMissionOwnership.js';
@@ -44,7 +44,7 @@ export const MISSIONS_VIEW_ID = 'clawdius.missions';
 /** The minimal run-enumeration surface the fleet view binds to (listRuns). Structural so a unit test
  *  can supply a fake without instantiating the full seam service. */
 export interface IFleetRunSource {
-	listRuns(root: ReaderConfigRoot, scope?: ReaderScope): Promise<readonly FleetRun[]>;
+	listMissions(root: ReaderConfigRoot): Promise<readonly MissionRun[]>;
 }
 
 /** Row -> its dedicated badge-host element, so the live badge can be updated by direct reference (never a
@@ -110,13 +110,96 @@ export function appendRunRow(parent: HTMLElement, run: FleetRun, badge?: BadgeSi
 	return row;
 }
 
+/**
+ * Append one ultracode MISSION as a labeled row - the Missions list's primary row. A mission leads with the name
+ * its script declared (a run is a thing the user named, not an opaque id) and carries its real status, agent count
+ * and phase count, plus every honesty label as both a badge and a `data-*` hook so a Playwright render can assert
+ * it.
+ *
+ * The status is the seam's, never fabricated: `running` is only ever reached by a run whose journal has no manifest
+ * beside it, so a row reading `running` is a genuinely in-flight mission. A live run additionally shows how far it
+ * has got (`finished/total` agents), which is the only progress signal that exists before a manifest is written.
+ */
+export function appendMissionRow(parent: HTMLElement, mission: MissionRun, badge?: BadgeSignal): HTMLElement {
+	const foreign = mission.coverage === CoverageLabel.Foreign;
+	const row = append(parent, $(`.clawdius-missions-row${foreign ? '.foreign' : ''}`, {
+		'data-run-id': mission.runId,
+		'data-session-id': mission.sessionId,
+		'data-kind': 'workflow',
+		'data-status': mission.status,
+		'data-mission-name': mission.name,
+		'data-agent-count': String(mission.agentCount),
+		'data-ownership': mission.ownership,
+		'data-coverage': mission.coverage,
+		'data-freshness': mission.freshness,
+		'data-completeness': mission.completeness,
+	}));
+	const name = append(row, $('.clawdius-missions-run'));
+	name.textContent = mission.name;
+	name.title = localize('clawdius.missions.missionTitle', "Mission {0} · run {1} · session {2}", mission.name, mission.runId, mission.sessionId);
+	append(row, $(`.clawdius-missions-status.status-${mission.status}`, undefined, localize('clawdius.missions.status', "status: {0}", mission.status)));
+	const labels = append(row, $('.clawdius-missions-labels'));
+	// A dedicated badge host leads the labels area; the live badge (if any) is rendered into it by direct
+	// reference, so no fragile selector lookup is needed to update it later.
+	const host = append(labels, $('.clawdius-missions-badgehost'));
+	badgeHosts.set(row, host);
+	// A live mission has no manifest yet, so `finished/total` off its journal is the only progress it can honestly
+	// report; a terminal mission reports the agent count its manifest recorded.
+	const agents = mission.status === 'running' && mission.resultCount !== undefined
+		? localize('clawdius.missions.agentsProgress', "agents: {0}/{1}", mission.resultCount, mission.agentCount)
+		: localize('clawdius.missions.agents', "agents: {0}", mission.agentCount);
+	append(labels, $('.clawdius-missions-label.agents', undefined, agents));
+	if (mission.phases.length > 0) {
+		append(labels, $('.clawdius-missions-label.phases', undefined, localize('clawdius.missions.phases', "phases: {0}", mission.phases.length)));
+	}
+	append(labels, $(`.clawdius-missions-label.freshness-${mission.freshness}`, undefined, localize('clawdius.missions.freshness', "freshness: {0}", mission.freshness)));
+	append(labels, $(`.clawdius-missions-label.completeness-${mission.completeness}`, undefined, localize('clawdius.missions.completeness', "completeness: {0}", mission.completeness)));
+	append(labels, $(`.clawdius-missions-label.ownership-${mission.ownership}`, undefined, localize('clawdius.missions.ownership', "ownership: {0}", mission.ownership)));
+	if (mission.error) {
+		append(row, $('.clawdius-missions-error', { 'data-mission-error': '' }, mission.error));
+	}
+	renderRunBadge(host, badge);
+	return row;
+}
+
+/**
+ * Append one of a mission's agents as a clickable child row. Unlike a Task subagent - a sidechain record inside its
+ * parent's transcript - a workflow agent is its own file, so the row is keyed by `agentId` and carries the role its
+ * meta sidecar recorded. An agent that started but never reported a result is rendered WITH that label
+ * (`data-finished="false"`), never omitted: an unfinished agent is exactly what a user opening a live mission needs
+ * to see.
+ */
+export function appendMissionAgentRow(parent: HTMLElement, agent: MissionAgent): HTMLElement {
+	const row = append(parent, $('.clawdius-missions-subrow', {
+		'data-agent-id': agent.agentId,
+		'data-parent-run-id': agent.runId,
+		'data-agent-type': agent.agentType ?? '',
+		'data-finished': String(agent.finished),
+		'data-coverage': agent.coverage,
+		'data-freshness': agent.freshness,
+		'data-completeness': agent.completeness,
+	}));
+	row.setAttribute('role', 'button');
+	row.tabIndex = 0;
+	const name = append(row, $('.clawdius-missions-subagent'));
+	name.textContent = agent.agentType ? `${agent.agentType} · ${agent.agentId}` : agent.agentId;
+	name.title = localize('clawdius.missions.agentTitle', "Open transcript for agent {0}", agent.agentId);
+	const labels = append(row, $('.clawdius-missions-sublabels'));
+	append(labels, $(`.clawdius-missions-label.finished-${agent.finished}`, undefined, agent.finished
+		? localize('clawdius.missions.agentFinished', "finished")
+		: localize('clawdius.missions.agentRunning', "in flight")));
+	append(labels, $(`.clawdius-missions-label.freshness-${agent.freshness}`, undefined, localize('clawdius.missions.freshness', "freshness: {0}", agent.freshness)));
+	append(labels, $(`.clawdius-missions-label.completeness-${agent.completeness}`, undefined, localize('clawdius.missions.completeness', "completeness: {0}", agent.completeness)));
+	return row;
+}
+
 /** The per-row drill-in wiring the ViewPane supplies (kept out of the pure list so a unit test can render rows
- *  without a workbench host): expand a run to its subagents, and open a subagent's transcript in the editor area. */
+ *  without a workbench host): expand a mission to its agents, and open an agent's transcript in the editor area. */
 export interface IFleetRowInteractions {
-	/** List a run's subagents through the seam (present-with-label, never dropped). */
-	listSubagents(run: FleetRun): Promise<readonly FleetSubagent[]>;
-	/** Open a subagent's transcript in the editor area (the drill-in). */
-	openSubagent(subagent: FleetSubagent): void;
+	/** List a mission's agents through the seam (present-with-label, never dropped). */
+	listAgents(mission: MissionRun): Promise<readonly MissionAgent[]>;
+	/** Open an agent's transcript in the editor area (the drill-in). */
+	openAgent(agent: MissionAgent): void;
 }
 
 /** Append one FleetSubagent as a clickable child row under its run, carrying its honesty labels as `data-*` hooks
@@ -173,7 +256,7 @@ export class FleetRunsList extends Disposable {
 		this._register(toDisposable(() => { this.generation++; }));
 	}
 
-	render(runs: readonly FleetRun[], badges?: ReadonlyMap<string, BadgeSignal>): void {
+	render(runs: readonly MissionRun[], badges?: ReadonlyMap<string, BadgeSignal>): void {
 		this.pendingBatch.clear();
 		this.rowStore.clear();
 		this.generation++;
@@ -190,7 +273,7 @@ export class FleetRunsList extends Disposable {
 		const step = () => {
 			const end = Math.min(i + FleetRunsList.BATCH_SIZE, runs.length);
 			for (; i < end; i++) {
-				const row = appendRunRow(this.container, runs[i], this.badges.get(runs[i].runId));
+				const row = appendMissionRow(this.container, runs[i], this.badges.get(runs[i].runId));
 				this.rowByRunId.set(runs[i].runId, row);
 				if (this.interactions) { this.wireRunRow(row, runs[i]); }
 			}
@@ -217,7 +300,7 @@ export class FleetRunsList extends Disposable {
 	/** Make a run row expandable: a click (or Enter/Space) toggles an inline child list of the run's subagents,
 	 *  fetched lazily through the seam; clicking a subagent opens its transcript. Only wired when interactions were
 	 *  supplied. */
-	private wireRunRow(row: HTMLElement, run: FleetRun): void {
+	private wireRunRow(row: HTMLElement, run: MissionRun): void {
 		const interactions = this.interactions!;
 		row.classList.add('expandable');
 		row.setAttribute('role', 'button');
@@ -246,8 +329,8 @@ export class FleetRunsList extends Disposable {
 			const mine = $('.clawdius-missions-subagents', { 'data-parent-run-id': run.runId });
 			child = mine;
 			row.after(mine);
-			let subs: readonly FleetSubagent[] = [];
-			try { subs = await interactions.listSubagents(run); } catch { subs = []; }
+			let subs: readonly MissionAgent[] = [];
+			try { subs = await interactions.listAgents(run); } catch { subs = []; }
 			// Bail if this expansion is stale: a collapse/re-expand replaced this child (child !== mine), OR a
 			// full render() / disposal tore the row down (generation moved) - in the latter case mine is detached
 			// and childStore is already disposed, so appending or adding listeners would be a leak/no-op warning.
@@ -255,12 +338,12 @@ export class FleetRunsList extends Disposable {
 			clearNode(mine);
 			if (subs.length === 0) {
 				append(mine, $('.clawdius-missions-subempty', { 'data-clawdius-missions-subempty': 'true' })).textContent =
-					localize('clawdius.missions.noSubagents', "No subagents for this run.");
+					localize('clawdius.missions.noAgents', "No agents for this mission.");
 				return;
 			}
 			for (const sub of subs) {
-				const subrow = appendSubagentRow(mine, sub);
-				const open = () => interactions.openSubagent(sub);
+				const subrow = appendMissionAgentRow(mine, sub);
+				const open = () => interactions.openAgent(sub);
 				childStore.add(addDisposableListener(subrow, EventType.CLICK, open));
 				childStore.add(addDisposableListener(subrow, EventType.KEY_DOWN, e => {
 					const ke = new StandardKeyboardEvent(e);
@@ -291,7 +374,7 @@ export class ClawdiusMissionsView extends ViewPane {
 	/** The config root resolved on the last refresh, reused by the drill-in to list a run's subagents. */
 	private root: ReaderConfigRoot | undefined;
 	/** The runs painted on the last refresh, correlated against by the live badge feed. */
-	private currentRuns: readonly FleetRun[] = [];
+	private currentRuns: readonly MissionRun[] = [];
 	/** The authoritative live badges per run; re-applied on every render and updated live by the feed. */
 	private readonly badges = new Map<string, BadgeSignal>();
 	/** The live needs-input/completion badge feed (created in renderBody, disposed with the view). */
@@ -327,8 +410,8 @@ export class ClawdiusMissionsView extends ViewPane {
 		super.renderBody(container);
 		this.listEl = append(container, $('.clawdius-missions'));
 		this.list = this._register(new FleetRunsList(this.listEl, {
-			listSubagents: run => this.listSubagentsFor(run),
-			openSubagent: sub => this.openSubagent(sub),
+			listAgents: mission => this.listAgentsFor(mission),
+			openAgent: agent => this.openAgent(agent),
 		}));
 		// The LIVE-only badge feed: an owned run's `onDidAction` needs-input/completion event raises a `live` badge on
 		// its row. In a runtime with no agent host the null service's `onDidAction` is `Event.None`, so nothing fires
@@ -345,19 +428,31 @@ export class ClawdiusMissionsView extends ViewPane {
 		void this.refresh();
 	}
 
-	/** List a run's subagents through the seam against the last-resolved root (the drill-in expand). */
-	private async listSubagentsFor(run: FleetRun): Promise<readonly FleetSubagent[]> {
+	/** List a mission's agents through the seam against the last-resolved root (the drill-in expand). */
+	private async listAgentsFor(mission: MissionRun): Promise<readonly MissionAgent[]> {
 		if (!this.root) { return []; }
 		try {
-			return await this.seam.listSubagents(this.root, run);
+			return await this.seam.listMissionAgents(this.root, mission);
 		} catch {
 			return [];
 		}
 	}
 
-	/** Open a subagent's transcript in the editor area via IEditorService (the drill-in). */
-	private openSubagent(sub: FleetSubagent): void {
-		void this.editorService.openEditor(new ClaudeMissionTranscriptInput(sub), { pinned: true, revealIfOpened: true });
+	/**
+	 * Open a mission agent's transcript in the editor area via IEditorService (the drill-in). The transcript editor
+	 * reads through the seam by `transcriptRef` alone, so a mission agent is adapted to the drill-in shape it
+	 * already accepts rather than duplicating an editor for the same read.
+	 */
+	private openAgent(agent: MissionAgent): void {
+		const subagent: FleetSubagent = {
+			subagentId: agent.agentId,
+			parentRunId: agent.runId,
+			transcriptRef: agent.transcriptRef,
+			coverage: agent.coverage,
+			freshness: agent.freshness,
+			completeness: agent.completeness,
+		};
+		void this.editorService.openEditor(new ClaudeMissionTranscriptInput(subagent), { pinned: true, revealIfOpened: true });
 	}
 
 	protected override layoutBody(height: number, width: number): void {
@@ -376,9 +471,9 @@ export class ClawdiusMissionsView extends ViewPane {
 		if (this.disposed) { return; }
 		const root = resolveConfigRoot(undefined, home);
 		this.root = root;
-		let runs: readonly FleetRun[] = [];
+		let runs: readonly MissionRun[] = [];
 		try {
-			runs = await this.seam.listRuns(root);
+			runs = await this.seam.listMissions(root);
 		} catch {
 			runs = [];
 		}

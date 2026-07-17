@@ -34,7 +34,7 @@ import { Disposable } from '../../../../../base/common/lifecycle.js';
 import { AgentSession } from '../../../../../platform/agentHost/common/agentService.js';
 import { ActionType, type ActionEnvelope, type StateAction } from '../../../../../platform/agentHost/common/state/protocol/common/actions.js';
 import { parseDefaultChatUri } from '../../../../../platform/agentHost/common/state/sessionState.js';
-import { FleetOwnership, FleetRun } from '../../common/claudeFleetModel.js';
+import { FleetOwnership } from '../../common/claudeFleetModel.js';
 import { FreshnessLabel } from '../../common/claudeReaderSeam.js';
 import { resolveOwnership } from './claudeMissionOwnership.js';
 
@@ -68,6 +68,18 @@ export interface BadgeSignal {
 }
 
 /**
+ * The identity a badge correlates against: the minimum a row must expose to receive a live badge. Structural on
+ * purpose - the feed matches an event's session id to a row and keys the badge by run id, and needs nothing else -
+ * so both a `FleetRun` and a `MissionRun` satisfy it without the feed knowing which entity the list paints.
+ */
+export interface IBadgeCorrelatableRun {
+	/** The row's stable identity, which the badge is keyed by. */
+	readonly runId: string;
+	/** The session the row belongs to, matched against the agent-host event's raw session id. */
+	readonly sessionId: string;
+}
+
+/**
  * The PURE freshness classifier the honesty of the badge turns on: a badge is `live` iff the run is OWNED AND a
  * live event actually fired; in every other case it is `polled` (the seam's honest fallback). This is the
  * never-falsely-live floor - a foreign run, or an owned run with no event, is `polled`, never `live`.
@@ -97,8 +109,10 @@ export function badgeKindForAction(action: StateAction): BadgeKind | undefined {
 export interface IBadgeFeedSource {
 	/** The workbench-facing live action stream (`IAgentHostService.onDidAction`). */
 	readonly onDidAction: Event<ActionEnvelope>;
-	/** The runs currently in view, to correlate an event's session id back to a `FleetRun`. */
-	getRuns(): readonly FleetRun[];
+	/** The runs currently in view, to correlate an event's session id back to the row that owns it. Structural on
+	 *  purpose: the feed correlates on identity alone, so it serves both a `FleetRun` and a `MissionRun` row
+	 *  without knowing which entity the list is painting. */
+	getRuns(): readonly IBadgeCorrelatableRun[];
 	/** The owned raw-session-id set (from `getActiveSubscriptions()` via the ownership adapter). */
 	getOwnedSessionIds(): ReadonlySet<string>;
 }

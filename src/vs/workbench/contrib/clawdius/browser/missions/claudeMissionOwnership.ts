@@ -29,7 +29,7 @@
 import { AgentSession, IAgentHostService } from '../../../../../platform/agentHost/common/agentService.js';
 import { IActiveSubscriptionInfo } from '../../../../../platform/agentHost/common/state/agentSubscription.js';
 import { StateComponents } from '../../../../../platform/agentHost/common/state/sessionState.js';
-import { FleetOwnership, FleetRun } from '../../common/claudeFleetModel.js';
+import { FleetOwnership } from '../../common/claudeFleetModel.js';
 
 /**
  * The PURE ownership decision: a run is `owned` iff its `sessionId` is present in the owned set, else `foreign`.
@@ -37,7 +37,7 @@ import { FleetOwnership, FleetRun } from '../../common/claudeFleetModel.js';
  * catalog) stays `foreign`. No side effects, no host access; correlates on plain string equality so it can be
  * unit-tested against an injected set.
  */
-export function resolveOwnership(run: FleetRun, ownedSessionIds: ReadonlySet<string>): FleetOwnership {
+export function resolveOwnership(run: { readonly sessionId: string }, ownedSessionIds: ReadonlySet<string>): FleetOwnership {
 	return ownedSessionIds.has(run.sessionId) ? 'owned' : 'foreign';
 }
 

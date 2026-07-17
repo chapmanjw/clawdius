@@ -21,13 +21,13 @@ import { ActionType, type ActionEnvelope, type StateAction } from '../../../../.
 import { buildDefaultChatUri, buildSubagentChatUri } from '../../../../../platform/agentHost/common/state/sessionState.js';
 import { BadgeSignal, ClaudeMissionBadgeFeed, badgeFreshnessFor } from '../../browser/missions/claudeMissionBadges.js';
 import { FleetRunsList, renderRunBadge } from '../../browser/missions/claudeMissionsView.js';
-import { FleetRun } from '../../common/claudeFleetModel.js';
+import { MissionRun } from '../../common/claudeFleetModel.js';
 import { CompletenessState, CoverageLabel, FreshnessLabel } from '../../common/claudeReaderSeam.js';
 
 /** A minimally-labeled FleetRun carrying the given ids - enumeration always emits `foreign`. */
-function run(runId: string, sessionId: string): FleetRun {
+function run(runId: string, sessionId: string): MissionRun {
 	return {
-		runId, sessionId, kind: 'single', status: 'unknown', ownership: 'foreign',
+		runId, sessionId, name: runId, status: 'completed', agentCount: 0, phases: [], progress: [], ownership: 'foreign',
 		coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.Complete,
 		adapterVersion: { format: 'transcript-jsonl', versionKey: 'v1' },
 	};
@@ -88,7 +88,7 @@ suite('Clawdius missions fleet - live badges', () => {
 
 	/** Build the full production path: a rendered FleetRunsList + a badge feed over an injected onDidAction, wired
 	 *  exactly as the ViewPane wires them (feed.onDidChangeBadge -> list.decorateRun). Returns the pieces to drive. */
-	function harness(runs: readonly FleetRun[], ownedSessionIds: ReadonlySet<string>) {
+	function harness(runs: readonly MissionRun[], ownedSessionIds: ReadonlySet<string>) {
 		const container = $('div');
 		const list = store.add(new FleetRunsList(container));
 		list.render(runs);
@@ -99,7 +99,7 @@ suite('Clawdius missions fleet - live badges', () => {
 			getOwnedSessionIds: () => ownedSessionIds,
 		}));
 		store.add(feed.onDidChangeBadge(signal => list.decorateRun(signal)));
-		const rowFor = (r: FleetRun) => container.querySelector<HTMLElement>(`.clawdius-missions-row[data-run-id="${r.runId}"]`);
+		const rowFor = (r: MissionRun) => container.querySelector<HTMLElement>(`.clawdius-missions-row[data-run-id="${r.runId}"]`);
 		return { feed, fire: (e: ActionEnvelope) => onDidAction.fire(e), rowFor };
 	}
 

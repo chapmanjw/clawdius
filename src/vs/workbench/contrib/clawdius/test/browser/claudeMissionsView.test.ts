@@ -14,23 +14,24 @@ import assert from 'assert';
 import { $ } from '../../../../../base/browser/dom.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { FleetRun, FleetSubagent } from '../../common/claudeFleetModel.js';
-import { CompletenessState, CoverageLabel, FreshnessLabel, ReaderConfigRoot, ReaderScope } from '../../common/claudeReaderSeam.js';
+import { MissionAgent, MissionRun } from '../../common/claudeFleetModel.js';
+import { CompletenessState, CoverageLabel, FreshnessLabel, ReaderConfigRoot } from '../../common/claudeReaderSeam.js';
 import { FleetRunsList, IFleetRowInteractions, IFleetRunSource } from '../../browser/missions/claudeMissionsView.js';
 
 /** A fake enumeration source: returns a fixed labeled list, so the view test binds to the SAME `listRuns` shape
  *  the seam produces without touching disk. */
 class FakeRunSource implements IFleetRunSource {
-	constructor(private readonly runs: readonly FleetRun[]) { }
-	async listRuns(_root: ReaderConfigRoot, _scope?: ReaderScope): Promise<readonly FleetRun[]> {
+	constructor(private readonly runs: readonly MissionRun[]) { }
+	async listMissions(_root: ReaderConfigRoot): Promise<readonly MissionRun[]> {
 		return this.runs;
 	}
 }
 
-/** A fully-labeled FleetRun with the given overrides (defaults are the conservative enumeration labels). */
-function run(overrides: Partial<FleetRun>): FleetRun {
+/** A fully-labeled MissionRun with the given overrides (defaults are the conservative enumeration labels). */
+function run(overrides: Partial<MissionRun>): MissionRun {
 	return {
-		runId: 'r', sessionId: 's', kind: 'single', status: 'unknown', ownership: 'foreign',
+		runId: 'r', sessionId: 's', name: 'a-mission', status: 'completed', agentCount: 0,
+		phases: [], progress: [], ownership: 'foreign',
 		coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.Complete,
 		adapterVersion: { format: 'transcript-jsonl', versionKey: 'v1' },
 		...overrides,
@@ -68,15 +69,15 @@ suite('Clawdius missions fleet - Sidebar view', () => {
 		const list = store.add(new FleetRunsList(container));
 
 		// Bind exactly as the ViewPane does: pull the enumerated runs off the seam, then render them.
-		list.render(await source.listRuns(ROOT));
+		list.render(await source.listMissions(ROOT));
 
 		// Every run present (the foreign run WITH its label, not omitted), each fully labeled with four
 		// badges + all four honesty `data-*` hooks, and the foreign run visually marked.
 		assert.strictEqual(container.getAttribute('data-clawdius-missions'), '3');
 		assert.deepStrictEqual(rowsOf(container), [
-			{ runId: 'a-0001', sessionId: 'sess-a', kind: 'single', status: 'unknown', ownership: 'foreign', coverage: 'in-scope', freshness: 'polled', completeness: 'complete', foreignMarked: false, labelCount: 4 },
-			{ runId: 'f-0001', sessionId: 'sess-foreign', kind: 'single', status: 'unknown', ownership: 'foreign', coverage: 'foreign', freshness: 'polled', completeness: 'complete', foreignMarked: true, labelCount: 4 },
-			{ runId: 'malformed', sessionId: 'malformed', kind: 'single', status: 'unknown', ownership: 'foreign', coverage: 'in-scope', freshness: 'polled', completeness: 'unknown-shape', foreignMarked: false, labelCount: 4 },
+			{ runId: 'a-0001', sessionId: 'sess-a', kind: 'workflow', status: 'completed', ownership: 'foreign', coverage: 'in-scope', freshness: 'polled', completeness: 'complete', foreignMarked: false, labelCount: 4 },
+			{ runId: 'f-0001', sessionId: 'sess-foreign', kind: 'workflow', status: 'completed', ownership: 'foreign', coverage: 'foreign', freshness: 'polled', completeness: 'complete', foreignMarked: true, labelCount: 4 },
+			{ runId: 'malformed', sessionId: 'malformed', kind: 'workflow', status: 'completed', ownership: 'foreign', coverage: 'in-scope', freshness: 'polled', completeness: 'unknown-shape', foreignMarked: false, labelCount: 4 },
 		]);
 	});
 
@@ -91,16 +92,17 @@ suite('Clawdius missions fleet - Sidebar view', () => {
 });
 
 /** A subagent with the given id, fully labeled (defaults are the conservative enumeration labels). */
-function subagent(id: string): FleetSubagent {
-	return { subagentId: id, parentRunId: 'r', transcriptRef: 'file:///t.jsonl', coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.Complete };
+function subagent(id: string): MissionAgent {
+	return { agentId: id, runId: 'r', agentType: 'workflow-subagent', finished: true, transcriptRef: 'file:///t.jsonl', coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.Complete };
 }
 
 suite('Clawdius missions fleet - drill-in interactions', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
-	function run(id: string): FleetRun {
+	function run(id: string): MissionRun {
 		return {
-			runId: id, sessionId: id, kind: 'single', status: 'unknown', ownership: 'foreign',
+			runId: id, sessionId: id, name: id, status: 'completed', agentCount: 0, phases: [], progress: [],
+			ownership: 'foreign',
 			coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.Complete,
 			adapterVersion: { format: 'transcript-jsonl', versionKey: 'v1' },
 		};
@@ -109,8 +111,8 @@ suite('Clawdius missions fleet - drill-in interactions', () => {
 	test('an interactive run row expands to its subagents; clicking one opens its transcript', async () => {
 		const opened: string[] = [];
 		const interactions: IFleetRowInteractions = {
-			listSubagents: async () => [subagent('sub-1'), subagent('sub-2')],
-			openSubagent: sub => { opened.push(sub.subagentId); },
+			listAgents: async () => [subagent('sub-1'), subagent('sub-2')],
+			openAgent: agent => { opened.push(agent.agentId); },
 		};
 		const container = $('div');
 		const list = store.add(new FleetRunsList(container, interactions));
@@ -135,10 +137,10 @@ suite('Clawdius missions fleet - drill-in interactions', () => {
 	});
 
 	test('a render() while a subagent list is in flight discards the stale expansion (no detached rows, no leak)', async () => {
-		let resolveList: (subs: readonly FleetSubagent[]) => void = () => { };
+		let resolveList: (subs: readonly MissionAgent[]) => void = () => { };
 		const interactions: IFleetRowInteractions = {
-			listSubagents: () => new Promise<readonly FleetSubagent[]>(res => { resolveList = res; }),
-			openSubagent: () => { },
+			listAgents: () => new Promise<readonly MissionAgent[]>(res => { resolveList = res; }),
+			openAgent: () => { },
 		};
 		const container = $('div');
 		const list = store.add(new FleetRunsList(container, interactions));

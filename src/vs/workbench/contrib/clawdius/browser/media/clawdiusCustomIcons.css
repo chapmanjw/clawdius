@@ -15,7 +15,8 @@
 
 .codicon.codicon-clawdius-claude-code-chat::before,
 .codicon.codicon-clawdius-claude-code-session::before,
-.codicon.codicon-clawdius-claude-code-terminal::before {
+.codicon.codicon-clawdius-claude-code-terminal::before,
+.codicon.codicon-clawdius-claude-code-workflows::before {
 	content: '';
 	display: inline-block;
 	width: 1em;
@@ -42,5 +43,10 @@
 .codicon.codicon-clawdius-claude-code-terminal::before {
 	-webkit-mask-image: url('./claude-code-terminal.svg');
 	mask-image: url('./claude-code-terminal.svg');
+}
+
+.codicon.codicon-clawdius-claude-code-workflows::before {
+	-webkit-mask-image: url('./claude-code-workflows.svg');
+	mask-image: url('./claude-code-workflows.svg');
 }
 /* CLAWDIUS-END */

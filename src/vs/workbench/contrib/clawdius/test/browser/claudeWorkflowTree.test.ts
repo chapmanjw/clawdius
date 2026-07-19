@@ -30,6 +30,9 @@ import {
 	WorkflowStoryLeafRenderer, WorkflowTreeAccessibilityProvider, WorkflowTreeElement, WorkflowTreeIdentityProvider,
 	WorkflowTreeVirtualDelegate, workflowTreeElementId, STORY_MIN_HEIGHT,
 } from '../../browser/workflows/claudeWorkflowTree.js';
+import {
+	matchesWorkflowFilter, matchesWorkflowStatusFilter, sortWorkflowRuns, WorkflowSortMode, WorkflowStatusFilter,
+} from '../../browser/workflows/claudeWorkflowsView.js';
 
 const IDENTITY_BASE = {
 	ownership: 'foreign' as const, coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled,
@@ -37,16 +40,23 @@ const IDENTITY_BASE = {
 };
 
 function terminalRun(overrides: Partial<TerminalWorkflowRun> = {}): TerminalWorkflowRun {
+	// `identity` is derived from the (possibly overridden) sessionId/runId FIRST, then `...overrides` still wins if
+	// a caller ever needs to override `identity` itself directly (e.g. a heuristic-trap fixture) - so a test that
+	// overrides only `runId` gets the matching identity for free, instead of silently keeping the default's.
+	const sessionId = overrides.sessionId ?? 's1';
+	const runId = overrides.runId ?? 'wf_a';
 	return {
-		kind: 'terminal', sessionId: 's1', runId: 'wf_a', identity: workflowRunIdentity('s1', 'wf_a'),
+		kind: 'terminal', sessionId, runId, identity: workflowRunIdentity(sessionId, runId),
 		...IDENTITY_BASE, status: 'completed', phases: [], agents: [],
 		...overrides,
 	};
 }
 
 function liveRun(overrides: Partial<LiveWorkflowRun> = {}): LiveWorkflowRun {
+	const sessionId = overrides.sessionId ?? 's1';
+	const runId = overrides.runId ?? 'wf_b';
 	return {
-		kind: 'live', sessionId: 's1', runId: 'wf_b', identity: workflowRunIdentity('s1', 'wf_b'),
+		kind: 'live', sessionId, runId, identity: workflowRunIdentity(sessionId, runId),
 		...IDENTITY_BASE, freshness: FreshnessLabel.Live,
 		startedCount: 1, resultCount: 0, seenCount: 1, landedResults: [], journalLastWriteTime: 1_700_000_000_000,
 		...overrides,
@@ -54,8 +64,10 @@ function liveRun(overrides: Partial<LiveWorkflowRun> = {}): LiveWorkflowRun {
 }
 
 function unknownRun(overrides: Partial<UnrecognizedWorkflowRun> = {}): UnrecognizedWorkflowRun {
+	const sessionId = overrides.sessionId ?? 's1';
+	const runId = overrides.runId ?? 'wf_c';
 	return {
-		kind: 'unknown-shape', sessionId: 's1', runId: 'wf_c', identity: workflowRunIdentity('s1', 'wf_c'),
+		kind: 'unknown-shape', sessionId, runId, identity: workflowRunIdentity(sessionId, runId),
 		ownership: 'foreign', coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled,
 		completeness: CompletenessState.UnknownShape, adapterVersion: { format: 'transcript-jsonl', versionKey: 'unknown-shape' },
 		...overrides,
@@ -719,6 +731,160 @@ suite('Clawdius Claude Code Ultracode Workflows - the three distinct display sta
 		const store = renderWorkflowsStateMessage(container, { kind: 'read-error', message: '' }, () => { });
 		assert.strictEqual(container.querySelector('.clawdius-workflows-state-text')!.textContent, 'Claude Code workflow runs could not be read.');
 		store.dispose();
+	});
+});
+
+suite('Clawdius Claude Code Ultracode Workflows - find/sort: the text-filter corpus', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('matches workflowName, summary, runId, each agent label, and the run\'s own error text - case-insensitively', () => {
+		const run = terminalRun({
+			runId: 'wf_Alpha', workflowName: 'Audit Fleet', summary: 'Found three issues',
+			error: 'Boom: retry cap exceeded', agents: [agent({ agentId: 'a1', label: 'Reviewer-One' })],
+		});
+		assert.deepStrictEqual([
+			matchesWorkflowFilter(run, 'audit'), matchesWorkflowFilter(run, 'THREE ISSUES'),
+			matchesWorkflowFilter(run, 'wf_alpha'), matchesWorkflowFilter(run, 'reviewer-one'),
+			matchesWorkflowFilter(run, 'boom'), matchesWorkflowFilter(run, 'no-such-needle'),
+		], [true, true, true, true, true, false]);
+	});
+
+	test('NEVER matches resultText, resultPreview, or any agent\'s resultPreview - those fields are never even read', () => {
+		const run = terminalRun({
+			runId: 'wf_beta', resultText: 'THE FULL SENSITIVE RESULT BODY', resultPreview: 'a bounded preview of the result',
+			agents: [agent({ agentId: 'a1', label: 'worker', resultPreview: 'a secret agent result body' })],
+		});
+		assert.deepStrictEqual([
+			matchesWorkflowFilter(run, 'sensitive result body'),
+			matchesWorkflowFilter(run, 'bounded preview'),
+			matchesWorkflowFilter(run, 'secret agent result'),
+		], [false, false, false]);
+	});
+
+	test('an empty query matches every run kind', () => {
+		assert.deepStrictEqual([
+			matchesWorkflowFilter(terminalRun(), ''), matchesWorkflowFilter(liveRun(), ''), matchesWorkflowFilter(unknownRun(), ''),
+		], [true, true, true]);
+	});
+
+	test('a live/unknown-shape run matches only by its own runId - it carries none of the terminal-only fields', () => {
+		const live = liveRun({ runId: 'wf_live_9' });
+		const unknown = unknownRun({ runId: 'wf_unknown_9' });
+		assert.deepStrictEqual([
+			matchesWorkflowFilter(live, 'wf_live_9'), matchesWorkflowFilter(live, 'no-such-text'),
+			matchesWorkflowFilter(unknown, 'wf_unknown_9'), matchesWorkflowFilter(unknown, 'no-such-text'),
+		], [true, false, true, false]);
+	});
+});
+
+suite('Clawdius Claude Code Ultracode Workflows - find/sort: the status-category filter', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('all matches every kind; live/completed/failed match exactly their own category, never the others', () => {
+		const kinds = [liveRun(), terminalRun({ status: 'completed' }), terminalRun({ status: 'failed' }), unknownRun()];
+		assert.deepStrictEqual({
+			all: kinds.map(r => matchesWorkflowStatusFilter(r, WorkflowStatusFilter.All)),
+			live: kinds.map(r => matchesWorkflowStatusFilter(r, WorkflowStatusFilter.Live)),
+			completed: kinds.map(r => matchesWorkflowStatusFilter(r, WorkflowStatusFilter.Completed)),
+			failed: kinds.map(r => matchesWorkflowStatusFilter(r, WorkflowStatusFilter.Failed)),
+		}, {
+			all: [true, true, true, true],
+			live: [true, false, false, false],
+			completed: [false, true, false, false],
+			failed: [false, false, true, false],
+		});
+	});
+});
+
+suite('Clawdius Claude Code Ultracode Workflows - find/sort: deterministic sort modes', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('recency: newest-first by timestamp; a run missing a timestamp (incl. unknown-shape) sorts last; remaining ties break by identity', () => {
+		const newer = terminalRun({ runId: 'r-newer', timestamp: 2000 });
+		const older = terminalRun({ runId: 'r-older', timestamp: 1000 });
+		const noTimestamp = terminalRun({ runId: 'r-no-ts', timestamp: undefined });
+		const unknown = unknownRun({ runId: 'r-unknown' });
+		const tiedA = terminalRun({ runId: 'r-tie-a', timestamp: 500 });
+		const tiedB = terminalRun({ runId: 'r-tie-b', timestamp: 500 });
+		const ordered = sortWorkflowRuns([noTimestamp, tiedB, unknown, newer, tiedA, older], WorkflowSortMode.Recency);
+		assert.deepStrictEqual(ordered.map(r => r.runId), ['r-newer', 'r-older', 'r-tie-a', 'r-tie-b', 'r-no-ts', 'r-unknown']);
+	});
+
+	test('cost: highest totalTokens first; a REAL zero is not "missing"; a missing total sorts last; remaining ties break by identity', () => {
+		const high = terminalRun({ runId: 'r-high', totalTokens: 5000 });
+		const low = terminalRun({ runId: 'r-low', totalTokens: 100 });
+		const zero = terminalRun({ runId: 'r-zero', totalTokens: 0 });
+		const missing = terminalRun({ runId: 'r-missing', totalTokens: undefined });
+		const tiedA = terminalRun({ runId: 'r-tie-a', totalTokens: 42 });
+		const tiedB = terminalRun({ runId: 'r-tie-b', totalTokens: 42 });
+		const ordered = sortWorkflowRuns([missing, low, tiedB, high, zero, tiedA], WorkflowSortMode.Cost);
+		assert.deepStrictEqual(ordered.map(r => r.runId), ['r-high', 'r-low', 'r-tie-a', 'r-tie-b', 'r-zero', 'r-missing']);
+	});
+
+	test('status: failed before completed; newest-first within a status; unknown-shape (no status) sorts last; remaining ties break by identity', () => {
+		const failedNew = terminalRun({ runId: 'r-failed-new', status: 'failed', timestamp: 2000 });
+		const failedOld = terminalRun({ runId: 'r-failed-old', status: 'failed', timestamp: 1000 });
+		const completedNew = terminalRun({ runId: 'r-completed-new', status: 'completed', timestamp: 1500 });
+		const completedOld = terminalRun({ runId: 'r-completed-old', status: 'completed', timestamp: 500 });
+		const unknown = unknownRun({ runId: 'r-unknown' });
+		const tiedFailedA = terminalRun({ runId: 'r-tie-failed-a', status: 'failed', timestamp: 999 });
+		const tiedFailedB = terminalRun({ runId: 'r-tie-failed-b', status: 'failed', timestamp: 999 });
+		const ordered = sortWorkflowRuns(
+			[unknown, completedOld, tiedFailedB, failedNew, completedNew, tiedFailedA, failedOld], WorkflowSortMode.Status,
+		);
+		assert.deepStrictEqual(ordered.map(r => r.runId), [
+			'r-failed-new', 'r-failed-old', 'r-tie-failed-a', 'r-tie-failed-b', 'r-completed-new', 'r-completed-old', 'r-unknown',
+		]);
+	});
+
+	test('sortWorkflowRuns returns a NEW array and never mutates its input', () => {
+		const a = terminalRun({ runId: 'r-a', timestamp: 1 });
+		const b = terminalRun({ runId: 'r-b', timestamp: 2 });
+		const input = [a, b];
+		const inputIdsBefore = input.map(r => r.runId);
+		const ordered = sortWorkflowRuns(input, WorkflowSortMode.Recency);
+		assert.deepStrictEqual(input.map(r => r.runId), inputIdsBefore);
+		assert.notStrictEqual(ordered, input);
+	});
+
+	test('the SAME run set in a different input array order produces the IDENTICAL output order - the order is a property of the data, never the input array', () => {
+		const x = terminalRun({ runId: 'r-x', timestamp: 10 });
+		const y = terminalRun({ runId: 'r-y', timestamp: 10 });
+		const z = terminalRun({ runId: 'r-z', timestamp: 5 });
+		const orderA = sortWorkflowRuns([x, y, z], WorkflowSortMode.Recency).map(r => r.runId);
+		const orderB = sortWorkflowRuns([z, y, x], WorkflowSortMode.Recency).map(r => r.runId);
+		assert.deepStrictEqual(orderA, orderB);
+	});
+});
+
+suite('Clawdius Claude Code Ultracode Workflows - find/sort: live pin among matches + exclusion', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('every sort mode pins LIVE runs first, ordered among themselves by identity, ahead of every terminal/unknown-shape run', () => {
+		const liveB = liveRun({ runId: 'wf_live_b' });
+		const liveA = liveRun({ runId: 'wf_live_a' });
+		const terminal = terminalRun({ runId: 'wf_terminal', status: 'failed', timestamp: 9_999_999, totalTokens: 9_999_999 });
+		for (const mode of [WorkflowSortMode.Recency, WorkflowSortMode.Cost, WorkflowSortMode.Status]) {
+			const ordered = sortWorkflowRuns([terminal, liveB, liveA], mode);
+			assert.deepStrictEqual(ordered.map(r => r.runId), ['wf_live_a', 'wf_live_b', 'wf_terminal'], `sort mode: ${mode}`);
+		}
+	});
+
+	test('a live run that fails the text filter is EXCLUDED outright, never force-pinned - filtering happens BEFORE sorting, never around it', () => {
+		const matchingLive = liveRun({ runId: 'wf_live_match' });
+		const nonMatchingLive = liveRun({ runId: 'wf_live_other' });
+		// The view's own composition, driven directly: filter, THEN sort.
+		const filtered = [matchingLive, nonMatchingLive].filter(r => matchesWorkflowFilter(r, 'wf_live_match'));
+		const ordered = sortWorkflowRuns(filtered, WorkflowSortMode.Recency);
+		assert.deepStrictEqual(ordered.map(r => r.runId), ['wf_live_match']);
+	});
+
+	test('a live run is pinned first only AMONG MATCHES: a terminal run that matches the filter still leads a live run that fails it', () => {
+		const matchingTerminal = terminalRun({ runId: 'wf_terminal_match', workflowName: 'audit' });
+		const nonMatchingLive = liveRun({ runId: 'wf_live_nomatch' });
+		const filtered = [matchingTerminal, nonMatchingLive].filter(r => matchesWorkflowFilter(r, 'audit'));
+		const ordered = sortWorkflowRuns(filtered, WorkflowSortMode.Recency);
+		assert.deepStrictEqual(ordered.map(r => r.runId), ['wf_terminal_match']);
 	});
 });
 // CLAWDIUS-END

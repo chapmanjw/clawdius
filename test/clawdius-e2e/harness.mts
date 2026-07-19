@@ -787,10 +787,14 @@ try {
 		// word "mission" but skip only the USER-DATA leaves the reader surfaces verbatim - the run row
 		// (.clawdius-workflow-run-row, whose label is the run's own summary/workflowName/runId), the story
 		// leaf's summary/result/error text, and expanded agent rows (.clawdius-workflow-agent-row) - since a
-		// run a user named "build-mission-rail" is content, not a rename regression. Everything else stays in
-		// scope, INCLUDING the fork's own chrome (chips, state messages, the surface label), so a label that
-		// regressed to "Mission" is still caught. title/aria-label are checked only OUTSIDE the run rows (a
-		// row tooltip can legitimately embed the user's run name).
+		// run a user named "build-mission-rail" (or one whose own description happens to discuss "missions")
+		// is legitimate user content, not a rename regression. Everything else stays in scope, INCLUDING the
+		// fork's own chrome (chips, state messages, the surface label, and the tree's own widget aria-label),
+		// so a label that regressed to "Mission" is still caught. For the title/aria case the exclusion ALSO
+		// covers the native `.monaco-list-row` wrapper: the tree paints a row's aria-label on that wrapper, one
+		// level ABOVE the renderer's own `.clawdius-workflow-run-row`/story/agent element, so it inherits the
+		// exact same user data - but ONLY that wrapper is skipped, not every container above it, so a
+		// fork-chrome aria-label on the list, tree container, or pane is still scanned.
 		const userDataSel = '.clawdius-workflow-run-row, .clawdius-workflow-story-summary, .clawdius-workflow-story-result, .clawdius-workflow-story-error, .clawdius-workflow-agent-row';
 		const missionChromeHits = await win.$$eval('.monaco-workbench *', (els, userSel) => {
 			const rx = /\bmissions?\b/i;
@@ -801,7 +805,7 @@ try {
 					const t = el.childElementCount === 0 ? (el.textContent || '') : '';
 					if (rx.test(t)) { out.push('text ' + label + ' :: ' + t.trim().slice(0, 80)); }
 				}
-				if (!el.closest('.clawdius-workflow-run-row')) {
+				if (!el.closest(userSel) && !(el.matches('.monaco-list-row') && el.querySelector(userSel))) {
 					for (const attr of ['title', 'aria-label']) {
 						const v = el.getAttribute && el.getAttribute(attr);
 						if (v && rx.test(v)) { out.push(attr + ' ' + label + ' :: ' + v.trim().slice(0, 80)); }
@@ -1469,6 +1473,106 @@ try {
 			try { rmSync(exts2, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
 			win = savedWin;
 		}
+	});
+
+	// 9. Find/sort against the REAL config root: typing into the persistent filter InputBox narrows the visible
+	// rows to an exact run id (the filter matches a run's OWN runId, so this is a deterministic, always-findable
+	// needle - never a synthetic fixture), measured against the ~300ms budget; switching the sort SelectBox to
+	// "status" then REORDERS the visible rows using real completed/failed/live classification already painted by
+	// the existing run-row renderer (data-run-kind + the status icon's status-* class - no new instrumentation
+	// needed here); repeating the same selection reproduces the IDENTICAL order, proving the mode's order is
+	// deterministic on real data, not merely non-empty. SKIPs+WARNs (never a false pass) when the real corpus is
+	// empty - the same posture every sibling real-corpus scenario in this file takes.
+	await scenario('ultracode-workflows-find-sort', true, async () => {
+		await focusWorkflowsView();
+
+		const beforeRows = await win.$$eval('.clawdius-workflow-run-row', els => els.map(el => el.getAttribute('data-run-id')));
+		if (beforeRows.length === 0) {
+			return 'SKIPPED (no workflow runs on this config root - nothing to filter or sort)';
+		}
+		const targetRunId = beforeRows[0];
+
+		// --- filter: narrow to exactly the one run carrying this (unique) run id -----------------------------------
+		const filterInput = await win.$('.clawdius-workflows-filter input');
+		assert(filterInput, 'the persistent filter InputBox did not render (.clawdius-workflows-filter input)');
+		await filterInput.fill(targetRunId);
+		const typedAt = Date.now();
+
+		let narrowedIds = await win.$$eval('.clawdius-workflow-run-row', els => els.map(el => el.getAttribute('data-run-id')));
+		for (let i = 0; i < 30 && !(narrowedIds.length > 0 && narrowedIds.every(id => id === targetRunId)); i++) {
+			await win.waitForTimeout(25);
+			narrowedIds = await win.$$eval('.clawdius-workflow-run-row', els => els.map(el => el.getAttribute('data-run-id')));
+		}
+		const settleMs = Date.now() - typedAt;
+		assert(narrowedIds.length > 0, `typing the exact run id "${targetRunId}" into the filter left ZERO rows visible`);
+		assert(narrowedIds.every(id => id === targetRunId),
+			`the filter did not narrow to only "${targetRunId}": visible ids = ${JSON.stringify(narrowedIds)}`);
+		assert(narrowedIds.length < beforeRows.length || beforeRows.length === 1,
+			`the filter matched ${narrowedIds.length} row(s) but the unfiltered view already showed only ${beforeRows.length}`);
+
+		// --- clear the filter, restore the full (unfiltered, still recency-sorted) list ---------------------------
+		await filterInput.fill('');
+		await win.waitForTimeout(400);
+		let restoredIds = await win.$$eval('.clawdius-workflow-run-row', els => els.map(el => el.getAttribute('data-run-id')));
+		for (let i = 0; i < 20 && restoredIds.length < beforeRows.length; i++) {
+			await win.waitForTimeout(25);
+			restoredIds = await win.$$eval('.clawdius-workflow-run-row', els => els.map(el => el.getAttribute('data-run-id')));
+		}
+		const firstRestoredRow = await win.$('.clawdius-workflow-run-row');
+		if (firstRestoredRow) { await firstRestoredRow.click(); await win.keyboard.press('Home'); await win.waitForTimeout(200); }
+		const beforeSortIds = await win.$$eval('.clawdius-workflow-run-row', els => els.map(el => el.getAttribute('data-run-id')));
+
+		// --- sort: switch to "status" (failed before completed, live always first) and prove a REAL reorder --------
+		const sortSelect = await win.$('.clawdius-workflows-sort select');
+		assert(sortSelect, 'the sort SelectBox did not render (.clawdius-workflows-sort select)');
+		const readVisible = () => win.$$eval('.clawdius-workflow-run-row', els => els.map(el => ({
+			runId: el.getAttribute('data-run-id'),
+			runKind: el.getAttribute('data-run-kind'),
+			statusClass: el.querySelector('.clawdius-workflow-status-icon')?.className || '',
+		})));
+
+		await win.selectOption('.clawdius-workflows-sort select', { label: 'Sort: Failed First' });
+		await win.waitForTimeout(300);
+		const afterStatusSort = await readVisible();
+		assert(afterStatusSort.length > 0, 'switching to the "status" sort mode left ZERO rows visible');
+
+		// Real-data invariants: live pinned first, then no `status-failed` row after a `status-completed` one.
+		let sawNonLive = false;
+		let sawCompleted = false;
+		const violations = [];
+		for (const row of afterStatusSort) {
+			if (row.runKind === 'live') {
+				if (sawNonLive) { violations.push(`live run "${row.runId}" appeared after a non-live row`); }
+				continue;
+			}
+			sawNonLive = true;
+			const isFailed = /\bstatus-failed\b/.test(row.statusClass);
+			const isCompleted = /\bstatus-completed\b/.test(row.statusClass);
+			if (isCompleted) { sawCompleted = true; }
+			if (isFailed && sawCompleted) { violations.push(`failed run "${row.runId}" appeared after a completed row`); }
+		}
+		assert(violations.length === 0, `status-sort ordering violated on real data: ${JSON.stringify(violations)}`);
+
+		const afterIds = afterStatusSort.map(r => r.runId);
+		const reordered = JSON.stringify(afterIds) !== JSON.stringify(beforeSortIds);
+
+		// --- determinism: switch away and back to "status" must reproduce the EXACT same order on the same data ----
+		await win.selectOption('.clawdius-workflows-sort select', { label: 'Sort: Newest First' });
+		await win.waitForTimeout(300);
+		await win.selectOption('.clawdius-workflows-sort select', { label: 'Sort: Failed First' });
+		await win.waitForTimeout(300);
+		const secondStatusSort = await readVisible();
+		const secondIds = secondStatusSort.map(r => r.runId);
+		assert(JSON.stringify(secondIds) === JSON.stringify(afterIds),
+			`the "status" sort mode produced a DIFFERENT order on a repeat selection over the same data: ${JSON.stringify(afterIds)} vs ${JSON.stringify(secondIds)}`);
+
+		// Leave the view in its default state for whichever scenario runs next.
+		await win.selectOption('.clawdius-workflows-sort select', { label: 'Sort: Newest First' });
+		await win.waitForTimeout(200);
+
+		return `filter: run id "${targetRunId}" narrowed ${beforeRows.length} -> ${narrowedIds.length} visible row(s) in ~${settleMs}ms (target ~300ms budget); `
+			+ `sort: switching to "status" ${reordered ? 'reordered' : 'left the order unchanged (already status-ordered)'} `
+			+ `${afterStatusSort.length} visible row(s) - live-first and failed-before-completed held on real data, and a repeat selection reproduced the identical order`;
 	});
 
 	// 10-11. Themes - switch + screenshot the status bar to eyeball the safety-pill contrast fix

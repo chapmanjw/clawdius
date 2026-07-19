@@ -20,6 +20,28 @@
 	border-bottom: 1px solid var(--vscode-panel-border);
 }
 
+/* The persistent filter/status-filter/sort toolbar, mounted above the tree/state pair - flex-wrap so it degrades gracefully at the narrowest sidebar widths instead of overflowing. */
+.clawdius-workflows-toolbar {
+	display: flex;
+	flex: 0 0 auto;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+	padding: 6px 8px;
+	border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.clawdius-workflows-filter {
+	flex: 1 1 160px;
+	min-width: 100px;
+}
+
+.clawdius-workflows-status-filter,
+.clawdius-workflows-sort {
+	flex: 1 1 auto;
+	min-width: 90px;
+}
+
 /* The three-state message overlay (empty / read-error / no-match) and the tree are mutually exclusive; the tree is the only one of the two that ever scrolls internally - this one never does. */
 .clawdius-workflows-state {
 	display: flex;

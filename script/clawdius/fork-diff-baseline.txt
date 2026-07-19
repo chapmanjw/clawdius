@@ -252,7 +252,17 @@
 # As with the entries above, the recorded baseline moves by more than the code delta because this block's own
 # comment lines also count toward the fork surface.
 
+# Disposition 2026-07-19 (+0 files, +610 insertions): filter and sort the workflows list. A persistent filter input
+# (matching a run's name/summary/runId, an agent's label, and the run-level error text - NEVER result bodies or
+# transcripts) plus a status filter narrow the list as the user types; three sort modes (recency newest-first; cost
+# by token total with missing-total last; status failed-before-completed newest-within) each pin live runs first and
+# fall through to a stable run-identifier tie-break so the order is always unique. Filter/sort are persistent view
+# state re-derived from the last held snapshot on any change (never waiting on a new read). Growth is the toolbar
+# (input + two select controls), the exported filter predicate + sort comparators, their unit tests, and the
+# real-build filter/sort proof; no new files, isolated to the clawdius-owned view + its tests. As with the entries
+# above, the recorded baseline moves by more than the code delta because this block's own comment lines also count.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
 recorded: 2026-07-19
-baseline: 5604 files changed, 47866 insertions(+), 1456122 deletions(-)
+baseline: 5604 files changed, 48472 insertions(+), 1456122 deletions(-)

@@ -44,8 +44,9 @@ import { BadgeSignal } from './claudeWorkflowBadges.js';
 import { resolveOwnership } from './claudeWorkflowOwnership.js';
 
 /** The literal shown for a number the model declares optional and this run/agent did not carry - NEVER a
- *  fabricated 0. Reused verbatim from the pre-tree row renderer's convention. */
-const DASH = '—';
+ *  fabricated 0. Reused verbatim from the pre-tree row renderer's convention. EXPORTED so the detail drill-in
+ *  editor (claudeWorkflowDetailEditor.ts) reuses the exact same convention instead of a second dash literal. */
+export const DASH = '—';
 
 // --- the tree element union -----------------------------------------------------------------------------------
 
@@ -94,7 +95,9 @@ export function errorSummary(error: string): string {
 	return first.trim().replace(/\s+/g, ' ');
 }
 
-function orDash(value: number | undefined, format: (value: number) => string): string {
+/** EXPORTED alongside {@link DASH} for the same reuse reason - the detail drill-in editor's cost rows follow the
+ *  identical "dash when absent, formatted when present" rule the tree's own row content already established. */
+export function orDash(value: number | undefined, format: (value: number) => string): string {
 	return value === undefined ? DASH : format(value);
 }
 

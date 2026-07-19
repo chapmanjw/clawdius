@@ -199,6 +199,111 @@ async function setThemeVerified(themeLabel) {
 	throw new Error(`setThemeVerified("${themeLabel}") failed after 3 attempts: ${lastErr}`);
 }
 
+// --- workflows drill-in driving (result/agent/transcript editor panes) -----------------------------------------
+//
+// Drill-in editors open on the tree's `onDidOpen` (Enter or mouse activation, see claudeWorkflowsView.ts) as REAL
+// EDITOR TABS in the editor area (IEditorService.openEditor), not sidebar DOM - so these helpers, unlike the
+// tree-only ones above, wait for `.clawdius-workflow-detail`/`.clawdius-transcript` to ATTACH there.
+
+// Open the workflows sidebar and wait for its first real paint (rows or a state message) - the same two-step
+// wait (`.clawdius-workflows-tree` attached, then rows/state-message) every other workflows scenario in this
+// file already does; factored here since the drill-in scenarios below need it more than once.
+async function focusWorkflowsView() {
+	await win.waitForSelector('.monaco-workbench', { timeout: 90000 });
+	await win.waitForTimeout(3000);
+	await runCommand('Focus on Claude Code Ultracode Workflows View');
+	await win.waitForSelector('.clawdius-workflows-tree', { state: 'attached', timeout: 15000 });
+	await win.waitForFunction(
+		() => document.querySelector('.clawdius-workflow-run-row') !== null || document.querySelector('[data-clawdius-workflows-state]') !== null,
+		undefined, { timeout: 60000 },
+	);
+	await win.waitForTimeout(300);
+}
+
+// Expand ONE terminal run's row (click, then ArrowRight, then a twistie-click fallback - the exact sequence
+// `ultracode-workflows-expand` already exercises) and, when it declares MORE THAN ONE phase (the 0/1/>1
+// phase-grouping rule in `buildTerminalRunChildren`), also expand every `.clawdius-workflow-phase-row` that
+// appears so any agent rows nested under a phase become visible too - otherwise a multi-phase run would falsely
+// look agent-less. Returns the story leaf handle (undefined if the run never revealed one) and whatever
+// `.clawdius-workflow-agent-row`s are now in the DOM - scoped correctly as long as the caller keeps only ONE run
+// expanded at a time.
+async function expandRunAndGatherAgents(target) {
+	await target.scrollIntoViewIfNeeded();
+	await target.click();
+	await win.waitForTimeout(150);
+	await win.keyboard.press('ArrowRight');
+	await win.waitForTimeout(400);
+	let storyHandles = await win.$$('.clawdius-workflow-story');
+	if (storyHandles.length === 0) {
+		const twistie = await target.$('.monaco-tl-twistie');
+		if (twistie) {
+			await twistie.click();
+			await win.waitForTimeout(400);
+			storyHandles = await win.$$('.clawdius-workflow-story');
+		}
+	}
+	if (storyHandles.length === 0) {
+		return { story: undefined, agentRows: [] };
+	}
+	const phaseRows = await win.$$('.clawdius-workflow-phase-row');
+	for (const phaseRow of phaseRows) {
+		try {
+			await phaseRow.click();
+			await win.waitForTimeout(100);
+			await win.keyboard.press('ArrowRight');
+			await win.waitForTimeout(250);
+		} catch { /* best-effort: a phase row that can't expand just contributes no agent rows below */ }
+	}
+	const agentRows = await win.$$('.clawdius-workflow-agent-row');
+	return { story: storyHandles[0], agentRows };
+}
+
+// Activate a leaf (story or agent row) and wait for its drill-in pane to attach in the editor area. Click first
+// (this build's default `workbench.list.openMode` is `singleClick`, so `onDidOpen` should fire directly); fall
+// back to select+Enter if the pane never attached - `onDidOpen` fires on either per claudeWorkflowsView.ts.
+// Returns the attached pane's ElementHandle, or null if NEITHER activation opened it - a real defect the caller
+// should assert (and fail loudly) on, never silently swallow.
+async function activateAndWaitForDetail(rowHandle, kind) {
+	const selector = `.clawdius-workflow-detail[data-clawdius-detail-kind="${kind}"]`;
+	await rowHandle.scrollIntoViewIfNeeded();
+	await rowHandle.click();
+	// A completed run's FULL result can be very large (a real run here carried ~520K tokens of resultText -
+	// several MB once rendered via `textContent`), and this is an unoptimized dev build, so the render+reflow
+	// genuinely takes several seconds - give the first (click) activation real room before falling back. The
+	// fallback does NOT re-click: the row is already selected from the click above, and a second onDidOpen while
+	// the first openEditor() is still in flight would only add contention, not speed anything up.
+	let pane = await win.waitForSelector(selector, { state: 'attached', timeout: 12000 }).catch(() => null);
+	if (!pane) {
+		// The click may have only selected the row (open-on-single-click is a setting); Enter always fires onDidOpen.
+		await win.keyboard.press('Enter');
+		pane = await win.waitForSelector(selector, { state: 'attached', timeout: 12000 }).catch(() => null);
+	}
+	return pane;
+}
+
+async function closeActiveEditorTab() {
+	try {
+		await win.keyboard.press('Control+w');
+		await win.waitForTimeout(300);
+	} catch { /* best effort */ }
+}
+
+// Inspect an already-open AGENT detail pane: its honest state (`data-clawdius-detail-state`, set by
+// `renderAgentDetail` in claudeWorkflowDetailEditor.ts - NOT `data-clawdius-detail-status`, which is the RESULT
+// variant's attribute), the transcript-affordance flag (`data-clawdius-detail-transcript`, "present" exactly
+// when `payload.transcriptRef` was defined), and the present/absent split across its
+// `[data-clawdius-detail-field]` rows - the dash-where-absent proof.
+async function probeAgentPane(pane, agentId) {
+	const state = await pane.getAttribute('data-clawdius-detail-state');
+	const transcriptPresent = (await pane.getAttribute('data-clawdius-detail-transcript')) === 'present';
+	const fieldHandles = await pane.$$('[data-clawdius-detail-field]');
+	let present = 0, absent = 0;
+	for (const f of fieldHandles) {
+		if ((await f.getAttribute('data-clawdius-detail-field-present')) === 'true') { present++; } else { absent++; }
+	}
+	return { agentId, state, transcriptPresent, present, absent, total: fieldHandles.length, pane };
+}
+
 // --- sidebar width driving (theme x width matrix) --------------------------------------------------------------
 
 async function getSidebarBox() {
@@ -622,6 +727,102 @@ try {
 		return `expanded terminal run "${runId}": story leaf present (summary+cost ok); ${agentRows.length} agent rows; ${phaseRows.length} phase rows`;
 	});
 
+	// 4d. Drill-in: open a completed run's FULL result, an agent's DETAIL, and (when the identity join gave it a
+	// transcriptRef) that agent's raw TRANSCRIPT - all from the workflows tree, as real EDITOR TABS
+	// (IEditorService.openEditor, per claudeWorkflowsView.ts's `openResultDetail`/`openAgentDetail`), not sidebar
+	// DOM. This is the one thing `ultracode-workflows-expand` above does NOT cover: that scenario only proves
+	// native tree EXPANSION; nothing there opens an editor. `onDidOpen` fires on click OR Enter for a
+	// `story`/`agent` leaf - `activateAndWaitForDetail` tries click first, falling back to Enter.
+	await scenario('ultracode-workflows-drill-in', true, async () => {
+		await focusWorkflowsView();
+
+		const rowHandles = await win.$$('.clawdius-workflow-run-row');
+		const terminalHandles = [];
+		for (const h of rowHandles) {
+			if ((await h.getAttribute('data-run-kind')) === 'terminal') { terminalHandles.push(h); }
+		}
+		if (terminalHandles.length === 0) {
+			return 'SKIPPED (no terminal runs on this config root)';
+		}
+
+		// --- 1. Full result, off the first terminal run (the same pick `ultracode-workflows-expand` makes). ---
+		const firstTarget = terminalHandles[0];
+		const firstRunId = await firstTarget.getAttribute('data-run-id');
+		let expanded = await expandRunAndGatherAgents(firstTarget);
+		assert(expanded.story, `expanding terminal run "${firstRunId}" did not reveal a .clawdius-workflow-story leaf`);
+
+		const resultPane = await activateAndWaitForDetail(expanded.story, 'result');
+		assert(resultPane, `activating the story leaf for run "${firstRunId}" (click, then select+Enter) never attached a .clawdius-workflow-detail[data-clawdius-detail-kind="result"] pane`);
+		const resultTextHandle = await resultPane.$('.clawdius-workflow-detail-result');
+		assert(resultTextHandle, 'result detail pane missing .clawdius-workflow-detail-result node');
+		const resultText = ((await resultTextHandle.innerText()) || '').trim();
+		const resultMarker = await resultTextHandle.getAttribute('data-clawdius-detail-result');
+		const isNoResult = resultText === 'No result recorded';
+		assert(isNoResult ? resultMarker === 'absent' : resultMarker === 'present',
+			`result text/marker mismatch for run "${firstRunId}": text="${resultText.slice(0, 60)}" marker="${resultMarker}"`);
+		await closeActiveEditorTab();
+
+		// --- 2 + 3. Agent detail + (when available) its transcript. Re-expand the same run (the tab close above
+		// didn't touch tree expansion state, but DOM nodes may have recycled) and, if IT declares no agents, widen
+		// the scan to further terminal runs - bounded, so one unlucky pick can't turn an honest structural gap into
+		// a false SKIP of the whole sub-step. ---
+		// Agent detail + (when available) its transcript, off the SAME expanded run (a `WorkbenchObjectTree` only
+		// renders visible rows, so gathering agent handles from one already-expanded run and probing them without
+		// re-scrolling keeps the handles attached). Probe up to 8 agent rows for the FIRST whose identity join gave it
+		// a transcriptRef; keep the FIRST agent-detail opened as the fallback report even if none carries a transcript.
+		expanded = await expandRunAndGatherAgents(firstTarget);
+		const scanTargets = expanded.agentRows;
+		if (scanTargets.length === 0) {
+			return `result: run "${firstRunId}" -> ${isNoResult ? '"No result recorded"' : `real result text (${resultText.length} chars)`}; `
+				+ `SKIPPED (agent+transcript: run "${firstRunId}" exposed no .clawdius-workflow-agent-row)`;
+		}
+		let firstProbe;
+		let chosenProbe;
+		for (const agentRow of scanTargets.slice(0, 8)) {
+			const agentId = await agentRow.getAttribute('data-agent-id');
+			const pane = await activateAndWaitForDetail(agentRow, 'agent');
+			if (!pane) { continue; }
+			const probe = await probeAgentPane(pane, agentId);
+			if (!firstProbe) { firstProbe = probe; }
+			if (probe.transcriptPresent) { chosenProbe = probe; break; }
+			await closeActiveEditorTab();
+		}
+		assert(firstProbe, `no .clawdius-workflow-agent-row opened an agent detail pane (probed ${Math.min(scanTargets.length, 8)} of run "${firstRunId}")`);
+		assert(firstProbe.total > 0, `agent detail pane for "${firstProbe.agentId}" rendered zero [data-clawdius-detail-field] rows`);
+		const scannedRunIds = [firstRunId];
+
+		const reportProbe = chosenProbe || firstProbe;
+		let transcriptDetail;
+		if (!reportProbe.transcriptPresent) {
+			transcriptDetail = `SKIPPED (no transcript affordance found across ${scannedRunIds.length} scanned run(s) - the identity join withheld it on every probed agent)`;
+			await closeActiveEditorTab();
+		} else {
+			const button = await reportProbe.pane.$('.clawdius-workflow-detail-actions .monaco-button');
+			assert(button, `agent "${reportProbe.agentId}" carries data-clawdius-detail-transcript="present" but no .monaco-button in .clawdius-workflow-detail-actions`);
+			await button.click();
+			const transcriptPane = await win.waitForSelector('.clawdius-transcript', { state: 'attached', timeout: 8000 }).catch(() => null);
+			assert(transcriptPane, `clicking "Open Transcript" for agent "${reportProbe.agentId}" never attached a .clawdius-transcript pane`);
+			// The pane container attaches synchronously in createEditor; setInput reads the transcript ASYNC and only
+			// then renders the record rows (or the honest empty state). Wait for that render to settle before counting.
+			await win.waitForFunction(() => {
+				const p = document.querySelector('.clawdius-transcript');
+				return !!p && (p.querySelector('.clawdius-transcript-record') !== null || p.querySelector('.clawdius-transcript-empty') !== null);
+			}, undefined, { timeout: 10000 }).catch(() => { });
+			const recordHandles = await transcriptPane.$$('.clawdius-transcript-record');
+			const emptyMarker = await transcriptPane.$('.clawdius-transcript-empty');
+			transcriptDetail = recordHandles.length > 0
+				? `transcript pane opened with ${recordHandles.length} .clawdius-transcript-record row(s)`
+				: emptyMarker
+					? 'transcript pane opened (honest empty state)'
+					: 'transcript pane opened (no records, no empty marker)';
+			await closeActiveEditorTab();
+		}
+
+		return `result: run "${firstRunId}" -> ${isNoResult ? '"No result recorded"' : `real result text (${resultText.length} chars)`}; `
+			+ `agent: "${reportProbe.agentId}" state="${reportProbe.state}" fields ${reportProbe.present} present / ${reportProbe.absent} absent (of ${reportProbe.total}); `
+			+ `transcript: ${transcriptDetail}`;
+	});
+
 	// 5. Usage dashboard
 	await scenario('usage-dashboard', true, async () => {
 		await runCommand('Open Claude Code Usage Dashboard');
@@ -745,6 +946,49 @@ try {
 		await selectTheme('Clawdius Dark');
 		assert(renderOk.every(Boolean), 'the workflows view rendered nothing (no rows, no state message) for at least one theme/width combo');
 		return `3 themes x 3 widths driven; actual widths achieved in px (target->theme->achieved): ${JSON.stringify(achievedWidths)}`;
+	});
+
+	// 9c. Drill-in render-integrity: the RESULT detail pane under Clawdius Dark / Clawdius Light / Clawdius High
+	// Contrast (this fork's own installed HC theme - same label the theme-width matrix above already verified
+	// maps to `hc-black` via `themeTypeClass()`). Non-critical, screenshot-for-review, but still asserts the pane
+	// renders SOMETHING under every theme actually driven - never a blank pane.
+	await scenario('ultracode-workflows-drill-in-themes', false, async () => {
+		const THEMES = ['Clawdius Dark', 'Clawdius Light', 'Clawdius High Contrast'];
+		const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+		const rendered = {};
+
+		for (const theme of THEMES) {
+			await setThemeVerified(theme);
+			await focusWorkflowsView();
+
+			const rowHandles = await win.$$('.clawdius-workflow-run-row');
+			let target;
+			for (const h of rowHandles) {
+				if ((await h.getAttribute('data-run-kind')) === 'terminal') { target = h; break; }
+			}
+			if (!target) {
+				rendered[theme] = 'SKIPPED (no terminal runs)';
+				continue;
+			}
+
+			const expanded = await expandRunAndGatherAgents(target);
+			assert(expanded.story, `[${theme}] expanding a terminal run did not reveal a story leaf`);
+			const pane = await activateAndWaitForDetail(expanded.story, 'result');
+			assert(pane, `[${theme}] activating the story leaf never attached a result detail pane`);
+
+			const actualType = await themeTypeClass();
+			await shot(`drill-in-${slug(theme)}`);
+
+			const resultNode = await pane.$('.clawdius-workflow-detail-result');
+			const fieldNode = await pane.$('[data-clawdius-detail-field]');
+			assert(resultNode || fieldNode, `[${theme}] detail pane rendered neither .clawdius-workflow-detail-result nor a [data-clawdius-detail-field] row`);
+			rendered[theme] = `rendered (workbench theme-type=${actualType})`;
+
+			await closeActiveEditorTab();
+		}
+
+		await setThemeVerified('Clawdius Dark');
+		return JSON.stringify(rendered);
 	});
 
 	// 10-11. Themes - switch + screenshot the status bar to eyeball the safety-pill contrast fix

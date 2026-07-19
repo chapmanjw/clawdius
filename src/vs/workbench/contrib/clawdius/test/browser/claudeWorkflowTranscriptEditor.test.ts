@@ -23,7 +23,8 @@ import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import { testWorkspace } from '../../../../../platform/workspace/test/common/testWorkspace.js';
 import { CompletenessState, CoverageLabel, FreshnessLabel, ReaderConfigRoot } from '../../common/claudeReaderSeam.js';
-import { FleetSubagent, FleetTranscriptSlice } from '../../common/claudeFleetModel.js';
+import { FleetTranscriptSlice } from '../../common/claudeFleetModel.js';
+import { WorkflowTranscriptRef } from '../../common/claudeWorkflowModel.js';
 import { encodeProjectDir } from '../../browser/clawdiusConfigStore.js';
 import { ClawdiusReaderSeamService } from '../../browser/reader/claudeReaderSeamService.js';
 import { renderTranscriptSlice } from '../../browser/workflows/claudeWorkflowTranscriptEditor.js';
@@ -142,16 +143,14 @@ suite('Clawdius Claude Code Ultracode Workflows - transcript drill-in', () => {
 		assert.strictEqual(ClaudeWorkflowTranscriptInput.ID, 'workbench.input.clawdiusMissionTranscript');
 	});
 
-	test('backward-compat: the transcript serializer round-trips a subagent through the preserved typeId', () => {
-		const subagent: FleetSubagent = {
-			subagentId: 'sub-rt-01',
-			parentRunId: 'run-rt-01',
-			transcriptRef: 'transcript-ref-rt-01',
-			coverage: CoverageLabel.InScope,
-			freshness: FreshnessLabel.Polled,
-			completeness: CompletenessState.Complete,
-		};
-		const input = store.add(new ClaudeWorkflowTranscriptInput(subagent));
+	// The input was migrated from carrying a FleetSubagent to carrying a WorkflowTranscriptRef identity triple
+	// (sessionId/runId/agentId) - never a stored path/URI, so the seam re-derives the transcript's on-disk path
+	// from these identities on every read. The typeId above stays unchanged; the full identity-migration +
+	// legacy-FleetSubagent-restore coverage lives in claudeWorkflowDetails.test.ts alongside the new drill-in
+	// editors it ships beside.
+	test('backward-compat: the transcript serializer round-trips a WorkflowTranscriptRef identity through the preserved typeId', () => {
+		const ref: WorkflowTranscriptRef = { sessionId: 'sess-rt-01', runId: 'wf_run-rt-01', agentId: 'agent-rt-01' };
+		const input = store.add(new ClaudeWorkflowTranscriptInput(ref));
 		const serializer = new ClaudeWorkflowTranscriptInputSerializer();
 		const instantiationService = store.add(new TestInstantiationService());
 
@@ -160,9 +159,9 @@ suite('Clawdius Claude Code Ultracode Workflows - transcript drill-in', () => {
 		assert.ok(deserialized instanceof ClaudeWorkflowTranscriptInput);
 		const restored = store.add(deserialized);
 
-		// The restored input reconstructs the same subagent identity - and, because `resource` is computed FROM
-		// the subagent (not itself persisted), the same resource the original input had.
-		assert.deepStrictEqual(restored.subagent, subagent);
+		// The restored input reconstructs the same identity triple - and, because `resource` is computed FROM the
+		// ref (not itself persisted), the same resource the original input had.
+		assert.deepStrictEqual(restored.ref, ref);
 		assert.deepStrictEqual(restored.resource, input.resource);
 	});
 

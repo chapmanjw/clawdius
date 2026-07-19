@@ -4,13 +4,17 @@
  *--------------------------------------------------------------------------------------------*/
 
 // CLAWDIUS-BEGIN Claude Code Ultracode Workflows - transcript drill-in EditorPane
-// A native-DOM EditorPane (no webview => zero-egress; pattern: claudeControlCenterEditor) that opens a subagent's
-// REAL on-disk transcript in the editor area. It reads ONLY through the shipped seam: the subagent's
-// opaque transcriptRef -> the seam's per-subagent transcript read, which returns an INDEX-ONLY labeled slice (the
-// record types in view + the four honesty labels), never the message bodies. The drill-in read's completeness
-// runs the out-of-band tool-result probe, so a transcript referencing a missing out-of-band file paints `partial`,
-// not `complete` - the label is rendered honestly, never fabricated up to complete. The header + record
-// rows carry `data-*` hooks so the real-build Playwright render can assert the completeness label + record count.
+// A native-DOM EditorPane (no webview => zero-egress; pattern: claudeControlCenterEditor) that opens a workflow
+// agent's REAL on-disk transcript in the editor area. It reads ONLY through the shipped seam, by IDENTITY
+// (`readWorkflowAgentTranscript(root, ref)` - the sessionId/runId/agentId triple the input carries, NEVER a
+// stored path/URI), which returns an INDEX-ONLY labeled slice (the record types in view + the four honesty
+// labels), never the message bodies. The seam re-derives the on-disk path from those identities on every call,
+// which is what closes the URI-serialization disclosure seam a stored path would otherwise reopen on restore -
+// see claudeWorkflowTranscriptInput.ts for the identity-migration + legacy-restore detail. The drill-in read's
+// completeness runs the out-of-band tool-result probe, so a transcript referencing a missing out-of-band file
+// paints `partial`, not `complete` - the label is rendered honestly, never fabricated up to complete. The header
+// + record rows carry `data-*` hooks so the real-build render can assert the completeness label +
+// record count.
 
 import './media/claudeWorkflows.css';
 import { $, append, clearNode, Dimension, size } from '../../../../../base/browser/dom.js';
@@ -25,7 +29,9 @@ import { IEditorOptions } from '../../../../../platform/editor/common/editor.js'
 import { EditorPane } from '../../../../browser/parts/editor/editorPane.js';
 import { IEditorOpenContext } from '../../../../common/editor.js';
 import { IEditorGroup } from '../../../../services/editor/common/editorGroupsService.js';
+import { IPathService } from '../../../../services/path/common/pathService.js';
 import { FleetTranscriptSlice } from '../../common/claudeFleetModel.js';
+import { resolveConfigRoot } from '../../common/claudeReaderSeam.js';
 import { ClawdiusReaderSeamService } from '../reader/claudeReaderSeamService.js';
 import { ClaudeWorkflowTranscriptInput } from './claudeWorkflowTranscriptInput.js';
 
@@ -38,7 +44,7 @@ import { ClaudeWorkflowTranscriptInput } from './claudeWorkflowTranscriptInput.j
  */
 export function renderTranscriptSlice(container: HTMLElement, slice: FleetTranscriptSlice): void {
 	clearNode(container);
-	// The honest projection Playwright asserts: the completeness label + the record count + the subagent id.
+	// The honest projection the real-build render asserts: the completeness label + the record count + the subagent id.
 	container.setAttribute('data-clawdius-transcript-subagent', slice.subagentId);
 	container.setAttribute('data-clawdius-transcript-completeness', slice.completeness);
 	container.setAttribute('data-clawdius-transcript-coverage', slice.coverage);
@@ -90,6 +96,7 @@ export class ClaudeWorkflowTranscriptEditor extends EditorPane {
 		@IThemeService themeService: IThemeService,
 		@IStorageService storageService: IStorageService,
 		@IInstantiationService instantiationService: IInstantiationService,
+		@IPathService private readonly pathService: IPathService,
 	) {
 		super(ClaudeWorkflowTranscriptEditor.ID, group, telemetryService, themeService, storageService);
 		// The seam service is not a registered singleton; instantiate it (teams probe off) so the pane reads through
@@ -104,9 +111,14 @@ export class ClaudeWorkflowTranscriptEditor extends EditorPane {
 
 	override async setInput(input: ClaudeWorkflowTranscriptInput, options: IEditorOptions | undefined, context: IEditorOpenContext, token: CancellationToken): Promise<void> {
 		await super.setInput(input, options, context, token);
-		// Read the transcript through the seam - the only data path. Honest on failure: the seam degrades to
-		// a labeled absent/unknown-shape slice rather than throwing, so the pane always has something honest to paint.
-		const slice = await this.seam.readSubagentTranscript(input.subagent);
+		const home = await this.pathService.userHome();
+		if (token.isCancellationRequested || this.disposed) { return; }
+		const root = resolveConfigRoot(undefined, home);
+		// Read by IDENTITY (sessionId/runId/agentId), never a stored path: the seam re-derives the on-disk path
+		// under the resolved root on every call, so a restored tab can never redirect the read elsewhere. Honest
+		// on failure: a legacy-restored ref with no sessionId degrades to the seam's own absent/out-of-scope
+		// slice rather than throwing, exactly like any other unreadable transcript.
+		const slice = await this.seam.readWorkflowAgentTranscript(root, input.ref);
 		if (token.isCancellationRequested || this.disposed) { return; }
 		this.render(slice);
 	}

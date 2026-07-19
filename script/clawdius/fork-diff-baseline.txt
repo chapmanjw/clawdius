@@ -220,7 +220,16 @@
 # count and nests the agent rows so a count cannot contradict the rows beneath it. Growth is the new tree module +
 # its renderers + the mutation-tested renderer / reader guards, net of the removed pre-tree view test.
 
+# Disposition 2026-07-19 (+3 files, +1172 insertions): add the drill-in editors - open a completed run's full
+# result, one agent's detail, and that agent's raw transcript as read-only editor panes from the tree. The result +
+# agent panes render a bounded, immutable snapshot the tree already holds (so a large result never lays out in one
+# non-virtualized text node), validated field-by-field on restore so a malformed persisted state opens no pane. The
+# transcript pane re-reads live, re-deriving its file path from the (session, run, agent) identities on every open -
+# never trusting a stored path - and shows record kinds only, never message bodies; its input was migrated to carry
+# those identities, with a pre-migration persisted tab still restoring into an honest absent read. Growth is the two
+# new pane/input files + their tests + the tree activation wiring + the pane registration.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
 recorded: 2026-07-19
-baseline: 5599 files changed, 44628 insertions(+), 1456122 deletions(-)
+baseline: 5602 files changed, 45800 insertions(+), 1456122 deletions(-)

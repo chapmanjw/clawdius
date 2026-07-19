@@ -52,6 +52,8 @@ import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContaine
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainerLocation } from '../../../common/views.js';
 import { ClawdiusContextBudgetView, CONTEXT_BUDGET_VIEW_CONTAINER_ID, CONTEXT_BUDGET_VIEW_ID } from './clawdiusContextBudgetView.js';
 import { ClawdiusWorkflowsView, WORKFLOWS_VIEW_CONTAINER_ID, WORKFLOWS_VIEW_ID } from './workflows/claudeWorkflowsView.js';
+import { ClaudeWorkflowDetailEditor } from './workflows/claudeWorkflowDetailEditor.js';
+import { ClaudeWorkflowDetailInput, ClaudeWorkflowDetailInputSerializer } from './workflows/claudeWorkflowDetailInput.js';
 import { ClaudeWorkflowTranscriptEditor } from './workflows/claudeWorkflowTranscriptEditor.js';
 import { ClaudeWorkflowTranscriptInput, ClaudeWorkflowTranscriptInputSerializer } from './workflows/claudeWorkflowTranscriptInput.js';
 import { ClawdiusContextBudgetStatusEntry, CONTEXT_BUDGET_WARN_TOKENS_SETTING, OpenContextBudgetAction } from './clawdiusContextBudgetStatusEntry.js';
@@ -321,6 +323,17 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	// The registered typeId (ClaudeWorkflowTranscriptInput.ID) is PRESERVED as 'workbench.input.clawdiusMissionTranscript'
 	// for backward compat: a pre-rename persisted editor tab must still restore through this exact serializer key.
 	Registry.as<IEditorFactoryRegistry>(EditorExtensions.EditorFactory).registerEditorSerializer(ClaudeWorkflowTranscriptInput.ID, ClaudeWorkflowTranscriptInputSerializer);
+
+	// The detail drill-in: a discriminated editor-area EditorPane opening a completed run's FULL result or one
+	// agent's cost/error/preview detail, rendered from a snapshot the tree already holds (no seam read on open -
+	// see claudeWorkflowDetailInput.ts). Opened from the Workflows view's `onDidOpen` (a story leaf -> result, an
+	// agent row -> agent detail); the transcript stays reachable from the agent-detail pane's "Open Transcript"
+	// action.
+	Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
+		EditorPaneDescriptor.create(ClaudeWorkflowDetailEditor, ClaudeWorkflowDetailEditor.ID, localize('clawdius.workflows.detailPane', "Claude Code Workflow Detail")),
+		[new SyncDescriptor(ClaudeWorkflowDetailInput)],
+	);
+	Registry.as<IEditorFactoryRegistry>(EditorExtensions.EditorFactory).registerEditorSerializer(ClaudeWorkflowDetailInput.ID, ClaudeWorkflowDetailInputSerializer);
 
 	registerWorkbenchContribution2(ClawdiusContextBudgetStatusEntry.ID, ClawdiusContextBudgetStatusEntry, WorkbenchPhase.BlockRestore);
 	registerAction2(OpenContextBudgetAction);

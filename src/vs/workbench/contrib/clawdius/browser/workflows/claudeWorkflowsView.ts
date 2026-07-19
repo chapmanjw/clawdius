@@ -10,8 +10,13 @@
 // claudeWorkflowModel.ts`) and rendered DIRECTLY through the tree - no bridge back to a legacy row shape. A
 // TERMINAL run expands (native tree expansion, collapsed by default) to its story leaf (summary + cost + result,
 // variable-height and measured) and its phases/agents (grouped under phase nodes only when the run declared more
-// than one - see `claudeWorkflowTree.ts`'s `buildTerminalRunChildren`). Drill-in editors (opening the full result /
-// an agent's transcript on Enter) are a later change: the tree here is the list + native expansion only.
+// than one - see `claudeWorkflowTree.ts`'s `buildTerminalRunChildren`). Drill-in editors open on `onDidOpen`
+// (Enter or mouse activation): the story leaf opens the run's FULL result, an agent row opens its DETAIL - both
+// the discriminated `ClaudeWorkflowDetailInput`/`Editor` (`claudeWorkflowDetailInput.ts` /
+// `claudeWorkflowDetailEditor.ts`), rendered from the SAME in-memory `TerminalWorkflowRun`/`TerminalWorkflowAgent`
+// the tree already holds - no second seam read. An agent's raw transcript is reachable FROM its detail pane (an
+// "Open Transcript" action, withheld unless `agent.transcriptRef` is present); `run` (toggles expansion) and
+// `phase` (a grouping node) never open an editor.
 //
 // The ownership-chrome rule is split across this file and `claudeWorkflowTree.ts`: `refresh()` below
 // computes `uniformlyForeign` ONCE per read (never per-row) and paints the single SURFACE ownership label above the
@@ -44,11 +49,13 @@ import { IOpenerService } from '../../../../../platform/opener/common/opener.js'
 import { IThemeService } from '../../../../../platform/theme/common/themeService.js';
 import { IViewPaneOptions, ViewPane } from '../../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../../common/views.js';
+import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { IPathService } from '../../../../services/path/common/pathService.js';
 import { resolveConfigRoot } from '../../common/claudeReaderSeam.js';
-import { WorkflowRun } from '../../common/claudeWorkflowModel.js';
+import { TerminalWorkflowAgent, TerminalWorkflowRun, WorkflowRun } from '../../common/claudeWorkflowModel.js';
 import { ClawdiusReaderSeamService } from '../reader/claudeReaderSeamService.js';
 import { BadgeSignal, ClaudeWorkflowBadgeFeed } from './claudeWorkflowBadges.js';
+import { boundResultText, ClaudeWorkflowAgentDetailPayload, ClaudeWorkflowDetailInput, ClaudeWorkflowResultDetailPayload } from './claudeWorkflowDetailInput.js';
 import { ownedSessionIdsFromHost } from './claudeWorkflowOwnership.js';
 import {
 	buildWorkflowTreeChildren, computeUniformlyForeign, IWorkflowRenderContext, renderWorkflowsStateMessage,
@@ -119,6 +126,7 @@ export class ClawdiusWorkflowsView extends ViewPane {
 		@IHoverService hoverService: IHoverService,
 		@IPathService private readonly pathService: IPathService,
 		@IAgentHostService private readonly agentHostService: IAgentHostService,
+		@IEditorService private readonly editorService: IEditorService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 		// The seam service is not a registered singleton; instantiate it (teams probe off) so the view reads runs
@@ -176,6 +184,19 @@ export class ClawdiusWorkflowsView extends ViewPane {
 				overrideStyles: this.getLocationBasedColors().listOverrideStyles,
 			},
 		));
+
+		// Drill-in activation: `onDidOpen` fires for BOTH Enter and mouse activation. A `story` element opens the
+		// run's full RESULT detail; an `agent` element opens that agent's DETAIL. `run` (a collapsible row) and
+		// `phase` (a grouping node) open no editor - the tree's own native expand/collapse handles `run`.
+		this._register(this.tree.onDidOpen(e => {
+			const element = e.element;
+			if (!element) { return; }
+			if (element.kind === 'story') {
+				void this.openResultDetail(element.run);
+			} else if (element.kind === 'agent') {
+				void this.openAgentDetail(element.run, element.agent);
+			}
+		}));
 
 		// The LIVE-only badge feed: an owned run's `onDidAction` needs-input/completion event raises a `live` badge
 		// on its row. In a runtime with no agent host the null service's `onDidAction` is `Event.None`, so nothing
@@ -271,6 +292,48 @@ export class ClawdiusWorkflowsView extends ViewPane {
 		const show = this.currentRuns.length > 0 && this.renderContext.uniformlyForeign;
 		this.surfaceLabelEl.style.display = show ? '' : 'none';
 		this.surfaceLabelEl.setAttribute('data-clawdius-workflows-surface-ownership', String(show));
+	}
+
+	/** Open the RESULT detail editor for a terminal run's story leaf - a SNAPSHOT off the same in-memory
+	 *  `TerminalWorkflowRun` the tree already holds (no second seam read; see claudeWorkflowDetailInput.ts). */
+	private async openResultDetail(run: TerminalWorkflowRun): Promise<void> {
+		const payload: ClaudeWorkflowResultDetailPayload = {
+			kind: 'result',
+			identity: run.identity,
+			runId: run.runId,
+			workflowName: run.workflowName,
+			status: run.status,
+			durationMs: run.durationMs,
+			totalTokens: run.totalTokens,
+			totalToolCalls: run.totalToolCalls,
+			defaultModel: run.defaultModel,
+			agentCount: run.agentCount,
+			resultText: boundResultText(run.resultText),
+		};
+		await this.editorService.openEditor(new ClaudeWorkflowDetailInput(payload), { pinned: true, revealIfOpened: true });
+	}
+
+	/** Open the AGENT detail editor for one agent row - a SNAPSHOT off the same in-memory `TerminalWorkflowAgent`
+	 *  the tree already holds. `transcriptRef` rides along unchanged, so the detail pane's "Open Transcript"
+	 *  action is withheld exactly when the tree's own identity join withheld it. */
+	private async openAgentDetail(run: TerminalWorkflowRun, agent: TerminalWorkflowAgent): Promise<void> {
+		const payload: ClaudeWorkflowAgentDetailPayload = {
+			kind: 'agent',
+			identity: run.identity,
+			runId: run.runId,
+			agentId: agent.agentId,
+			label: agent.label,
+			state: agent.state,
+			model: agent.model,
+			tokens: agent.tokens,
+			toolCalls: agent.toolCalls,
+			durationMs: agent.durationMs,
+			promptPreview: agent.promptPreview,
+			resultPreview: agent.resultPreview,
+			error: agent.error,
+			transcriptRef: agent.transcriptRef,
+		};
+		await this.editorService.openEditor(new ClaudeWorkflowDetailInput(payload), { pinned: true, revealIfOpened: true });
 	}
 }
 // CLAWDIUS-END

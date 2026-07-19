@@ -317,4 +317,86 @@
 	background: var(--vscode-badge-background);
 	color: var(--vscode-badge-foreground);
 }
+
+/* Detail drill-in editor pane: the run RESULT variant and the agent DETAIL variant share one shell. */
+.clawdius-workflow-detail {
+	height: 100%;
+	overflow: auto;
+	user-select: text;
+}
+
+.clawdius-workflow-detail-inner {
+	padding: 12px 16px;
+}
+
+.clawdius-workflow-detail-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding-bottom: 8px;
+	margin-bottom: 8px;
+	border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.clawdius-workflow-detail-title {
+	font-weight: 600;
+	word-break: break-word;
+}
+
+.clawdius-workflow-detail-status-badge {
+	font-size: 10px;
+	line-height: 15px;
+	padding: 0 5px;
+	border-radius: 3px;
+	white-space: nowrap;
+	text-transform: uppercase;
+	letter-spacing: 0.02em;
+	background: var(--vscode-badge-background);
+	color: var(--vscode-badge-foreground);
+	margin-left: auto;
+}
+
+.clawdius-workflow-detail-status-badge.status-failed,
+.clawdius-workflow-detail-status-badge.status-error {
+	background: var(--vscode-errorForeground);
+	color: var(--vscode-editor-background);
+}
+
+.clawdius-workflow-detail-cost {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	font-size: 11px;
+	opacity: 0.8;
+	margin-bottom: 12px;
+}
+
+.clawdius-workflow-detail-sep {
+	opacity: 0.6;
+}
+
+.clawdius-workflow-detail-field {
+	margin-bottom: 12px;
+}
+
+.clawdius-workflow-detail-field-label {
+	font-weight: 600;
+	font-size: 11px;
+	opacity: 0.8;
+	margin-bottom: 2px;
+}
+
+.clawdius-workflow-detail-field-value,
+.clawdius-workflow-detail-result {
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.clawdius-workflow-detail-field-error .clawdius-workflow-detail-field-value {
+	color: var(--vscode-errorForeground);
+}
+
+.clawdius-workflow-detail-actions {
+	margin-top: 8px;
+}
 /* CLAWDIUS-END */

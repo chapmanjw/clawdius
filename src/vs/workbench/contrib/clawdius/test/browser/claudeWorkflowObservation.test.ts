@@ -28,10 +28,12 @@ import { IFileService } from '../../../../../platform/files/common/files.js';
 import { InMemoryFileSystemProvider } from '../../../../../platform/files/common/inMemoryFilesystemProvider.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
+import { IStorageService } from '../../../../../platform/storage/common/storage.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { testWorkspace } from '../../../../../platform/workspace/test/common/testWorkspace.js';
 import { TestPathService } from '../../../../test/browser/workbenchTestServices.js';
-import { TestContextService } from '../../../../test/common/workbenchTestServices.js';
+import { TestActivityService, TestContextService, TestStorageService } from '../../../../test/common/workbenchTestServices.js';
+import { IActivityService } from '../../../../services/activity/common/activity.js';
 import { IPathService } from '../../../../services/path/common/pathService.js';
 import { encodeProjectDir } from '../../browser/clawdiusConfigStore.js';
 import {
@@ -100,6 +102,10 @@ suite('Clawdius Claude Code Ultracode Workflows - observation service', () => {
 		instantiationService.stub(IFileService, fs);
 		instantiationService.stub(IWorkspaceContextService, new TestContextService(testWorkspace(FOLDER)));
 		instantiationService.stub(IPathService, new TestPathService(HOME, HOME.scheme));
+		// A fresh, unshared watermark store per service - the awareness watermark's own baseline/persistence/
+		// restart semantics are covered separately in claudeWorkflowAwareness.test.ts.
+		instantiationService.stub(IStorageService, store.add(new TestStorageService()));
+		instantiationService.stub(IActivityService, new TestActivityService());
 		return store.add(instantiationService.createInstance(ClaudeWorkflowObservationService));
 	}
 
@@ -147,7 +153,7 @@ suite('Clawdius Claude Code Ultracode Workflows - observation service', () => {
 			[{ runId: 'wf_11111111-aaa', kind: 'terminal' }, { runId: 'wf_22222222-bbb', kind: 'live' }],
 		);
 		assert.strictEqual(snapshot.liveCount, 1);
-		// Deferred: no persisted watermark exists yet, so awareness is always empty here.
+		// Neither run is `failed`, so the baseline this first `ok` read establishes has nothing to absorb.
 		assert.deepStrictEqual(snapshot.unseenFailures, []);
 	});
 
@@ -165,7 +171,7 @@ suite('Clawdius Claude Code Ultracode Workflows - observation service', () => {
 		assert.strictEqual(snapshot.liveCount, 1);
 	});
 
-	test('markFailuresSeen() is a no-op - there is no persisted watermark yet to mark', async () => {
+	test('markFailuresSeen() is safe to call when there is nothing to mark (no failures observed)', async () => {
 		const fs = makeFs();
 		const service = makeService(fs);
 		await nextSnapshot(service);

@@ -621,6 +621,40 @@ function findWorkflowDonor() {
 	return { ...chosen, manifestBytes: readFileSync(chosen.manifestFile) };
 }
 
+/** Scan the REAL `~/.claude/projects` corpus (read-only; NEVER written to) for a DONOR: a session whose
+ *  `workflows/<runId>.json` manifest parses as JSON with `status: "failed"` - a real terminal failed run to clone
+ *  the awareness-badge scenario's fixture from. Mirrors {@link findWorkflowDonor}'s own directory walk and
+ *  filename shape, but only needs the manifest (no journal/sidecars - a terminal manifest alone is a complete,
+ *  valid run). Returns `undefined` when the corpus has no failed run at all - the scenario's own SKIP condition,
+ *  never a false pass. */
+function findFailedWorkflowDonor() {
+	const projectsRoot = join(homedir(), '.claude', 'projects');
+	const isDir = p => { try { return statSync(p).isDirectory(); } catch { return false; } };
+	let projectDirs;
+	try { projectDirs = readdirSync(projectsRoot).filter(d => isDir(join(projectsRoot, d))); } catch { return undefined; }
+
+	for (const enc of projectDirs) {
+		const projectDir = join(projectsRoot, enc);
+		let sessionDirs;
+		try { sessionDirs = readdirSync(projectDir).filter(d => d !== 'memory' && isDir(join(projectDir, d))); } catch { continue; }
+		for (const session of sessionDirs) {
+			const workflowsDir = join(projectDir, session, 'workflows');
+			let manifestNames;
+			try { manifestNames = readdirSync(workflowsDir).filter(f => f.endsWith('.json') && statSync(join(workflowsDir, f)).isFile()); } catch { continue; }
+			for (const manifestName of manifestNames) {
+				const runId = manifestName.slice(0, -'.json'.length);
+				if (!/^wf_[a-z0-9-]{6,}$/.test(runId)) { continue; }
+				const manifestFile = join(workflowsDir, manifestName);
+				let parsed;
+				try { parsed = JSON.parse(readFileSync(manifestFile, 'utf8')); } catch { continue; }
+				if (!parsed || parsed.status !== 'failed') { continue; }
+				return { enc, session, runId, manifestFile, manifestBytes: readFileSync(manifestFile) };
+			}
+		}
+	}
+	return undefined;
+}
+
 /** Expand a live run's row (click, ArrowRight, twistie fallback - the same sequence {@link expandRunAndGatherAgents}
  *  uses for a terminal run's story leaf) and return its `.clawdius-workflow-live-progress` leaf handle, or
  *  undefined if expansion never revealed one. */
@@ -1471,6 +1505,159 @@ try {
 			try { rmSync(sandbox, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
 			try { rmSync(prof2, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
 			try { rmSync(exts2, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+			win = savedWin;
+		}
+	});
+
+	// 9e. AWARENESS: the activity-bar container badge appears for an UNSEEN failed run, clears the moment the
+	// workflows view is opened/focused, and a RESTART of the same profile does not re-alarm the now-seen failure -
+	// against the REAL built app. Clones a REAL FAILED run's manifest bytes (findFailedWorkflowDonor above) into
+	// an isolated sandbox and points a SECOND Electron instance's `USERPROFILE`/`HOME` at it (the real ~/.claude is
+	// never touched). Unlike the live-graduation scenario above, this one launches with a FIXED `--user-data-dir`
+	// reused across a close+relaunch, since the failure watermark lives in PROFILE-scoped storage and must survive
+	// that restart for the assertion to mean anything. The container's action item is found by its codicon class
+	// (`codicon-clawdius-claude-code-workflows`, stable per its icon registration) rather than by aria-label: the
+	// label text lives on the inner `.action-label` anchor while the outer `.action-item` itself carries an EMPTY
+	// aria-label, so an aria-label-based selector on the outer element would never match.
+	// SKIPs+WARNs (never a false pass, never a weakened assertion) when the config root has no failed run to clone,
+	// or when the activity-bar action item/badge cannot be found in the DOM at all.
+	await scenario('ultracode-workflows-awareness-badge', true, async () => {
+		const donor = findFailedWorkflowDonor();
+		if (!donor) {
+			return 'SKIPPED (no run under the config root carries a workflows/<runId>.json manifest '
+				+ 'with status:"failed" - nothing to clone an unseen-failure badge from)';
+		}
+
+		const sandbox = mkdtempSync(join(tmpdir(), 'clawdius-e2e-awareness-sandbox-'));
+		const profile = mkdtempSync(join(tmpdir(), 'clawdius-e2e-awareness-prof-'));
+		const exts = mkdtempSync(join(tmpdir(), 'clawdius-e2e-awareness-exts-'));
+		const syntheticSession = `${donor.session}-e2e-awareness-${process.pid}`;
+		const savedWin = win;
+		let app;
+
+		const iconSelector = '.part.activitybar .action-item .action-label.codicon-clawdius-claude-code-workflows';
+
+		const launch = async () => {
+			const a = await electron.launch({
+				executablePath: join(REPO, '.build', 'electron', 'Clawdius.exe'),
+				cwd: REPO,
+				args: ['.', '--disable-extension=vscode.vscode-api-tests',
+					`--user-data-dir=${profile}`, `--extensions-dir=${exts}`,
+					'--no-sandbox', '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust'],
+				env: { ...process.env, VSCODE_DEV: '1', VSCODE_CLI: '1', NODE_ENV: 'development', USERPROFILE: sandbox, HOME: sandbox },
+				timeout: 120000,
+			});
+			const w = await a.firstWindow();
+			await w.waitForSelector('.monaco-workbench', { timeout: 90000 });
+			await w.waitForTimeout(6000);
+			return { app: a, win: w };
+		};
+
+		// Read the container's CURRENT badge state, or `undefined` if the action item itself cannot be found at
+		// all (the scenario's own "badge DOM unreachable" SKIP trigger).
+		const readBadge = async w => {
+			const icon = await w.$(iconSelector);
+			if (!icon) { return undefined; }
+			return icon.evaluate(el => {
+				const item = el.closest('.action-item');
+				const badge = item ? item.querySelector('.badge') : null;
+				if (!badge) { return { visible: false, isWarning: false, numberText: '' }; }
+				const content = badge.querySelector('.badge-content');
+				return {
+					visible: badge.style.display !== 'none',
+					isWarning: !!content && content.classList.contains('codicon-warning'),
+					numberText: content ? (content.textContent || '') : '',
+				};
+			});
+		};
+
+		try {
+			// Clone the FAILED run's manifest bytes under a fresh synthetic session - no journal/sidecars needed
+			// (a terminal manifest alone is a complete, valid run).
+			const manifestDestDir = join(sandbox, '.claude', 'projects', donor.enc, syntheticSession, 'workflows');
+			mkdirSync(manifestDestDir, { recursive: true });
+			writeFileSync(join(manifestDestDir, `${donor.runId}.json`), donor.manifestBytes);
+
+			let launched = await launch();
+			app = launched.app;
+			win = launched.win;
+
+			// A COLD profile over a PRE-EXISTING failed run must NOT alarm: the first read with no stored watermark
+			// baselines every currently-failed identity into "seen" WITHOUT badging. So the badge is absent right
+			// after launch even though a failed run is present - the no-cold-start-alarm rule.
+			const afterLaunch = await readBadge(win);
+			if (!afterLaunch) {
+				return `SKIPPED (the workflows container's activity-bar action item could not be found - selector "${iconSelector}" matched nothing)`;
+			}
+			assert(!afterLaunch.visible, `expected NO badge on a cold profile whose only failed run was baselined as already-seen (no cold-start alarm), badge state: ${JSON.stringify(afterLaunch)}`);
+			const coldStartDetail = `no cold-start badge (baseline absorbed the pre-existing failure): ${JSON.stringify(afterLaunch)}`;
+
+			// A NEW failure that lands AFTER the baseline is genuinely unseen -> the warning badge appears. Write a
+			// second failed run (a distinct run id) into the already-watched sandbox and wait for the watcher to
+			// surface it. liveCount is 0 here (only terminal runs), so the failure indicator is what shows.
+			const newFailedRunId = 'wf_e2eawaretwo';
+			writeFileSync(join(manifestDestDir, `${newFailedRunId}.json`), donor.manifestBytes);
+			await win.waitForFunction((sel) => {
+				const icon = document.querySelector(sel);
+				const item = icon ? icon.closest('.action-item') : null;
+				const badge = item ? item.querySelector('.badge') : null;
+				const content = badge ? badge.querySelector('.badge-content') : null;
+				return !!badge && badge.style.display !== 'none' && !!content && content.classList.contains('codicon-warning');
+			}, iconSelector, { timeout: 20000, polling: 300 }).catch(() => { });
+			const afterNewFailure = await readBadge(win);
+			assert(afterNewFailure && afterNewFailure.visible, `expected the unseen-failure badge to APPEAR after a new failed run landed post-baseline, badge state: ${JSON.stringify(afterNewFailure)}`);
+			assert(afterNewFailure.isWarning, `expected the unseen-failure badge to be a warning icon badge, badge state: ${JSON.stringify(afterNewFailure)}`);
+			const launchDetail = `${coldStartDetail}; badge appeared for a new failure: ${JSON.stringify(afterNewFailure)}`;
+
+			// --- open/focus the workflows view: the badge must clear ---------------------------------------------
+			await focusWorkflowsView();
+			await win.waitForFunction((sel) => {
+				const icon = document.querySelector(sel);
+				const item = icon ? icon.closest('.action-item') : null;
+				const badge = item ? item.querySelector('.badge') : null;
+				return !!badge && badge.style.display === 'none';
+			}, iconSelector, { timeout: 15000, polling: 300 }).catch(() => { });
+			const afterOpen = await readBadge(win);
+			assert(afterOpen && !afterOpen.visible, `expected the badge to clear after opening/focusing the workflows view, badge state: ${JSON.stringify(afterOpen)}`);
+			const openDetail = `badge cleared after focusing the view: ${JSON.stringify(afterOpen)}`;
+
+			// --- prove the watermark PERSISTED across a real restart, DISTINGUISHABLY -----------------------------
+			// A bare "no badge after restart" cannot tell a persisted watermark from a re-baseline: both leave the two
+			// pre-existing failures unbadged. So make it distinguishing. First switch the active side bar AWAY from
+			// the workflows view (focus the Explorer) so the restored window does NOT restore the workflows view as
+			// visible and fire its on-visible mark-seen - that would acknowledge the new failure below and erase the
+			// proof. Then stage a THIRD, still-unseen failure that is already present at the restart's FIRST read, and
+			// relaunch the same profile + sandbox. On restart the warning badge appears ONLY if the watermark
+			// persisted: with a real watermark the two already-seen failures stay quiet and the new one alarms; if
+			// persistence had been lost the restart would cold-start-baseline ALL THREE into "seen" and show nothing.
+			await win.keyboard.press('Control+Shift+E');
+			await win.waitForTimeout(500);
+			const restartFailedRunId = 'wf_e2eawarethree';
+			writeFileSync(join(manifestDestDir, `${restartFailedRunId}.json`), donor.manifestBytes);
+
+			await app.close();
+			app = undefined;
+			launched = await launch();
+			app = launched.app;
+			win = launched.win;
+			await win.waitForFunction((sel) => {
+				const icon = document.querySelector(sel);
+				const item = icon ? icon.closest('.action-item') : null;
+				const badge = item ? item.querySelector('.badge') : null;
+				const content = badge ? badge.querySelector('.badge-content') : null;
+				return !!badge && badge.style.display !== 'none' && !!content && content.classList.contains('codicon-warning');
+			}, iconSelector, { timeout: 20000, polling: 300 }).catch(() => { });
+			const afterRestart = await readBadge(win);
+			assert(afterRestart, `the workflows container's activity-bar action item was not found after the restart (selector "${iconSelector}")`);
+			assert(afterRestart.visible && afterRestart.isWarning, `expected the warning badge to APPEAR on restart for a new unseen failure while the two persisted-seen failures stayed quiet (proving the watermark survived the restart - a lost watermark would have re-baselined all three into "seen" and shown nothing), badge state: ${JSON.stringify(afterRestart)}`);
+			const restartDetail = `warning badge on restart for a new failure while persisted-seen failures stayed quiet: ${JSON.stringify(afterRestart)}`;
+
+			return `donor: enc="${donor.enc}" session="${donor.session}" runId="${donor.runId}"; ${launchDetail}; ${openDetail}; ${restartDetail}`;
+		} finally {
+			if (app) { try { await app.close(); } catch { /* best-effort cleanup */ } }
+			try { rmSync(sandbox, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+			try { rmSync(profile, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+			try { rmSync(exts, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
 			win = savedWin;
 		}
 	});

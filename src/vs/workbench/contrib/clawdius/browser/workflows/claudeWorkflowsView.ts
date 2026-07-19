@@ -64,7 +64,7 @@ import {
 } from '../../common/claudeWorkflowModel.js';
 import { BadgeSignal, ClaudeWorkflowBadgeFeed } from './claudeWorkflowBadges.js';
 import { boundResultText, ClaudeWorkflowAgentDetailPayload, ClaudeWorkflowDetailInput, ClaudeWorkflowResultDetailPayload } from './claudeWorkflowDetailInput.js';
-import { IClaudeWorkflowObservationService, WorkflowSnapshot } from './claudeWorkflowObservationService.js';
+import { IClaudeWorkflowObservationService, WORKFLOWS_VIEW_CONTAINER_ID, WorkflowSnapshot } from './claudeWorkflowObservationService.js';
 import { ownedSessionIdsFromHost } from './claudeWorkflowOwnership.js';
 import {
 	computeUniformlyForeign, IWorkflowRenderContext, reconcileWorkflowTree, renderWorkflowsStateMessage,
@@ -78,11 +78,11 @@ import {
  *  Skipped entirely under reduced motion - the accessibility alert still always fires, motion-independent. */
 const GRADUATION_HIGHLIGHT_MS = 1500;
 
-// PRESERVED for backward compat: this is the view CONTAINER id VS Code persists (activity-bar placement,
-// pinned state, visibility) across restarts. It must NOT change with the rename, or a pre-rename user's
-// pinned activity-bar placement/visibility of this container would fail to restore - the same backward-compat
-// rationale as the transcript editor-input-serializer typeId.
-export const WORKFLOWS_VIEW_CONTAINER_ID = 'workbench.view.clawdiusMissions';
+// The view CONTAINER id is defined in `claudeWorkflowObservationService.ts` (re-exported here) so the observation
+// service can target the container's activity badge without an import cycle - this view already depends on that
+// module for its snapshot type, never the reverse. See that module's own PRESERVED-for-backward-compat comment
+// on the constant itself.
+export { WORKFLOWS_VIEW_CONTAINER_ID };
 // PRESERVED for backward compat: this is the view id VS Code persists (panel/sidebar placement, visibility,
 // size) across restarts. It must NOT change with the rename, or a pre-rename user's restored view state for
 // this view would fail to restore - the same backward-compat rationale as the transcript editor-input-serializer
@@ -451,6 +451,14 @@ export class ClawdiusWorkflowsView extends ViewPane {
 		// read-error state's "Read again" button triggers via `observationService.readAgain()`.
 		this._register(this.observationService.onDidChangeSnapshot(snapshot => this.applySnapshot(snapshot)));
 		this.applySnapshot(this.observationService.snapshot);
+
+		// Awareness: mark known failures seen whenever the developer actually looks at this surface - on focus,
+		// and whenever the view's body becomes visible (opened, expanded, or brought to the foreground), never on
+		// becoming hidden. Clears the container's unseen-failure badge without waiting for a fresh read.
+		this._register(this.onDidFocus(() => this.observationService.markFailuresSeen()));
+		this._register(this.onDidChangeBodyVisibility(visible => {
+			if (visible) { this.observationService.markFailuresSeen(); }
+		}));
 	}
 
 	/**

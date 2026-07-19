@@ -262,7 +262,18 @@
 # real-build filter/sort proof; no new files, isolated to the clawdius-owned view + its tests. As with the entries
 # above, the recorded baseline moves by more than the code delta because this block's own comment lines also count.
 
+# Disposition 2026-07-19 (+1 file, +675 insertions): badge the workflows container for live runs and new failures.
+# The observation service (from the entry above) gains a persisted failure watermark - a versioned set of seen
+# failure identities in PROFILE/MACHINE storage - and drives an activity-bar container badge from it: a live-run
+# count, or (when none are live) a warning for runs that failed since the view was last opened. The first read
+# baselines existing failures as already-seen (no cold-start alarm), opening/focusing the view marks them seen and
+# clears the warning, a restart never re-alarms a seen failure, and a degraded (partial/read-error) read never
+# advances the watermark nor touches the badge. The +1 file is the awareness unit suite; the rest is the watermark
+# + badge feed on the service, the view's mark-seen wiring, and the real-build badge/persistence proof. Isolated to
+# the clawdius-owned view/service + tests. As with the entries above, the recorded baseline moves by more than the
+# code delta because this block's own comment lines also count toward the fork surface.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
 recorded: 2026-07-19
-baseline: 5604 files changed, 48472 insertions(+), 1456122 deletions(-)
+baseline: 5605 files changed, 49148 insertions(+), 1456122 deletions(-)

@@ -1662,6 +1662,216 @@ try {
 		}
 	});
 
+	// HONEST EDGES: every degraded/degenerate run shape stays VISIBLE and never crashes the list - an
+	// unknown-shape manifest, a run/agent missing its cost numbers (a dash, never a fabricated zero), a live run
+	// whose result landed with no surviving started record, a live run with a torn (non-tail) journal line, and a
+	// manifest naming one agentId twice - against the real built app. These shapes are hand-authored (they are not
+	// expected in ordinary use), staged into an isolated sandbox that a separate instance reads via an overridden
+	// USERPROFILE/HOME pointed at the sandbox only, so the reader sees only the sandbox and never the user's own
+	// config root, across Dark/Light/High-Contrast.
+	await scenario('ultracode-workflows-honest-edges', true, async () => {
+		const sandbox = mkdtempSync(join(tmpdir(), 'clawdius-e2e-edges-sandbox-'));
+		const prof3 = mkdtempSync(join(tmpdir(), 'clawdius-e2e-edges-prof-'));
+		const exts3 = mkdtempSync(join(tmpdir(), 'clawdius-e2e-edges-exts-'));
+		const savedWin = win;
+		let app3;
+		try {
+			const projectsRoot = join(sandbox, '.claude', 'projects');
+			const proj = join(projectsRoot, 'edge-cases');
+
+			// 1. UNKNOWN-SHAPE: a manifest present but not a recognized shape (no `status`).
+			const unknownShapeDir = join(proj, 'session-unknown-shape', 'workflows');
+			mkdirSync(unknownShapeDir, { recursive: true });
+			writeFileSync(join(unknownShapeDir, 'wf_unknownshape.json'), JSON.stringify({ foo: 'bar' }));
+
+			// 2. MISSING NUMBERS: a terminal run with no cost totals at all, and one agent with no model/tokens/toolCalls.
+			const missingNumsDir = join(proj, 'session-missing-numbers', 'workflows');
+			mkdirSync(missingNumsDir, { recursive: true });
+			writeFileSync(join(missingNumsDir, 'wf_missingnums.json'), JSON.stringify({
+				workflowName: 'missing-numbers-edge', summary: 'No cost totals were ever computed.', status: 'completed',
+				workflowProgress: [{ type: 'workflow_agent', agentId: 'a1', label: 'bare-agent', state: 'done' }],
+			}));
+
+			// 3. RESULT-BEFORE-START: a live run (manifest-less journal) whose result landed with no started record.
+			const resultBeforeStartDir = join(proj, 'session-result-before-start', 'subagents', 'workflows', 'wf_resultbeforestart');
+			mkdirSync(resultBeforeStartDir, { recursive: true });
+			writeFileSync(join(resultBeforeStartDir, 'journal.jsonl'), '{"type":"result","agentId":"a1","result":"Landed with no started record."}\n');
+
+			// 4. TORN TAIL: a live run whose journal has a torn (NOT last) line; the readable records still render.
+			const tornTailDir = join(proj, 'session-torn-tail', 'subagents', 'workflows', 'wf_torntail');
+			mkdirSync(tornTailDir, { recursive: true });
+			writeFileSync(join(tornTailDir, 'journal.jsonl'),
+				'{"type":"started","agentId":"a1"}\n{"type":"started","agen\n{"type":"result","agentId":"a1","result":"Done despite the torn line."}\n');
+
+			// 5. DUPLICATE AGENT ID: one manifest naming the same agentId twice.
+			const dupAgentDir = join(proj, 'session-duplicate-agent', 'workflows');
+			mkdirSync(dupAgentDir, { recursive: true });
+			writeFileSync(join(dupAgentDir, 'wf_dupagent.json'), JSON.stringify({
+				workflowName: 'duplicate-agent-edge', status: 'completed',
+				workflowProgress: [
+					{ type: 'workflow_agent', agentId: 'a1', label: 'first', state: 'done' },
+					{ type: 'workflow_agent', agentId: 'a1', label: 'second', state: 'done' },
+				],
+			}));
+
+			// 6. ZERO-AGENT TERMINAL: a run that genuinely ran no agents (complete, no chip) vs one whose only agent
+			// entry was unreadable (also an empty agent list, but partial) - the distinguishing pair.
+			const zeroAgentDir = join(proj, 'session-zero-agent', 'workflows');
+			mkdirSync(zeroAgentDir, { recursive: true });
+			writeFileSync(join(zeroAgentDir, 'wf_zeroagent.json'), JSON.stringify({
+				workflowName: 'zero-agent-edge', summary: 'Ran no agents at all.', status: 'completed', workflowProgress: [],
+			}));
+			const zeroAgentPartialDir = join(proj, 'session-zero-agent-partial', 'workflows');
+			mkdirSync(zeroAgentPartialDir, { recursive: true });
+			writeFileSync(join(zeroAgentPartialDir, 'wf_zeroagentpartial.json'), JSON.stringify({
+				workflowName: 'zero-agent-partial-edge', summary: 'Its only agent entry was unreadable.', status: 'completed',
+				workflowProgress: [{ type: 'workflow_agent', label: 'missing id and state' }],
+			}));
+
+			// A HEALTHY sibling run beside the degenerate ones - proves the whole list never blanks or crashes.
+			const healthyDir = join(proj, 'session-healthy', 'workflows');
+			mkdirSync(healthyDir, { recursive: true });
+			writeFileSync(join(healthyDir, 'wf_healthy.json'), JSON.stringify({
+				workflowName: 'healthy-sibling', summary: 'A normal run beside the degenerate ones.', status: 'completed',
+				durationMs: 1000, totalTokens: 500, totalToolCalls: 3, defaultModel: 'claude-opus-4-8[1m]',
+				workflowProgress: [{ type: 'workflow_agent', agentId: 'h1', label: 'healthy-agent', state: 'done', model: 'opus', tokens: 500, toolCalls: 3, durationMs: 1000 }],
+			}));
+
+			app3 = await electron.launch({
+				executablePath: join(REPO, '.build', 'electron', 'Clawdius.exe'),
+				cwd: REPO,
+				args: ['.', '--disable-extension=vscode.vscode-api-tests',
+					`--user-data-dir=${prof3}`, `--extensions-dir=${exts3}`,
+					'--no-sandbox', '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust'],
+				env: { ...process.env, VSCODE_DEV: '1', VSCODE_CLI: '1', NODE_ENV: 'development', USERPROFILE: sandbox, HOME: sandbox },
+				timeout: 120000,
+			});
+			win = await app3.firstWindow();
+			await win.waitForSelector('.monaco-workbench', { timeout: 90000 });
+			await win.waitForTimeout(6000);
+			await focusWorkflowsView();
+
+			const errorOverlay = await win.$('[data-clawdius-workflows-state="read-error"]');
+			assert(!errorOverlay, 'the workflows list rendered a read-error overlay instead of the degenerate runs');
+			await win.waitForSelector('.clawdius-workflow-run-row[data-run-id="wf_healthy"]', { state: 'attached', timeout: 20000 });
+
+			// Expand-then-collapse ONE row at a time: the story/live-progress leaf carries no data-run-id of its own
+			// (it is a SEPARATE tree row below the run, not a nested child), so only ONE such leaf may be expanded
+			// at a time for `expandRunAndGatherAgents`/`expandLiveRunProgress`'s global `.clawdius-workflow-story` /
+			// `.clawdius-workflow-live-progress` lookups to unambiguously belong to the run under test.
+			const collapse = async (row) => { await row.click(); await win.keyboard.press('ArrowLeft'); await win.waitForTimeout(200); };
+
+			const results = {};
+
+			// --- 1. unknown-shape --------------------------------------------------------------------------------
+			const unknownRow = await win.waitForSelector('.clawdius-workflow-run-row[data-run-id="wf_unknownshape"]', { state: 'attached', timeout: 10000 });
+			const unknownKind = await unknownRow.getAttribute('data-run-kind');
+			const unknownCompleteness = await unknownRow.getAttribute('data-completeness');
+			const unknownText = (await unknownRow.textContent()) || '';
+			assert(unknownKind === 'unknown-shape' && unknownCompleteness === 'unknown-shape',
+				`unknown-shape run read data-run-kind="${unknownKind}" data-completeness="${unknownCompleteness}"`);
+			assert(unknownText.includes('Shape not recognized'), `unknown-shape row text missing "Shape not recognized": ${JSON.stringify(unknownText)}`);
+			results.unknownShape = `data-run-kind="unknown-shape"; row text includes "Shape not recognized"`;
+
+			// --- 2. missing numbers --------------------------------------------------------------------------------
+			const missingRow = await win.waitForSelector('.clawdius-workflow-run-row[data-run-id="wf_missingnums"]', { state: 'attached', timeout: 10000 });
+			const missingExpand = await expandRunAndGatherAgents(missingRow);
+			assert(missingExpand.story, 'missing-numbers run did not reveal its story leaf');
+			const storyText = (await missingExpand.story.textContent()) || '';
+			const storyDashCount = (storyText.match(/—/g) || []).length;
+			assert(storyDashCount === 5, `expected exactly 5 dash placeholders (duration/tokens/toolCalls/model/agentCount) in the missing-numbers story leaf, found ${storyDashCount}: ${JSON.stringify(storyText)}`);
+			assert(!/\b0 tokens\b|\b0 tool calls\b/.test(storyText), `missing-numbers story leaf fabricated a zero: ${JSON.stringify(storyText)}`);
+			let agentDashCount = -1;
+			if (missingExpand.agentRows.length > 0) {
+				const agentText = (await missingExpand.agentRows[0].textContent()) || '';
+				agentDashCount = (agentText.match(/—/g) || []).length;
+				assert(agentDashCount === 3, `expected exactly 3 dash placeholders (tokens/calls/duration) in the missing-numbers agent row, found ${agentDashCount}: ${JSON.stringify(agentText)}`);
+				assert(!/\b0 tokens\b|\b0 calls\b/.test(agentText), `missing-numbers agent row fabricated a zero: ${JSON.stringify(agentText)}`);
+			}
+			await collapse(missingRow);
+			results.missingNumbers = `story leaf dash count=${storyDashCount}, agent row dash count=${agentDashCount}, no fabricated zero`;
+
+			// --- 3. result-before-start --------------------------------------------------------------------------
+			const rbsRow = await win.waitForSelector('.clawdius-workflow-run-row[data-run-id="wf_resultbeforestart"]', { state: 'attached', timeout: 10000 });
+			const rbsCompleteness = await rbsRow.getAttribute('data-completeness');
+			const rbsProgress = await expandLiveRunProgress(rbsRow);
+			assert(rbsProgress, 'result-before-start run did not reveal its live-progress leaf');
+			const rbsRatio = ((await rbsProgress.$eval('.clawdius-workflow-live-ratio', el => el.textContent || '')) || '').trim();
+			assert(rbsRatio === '1 of 1 agents seen so far have a result', `result-before-start ratio read "${rbsRatio}", expected "1 of 1 agents seen so far have a result" (the union, never inverted)`);
+			assert(rbsCompleteness === 'complete', `result-before-start alone (no torn line) must stay complete, read data-completeness="${rbsCompleteness}"`);
+			await collapse(rbsRow);
+			results.resultBeforeStart = `ratio="${rbsRatio}"; data-completeness="${rbsCompleteness}"`;
+
+			// --- 4. torn tail --------------------------------------------------------------------------------------
+			const tornRow = await win.waitForSelector('.clawdius-workflow-run-row[data-run-id="wf_torntail"]', { state: 'attached', timeout: 10000 });
+			const tornCompleteness = await tornRow.getAttribute('data-completeness');
+			const tornProgress = await expandLiveRunProgress(tornRow);
+			assert(tornProgress, 'torn-tail run did not reveal its live-progress leaf');
+			const tornDegradedText = ((await tornProgress.$eval('.clawdius-workflow-live-degraded', el => el.textContent || '')) || '').trim();
+			assert(tornDegradedText.length > 0, 'torn-tail live-progress leaf shows no degraded caption');
+			const tornRatio = ((await tornProgress.$eval('.clawdius-workflow-live-ratio', el => el.textContent || '')) || '').trim();
+			assert(tornRatio === '1 of 1 agents seen so far have a result', `torn-tail ratio read "${tornRatio}" - the readable started+result records must still render`);
+			assert(tornCompleteness === 'partial', `a torn journal line must degrade the run to partial, read data-completeness="${tornCompleteness}"`);
+			await collapse(tornRow);
+			results.tornTail = `degraded caption="${tornDegradedText}"; ratio="${tornRatio}" (readable records still render); data-completeness="${tornCompleteness}"`;
+
+			// --- 5. duplicate agent id ------------------------------------------------------------------------------
+			const dupAgentRow = await win.waitForSelector('.clawdius-workflow-run-row[data-run-id="wf_dupagent"]', { state: 'attached', timeout: 10000 });
+			const dupAgentCompleteness = await dupAgentRow.getAttribute('data-completeness');
+			const dupAgentExpand = await expandRunAndGatherAgents(dupAgentRow);
+			assert(dupAgentExpand.agentRows.length === 1, `expected exactly ONE agent row for the duplicate agentId, found ${dupAgentExpand.agentRows.length}`);
+			assert(dupAgentCompleteness === 'partial', `a manifest naming one agentId twice must degrade the run to partial, read data-completeness="${dupAgentCompleteness}"`);
+			await collapse(dupAgentRow);
+			results.duplicateAgentId = `exactly 1 agent row for the duplicated agentId (never 2); data-completeness="${dupAgentCompleteness}"`;
+
+			// --- 6. zero-agent terminal: complete vs partial ------------------------------------------------------
+			const zeroAgentRow = await win.waitForSelector('.clawdius-workflow-run-row[data-run-id="wf_zeroagent"]', { state: 'attached', timeout: 10000 });
+			const zeroAgentCompleteness = await zeroAgentRow.getAttribute('data-completeness');
+			const zeroAgentChip = await zeroAgentRow.$('.completeness-chip');
+			const zeroAgentChipVisible = zeroAgentChip ? await zeroAgentChip.evaluate(el => el.style.display !== 'none') : false;
+			assert(zeroAgentCompleteness === 'complete' && !zeroAgentChipVisible,
+				`a genuinely agent-less run must read complete with no completeness chip, read data-completeness="${zeroAgentCompleteness}", chip visible=${zeroAgentChipVisible}`);
+			const zeroAgentPartialRow = await win.waitForSelector('.clawdius-workflow-run-row[data-run-id="wf_zeroagentpartial"]', { state: 'attached', timeout: 10000 });
+			const zeroAgentPartialCompleteness = await zeroAgentPartialRow.getAttribute('data-completeness');
+			assert(zeroAgentPartialCompleteness === 'partial', `an empty agent list caused by an unreadable entry must read partial, read data-completeness="${zeroAgentPartialCompleteness}"`);
+			results.zeroAgentTerminal = `genuinely agent-less: data-completeness="complete", no chip; unreadable-entry empty list: data-completeness="partial"`;
+
+			// --- THEME MATRIX: every degenerate row survives Dark / Light / High Contrast --------------------------
+			const rowSelectors = {
+				unknownShape: '.clawdius-workflow-run-row[data-run-id="wf_unknownshape"]',
+				missingNumbers: '.clawdius-workflow-run-row[data-run-id="wf_missingnums"]',
+				resultBeforeStart: '.clawdius-workflow-run-row[data-run-id="wf_resultbeforestart"]',
+				tornTail: '.clawdius-workflow-run-row[data-run-id="wf_torntail"]',
+				duplicateAgentId: '.clawdius-workflow-run-row[data-run-id="wf_dupagent"]',
+				zeroAgentTerminal: '.clawdius-workflow-run-row[data-run-id="wf_zeroagent"]',
+			};
+			const THEME_MATRIX = ['Clawdius Dark', 'Clawdius Light', 'Clawdius High Contrast'];
+			const themeResults = {};
+			for (const theme of THEME_MATRIX) {
+				await setThemeVerified(theme);
+				await focusWorkflowsView();
+				for (const [name, sel] of Object.entries(rowSelectors)) {
+					const count = (await win.$$(sel)).length;
+					assert(count === 1, `[${theme}] expected exactly 1 row for "${name}", found ${count}`);
+				}
+				const overlay = await win.$('[data-clawdius-workflows-state="read-error"]');
+				assert(!overlay, `[${theme}] the workflows list rendered a read-error overlay`);
+				const actualType = await themeTypeClass();
+				await shot(`honest-edges-${theme.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`);
+				themeResults[theme] = `all 6 edge rows present exactly once, no error overlay, workbench theme-type=${actualType}`;
+			}
+			await setThemeVerified('Clawdius Dark');
+
+			return `${Object.entries(results).map(([k, v]) => `${k}: ${v}`).join('; ')}; themes=${JSON.stringify(themeResults)}`;
+		} finally {
+			if (app3) { try { await app3.close(); } catch { /* best-effort cleanup */ } }
+			try { rmSync(sandbox, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+			try { rmSync(prof3, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+			try { rmSync(exts3, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+			win = savedWin;
+		}
+	});
+
 	// 9. Find/sort against the REAL config root: typing into the persistent filter InputBox narrows the visible
 	// rows to an exact run id (the filter matches a run's OWN runId, so this is a deterministic, always-findable
 	// needle - never a synthetic fixture), measured against the ~300ms budget; switching the sort SelectBox to

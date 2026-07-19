@@ -683,6 +683,11 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		}
 		const out: WorkflowRun[] = [];
 		let degraded = false;
+		// A run's identity is `run:<sessionId>:<runId>`. A launcher run id (`wf_<...>`) is effectively unique across
+		// the corpus - its artifacts live under exactly ONE project dir - so a given run identity is enumerated at
+		// most once: two different runs do not share one, and the same run is not written under two project encodings.
+		// There is therefore no run-level identity collision to guard against here (a duplicate `agentId` WITHIN one
+		// manifest is a separate, real case, handled in `workflowFromManifest`).
 		for (const projectDir of projects.dirs) {
 			const sessions = await this.resolveChildDirs(projectDir);
 			if (sessions.outcome === 'error') { degraded = true; continue; }
@@ -890,6 +895,14 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		const startedIds = await this.startedAgentIdsFor(dir);
 
 		const agents: TerminalWorkflowAgent[] = [];
+		// Every agentId LISTED so far - the duplicate-id guard below. A manifest that names the SAME agentId twice
+		// (a launcher bug, not a read gap) would otherwise hand the tree two rows sharing one `workflowTreeElementId`
+		// (`agent:<identity>:<agentId>`), which the tree's diff-by-identity model resolves by SILENTLY tracking only
+		// the last one internally while still keeping both in the DOM - a duplicate row, never a crash, but exactly
+		// the double-count/duplicate-row shape the honest-degradation contract forbids. First occurrence wins
+		// (declared order, the same determinism the phase-assignment first-match rule already uses); every later
+		// occurrence is dropped like any other entry this read cannot carry forward whole, degrading to `partial`.
+		const seenAgentIds = new Set<string>();
 		for (const p of progressEntries) {
 			const type = str(p, 'type');
 			if (type !== 'workflow_agent') {
@@ -906,6 +919,11 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 				continue;
 			}
 			const agentId = idRaw;
+			if (seenAgentIds.has(agentId)) {
+				droppedField = true; // a duplicate agentId within this manifest - drop the repeat, keep the first
+				continue;
+			}
+			seenAgentIds.add(agentId);
 			const state = stateRaw;
 			const agentError = str(p, 'error');
 			if (state === 'error' && agentError === undefined) {

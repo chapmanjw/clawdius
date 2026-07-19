@@ -21,7 +21,7 @@
 
 import assert from 'assert';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
-import { Schemas } from '../../../../../base/common/network.js';
+import { FileAccess, Schemas } from '../../../../../base/common/network.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { FileService } from '../../../../../platform/files/common/fileService.js';
@@ -37,6 +37,18 @@ import {
 import { encodeProjectDir } from '../../browser/clawdiusConfigStore.js';
 import { ClawdiusReaderSeamService } from '../../browser/reader/claudeReaderSeamService.js';
 import { TestContextService } from '../../../../test/common/workbenchTestServices.js';
+
+// The committed honest-degenerate-shape fixtures (a torn journal tail, a result-before-start journal, a
+// duplicate-agentId manifest) are the single source of truth for the tests that exercise
+// the READER's own classification of them, read via the browser harness's file bridge (the same mechanism
+// `claudeReaderSeamFormats.test.ts` uses for its own committed fixtures) - no inline duplicate fixtures.
+declare const __readFileInTests: (path: string) => Promise<string>;
+const WORKFLOW_FIXTURE_ROOT = 'vs/workbench/contrib/clawdius/test/browser/fixtures/workflows';
+
+async function loadWorkflowFixture(name: string): Promise<string> {
+	const src = URI.joinPath(FileAccess.asFileUri(''), '../src');
+	return await __readFileInTests(URI.joinPath(src, WORKFLOW_FIXTURE_ROOT, name).fsPath);
+}
 
 suite('Clawdius Claude Code Ultracode Workflows - enumeration', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
@@ -1019,6 +1031,18 @@ suite('Clawdius Claude Code Ultracode Workflows - validated model + root envelop
 			{ started: 1, results: 2, seen: 2 });
 	});
 
+	test('(fixture) result-before-start: a result record with NO surviving started record is still counted, honestly, never inverting the ratio', async () => {
+		const fs = makeFs();
+		// The committed fixture: a bare `result` record for an agent that never has a `started` line at all (not
+		// merely torn away) - the limit case of the union rule: startedCount 0, resultCount 1, seenCount MUST still
+		// be 1 (the union), so "1 of 1 agents seen so far" is what renders, never "1 of 0".
+		await stageJournalText(fs, 'wf_d980f960-543', await loadWorkflowFixture('result-before-start-journal.jsonl'));
+		const run = await listOne(fs) as LiveWorkflowRun;
+		assert.deepStrictEqual(
+			{ started: run.startedCount, results: run.resultCount, seen: run.seenCount, completeness: run.completeness },
+			{ started: 0, results: 1, seen: 1, completeness: CompletenessState.Complete });
+	});
+
 	test('landed results read a string payload as a preview', async () => {
 		const fs = makeFs();
 		await stageJournal(fs, 'wf_d980f960-543', [{ type: 'started', agentId: 'a1' }, { type: 'result', agentId: 'a1', result: 'The fleet module is clean.' }]);
@@ -1041,6 +1065,23 @@ suite('Clawdius Claude Code Ultracode Workflows - validated model + root envelop
 			+ JSON.stringify({ type: 'result', agentId: 'a1' }) + '\n');
 		const run = await listOne(fs) as LiveWorkflowRun;
 		assert.deepStrictEqual({ completeness: run.completeness, degradation: run.degradation }, { completeness: CompletenessState.Partial, degradation: 'partial' });
+	});
+
+	test('(fixture) a torn journal tail degrades the run to partial while its readable records still render, never crashing the list', async () => {
+		const fs = makeFs();
+		// The committed fixture: a `started` record, a torn (unparseable) line NOT at the tail, then a `result`
+		// record - the same shape the inline test above pins, loaded from the on-disk fixture that also backs the
+		// real-build proof so the two never drift apart.
+		await stageJournalText(fs, 'wf_d980f960-543', await loadWorkflowFixture('torn-tail-journal.jsonl'));
+		await stageManifest(fs, 'wf_healthy-sibling', terminalManifest(), 'a-healthy-sibling-session');
+		const res = await makeService(fs).listWorkflows(RESOLVED);
+		assert.strictEqual(res.state, 'ok'); // a torn line degrades the ONE run, never the whole enumeration
+		const torn = res.runs.find(r => r.runId === 'wf_d980f960-543') as LiveWorkflowRun;
+		assert.deepStrictEqual(
+			{ kind: torn.kind, completeness: torn.completeness, degradation: torn.degradation, startedCount: torn.startedCount, resultCount: torn.resultCount },
+			// The readable records (the started AND the result) still render - a torn line drops only itself.
+			{ kind: 'live', completeness: CompletenessState.Partial, degradation: 'partial', startedCount: 1, resultCount: 1 });
+		assert.strictEqual(res.runs.some(r => r.runId === 'wf_healthy-sibling'), true, 'a healthy sibling run must still render beside the torn one');
 	});
 
 	test('a journal with content but nothing recognizable degrades to degradation: "unknown-shape"', async () => {
@@ -1101,9 +1142,12 @@ suite('Clawdius Claude Code Ultracode Workflows - validated model + root envelop
 		assert.deepStrictEqual({ agents: run.agents.length, completeness: run.completeness }, { agents: 0, completeness: CompletenessState.Partial });
 	});
 
-	test('a duplicate agentId within the manifest receives NO transcriptRef for either occurrence', async () => {
+	test('a duplicate agentId within the manifest is placed ONCE (first occurrence), never a duplicate row, and receives no transcriptRef', async () => {
 		const fs = makeFs();
 		const runId = 'wf_a1b2c3d4-e5f';
+		// The manifest names the SAME agentId twice - a launcher-side identity collision, not a read gap. The tree
+		// keys an agent row on `agent:<runIdentity>:<agentId>` (workflowTreeElementId), so two surviving entries
+		// would be two rows sharing one identity; the reader dedupes to the FIRST occurrence instead.
 		await stageManifest(fs, runId, {
 			...terminalManifest(),
 			workflowProgress: [agentEntry({ agentId: 'a1', label: 'first' }), agentEntry({ agentId: 'a1', label: 'second' })],
@@ -1111,7 +1155,69 @@ suite('Clawdius Claude Code Ultracode Workflows - validated model + root envelop
 		await stageJournal(fs, runId, [{ type: 'started', agentId: 'a1' }]);
 		await stageAgentTranscript(fs, runId, 'a1', [{ type: 'user', uuid: 'u1' }]);
 		const run = await listOne(fs) as TerminalWorkflowRun;
-		assert.deepStrictEqual(run.agents.map(a => a.transcriptRef), [undefined, undefined]);
+		assert.deepStrictEqual(
+			{ labels: run.agents.map(a => a.label), transcriptRefs: run.agents.map(a => a.transcriptRef), completeness: run.completeness },
+			// Still no transcriptRef: the manifest-level ambiguity (idFreq > 1) withholds the identity join even for
+			// the surviving occurrence, per the join's "unique within the manifest" condition. Dropping the repeat
+			// is itself a known gap, so the read degrades to partial rather than riding under a false `complete`.
+			{ labels: ['first'], transcriptRefs: [undefined], completeness: CompletenessState.Partial });
+	});
+
+	test('(fixture) a duplicate agentId within the manifest is placed ONCE, never a duplicate row, no crash', async () => {
+		const fs = makeFs();
+		const runId = 'wf_dup-agent-fixture';
+		const dir = URI.joinPath(sessionDir(), 'workflows');
+		await fs.createFolder(dir);
+		await fs.writeFile(URI.joinPath(dir, `${runId}.json`), VSBuffer.fromString(await loadWorkflowFixture('duplicate-agent-manifest.json')));
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.deepStrictEqual(
+			{ agentIds: run.agents.map(a => a.agentId), labels: run.agents.map(a => a.label), completeness: run.completeness },
+			{ agentIds: ['a1'], labels: ['first'], completeness: CompletenessState.Partial });
+	});
+
+	// --- the honest degenerate-shape catalogue: missing numbers, zero agents ------------------------------------
+
+	test('an ABSENT run-level cost total / agent metric is a genuinely missing number, never a drop - the read stays complete', async () => {
+		const fs = makeFs();
+		// Distinct from the wrong-typed-field tests above: these fields are simply not IN the manifest at all (the
+		// launcher's own real shape when a cost figure was never computed), so the read must stay `complete` - a
+		// dash on the tree, never a fabricated 0 AND never a spurious `partial` for legitimate absence.
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', terminalManifest({
+			durationMs: undefined, totalTokens: undefined, totalToolCalls: undefined, defaultModel: undefined, agentCount: undefined,
+			workflowProgress: [agentEntry({ agentId: 'a1', model: undefined, tokens: undefined, toolCalls: undefined, durationMs: undefined })],
+		}));
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.deepStrictEqual(
+			{
+				durationMs: run.durationMs, totalTokens: run.totalTokens, totalToolCalls: run.totalToolCalls,
+				defaultModel: run.defaultModel, agentCount: run.agentCount, completeness: run.completeness,
+				agent: { model: run.agents[0].model, tokens: run.agents[0].tokens, toolCalls: run.agents[0].toolCalls, durationMs: run.agents[0].durationMs },
+			},
+			{
+				durationMs: undefined, totalTokens: undefined, totalToolCalls: undefined,
+				defaultModel: undefined, agentCount: undefined, completeness: CompletenessState.Complete,
+				agent: { model: undefined, tokens: undefined, toolCalls: undefined, durationMs: undefined },
+			});
+	});
+
+	test('a terminal run with genuinely no declared agents renders as itself: an empty agent list, completeness stays complete', async () => {
+		const fs = makeFs();
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', terminalManifest({ workflowProgress: [] }));
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.deepStrictEqual({ agents: run.agents, completeness: run.completeness }, { agents: [], completeness: CompletenessState.Complete });
+	});
+
+	test('a terminal run whose only agent entries were unreadable is ALSO an empty agent list, but reads partial - distinct from a genuinely agent-less run', async () => {
+		const fs = makeFs();
+		// Same observable shape (agents: []) as the test above, opposite cause: the entry existed but could not be
+		// listed (no agentId/state). The envelope this proves - an empty list that still says partial - is the same
+		// one `WorkflowAgentList`'s doc comment names for the legacy mission model, carried through to the honest
+		// `WorkflowRun` model via `completeness`.
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', terminalManifest({
+			workflowProgress: [{ type: 'workflow_agent', label: 'no id or state' }],
+		}));
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.deepStrictEqual({ agents: run.agents, completeness: run.completeness }, { agents: [], completeness: CompletenessState.Partial });
 	});
 
 	test('an agentId absent from the journal\'s started records receives no transcriptRef', async () => {

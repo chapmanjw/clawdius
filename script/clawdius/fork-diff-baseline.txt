@@ -273,7 +273,17 @@
 # the clawdius-owned view/service + tests. As with the entries above, the recorded baseline moves by more than the
 # code delta because this block's own comment lines also count toward the fork surface.
 
+# Disposition 2026-07-19 (+3 files, +375 insertions): render degraded/degenerate workflow runs honestly. Prove each
+# stays visible and never breaks the list - unrecognized manifest ("shape not recognized"), missing numbers (a dash,
+# never a fabricated zero), a result landed before its start record (counted against the agents actually seen), a
+# torn journal tail (readable records kept, reads partial), and a genuinely agent-less terminal run distinct from one
+# whose agents were unreadable. A manifest naming one agent id twice now lists that agent once and reads partial
+# instead of drawing two rows sharing an identity. The +3 files are on-disk reader-classification fixtures; the rest
+# is the agent-id dedup in the reader plus the unit + real-build proofs of each shape across Dark/Light/HC. Isolated
+# to the clawdius-owned reader + tests. As with the entries above, the recorded baseline moves by more than the code
+# delta because this block's own comment lines also count toward the fork surface.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
 recorded: 2026-07-19
-baseline: 5605 files changed, 49148 insertions(+), 1456122 deletions(-)
+baseline: 5608 files changed, 49522 insertions(+), 1456122 deletions(-)

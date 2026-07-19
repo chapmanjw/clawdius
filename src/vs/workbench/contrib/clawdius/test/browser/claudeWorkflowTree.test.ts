@@ -359,6 +359,16 @@ suite('Clawdius Claude Code Ultracode Workflows - the 0/1/>1 phase-grouping rule
 		assert.deepStrictEqual({ kind: story.element.kind, collapsible: story.collapsible }, { kind: 'story', collapsible: false });
 	});
 
+	test('a zero-agent terminal run renders as itself: only the story leaf, no phantom agent/phase rows', () => {
+		// A run that genuinely ran no agents (agents: [], phases: []) - the run row/story leaf still render, there
+		// is simply nothing beneath them. Distinct from a partial read that happens to have produced no readable
+		// agents: that distinction lives in `run.completeness` (proved at the reader level), not in the tree shape,
+		// which is identical either way - this test pins the SHAPE half of that honesty contract.
+		const run = terminalRun({ agents: [], phases: [] });
+		const children = buildTerminalRunChildren(run);
+		assert.deepStrictEqual(children.map(c => c.element.kind), ['story']);
+	});
+
 	test('buildWorkflowTreeChildren preserves the seam\'s own enumeration order (never re-sorted)', () => {
 		const runs: readonly WorkflowRun[] = [terminalRun({ runId: 'z' }), terminalRun({ runId: 'a' })];
 		const children = buildWorkflowTreeChildren(runs);

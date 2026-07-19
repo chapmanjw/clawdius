@@ -1,0 +1,17 @@
+{
+	"workflowName": "duplicate-agent-repro",
+	"summary": "A manifest that names the same agentId twice - a launcher-side identity collision, not a read gap.",
+	"status": "completed",
+	"startTime": 1750000000000,
+	"timestamp": "2026-06-15T12:00:00.000Z",
+	"durationMs": 12000,
+	"totalTokens": 4000,
+	"totalToolCalls": 5,
+	"defaultModel": "claude-opus-4-8[1m]",
+	"agentCount": 2,
+	"phases": [{ "title": "Only phase" }],
+	"workflowProgress": [
+		{ "type": "workflow_agent", "agentId": "a1", "label": "first", "state": "done" },
+		{ "type": "workflow_agent", "agentId": "a1", "label": "second", "state": "done" }
+	]
+}

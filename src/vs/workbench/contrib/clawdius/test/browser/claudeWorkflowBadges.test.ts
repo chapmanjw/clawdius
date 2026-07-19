@@ -6,28 +6,40 @@
 // CLAWDIUS-BEGIN Claude Code Ultracode Workflows - live badge feed tests
 // The POSITIVE-path proof the sanitized Playwright harness cannot provide (its null agent host's onDidAction is
 // Event.None): an injected onDidAction event drives the SAME production path the ViewPane wires - the badge feed
-// correlates the event to a run, gates on ownership, and the FleetRunsList row is decorated. Proves honesty
-// from both directions: an OWNED run's ChatInputRequested/ChatTurnComplete raises a `live` badge that renders on
-// the row; the same event on a FOREIGN run (or with no ownership) raises NO badge and the row keeps its honest
-// polled labels. Also covers the pure `badgeFreshnessFor` floor and a source-scan that the module does not import
-// `vs/sessions` `SessionStatus` (valid-layers-check is the real enforcer; this is the belt-and-suspenders check).
+// correlates the event to a run, gates on ownership, and re-renders that run's tree row through
+// `WorkflowRunRowRenderer` reading the SAME `IWorkflowRenderContext.badgeOf` the view feeds it (see
+// `claudeWorkflowsView.ts`'s badgeFeed.onDidChangeBadge wiring). Proves honesty from both directions: an OWNED
+// run's ChatInputRequested/ChatTurnComplete raises a `live` badge that renders on the row; the same event on a
+// FOREIGN run (or with no ownership) raises NO badge and the row keeps its honest polled labels. Also covers the
+// pure `badgeFreshnessFor` floor and a source-scan that the module does not import `vs/sessions` `SessionStatus`.
 
 import assert from 'assert';
 import { $ } from '../../../../../base/browser/dom.js';
+import { IHoverDelegate } from '../../../../../base/browser/ui/hover/hoverDelegate.js';
+import { ITreeNode } from '../../../../../base/browser/ui/tree/tree.js';
 import { Emitter } from '../../../../../base/common/event.js';
+import { FuzzyScore } from '../../../../../base/common/filters.js';
+import { toDisposable } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { AgentSession } from '../../../../../platform/agentHost/common/agentService.js';
 import { ActionType, type ActionEnvelope, type StateAction } from '../../../../../platform/agentHost/common/state/protocol/common/actions.js';
 import { buildDefaultChatUri, buildSubagentChatUri } from '../../../../../platform/agentHost/common/state/sessionState.js';
+import { IWorkflowRenderContext, WorkflowRunRowRenderer, WorkflowTreeElement } from '../../browser/workflows/claudeWorkflowTree.js';
 import { BadgeSignal, ClaudeWorkflowBadgeFeed, badgeFreshnessFor } from '../../browser/workflows/claudeWorkflowBadges.js';
-import { FleetRunsList, renderRunBadge } from '../../browser/workflows/claudeWorkflowsView.js';
-import { MissionRun as WorkflowRun } from '../../common/claudeFleetModel.js';
 import { CompletenessState, CoverageLabel, FreshnessLabel } from '../../common/claudeReaderSeam.js';
+import { TerminalWorkflowRun, workflowRunIdentity } from '../../common/claudeWorkflowModel.js';
 
-/** A minimally-labeled FleetRun carrying the given ids - enumeration always emits `foreign`. */
-function run(runId: string, sessionId: string): WorkflowRun {
+const fakeHoverDelegate: IHoverDelegate = { showHover: () => undefined, delay: 0 };
+
+function fakeNode(element: WorkflowTreeElement): ITreeNode<WorkflowTreeElement, FuzzyScore> {
+	return { element, children: [], depth: 0, visibleChildrenCount: 0, visibleChildIndex: -1, collapsible: false, collapsed: false, visible: true, filterData: undefined };
+}
+
+/** A minimally-labeled terminal run carrying the given ids - enumeration always emits `foreign`. */
+function run(runId: string, sessionId: string): TerminalWorkflowRun {
 	return {
-		runId, sessionId, name: runId, status: 'completed', agentCount: 0, phases: [], progress: [], ownership: 'foreign',
+		kind: 'terminal', runId, sessionId, identity: workflowRunIdentity(sessionId, runId),
+		workflowName: runId, status: 'completed', phases: [], agents: [], ownership: 'foreign',
 		coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.Complete,
 		adapterVersion: { format: 'transcript-jsonl', versionKey: 'v1' },
 	};
@@ -66,18 +78,11 @@ function turnComplete(meta?: Record<string, unknown>): StateAction {
 	return { type: ActionType.ChatTurnComplete, turnId: 'turn-1', _meta: meta };
 }
 
-/** The live-badge state a row carries (the `data-live-badge` hook on its badge host + the badge's `data-*`) -
- *  the badge-less shape when no live badge is present. */
-function badgeOf(row: HTMLElement | null): unknown {
-	const host = row?.querySelector<HTMLElement>('[data-live-badge]') ?? null;
-	const badge = row?.querySelector<HTMLElement>('.clawdius-workflows-badge') ?? null;
-	if (!badge) {
-		return { liveBadgeAttr: host?.getAttribute('data-live-badge') ?? null, badge: null };
-	}
-	return {
-		liveBadgeAttr: host?.getAttribute('data-live-badge') ?? null,
-		badge: { kind: badge.getAttribute('data-badge-kind'), freshness: badge.getAttribute('data-badge-freshness') },
-	};
+/** The live-badge state a rendered row carries: its badge chip's kind, or `null` when none is present. */
+function badgeOf(container: HTMLElement | undefined): { kind: string | null } | null {
+	if (!container) { return null; }
+	const badge = container.querySelector<HTMLElement>('.clawdius-workflow-badge');
+	return { kind: badge?.getAttribute('data-badge-kind') ?? null };
 }
 
 suite('Clawdius Claude Code Ultracode Workflows - live badges', () => {
@@ -86,21 +91,37 @@ suite('Clawdius Claude Code Ultracode Workflows - live badges', () => {
 	const OWNED = run('owned-0001', 'sess-owned');
 	const FOREIGN = run('foreign-0001', 'sess-foreign');
 
-	/** Build the full production path: a rendered FleetRunsList + a badge feed over an injected onDidAction, wired
-	 *  exactly as the ViewPane wires them (feed.onDidChangeBadge -> list.decorateRun). Returns the pieces to drive. */
-	function harness(runs: readonly WorkflowRun[], ownedSessionIds: ReadonlySet<string>) {
-		const container = $('div');
-		const list = store.add(new FleetRunsList(container));
-		list.render(runs);
+	/** Build the full production path: a `WorkflowRunRowRenderer` bound to a live `IWorkflowRenderContext.badgeOf`,
+	 *  wired to a badge feed over an injected onDidAction - exactly as the ViewPane wires them
+	 *  (badgeFeed.onDidChangeBadge -> badges.set + a re-render of that run's row). Mirrors how the real tree treats a
+	 *  template: rendered ONCE per row and re-used across re-renders (never a fresh `IconLabel` per event), disposed
+	 *  once at teardown. Returns the pieces to drive. */
+	function harness(runs: readonly TerminalWorkflowRun[], ownedSessionIds: ReadonlySet<string>) {
+		const badges = new Map<string, BadgeSignal>();
+		const context: IWorkflowRenderContext = { uniformlyForeign: true, ownedSessionIds: new Set(), badgeOf: runId => badges.get(runId) };
+		const renderer = store.add(new WorkflowRunRowRenderer(context, fakeHoverDelegate));
+		const rows = new Map<string, { container: HTMLElement; template: ReturnType<WorkflowRunRowRenderer['renderTemplate']> }>();
+		for (const r of runs) {
+			const container = $('div');
+			const template = renderer.renderTemplate(container);
+			renderer.renderElement(fakeNode({ kind: 'run', run: r }), 0, template);
+			rows.set(r.runId, { container, template });
+		}
+		store.add(toDisposable(() => { for (const { template } of rows.values()) { renderer.disposeTemplate(template); } }));
+
 		const onDidAction = store.add(new Emitter<ActionEnvelope>());
 		const feed = store.add(new ClaudeWorkflowBadgeFeed({
 			onDidAction: onDidAction.event,
 			getRuns: () => runs,
 			getOwnedSessionIds: () => ownedSessionIds,
 		}));
-		store.add(feed.onDidChangeBadge(signal => list.decorateRun(signal)));
-		const rowFor = (r: WorkflowRun) => container.querySelector<HTMLElement>(`.clawdius-workflows-row[data-run-id="${r.runId}"]`);
-		return { feed, fire: (e: ActionEnvelope) => onDidAction.fire(e), rowFor };
+		store.add(feed.onDidChangeBadge(signal => {
+			badges.set(signal.runId, signal);
+			const owning = runs.find(r => r.runId === signal.runId);
+			const row = rows.get(signal.runId);
+			if (owning && row) { renderer.renderElement(fakeNode({ kind: 'run', run: owning }), 0, row.template); }
+		}));
+		return { feed, fire: (e: ActionEnvelope) => onDidAction.fire(e), rowFor: (r: TerminalWorkflowRun) => rows.get(r.runId)?.container };
 	}
 
 	test('ChatInputRequested on an OWNED run raises a live needs-input badge that renders on the row', () => {
@@ -115,7 +136,7 @@ suite('Clawdius Claude Code Ultracode Workflows - live badges', () => {
 			},
 			{
 				signal: { runId: 'owned-0001', kind: 'needs-input', freshness: FreshnessLabel.Live, source: 'live-event' } satisfies BadgeSignal,
-				ownedRow: { liveBadgeAttr: 'needs-input', badge: { kind: 'needs-input', freshness: 'live' } },
+				ownedRow: { kind: 'needs-input' },
 			},
 		);
 	});
@@ -129,7 +150,7 @@ suite('Clawdius Claude Code Ultracode Workflows - live badges', () => {
 				foreignRow: badgeOf(rowFor(FOREIGN)),
 				stillPolled: rowFor(FOREIGN)?.getAttribute('data-freshness'),
 			},
-			{ signal: undefined, foreignRow: { liveBadgeAttr: null, badge: null }, stillPolled: 'polled' },
+			{ signal: undefined, foreignRow: { kind: null }, stillPolled: 'polled' },
 		);
 	});
 
@@ -142,7 +163,7 @@ suite('Clawdius Claude Code Ultracode Workflows - live badges', () => {
 			{ signal: feed.getBadge('owned-0001'), row: badgeOf(rowFor(OWNED)) },
 			{
 				signal: { runId: 'owned-0001', kind: 'completion', freshness: FreshnessLabel.Live, source: 'live-event' } satisfies BadgeSignal,
-				row: { liveBadgeAttr: 'completion', badge: { kind: 'completion', freshness: 'live' } },
+				row: { kind: 'completion' },
 			},
 		);
 	});
@@ -159,14 +180,14 @@ suite('Clawdius Claude Code Ultracode Workflows - live badges', () => {
 		);
 	});
 
-	test('renderRunBadge clears a prior badge when handed no signal (no fabricated live state persists)', () => {
-		const host = $('.clawdius-workflows-badgehost');
-		renderRunBadge(host, { runId: 'x', kind: 'completion', freshness: FreshnessLabel.Live, source: 'live-event' });
-		renderRunBadge(host, undefined);
-		assert.deepStrictEqual(
-			{ liveBadgeAttr: host.getAttribute('data-live-badge'), badges: host.querySelectorAll('.clawdius-workflows-badge').length },
-			{ liveBadgeAttr: null, badges: 0 },
-		);
+	test('a row with no badge signal renders no badge chip (no fabricated live state)', () => {
+		const context: IWorkflowRenderContext = { uniformlyForeign: true, ownedSessionIds: new Set(), badgeOf: () => undefined };
+		const renderer = store.add(new WorkflowRunRowRenderer(context, fakeHoverDelegate));
+		const container = $('div');
+		const template = renderer.renderTemplate(container);
+		renderer.renderElement(fakeNode({ kind: 'run', run: OWNED }), 0, template);
+		assert.deepStrictEqual(badgeOf(container), { kind: null });
+		renderer.disposeTemplate(template);
 	});
 
 	test('the badge module does not import vs/sessions SessionStatus (layer purity - valid-layers-check enforces)', async () => {

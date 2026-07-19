@@ -27,7 +27,7 @@ import {
 } from '../../common/claudeReaderSeam.js';
 import { FleetRun, FleetSubagent, FleetTranscriptSlice, MissionAgent, MissionAgentList, MissionPhase, MissionProgressEntry, MissionProgressKind, MissionRun, MissionStatus } from '../../common/claudeFleetModel.js';
 import {
-	LiveWorkflowResult, LiveWorkflowRun, TerminalWorkflowAgent, TerminalWorkflowRun, UnrecognizedWorkflowRun,
+	agentInPhase, LiveWorkflowResult, LiveWorkflowRun, TerminalWorkflowAgent, TerminalWorkflowRun, UnrecognizedWorkflowRun,
 	WorkflowPhase, WorkflowRun, WorkflowRunListResult, WorkflowTranscriptRef, workflowRunIdentity,
 } from '../../common/claudeWorkflowModel.js';
 import { encodeProjectDir } from '../clawdiusConfigStore.js';
@@ -238,6 +238,33 @@ function readString(obj: Record<string, unknown>, key: string): string | undefin
 function readNumber(obj: Record<string, unknown>, key: string): number | undefined {
 	const v = obj[key];
 	return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+}
+
+/** A strict ISO-8601 date-time WITH an explicit timezone designator (`Z` or `+/-HH:MM`) - the only string form the
+ *  launcher writes for an epoch-ms time field. Capture groups 1-6 are year/month/day/hour/minute/second, validated as
+ *  a real CALENDAR date-time by {@link strictIsoToEpochMs} before the epoch is trusted. Requiring the timezone (and
+ *  the calendar check) rejects locale-style, date-only, partial, and bare-numeric strings - AND syntactically-valid
+ *  but impossible dates like `2026-02-30` - that `Date.parse` would otherwise coerce (or roll over) into a
+ *  plausible-but-wrong (or timezone-ambiguous) epoch under a false `complete` label. */
+const ISO_8601_WITH_TZ = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/** Parse a strict ISO-8601-with-timezone string to epoch ms, or `undefined` when it is not that form OR is an
+ *  impossible calendar date-time (e.g. `2026-02-30`, `2026-04-31`, a non-leap `2026-02-29`, or an out-of-range
+ *  time). The explicit component check is what closes the gap `Date.parse` alone leaves: `Date.parse` silently
+ *  NORMALIZES an out-of-range day/time (Feb 30 -> Mar 2) into a valid-but-wrong instant, so validating the captured
+ *  Y-M-D-H-M-S against real month/day/time bounds BEFORE trusting the parse is required. Pure. */
+function strictIsoToEpochMs(value: string): number | undefined {
+	const m = ISO_8601_WITH_TZ.exec(value);
+	if (!m) { return undefined; }
+	const year = Number(m[1]), month = Number(m[2]), day = Number(m[3]);
+	const hour = Number(m[4]), minute = Number(m[5]), second = Number(m[6]);
+	const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+	const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+	const validCalendar = month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth[month - 1]
+		&& hour <= 23 && minute <= 59 && second <= 59;
+	if (!validCalendar) { return undefined; }
+	const parsed = Date.parse(value);
+	return !Number.isNaN(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
 /** A non-null, non-array object - the shape every recognized JSON record/document must have. */
@@ -767,6 +794,27 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 			}
 			return v;
 		};
+		// An epoch-milliseconds time field the manifest may store EITHER as a number OR as a strict ISO-8601 string
+		// (with a timezone): the launcher writes the run `timestamp` (completion) as an ISO-8601 string and `startTime`
+		// as epoch ms, so a well-formed ISO string is the field's real shape, not a wrong-typed gap - parse it rather
+		// than drop it. Absent/null is no gap; a string that is NOT strict ISO-8601-with-timezone (locale/date-only/
+		// partial/bare-numeric), an unparseable value, or a negative/non-finite number all degrade the read to `partial`
+		// rather than riding under `complete` on a coerced, plausible-but-wrong epoch.
+		const epochMs = (o: Record<string, unknown>, key: string): number | undefined => {
+			const v = o[key];
+			if (v === undefined || v === null) { return undefined; }
+			if (typeof v === 'number') {
+				if (Number.isFinite(v) && v >= 0) { return v; }
+				droppedField = true;
+				return undefined;
+			}
+			if (typeof v === 'string') {
+				const parsed = strictIsoToEpochMs(v);
+				if (parsed !== undefined) { return parsed; }
+			}
+			droppedField = true;
+			return undefined;
+		};
 		const entries = (key: string): Record<string, unknown>[] => {
 			const v = raw[key];
 			if (v === undefined || v === null) { return []; }
@@ -778,8 +826,8 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 
 		const workflowName = str(raw, 'workflowName');
 		const summary = str(raw, 'summary');
-		const startTime = num(raw, 'startTime');
-		const timestamp = num(raw, 'timestamp');
+		const startTime = epochMs(raw, 'startTime');
+		const timestamp = epochMs(raw, 'timestamp');
 		const durationMs = num(raw, 'durationMs');
 		const totalTokens = num(raw, 'totalTokens');
 		const totalToolCalls = num(raw, 'totalToolCalls', { integer: true });
@@ -789,7 +837,26 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		const resultRaw = raw['result'];
 		let resultText: string | undefined;
 		if (resultRaw !== undefined && resultRaw !== null) {
-			if (typeof resultRaw === 'string') { resultText = resultRaw; } else { droppedField = true; }
+			if (typeof resultRaw === 'string') {
+				resultText = resultRaw;
+			} else if (typeof resultRaw === 'object') {
+				// An ultracode workflow's `result` is frequently a STRUCTURED value - the workflow script's return
+				// object/array (non-null, so `typeof === 'object'` here), which is the field's real shape on the
+				// corpus, not a wrong-typed gap. Serialize it to plain JSON text (textContent-safe) rather than
+				// dropping it: dropping a structured result collapsed every such run to `partial` AND hid the result
+				// behind "No result recorded". Only a genuinely non-serializable value (not producible by JSON.parse,
+				// e.g. a cycle) degrades the read.
+				try {
+					const serialized = JSON.stringify(resultRaw, null, 2);
+					if (serialized === undefined) { droppedField = true; } else { resultText = serialized; }
+				} catch {
+					droppedField = true;
+				}
+			} else {
+				// A bare scalar (number / boolean) is neither the string nor the structured shape the `result`
+				// contract allows - an unexpected type, dropped like any other wrong-typed field, degrading to `partial`.
+				droppedField = true;
+			}
 		}
 		const resultPreview = resultText !== undefined ? boundedPreview(resultText, RESULT_PREVIEW_MAX_CHARS) : undefined;
 
@@ -869,8 +936,7 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		}
 
 		const phases: WorkflowPhase[] = rawPhases.map(p => {
-			const inPhase = (a: TerminalWorkflowAgent) => a.phaseTitle !== undefined ? a.phaseTitle === p.title : a.phaseIndex === p.index;
-			const members = agents.filter(inPhase);
+			const members = agents.filter(a => agentInPhase(a, p));
 			return { index: p.index, title: p.title, detail: p.detail, agentCount: members.length, errorCount: members.filter(a => a.state === 'error').length };
 		});
 

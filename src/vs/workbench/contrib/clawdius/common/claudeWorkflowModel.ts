@@ -94,6 +94,17 @@ export interface WorkflowPhase {
 	readonly errorCount: number;
 }
 
+/** Whether a validated agent belongs to a phase. `phaseIndex` is the unambiguous positional key, so it wins when
+ *  present (a title can be duplicated across phases; an index cannot); the title is the fallback. This ONE predicate
+ *  is shared by the reader's phase-count derivation and the tree's agent grouping, so a phase's rendered agent count
+ *  can never contradict the agent rows nested beneath it. */
+export function agentInPhase(
+	agent: { readonly phaseIndex?: number; readonly phaseTitle?: string },
+	phase: { readonly index: number; readonly title: string },
+): boolean {
+	return agent.phaseIndex !== undefined ? agent.phaseIndex === phase.index : agent.phaseTitle === phase.title;
+}
+
 /** Identities locating one agent's raw on-disk transcript - never a URI. The seam re-derives
  *  `subagents/workflows/wf_<runId>/agent-<agentId>.jsonl` under the resolved root from these three components
  *  before every read, so a restored/serialized ref can never redirect the read elsewhere. */
@@ -149,15 +160,20 @@ export interface TerminalWorkflowRun extends WorkflowRunBase {
 	readonly workflowName?: string;
 	readonly summary?: string;
 	readonly status: 'completed' | 'failed';
+	/** Run start, epoch ms. */
 	readonly startTime?: number;
+	/** Run completion, epoch ms. The manifest records this as an ISO-8601 string (and `startTime` as epoch ms); the
+	 *  seam parses either form to epoch ms, degrading the read to `partial` only on an unparseable value. */
 	readonly timestamp?: number;
 	readonly durationMs?: number;
 	readonly totalTokens?: number;
 	readonly totalToolCalls?: number;
 	readonly agentCount?: number;
 	readonly defaultModel?: string;
-	/** The full result as bounded plain text - safe WHEN rendered via `textContent` (the fork renders all such
-	 *  text via `textContent`, never innerHTML/markdown); NOT markup-escaped at the seam, which would double-escape. */
+	/** The full result as plain text - safe WHEN rendered via `textContent` (the fork renders all such text via
+	 *  `textContent`, never innerHTML/markdown); NOT markup-escaped at the seam, which would double-escape. A
+	 *  STRUCTURED (object/array) manifest result - the common shape, since a workflow script returns structured data
+	 *  - is serialized to JSON text at the seam; a plain-string result is kept as-is. */
 	readonly resultText?: string;
 	/** A bounded preview of {@link resultText}; absent means the row reads "No result recorded". */
 	readonly resultPreview?: string;

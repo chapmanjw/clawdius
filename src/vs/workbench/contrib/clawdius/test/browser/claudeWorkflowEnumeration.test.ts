@@ -742,6 +742,88 @@ suite('Clawdius Claude Code Ultracode Workflows - validated model + root envelop
 		]);
 	});
 
+	test('a manifest timestamp stored as an ISO-8601 string is parsed to epoch ms, not dropped', async () => {
+		const fs = makeFs();
+		// The launcher writes the run `timestamp` (completion) as an ISO-8601 string; the seam must PARSE it, not
+		// reject it as non-numeric - rejecting it collapsed every real terminal run to `partial`.
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', terminalManifest({ timestamp: '2026-06-07T17:53:05.254Z' }));
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.deepStrictEqual(
+			{ timestamp: run.timestamp, completeness: run.completeness },
+			{ timestamp: Date.parse('2026-06-07T17:53:05.254Z'), completeness: CompletenessState.Complete });
+	});
+
+	test('a manifest timestamp that is neither a number nor a parseable date is a dropped field -> partial', async () => {
+		const fs = makeFs();
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', terminalManifest({ timestamp: 'not-a-real-date' }));
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.deepStrictEqual(
+			{ timestamp: run.timestamp, completeness: run.completeness },
+			{ timestamp: undefined, completeness: CompletenessState.Partial });
+	});
+
+	test('a structured object result is serialized to JSON text, not dropped into "No result" + partial', async () => {
+		const fs = makeFs();
+		// A workflow script returns structured data, so the manifest's run-level `result` is commonly an object/array.
+		// The seam serializes it to plain JSON text (textContent-safe) rather than dropping it - which would both
+		// hide the result AND degrade the read to `partial`.
+		const structured = { clouds: [{ cloud: 'AWS', available: 'yes' }], fetched: 3 };
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', terminalManifest({ result: structured }));
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.deepStrictEqual(
+			{ resultText: run.resultText, hasPreview: run.resultPreview !== undefined, completeness: run.completeness },
+			{ resultText: JSON.stringify(structured, null, 2), hasPreview: true, completeness: CompletenessState.Complete });
+	});
+
+	test('a timestamp string that is not strict ISO-8601-with-timezone is a dropped field -> partial', async () => {
+		// Timezone-naive, date-only, and bare-numeric strings are REJECTED rather than coerced by Date.parse into a
+		// plausible-but-wrong (or timezone-ambiguous) epoch under a false `complete`.
+		for (const bad of ['2026-06-07T17:53:05', '2026-06-07', '1750000000000']) {
+			const fs = makeFs();
+			await stageManifest(fs, 'wf_a1b2c3d4-e5f', terminalManifest({ timestamp: bad }));
+			const run = await listOne(fs) as TerminalWorkflowRun;
+			assert.deepStrictEqual(
+				{ bad, timestamp: run.timestamp, completeness: run.completeness },
+				{ bad, timestamp: undefined, completeness: CompletenessState.Partial });
+		}
+	});
+
+	test('the seam validates the CALENDAR, not just the ISO shape: real leap days parse, impossible dates drop', async () => {
+		// Date.parse silently NORMALIZES an out-of-range day/time (Feb 30 -> Mar 2) into a valid-but-wrong instant, so
+		// the seam validates real month/day/time bounds: a genuine leap-year Feb 29 parses; an impossible calendar
+		// date-time drops the field -> partial rather than riding under `complete` on a rolled-over epoch.
+		const cases: { ts: string; ok: boolean }[] = [
+			{ ts: '2024-02-29T00:00:00Z', ok: true },   // 2024 IS a leap year
+			{ ts: '2026-02-29T00:00:00Z', ok: false },  // 2026 is not
+			{ ts: '2026-02-30T17:53:05Z', ok: false },
+			{ ts: '2026-04-31T17:53:05Z', ok: false },
+			{ ts: '2026-06-07T25:00:00Z', ok: false },
+		];
+		for (const { ts, ok } of cases) {
+			const fs = makeFs();
+			await stageManifest(fs, 'wf_a1b2c3d4-e5f', terminalManifest({ timestamp: ts }));
+			const run = await listOne(fs) as TerminalWorkflowRun;
+			assert.deepStrictEqual(
+				{ ts, present: run.timestamp !== undefined, completeness: run.completeness },
+				{ ts, present: ok, completeness: ok ? CompletenessState.Complete : CompletenessState.Partial });
+		}
+	});
+
+	test('phase agent counts use one index-first predicate, so a conflicting agent is counted where it nests', async () => {
+		const fs = makeFs();
+		// An agent whose phaseIndex (0) and phaseTitle ('B') DISAGREE: the shared predicate is index-first, so the
+		// agent counts in phase index 0 ('A') only - the reader's count and the tree's nesting cannot diverge.
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', terminalManifest({
+			phases: [{ title: 'A' }, { title: 'B' }],
+			workflowProgress: [agentEntry({ agentId: 'a1', phaseIndex: 0, phaseTitle: 'B' })],
+		}));
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.deepStrictEqual(run.phases.map(p => ({ index: p.index, title: p.title, agentCount: p.agentCount })), [
+			{ index: 0, title: 'A', agentCount: 1 },
+			{ index: 1, title: 'B', agentCount: 0 },
+		]);
+	});
+
 	test('a terminal manifest with no declared agentCount reads it as absent, never derived from its agent list', async () => {
 		const fs = makeFs();
 		// The manifest fixture otherwise declares one valid workflow_agent entry - if the run-level count were still
@@ -781,8 +863,11 @@ suite('Clawdius Claude Code Ultracode Workflows - validated model + root envelop
 		}
 	});
 
-	test('a non-string run-level result is dropped: no resultText/resultPreview, and the read is partial', async () => {
+	test('a bare scalar run-level result (neither string nor structured) is a dropped field -> partial', async () => {
 		const fs = makeFs();
+		// A number/boolean is neither the string nor the structured object/array shape the `result` contract allows;
+		// it is an unexpected type, dropped like any wrong-typed field, degrading the read - never serialized under
+		// a false `complete`.
 		await stageManifest(fs, 'wf_a1b2c3d4-e5f', { ...terminalManifest(), result: 12345 });
 		const run = await listOne(fs) as TerminalWorkflowRun;
 		assert.deepStrictEqual(
@@ -877,9 +962,9 @@ suite('Clawdius Claude Code Ultracode Workflows - validated model + root envelop
 			...terminalManifest(),
 			phases: [{ title: 'Analyze' }, { title: 'Synthesize' }],
 			workflowProgress: [
-				agentEntry({ agentId: 'a1', phaseTitle: 'Analyze', state: 'done' }),
-				agentEntry({ agentId: 'a2', label: 'a2', phaseTitle: 'Analyze', state: 'error', error: 'boom' }),
-				agentEntry({ agentId: 'a3', label: 'a3', phaseTitle: 'Synthesize', state: 'done' }),
+				agentEntry({ agentId: 'a1', phaseIndex: 0, phaseTitle: 'Analyze', state: 'done' }),
+				agentEntry({ agentId: 'a2', label: 'a2', phaseIndex: 0, phaseTitle: 'Analyze', state: 'error', error: 'boom' }),
+				agentEntry({ agentId: 'a3', label: 'a3', phaseIndex: 1, phaseTitle: 'Synthesize', state: 'done' }),
 			],
 		});
 		const run = await listOne(fs) as TerminalWorkflowRun;

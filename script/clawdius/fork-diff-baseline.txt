@@ -209,7 +209,18 @@
 # mutation-tested honesty guards; the existing view is temporarily bridged onto the new model, behavior-neutral on
 # real data.
 
+# Disposition 2026-07-19 (+1 files, +1340 insertions): render the workflows view as a materialized tree + harden
+# the manifest reader. The hand-rolled manual-DOM row list is replaced by a WorkbenchObjectTree bound to the
+# validated read model (a run is a top-level row; a completed / failed run expands to a measured, variable-height
+# story leaf and its phases / agents, grouped only when more than one phase is declared), with three visibly
+# distinct empty / read-error / no-match states and a read-error data-re-read that is never a run control. The
+# reader now parses an ISO-8601-with-timezone completion time (validating the calendar so an impossible date is
+# not silently rolled over) and serializes a structured object / array result to text rather than dropping either
+# and collapsing every run to a partial read; one shared phase-membership predicate derives the per-phase agent
+# count and nests the agent rows so a count cannot contradict the rows beneath it. Growth is the new tree module +
+# its renderers + the mutation-tested renderer / reader guards, net of the removed pre-tree view test.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
-recorded: 2026-07-18
-baseline: 5598 files changed, 43288 insertions(+), 1456122 deletions(-)
+recorded: 2026-07-19
+baseline: 5599 files changed, 44628 insertions(+), 1456122 deletions(-)

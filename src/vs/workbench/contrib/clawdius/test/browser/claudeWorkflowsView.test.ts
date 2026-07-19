@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Missions fleet - Sidebar view render tests
+// CLAWDIUS-BEGIN Claude Code Ultracode Workflows - Sidebar view render tests
 // The view layer honesty guarantee: the fleet binds to the seam's listRuns and renders EVERY enumerated run as a
 // labeled row carrying its status + coverage/freshness/completeness/ownership as both a badge and a `data-*` hook;
 // a foreign/suppressed run is rendered PRESENT-WITH-LABEL (marked, never omitted). Drives the
@@ -14,23 +14,23 @@ import assert from 'assert';
 import { $ } from '../../../../../base/browser/dom.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { MissionAgent, MissionAgentList, MissionRun } from '../../common/claudeFleetModel.js';
+import { MissionAgent as WorkflowAgent, MissionAgentList as WorkflowAgentList, MissionRun as WorkflowRun } from '../../common/claudeFleetModel.js';
 import { CompletenessState, CoverageLabel, FreshnessLabel, ReaderConfigRoot } from '../../common/claudeReaderSeam.js';
-import { errorSummary, FleetRunsList, IFleetRowInteractions, IFleetRunSource } from '../../browser/missions/claudeMissionsView.js';
+import { errorSummary, FleetRunsList, IFleetRowInteractions, IFleetRunSource } from '../../browser/workflows/claudeWorkflowsView.js';
 
 /** A fake enumeration source: returns a fixed labeled list, so the view test binds to the SAME `listRuns` shape
  *  the seam produces without touching disk. */
 class FakeRunSource implements IFleetRunSource {
-	constructor(private readonly runs: readonly MissionRun[]) { }
-	async listMissions(_root: ReaderConfigRoot): Promise<readonly MissionRun[]> {
+	constructor(private readonly runs: readonly WorkflowRun[]) { }
+	async listMissions(_root: ReaderConfigRoot): Promise<readonly WorkflowRun[]> {
 		return this.runs;
 	}
 }
 
-/** A fully-labeled MissionRun with the given overrides (defaults are the conservative enumeration labels). */
-function run(overrides: Partial<MissionRun>): MissionRun {
+/** A fully-labeled WorkflowRun with the given overrides (defaults are the conservative enumeration labels). */
+function run(overrides: Partial<WorkflowRun>): WorkflowRun {
 	return {
-		runId: 'r', sessionId: 's', name: 'a-mission', status: 'completed', agentCount: 0,
+		runId: 'r', sessionId: 's', name: 'a-workflow', status: 'completed', agentCount: 0,
 		phases: [], progress: [], ownership: 'foreign',
 		coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.Complete,
 		adapterVersion: { format: 'transcript-jsonl', versionKey: 'v1' },
@@ -41,7 +41,7 @@ function run(overrides: Partial<MissionRun>): MissionRun {
 /** Extract the honest projection each rendered row carries (its `data-*` hooks + the count of label badges), the
  *  view-layer analogue of the enumeration snapshot the enumeration tests assert. */
 function rowsOf(container: HTMLElement): unknown[] {
-	return [...container.querySelectorAll<HTMLElement>('.clawdius-missions-row')].map(el => ({
+	return [...container.querySelectorAll<HTMLElement>('.clawdius-workflows-row')].map(el => ({
 		runId: el.getAttribute('data-run-id'),
 		sessionId: el.getAttribute('data-session-id'),
 		kind: el.getAttribute('data-kind'),
@@ -51,11 +51,11 @@ function rowsOf(container: HTMLElement): unknown[] {
 		freshness: el.getAttribute('data-freshness'),
 		completeness: el.getAttribute('data-completeness'),
 		foreignMarked: el.classList.contains('foreign'),
-		labelCount: el.querySelectorAll('.clawdius-missions-label').length,
+		labelCount: el.querySelectorAll('.clawdius-workflows-label').length,
 	}));
 }
 
-suite('Clawdius missions fleet - Sidebar view', () => {
+suite('Clawdius Claude Code Ultracode Workflows - Sidebar view', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 	const ROOT: ReaderConfigRoot = { kind: 'resolved', root: URI.file('/home/tester/.claude') };
 
@@ -73,7 +73,7 @@ suite('Clawdius missions fleet - Sidebar view', () => {
 
 		// Every run present (the foreign run WITH its label, not omitted), each fully labeled with four
 		// badges + all four honesty `data-*` hooks, and the foreign run visually marked.
-		assert.strictEqual(container.getAttribute('data-clawdius-missions'), '3');
+		assert.strictEqual(container.getAttribute('data-clawdius-workflows'), '3');
 		assert.deepStrictEqual(rowsOf(container), [
 			{ runId: 'a-0001', sessionId: 'sess-a', kind: 'workflow', status: 'completed', ownership: 'foreign', coverage: 'in-scope', freshness: 'polled', completeness: 'complete', foreignMarked: false, labelCount: 4 },
 			{ runId: 'f-0001', sessionId: 'sess-foreign', kind: 'workflow', status: 'completed', ownership: 'foreign', coverage: 'foreign', freshness: 'polled', completeness: 'complete', foreignMarked: true, labelCount: 4 },
@@ -81,9 +81,9 @@ suite('Clawdius missions fleet - Sidebar view', () => {
 		]);
 	});
 
-	test('a failed mission shows its error clamped to one line, with the FULL text kept on the tooltip', () => {
+	test('a failed workflow run shows its error clamped to one line, with the FULL text kept on the tooltip', () => {
 		// The real shape this regressed on: a workflow failure arrives as a multi-line stack trace whose frames are
-		// bundler paths. Rendered whole it wrapped to eight lines and pushed every mission below it off screen.
+		// bundler paths. Rendered whole it wrapped to eight lines and pushed every run below it off screen.
 		const stack = 'TelemetrySafeError: StructuredOutput retry cap (5) exceeded\n'
 			+ '    at <anonymous> (B:/~BUN/root/src/entrypoints/cli.js:6072:2729)\n'
 			+ '    at processTicksAndRejections (native:7:39)';
@@ -91,11 +91,11 @@ suite('Clawdius missions fleet - Sidebar view', () => {
 		const list = store.add(new FleetRunsList(container));
 		list.render([run({ runId: 'boom', status: 'failed', error: stack })]);
 
-		const error = container.querySelector<HTMLElement>('.clawdius-missions-error')!;
+		const error = container.querySelector<HTMLElement>('.clawdius-workflows-error')!;
 		// Present (never hidden - an invisible failure is the defect this view exists to prevent), summarised to the
 		// one line that names the fault, and STILL complete on the tooltip: painted short, never known short.
 		assert.deepStrictEqual(
-			{ text: error.textContent, title: error.title, marked: error.hasAttribute('data-mission-error') },
+			{ text: error.textContent, title: error.title, marked: error.hasAttribute('data-workflow-error') },
 			{ text: 'TelemetrySafeError: StructuredOutput retry cap (5) exceeded', title: stack, marked: true });
 	});
 
@@ -117,21 +117,21 @@ suite('Clawdius missions fleet - Sidebar view', () => {
 		const container = $('div');
 		const list = store.add(new FleetRunsList(container));
 		list.render([]);
-		assert.strictEqual(container.getAttribute('data-clawdius-missions'), '0');
-		assert.strictEqual(container.querySelectorAll('.clawdius-missions-row').length, 0);
-		assert.strictEqual(container.querySelectorAll('[data-clawdius-missions-empty]').length, 1);
+		assert.strictEqual(container.getAttribute('data-clawdius-workflows'), '0');
+		assert.strictEqual(container.querySelectorAll('.clawdius-workflows-row').length, 0);
+		assert.strictEqual(container.querySelectorAll('[data-clawdius-workflows-empty]').length, 1);
 	});
 });
 
 /** A subagent with the given id, fully labeled (defaults are the conservative enumeration labels). */
-function subagent(id: string): MissionAgent {
+function subagent(id: string): WorkflowAgent {
 	return { agentId: id, runId: 'r', agentType: 'workflow-subagent', finished: true, transcriptRef: 'file:///t.jsonl', coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.Complete };
 }
 
-suite('Clawdius missions fleet - drill-in interactions', () => {
+suite('Clawdius Claude Code Ultracode Workflows - drill-in interactions', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
-	function run(id: string): MissionRun {
+	function run(id: string): WorkflowRun {
 		return {
 			runId: id, sessionId: id, name: id, status: 'completed', agentCount: 0, phases: [], progress: [],
 			ownership: 'foreign',
@@ -150,42 +150,42 @@ suite('Clawdius missions fleet - drill-in interactions', () => {
 		const list = store.add(new FleetRunsList(container, interactions));
 		list.render([run('a')]);
 
-		const row = container.querySelector<HTMLElement>('.clawdius-missions-row')!;
+		const row = container.querySelector<HTMLElement>('.clawdius-workflows-row')!;
 		// Expandable rows carry the twistie + the expanded hook; the run's four labels are still intact.
 		assert.strictEqual(row.classList.contains('expandable'), true);
-		assert.strictEqual(row.querySelectorAll('.clawdius-missions-label').length, 4);
+		assert.strictEqual(row.querySelectorAll('.clawdius-workflows-label').length, 4);
 		row.click();
 		// listSubagents resolves on a microtask; let it settle, then the two subagent rows are present.
 		await Promise.resolve();
 		await Promise.resolve();
-		const subrows = container.querySelectorAll<HTMLElement>('.clawdius-missions-subrow');
+		const subrows = container.querySelectorAll<HTMLElement>('.clawdius-workflows-subrow');
 		assert.strictEqual(subrows.length, 2);
 		subrows[1].click();
 		assert.deepStrictEqual(opened, ['sub-2']);
 
 		// A second click collapses the row - the subagent list is removed.
 		row.click();
-		assert.strictEqual(container.querySelectorAll('.clawdius-missions-subrow').length, 0);
+		assert.strictEqual(container.querySelectorAll('.clawdius-workflows-subrow').length, 0);
 	});
 
 	test('a render() while a subagent list is in flight discards the stale expansion (no detached rows, no leak)', async () => {
-		let resolveList: (list: MissionAgentList) => void = () => { };
+		let resolveList: (list: WorkflowAgentList) => void = () => { };
 		const interactions: IFleetRowInteractions = {
-			listAgents: () => new Promise<MissionAgentList>(res => { resolveList = res; }),
+			listAgents: () => new Promise<WorkflowAgentList>(res => { resolveList = res; }),
 			openAgent: () => { },
 		};
 		const container = $('div');
 		const list = store.add(new FleetRunsList(container, interactions));
 		list.render([run('a')]);
-		container.querySelector<HTMLElement>('.clawdius-missions-row')!.click();
+		container.querySelector<HTMLElement>('.clawdius-workflows-row')!.click();
 		// A full re-render tears the expanding row down before the list resolves.
 		list.render([run('b')]);
 		// The now-stale list resolves: the generation guard must drop it - no subagent rows, no listeners leaked.
 		resolveList({ agents: [subagent('sub-1')], completeness: CompletenessState.Complete });
 		await Promise.resolve();
 		await Promise.resolve();
-		assert.strictEqual(container.querySelectorAll('.clawdius-missions-subrow').length, 0);
-		assert.strictEqual(container.querySelectorAll('.clawdius-missions-row').length, 1);
+		assert.strictEqual(container.querySelectorAll('.clawdius-workflows-subrow').length, 0);
+		assert.strictEqual(container.querySelectorAll('.clawdius-workflows-row').length, 1);
 	});
 });
 // CLAWDIUS-END

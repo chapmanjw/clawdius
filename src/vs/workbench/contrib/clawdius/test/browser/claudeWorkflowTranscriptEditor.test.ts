@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Missions fleet - transcript drill-in tests
+// CLAWDIUS-BEGIN Claude Code Ultracode Workflows - transcript drill-in tests
 // The drill-in path: the seam reads a subagent's transcript through its opaque transcriptRef and returns a
 // labeled, INDEX-ONLY slice (record types in view + the four honesty labels), which the editor's pure render
 // helper paints with `data-*` hooks. The headline case: a subagent transcript referencing a MISSING
@@ -20,12 +20,15 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/tes
 import { FileService } from '../../../../../platform/files/common/fileService.js';
 import { InMemoryFileSystemProvider } from '../../../../../platform/files/common/inMemoryFilesystemProvider.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
+import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import { testWorkspace } from '../../../../../platform/workspace/test/common/testWorkspace.js';
 import { CompletenessState, CoverageLabel, FreshnessLabel, ReaderConfigRoot } from '../../common/claudeReaderSeam.js';
-import { FleetTranscriptSlice } from '../../common/claudeFleetModel.js';
+import { FleetSubagent, FleetTranscriptSlice } from '../../common/claudeFleetModel.js';
 import { encodeProjectDir } from '../../browser/clawdiusConfigStore.js';
 import { ClawdiusReaderSeamService } from '../../browser/reader/claudeReaderSeamService.js';
-import { renderTranscriptSlice } from '../../browser/missions/claudeMissionTranscriptEditor.js';
+import { renderTranscriptSlice } from '../../browser/workflows/claudeWorkflowTranscriptEditor.js';
+import { ClaudeWorkflowTranscriptInput, ClaudeWorkflowTranscriptInputSerializer } from '../../browser/workflows/claudeWorkflowTranscriptInput.js';
+import { WORKFLOWS_VIEW_CONTAINER_ID, WORKFLOWS_VIEW_ID } from '../../browser/workflows/claudeWorkflowsView.js';
 import { TestContextService } from '../../../../test/common/workbenchTestServices.js';
 
 // The committed .jsonl skeletons are the single source of truth, read via the browser harness's file bridge.
@@ -37,7 +40,7 @@ async function loadFixture(name: string): Promise<string> {
 	return await __readFileInTests(URI.joinPath(src, FIXTURE_DIR, name).fsPath);
 }
 
-suite('Clawdius missions fleet - transcript drill-in', () => {
+suite('Clawdius Claude Code Ultracode Workflows - transcript drill-in', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	const ROOT = URI.file('/home/tester/.claude');
@@ -127,6 +130,45 @@ suite('Clawdius missions fleet - transcript drill-in', () => {
 		assert.strictEqual(container.getAttribute('data-clawdius-transcript-completeness'), 'absent');
 		assert.strictEqual(container.querySelectorAll('[data-clawdius-transcript-empty]').length, 1);
 		assert.strictEqual(container.querySelectorAll('.clawdius-transcript-record').length, 0);
+	});
+
+	// Backward-compat persistence keys: these string values are what VS Code actually writes to disk (the
+	// serializer typeId keys a restored editor tab; the view + container ids key pinned activity-bar placement
+	// and visibility). None of them may change - a pre-rename user who already has state persisted under the old
+	// strings would silently lose their restored editors or their pinned placement the next time they open
+	// Clawdius. These tests exist so an editor rename never touches these strings again by accident.
+
+	test('backward-compat: the transcript editor-input typeId is preserved', () => {
+		assert.strictEqual(ClaudeWorkflowTranscriptInput.ID, 'workbench.input.clawdiusMissionTranscript');
+	});
+
+	test('backward-compat: the transcript serializer round-trips a subagent through the preserved typeId', () => {
+		const subagent: FleetSubagent = {
+			subagentId: 'sub-rt-01',
+			parentRunId: 'run-rt-01',
+			transcriptRef: 'transcript-ref-rt-01',
+			coverage: CoverageLabel.InScope,
+			freshness: FreshnessLabel.Polled,
+			completeness: CompletenessState.Complete,
+		};
+		const input = store.add(new ClaudeWorkflowTranscriptInput(subagent));
+		const serializer = new ClaudeWorkflowTranscriptInputSerializer();
+		const instantiationService = store.add(new TestInstantiationService());
+
+		const raw = serializer.serialize(input);
+		const deserialized = serializer.deserialize(instantiationService, raw);
+		assert.ok(deserialized instanceof ClaudeWorkflowTranscriptInput);
+		const restored = store.add(deserialized);
+
+		// The restored input reconstructs the same subagent identity - and, because `resource` is computed FROM
+		// the subagent (not itself persisted), the same resource the original input had.
+		assert.deepStrictEqual(restored.subagent, subagent);
+		assert.deepStrictEqual(restored.resource, input.resource);
+	});
+
+	test('backward-compat: the Workflows view + container ids are preserved', () => {
+		assert.strictEqual(WORKFLOWS_VIEW_ID, 'clawdius.missions');
+		assert.strictEqual(WORKFLOWS_VIEW_CONTAINER_ID, 'workbench.view.clawdiusMissions');
 	});
 });
 // CLAWDIUS-END

@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Missions fleet - transcript drill-in EditorPane
+// CLAWDIUS-BEGIN Claude Code Ultracode Workflows - transcript drill-in EditorPane
 // A native-DOM EditorPane (no webview => zero-egress; pattern: claudeControlCenterEditor) that opens a subagent's
 // REAL on-disk transcript in the editor area. It reads ONLY through the shipped seam: the subagent's
 // opaque transcriptRef -> the seam's per-subagent transcript read, which returns an INDEX-ONLY labeled slice (the
@@ -12,7 +12,7 @@
 // not `complete` - the label is rendered honestly, never fabricated up to complete. The header + record
 // rows carry `data-*` hooks so the real-build Playwright render can assert the completeness label + record count.
 
-import './media/claudeMissions.css';
+import './media/claudeWorkflows.css';
 import { $, append, clearNode, Dimension, size } from '../../../../../base/browser/dom.js';
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { DisposableStore } from '../../../../../base/common/lifecycle.js';
@@ -27,7 +27,7 @@ import { IEditorOpenContext } from '../../../../common/editor.js';
 import { IEditorGroup } from '../../../../services/editor/common/editorGroupsService.js';
 import { FleetTranscriptSlice } from '../../common/claudeFleetModel.js';
 import { ClawdiusReaderSeamService } from '../reader/claudeReaderSeamService.js';
-import { ClaudeMissionTranscriptInput } from './claudeMissionTranscriptInput.js';
+import { ClaudeWorkflowTranscriptInput } from './claudeWorkflowTranscriptInput.js';
 
 /**
  * Render a labeled subagent transcript slice into a container: a header carrying the completeness / coverage /
@@ -74,9 +74,9 @@ export function renderTranscriptSlice(container: HTMLElement, slice: FleetTransc
 
 /** The transcript drill-in editor pane: reads a subagent's transcript through the seam and renders it, honestly
  *  completeness-labeled. Read-only + zero-egress (native DOM, local seam read). */
-export class ClaudeMissionTranscriptEditor extends EditorPane {
+export class ClaudeWorkflowTranscriptEditor extends EditorPane {
 
-	static readonly ID = 'workbench.editor.clawdiusMissionTranscript';
+	static readonly ID = 'workbench.editor.clawdiusWorkflowTranscript';
 
 	private container!: HTMLElement;
 	private content: HTMLElement | undefined;
@@ -91,7 +91,7 @@ export class ClaudeMissionTranscriptEditor extends EditorPane {
 		@IStorageService storageService: IStorageService,
 		@IInstantiationService instantiationService: IInstantiationService,
 	) {
-		super(ClaudeMissionTranscriptEditor.ID, group, telemetryService, themeService, storageService);
+		super(ClaudeWorkflowTranscriptEditor.ID, group, telemetryService, themeService, storageService);
 		// The seam service is not a registered singleton; instantiate it (teams probe off) so the pane reads through
 		// the SAME seam path the enumeration + unit tests exercise. It is stateless + read-only (not a disposable).
 		this.seam = instantiationService.createInstance(ClawdiusReaderSeamService, false);
@@ -102,7 +102,7 @@ export class ClaudeMissionTranscriptEditor extends EditorPane {
 		this.container.tabIndex = -1;
 	}
 
-	override async setInput(input: ClaudeMissionTranscriptInput, options: IEditorOptions | undefined, context: IEditorOpenContext, token: CancellationToken): Promise<void> {
+	override async setInput(input: ClaudeWorkflowTranscriptInput, options: IEditorOptions | undefined, context: IEditorOpenContext, token: CancellationToken): Promise<void> {
 		await super.setInput(input, options, context, token);
 		// Read the transcript through the seam - the only data path. Honest on failure: the seam degrades to
 		// a labeled absent/unknown-shape slice rather than throwing, so the pane always has something honest to paint.

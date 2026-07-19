@@ -72,7 +72,7 @@ jobs:
         shell: bash
         run: |
           set -e
-          owned=$(git ls-files 'clawdius/**' 'src/vs/workbench/contrib/clawdius/**' 'src/vs/platform/clawdius/**' 'src/vs/platform/agentHost/**' 'script/clawdius/**' 'extensions/clawdius-*/**' docs/CHANGES_AGAINST_UPSTREAM.md docs/MERGING.md docs/BUILD.md docs/CONTRIBUTING.md docs/SECURITY.md 'README-CLAWDIUS*')
+          owned=$(git ls-files 'clawdius/**' 'src/vs/workbench/contrib/clawdius/**' 'src/vs/platform/clawdius/**' 'src/vs/platform/agentHost/**' 'script/clawdius/**' 'test/clawdius/**' 'test/clawdius-e2e/**' 'extensions/clawdius-*/**' docs/CHANGES_AGAINST_UPSTREAM.md docs/MERGING.md docs/BUILD.md docs/CONTRIBUTING.md docs/SECURITY.md 'README-CLAWDIUS*')
           # Discover in-place upstream edits by their begin-marker across ALL tracked files (built at
           # runtime so this workflow does not match itself). The scanner self-selects: it skips its own
           # source, scans owned files in full, and inspects only the marked regions of everything else, so
@@ -299,11 +299,11 @@ jobs:
             "out/vs/workbench/contrib/clawdius/test/browser/claudeReaderSeamReadOnly.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeReaderSeamFormats.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeFleetEnumeration.test.js" \
-            "out/vs/workbench/contrib/clawdius/test/browser/claudeMissionEnumeration.test.js" \
-            "out/vs/workbench/contrib/clawdius/test/browser/claudeMissionsView.test.js" \
-            "out/vs/workbench/contrib/clawdius/test/browser/claudeMissionTranscriptEditor.test.js" \
-            "out/vs/workbench/contrib/clawdius/test/browser/claudeMissionOwnership.test.js" \
-            "out/vs/workbench/contrib/clawdius/test/browser/claudeMissionBadges.test.js"; do
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeWorkflowEnumeration.test.js" \
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeWorkflowsView.test.js" \
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeWorkflowTranscriptEditor.test.js" \
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeWorkflowOwnership.test.js" \
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeWorkflowBadges.test.js"; do
             if [ ! -f "$t" ]; then echo "::error::compiled test missing ($t) — transpile path drift"; exit 1; fi
             log="$(basename "$t").log"
             node test/unit/browser/index.js --run "$t" --browser chromium 2>&1 | tee "$log"

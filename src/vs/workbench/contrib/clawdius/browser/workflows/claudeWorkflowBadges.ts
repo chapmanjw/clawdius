@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Missions fleet needs-input/completion badge feed
+// CLAWDIUS-BEGIN Claude Code Ultracode Workflows needs-input/completion badge feed
 // A LIVE-ONLY badge feed. It subscribes to the workbench-facing `IAgentHostService.onDidAction` action stream and
 // raises an honest needs-input / completion badge for an OWNED run when a live event actually fires:
 //   - `ActionType.ChatInputRequested` -> a `needs-input` badge (the run is blocked on the user).
@@ -36,7 +36,7 @@ import { ActionType, type ActionEnvelope, type StateAction } from '../../../../.
 import { parseDefaultChatUri } from '../../../../../platform/agentHost/common/state/sessionState.js';
 import { FleetOwnership } from '../../common/claudeFleetModel.js';
 import { FreshnessLabel } from '../../common/claudeReaderSeam.js';
-import { resolveOwnership } from './claudeMissionOwnership.js';
+import { resolveOwnership } from './claudeWorkflowOwnership.js';
 
 /** The two honest live badges the fleet raises: the run is blocked on the user, or its turn finished. */
 export type BadgeKind = 'needs-input' | 'completion';
@@ -70,7 +70,7 @@ export interface BadgeSignal {
 /**
  * The identity a badge correlates against: the minimum a row must expose to receive a live badge. Structural on
  * purpose - the feed matches an event's session id to a row and keys the badge by run id, and needs nothing else -
- * so both a `FleetRun` and a `MissionRun` satisfy it without the feed knowing which entity the list paints.
+ * so both a `FleetRun` and a `WorkflowRun` satisfy it without the feed knowing which entity the list paints.
  */
 export interface IBadgeCorrelatableRun {
 	/** The row's stable identity, which the badge is keyed by. */
@@ -110,7 +110,7 @@ export interface IBadgeFeedSource {
 	/** The workbench-facing live action stream (`IAgentHostService.onDidAction`). */
 	readonly onDidAction: Event<ActionEnvelope>;
 	/** The runs currently in view, to correlate an event's session id back to the row that owns it. Structural on
-	 *  purpose: the feed correlates on identity alone, so it serves both a `FleetRun` and a `MissionRun` row
+	 *  purpose: the feed correlates on identity alone, so it serves both a `FleetRun` and a `WorkflowRun` row
 	 *  without knowing which entity the list is painting. */
 	getRuns(): readonly IBadgeCorrelatableRun[];
 	/** The owned raw-session-id set (from `getActiveSubscriptions()` via the ownership adapter). */
@@ -122,7 +122,7 @@ export interface IBadgeFeedSource {
  * OWNED run. Holds the latest badge per run so a re-render can re-apply it, and fires {@link onDidChangeBadge} on
  * every new signal. A foreign / non-live run never produces a badge (never-falsely-live). Dispose to unsubscribe.
  */
-export class ClaudeMissionBadgeFeed extends Disposable {
+export class ClaudeWorkflowBadgeFeed extends Disposable {
 
 	private readonly _onDidChangeBadge = this._register(new Emitter<BadgeSignal>());
 	/** Fires when a live badge is raised for an owned run. */

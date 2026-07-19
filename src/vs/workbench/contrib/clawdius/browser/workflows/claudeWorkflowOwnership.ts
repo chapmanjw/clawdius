@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Missions fleet ownership probe
+// CLAWDIUS-BEGIN Claude Code Ultracode Workflows ownership probe
 // Decides, per enumerated `FleetRun`, whether THIS Clawdius workbench holds the run (`owned`) or it is merely
 // observed on disk (`foreign`). Split into a PURE resolver + a thin service adapter so the correlation is
 // unit-testable without a live agent host.

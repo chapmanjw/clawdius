@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Missions fleet - live badge feed tests
+// CLAWDIUS-BEGIN Claude Code Ultracode Workflows - live badge feed tests
 // The POSITIVE-path proof the sanitized Playwright harness cannot provide (its null agent host's onDidAction is
 // Event.None): an injected onDidAction event drives the SAME production path the ViewPane wires - the badge feed
 // correlates the event to a run, gates on ownership, and the FleetRunsList row is decorated. Proves honesty
@@ -19,13 +19,13 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/tes
 import { AgentSession } from '../../../../../platform/agentHost/common/agentService.js';
 import { ActionType, type ActionEnvelope, type StateAction } from '../../../../../platform/agentHost/common/state/protocol/common/actions.js';
 import { buildDefaultChatUri, buildSubagentChatUri } from '../../../../../platform/agentHost/common/state/sessionState.js';
-import { BadgeSignal, ClaudeMissionBadgeFeed, badgeFreshnessFor } from '../../browser/missions/claudeMissionBadges.js';
-import { FleetRunsList, renderRunBadge } from '../../browser/missions/claudeMissionsView.js';
-import { MissionRun } from '../../common/claudeFleetModel.js';
+import { BadgeSignal, ClaudeWorkflowBadgeFeed, badgeFreshnessFor } from '../../browser/workflows/claudeWorkflowBadges.js';
+import { FleetRunsList, renderRunBadge } from '../../browser/workflows/claudeWorkflowsView.js';
+import { MissionRun as WorkflowRun } from '../../common/claudeFleetModel.js';
 import { CompletenessState, CoverageLabel, FreshnessLabel } from '../../common/claudeReaderSeam.js';
 
 /** A minimally-labeled FleetRun carrying the given ids - enumeration always emits `foreign`. */
-function run(runId: string, sessionId: string): MissionRun {
+function run(runId: string, sessionId: string): WorkflowRun {
 	return {
 		runId, sessionId, name: runId, status: 'completed', agentCount: 0, phases: [], progress: [], ownership: 'foreign',
 		coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.Complete,
@@ -70,7 +70,7 @@ function turnComplete(meta?: Record<string, unknown>): StateAction {
  *  the badge-less shape when no live badge is present. */
 function badgeOf(row: HTMLElement | null): unknown {
 	const host = row?.querySelector<HTMLElement>('[data-live-badge]') ?? null;
-	const badge = row?.querySelector<HTMLElement>('.clawdius-missions-badge') ?? null;
+	const badge = row?.querySelector<HTMLElement>('.clawdius-workflows-badge') ?? null;
 	if (!badge) {
 		return { liveBadgeAttr: host?.getAttribute('data-live-badge') ?? null, badge: null };
 	}
@@ -80,7 +80,7 @@ function badgeOf(row: HTMLElement | null): unknown {
 	};
 }
 
-suite('Clawdius missions fleet - live badges', () => {
+suite('Clawdius Claude Code Ultracode Workflows - live badges', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	const OWNED = run('owned-0001', 'sess-owned');
@@ -88,18 +88,18 @@ suite('Clawdius missions fleet - live badges', () => {
 
 	/** Build the full production path: a rendered FleetRunsList + a badge feed over an injected onDidAction, wired
 	 *  exactly as the ViewPane wires them (feed.onDidChangeBadge -> list.decorateRun). Returns the pieces to drive. */
-	function harness(runs: readonly MissionRun[], ownedSessionIds: ReadonlySet<string>) {
+	function harness(runs: readonly WorkflowRun[], ownedSessionIds: ReadonlySet<string>) {
 		const container = $('div');
 		const list = store.add(new FleetRunsList(container));
 		list.render(runs);
 		const onDidAction = store.add(new Emitter<ActionEnvelope>());
-		const feed = store.add(new ClaudeMissionBadgeFeed({
+		const feed = store.add(new ClaudeWorkflowBadgeFeed({
 			onDidAction: onDidAction.event,
 			getRuns: () => runs,
 			getOwnedSessionIds: () => ownedSessionIds,
 		}));
 		store.add(feed.onDidChangeBadge(signal => list.decorateRun(signal)));
-		const rowFor = (r: MissionRun) => container.querySelector<HTMLElement>(`.clawdius-missions-row[data-run-id="${r.runId}"]`);
+		const rowFor = (r: WorkflowRun) => container.querySelector<HTMLElement>(`.clawdius-workflows-row[data-run-id="${r.runId}"]`);
 		return { feed, fire: (e: ActionEnvelope) => onDidAction.fire(e), rowFor };
 	}
 
@@ -160,17 +160,17 @@ suite('Clawdius missions fleet - live badges', () => {
 	});
 
 	test('renderRunBadge clears a prior badge when handed no signal (no fabricated live state persists)', () => {
-		const host = $('.clawdius-missions-badgehost');
+		const host = $('.clawdius-workflows-badgehost');
 		renderRunBadge(host, { runId: 'x', kind: 'completion', freshness: FreshnessLabel.Live, source: 'live-event' });
 		renderRunBadge(host, undefined);
 		assert.deepStrictEqual(
-			{ liveBadgeAttr: host.getAttribute('data-live-badge'), badges: host.querySelectorAll('.clawdius-missions-badge').length },
+			{ liveBadgeAttr: host.getAttribute('data-live-badge'), badges: host.querySelectorAll('.clawdius-workflows-badge').length },
 			{ liveBadgeAttr: null, badges: 0 },
 		);
 	});
 
 	test('the badge module does not import vs/sessions SessionStatus (layer purity - valid-layers-check enforces)', async () => {
-		const source = await (await fetch(new URL('../../browser/missions/claudeMissionBadges.js', import.meta.url))).text();
+		const source = await (await fetch(new URL('../../browser/workflows/claudeWorkflowBadges.js', import.meta.url))).text();
 		// Strip comments (the module's own prose names `vs/sessions`/`SessionStatus` to document the deliberate
 		// avoidance); the scan targets real import statements only.
 		const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');

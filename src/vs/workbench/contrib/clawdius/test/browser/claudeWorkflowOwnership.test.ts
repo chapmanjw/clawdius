@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Missions fleet ownership-probe tests
+// CLAWDIUS-BEGIN Claude Code Ultracode Workflows ownership-probe tests
 // Exercises the PURE ownership resolver + the thin `getActiveSubscriptions()` adapter mapping against injected
 // data - NO live agent host. Proves: `resolveOwnership` returns `owned` iff the run's `sessionId` is in the
 // owned set and `foreign` otherwise (the never-falsely-owned safety floor); the adapter keeps only
@@ -17,7 +17,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/tes
 import { AgentSession } from '../../../../../platform/agentHost/common/agentService.js';
 import { IActiveSubscriptionInfo } from '../../../../../platform/agentHost/common/state/agentSubscription.js';
 import { StateComponents } from '../../../../../platform/agentHost/common/state/sessionState.js';
-import { ownedSessionIdsFromSubscriptions, resolveOwnership } from '../../browser/missions/claudeMissionOwnership.js';
+import { ownedSessionIdsFromSubscriptions, resolveOwnership } from '../../browser/workflows/claudeWorkflowOwnership.js';
 import { AdapterVersionStamp, CompletenessState, CoverageLabel, FreshnessLabel } from '../../common/claudeReaderSeam.js';
 import { FleetRun } from '../../common/claudeFleetModel.js';
 
@@ -49,7 +49,7 @@ function subscription(kind: StateComponents, provider: string, rawId: string): I
 	};
 }
 
-suite('Clawdius missions fleet - ownership probe', () => {
+suite('Clawdius Claude Code Ultracode Workflows - ownership probe', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
 	test('resolveOwnership: owned iff sessionId is in the owned set, else foreign (safety floor)', () => {

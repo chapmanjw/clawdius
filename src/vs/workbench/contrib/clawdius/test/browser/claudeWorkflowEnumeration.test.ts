@@ -3,18 +3,19 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Missions ultracode workflow enumeration tests
-// Drives the seam's MISSION enumeration - the Missions view's primary read - over an in-memory tree staged in the
-// launcher's real on-disk layout. The load-bearing property under test is the ASYMMETRY the launcher actually
-// exhibits (observed against a live run, not assumed): the run manifest is written ONLY at a terminal state, so a
-// journal with no manifest beside it is a run still IN FLIGHT. That is the only way a live mission is visible at
-// all, and it is why `running` is inferred from artifact topology rather than read from a status field.
+// CLAWDIUS-BEGIN Claude Code Ultracode Workflows enumeration tests
+// Drives the seam's WORKFLOW enumeration (listMissions) - the Workflows view's primary read - over an in-memory
+// tree staged in the launcher's real on-disk layout. The load-bearing property under test is the ASYMMETRY the
+// launcher actually exhibits (observed against a live run, not assumed): the run manifest is written ONLY at a
+// terminal state, so a journal with no manifest beside it is a run still IN FLIGHT. That is the only way a live
+// workflow run is visible at all, and it is why `running` is inferred from artifact topology rather than read
+// from a status field.
 //
 // Pinned here: a terminal manifest yields its own status/name/phases/progress; a manifest-less journal is `running`
 // + `live` + counted, and is NOT degraded for lacking a manifest (in-flight is not incomplete); a manifest WINS
 // over its own journal (the terminal record of the same run); an unrecognized manifest degrades to `unknown-shape`
-// + the canary stamp rather than throwing; a stray non-run-id file is not a mission; a plain chat session is NEVER
-// enumerated as one (Missions is an ultracode control surface, not a transcript browser); a `no-config` root
+// + the canary stamp rather than throwing; a stray non-run-id file is not a workflow run; a plain chat session is
+// NEVER enumerated as one (Workflows is an ultracode control surface, not a transcript browser); a `no-config` root
 // degrades to an empty labeled list; and agents are resolved lazily from the journal, with an agent that never
 // reported a result present-with-label (`finished: false`), never omitted.
 
@@ -27,13 +28,13 @@ import { FileService } from '../../../../../platform/files/common/fileService.js
 import { InMemoryFileSystemProvider } from '../../../../../platform/files/common/inMemoryFilesystemProvider.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { testWorkspace } from '../../../../../platform/workspace/test/common/testWorkspace.js';
-import { MissionRun } from '../../common/claudeFleetModel.js';
+import { MissionRun as WorkflowRun } from '../../common/claudeFleetModel.js';
 import { CompletenessState, FreshnessLabel, ReaderConfigRoot } from '../../common/claudeReaderSeam.js';
 import { encodeProjectDir } from '../../browser/clawdiusConfigStore.js';
 import { ClawdiusReaderSeamService } from '../../browser/reader/claudeReaderSeamService.js';
 import { TestContextService } from '../../../../test/common/workbenchTestServices.js';
 
-suite('Clawdius missions - ultracode workflow enumeration', () => {
+suite('Clawdius Claude Code Ultracode Workflows - enumeration', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	const ROOT = URI.file('/home/tester/.claude');
@@ -219,7 +220,7 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 		]);
 		await stageAgentMeta(fs, 'wf_f96a6688-77e', 'a1', 'workflow-subagent');
 		const service = makeService(fs);
-		const mission = (await service.listMissions(RESOLVED))[0] as MissionRun;
+		const mission = (await service.listMissions(RESOLVED))[0] as WorkflowRun;
 		const agents = await service.listMissionAgents(RESOLVED, mission);
 
 		assert.deepStrictEqual(agents.agents.map(a => ({ agentId: a.agentId, runId: a.runId, agentType: a.agentType, finished: a.finished })), [
@@ -241,7 +242,7 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 			+ JSON.stringify({ type: 'started', agentId: 'a-2' }) + '\n'
 			+ '{"type":"started","agen' + '\n'
 			+ JSON.stringify({ type: 'result', agentId: 'a-1' }) + '\n');
-		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as WorkflowRun;
 		assert.deepStrictEqual(
 			{ status: mission.status, started: mission.startedCount, results: mission.resultCount, completeness: mission.completeness },
 			{ status: 'running', started: 2, results: 1, completeness: CompletenessState.Partial });
@@ -255,7 +256,7 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 		await stageJournalText(fs, 'wf_b2c3d4e5-f60',
 			JSON.stringify({ type: 'started', agentId: 'a-1' }) + '\n'
 			+ '{"type":"started","agen');
-		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as WorkflowRun;
 		assert.deepStrictEqual(
 			{ status: mission.status, started: mission.startedCount, completeness: mission.completeness },
 			{ status: 'running', started: 1, completeness: CompletenessState.Complete });
@@ -272,7 +273,7 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 			+ '{"type":"started","agen' + '\n'
 			+ JSON.stringify({ type: 'result', agentId: 'a1' }) + '\n');
 		const service = makeService(fs);
-		const mission = (await service.listMissions(RESOLVED))[0] as MissionRun;
+		const mission = (await service.listMissions(RESOLVED))[0] as WorkflowRun;
 		const list = await service.listMissionAgents(RESOLVED, mission);
 		// The surviving row is real and still listed - but it must not read `complete` off a manifest while the
 		// journal beside it lost an agent the row cannot mention.
@@ -291,7 +292,7 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 			{ type: 'started', agentId: '../../escape' },
 		]);
 		const service = makeService(fs);
-		const mission = (await service.listMissions(RESOLVED))[0] as MissionRun;
+		const mission = (await service.listMissions(RESOLVED))[0] as WorkflowRun;
 		const list = await service.listMissionAgents(RESOLVED, mission);
 		assert.deepStrictEqual(
 			{ completeness: list.completeness, ids: list.agents.map(a => a.agentId) },
@@ -316,7 +317,7 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 				{ type: 'result', agentId: 'a1' },
 				malformed.record,
 			]);
-			const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+			const mission = (await makeService(fs).listMissions(RESOLVED))[0] as WorkflowRun;
 			// The good agent is still counted and still finished; the malformed record degrades the read rather than
 			// vanishing from it.
 			assert.deepStrictEqual(
@@ -335,7 +336,7 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 			+ JSON.stringify({ type: 'result', agentId: 'a1' }) + '\n'
 			+ '{"type":"started","agen');
 		const service = makeService(fs);
-		const mission = (await service.listMissions(RESOLVED))[0] as MissionRun;
+		const mission = (await service.listMissions(RESOLVED))[0] as WorkflowRun;
 		assert.strictEqual(mission.status, 'running');
 		const list = await service.listMissionAgents(RESOLVED, mission);
 		assert.deepStrictEqual(
@@ -353,7 +354,7 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 		await stageJournalText(fs, 'wf_a1b2c3d4-e5f',
 			JSON.stringify({ type: 'started', agentId: 'a1' }) + '\n'
 			+ JSON.stringify({ type: 'started', agentId: 7 }) + '\n');
-		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as WorkflowRun;
 		assert.deepStrictEqual(
 			{ started: mission.startedCount, completeness: mission.completeness },
 			{ started: 1, completeness: CompletenessState.Partial });
@@ -369,7 +370,7 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 			JSON.stringify({ type: 'started', agentId: 'a1' }) + '\n'
 			+ '{"type":"started","agen');
 		const service = makeService(fs);
-		const mission = (await service.listMissions(RESOLVED))[0] as MissionRun;
+		const mission = (await service.listMissions(RESOLVED))[0] as WorkflowRun;
 		const list = await service.listMissionAgents(RESOLVED, mission);
 		assert.deepStrictEqual(
 			{ completeness: list.completeness, ids: list.agents.map(a => a.agentId) },
@@ -383,7 +384,7 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 		await stageManifest(fs, 'wf_a1b2c3d4-e5f', manifestOf({ status: 'completed' }));
 		await stageJournalText(fs, 'wf_a1b2c3d4-e5f', '{"type":"started","agen' + '\n' + '{"type":"star' + '\n');
 		const service = makeService(fs);
-		const mission = (await service.listMissions(RESOLVED))[0] as MissionRun;
+		const mission = (await service.listMissions(RESOLVED))[0] as WorkflowRun;
 		assert.deepStrictEqual(await service.listMissionAgents(RESOLVED, mission),
 			{ agents: [], completeness: CompletenessState.Partial });
 	});
@@ -400,7 +401,7 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 			{ index: 2, title: 'Phase one', type: 'workflow_phase' },
 		];
 		await stageManifest(fs, 'wf_a1b2c3d4-e5f', manifest);
-		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as WorkflowRun;
 		// Two agent entries, not three: a phase entry is progress, not an agent.
 		assert.strictEqual(mission.agentCount, 2);
 	});
@@ -413,7 +414,7 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 			...manifestOf({ status: 'completed' }),
 			agentCount: 'two', durationMs: '5s', totalTokens: null, scriptPath: 42,
 		});
-		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as WorkflowRun;
 		assert.deepStrictEqual(
 			{
 				agentCount: mission.agentCount, durationMs: mission.durationMs,
@@ -448,7 +449,7 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 			...manifestOf({ status: 'completed' }),
 			phases: [{ title: 'Analyze' }, null, 'nope', { title: 'Synthesize' }],
 		});
-		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as WorkflowRun;
 		assert.deepStrictEqual(
 			{ phases: mission.phases, completeness: mission.completeness },
 			// The two readable phases survive; the unreadable entries are a gap, so the read says partial.
@@ -466,7 +467,7 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 		] as const) {
 			const fs = makeFs();
 			await stageManifest(fs, 'wf_a1b2c3d4-e5f', { ...manifestOf({ status: 'completed' }), [key]: bad });
-			const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+			const mission = (await makeService(fs).listMissions(RESOLVED))[0] as WorkflowRun;
 			assert.deepStrictEqual(
 				{ key, value: (mission as unknown as Record<string, unknown>)[key], completeness: mission.completeness },
 				{ key, value: undefined, completeness: CompletenessState.Partial });
@@ -487,7 +488,7 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 		// `complete`, so 82% of the progress vanished with nothing to show it had. The honesty label is what
 		// surfaced it: the drop only became visible once a dropped entry started degrading the read.
 		await stageManifest(fs, 'wf_a1b2c3d4-e5f', manifestOf({ status: 'completed' }));
-		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as WorkflowRun;
 		assert.deepStrictEqual(
 			{
 				progress: mission.progress.map(p => ({ title: p.title, kind: p.kind })),
@@ -510,7 +511,7 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 			...manifestOf({ status: 'completed' }),
 			phases: [{ title: 'Analyze' }, { detail: 'no title here' }],
 		});
-		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as WorkflowRun;
 		assert.deepStrictEqual(
 			{ phases: mission.phases, completeness: mission.completeness },
 			{ phases: [{ title: 'Analyze' }], completeness: CompletenessState.Partial });
@@ -522,7 +523,7 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 			...manifestOf({ status: 'completed' }),
 			workflowProgress: [{ index: 1, title: 'audit', type: 'workflow_agent' }, { index: 2, title: 'a tool', type: 'workflow_tool' }],
 		});
-		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as WorkflowRun;
 		assert.deepStrictEqual(
 			{ progress: mission.progress.map(p => p.title), completeness: mission.completeness },
 			{ progress: ['audit'], completeness: CompletenessState.Partial });
@@ -534,7 +535,7 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 		// reasons. Losing the null->absent branch would flip every ordinary run that serializes `"error": null` to
 		// partial - crying wolf on healthy data, which erodes the label exactly as fast as overclaiming does.
 		await stageManifest(fs, 'wf_a1b2c3d4-e5f', { ...manifestOf({ status: 'completed' }), error: null });
-		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as WorkflowRun;
 		assert.deepStrictEqual(
 			{ error: mission.error, completeness: mission.completeness },
 			{ error: undefined, completeness: CompletenessState.Complete });
@@ -548,7 +549,7 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 		const manifest = manifestOf({ status: 'completed' }) as Record<string, unknown>;
 		delete manifest.error; delete manifest.scriptPath; delete manifest.totalToolCalls;
 		await stageManifest(fs, 'wf_a1b2c3d4-e5f', manifest);
-		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as MissionRun;
+		const mission = (await makeService(fs).listMissions(RESOLVED))[0] as WorkflowRun;
 		assert.deepStrictEqual(
 			{ error: mission.error, scriptPath: mission.scriptPath, completeness: mission.completeness },
 			{ error: undefined, scriptPath: undefined, completeness: CompletenessState.Complete });
@@ -564,7 +565,7 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 			{ type: 'result', agentId: 'a1' },
 		]);
 		const service = makeService(fs);
-		const mission = (await service.listMissions(RESOLVED))[0] as MissionRun;
+		const mission = (await service.listMissions(RESOLVED))[0] as WorkflowRun;
 		const list = await service.listMissionAgents(RESOLVED, mission);
 		assert.deepStrictEqual(
 			{ ids: list.agents.map(a => a.agentId), ref: list.agents[0].transcriptRef.endsWith('agent-a1.jsonl') },
@@ -575,7 +576,7 @@ suite('Clawdius missions - ultracode workflow enumeration', () => {
 		const fs = makeFs();
 		await stageManifest(fs, 'wf_f96a6688-77e', manifestOf());
 		const service = makeService(fs);
-		const mission = (await service.listMissions(RESOLVED))[0] as MissionRun;
+		const mission = (await service.listMissions(RESOLVED))[0] as WorkflowRun;
 		// No journal at all is `absent` - there was nothing to read - which is a different claim from `partial` (a
 		// read that lost something) and from a mission that genuinely ran no agents.
 		assert.deepStrictEqual(await service.listMissionAgents(RESOLVED, mission),

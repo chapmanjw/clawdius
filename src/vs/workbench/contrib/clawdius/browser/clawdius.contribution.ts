@@ -24,8 +24,8 @@ import { ClawdiusNoopRegistryReader, IClawdiusRegistryReader } from '../common/c
 import { registerClawdiusConfigActions } from './clawdiusConfigActions.js';
 import { ClawdiusPluginSetupContribution, InstallClaudeCodePluginAction } from './clawdiusPluginSetup.js';
 import { ClawdiusTrustForwarder } from './clawdiusTrustForwarder.js';
-// CLAWDIUS-BEGIN load custom Claude Code icon registrations + their mask CSS (chat/session/terminal)
-import './clawdiusCustomIcons.js';
+// CLAWDIUS-BEGIN load custom Claude Code icon registrations + their mask CSS (chat/session/terminal/workflows)
+import { clawdiusWorkflowsIcon } from './clawdiusCustomIcons.js';
 import { registerClawdiusEditorTitleActions } from './clawdiusEditorTitleActions.js';
 // CLAWDIUS-END
 import { ClawdiusMissingPluginStatusEntry } from './clawdiusMissingPluginStatusEntry.js';
@@ -34,7 +34,7 @@ import { EditorExtensions, IEditorFactoryRegistry, IEditorSerializer } from '../
 import { EditorInput } from '../../../common/editor/editorInput.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { Action2, MenuId, registerAction2 } from '../../../../platform/actions/common/actions.js';
-import { IInstantiationService, ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
+import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ClaudeUsageStatusEntry } from './usage/claudeUsageStatusEntry.js';
@@ -51,10 +51,9 @@ import { Codicon } from '../../../../base/common/codicons.js';
 import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContainer.js';
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainerLocation } from '../../../common/views.js';
 import { ClawdiusContextBudgetView, CONTEXT_BUDGET_VIEW_CONTAINER_ID, CONTEXT_BUDGET_VIEW_ID } from './clawdiusContextBudgetView.js';
-import { ClawdiusMissionsView, MISSIONS_VIEW_CONTAINER_ID, MISSIONS_VIEW_ID } from './missions/claudeMissionsView.js';
-import { ClaudeMissionTranscriptEditor } from './missions/claudeMissionTranscriptEditor.js';
-import { ClaudeMissionTranscriptInput } from './missions/claudeMissionTranscriptInput.js';
-import { FleetSubagent } from '../common/claudeFleetModel.js';
+import { ClawdiusWorkflowsView, WORKFLOWS_VIEW_CONTAINER_ID, WORKFLOWS_VIEW_ID } from './workflows/claudeWorkflowsView.js';
+import { ClaudeWorkflowTranscriptEditor } from './workflows/claudeWorkflowTranscriptEditor.js';
+import { ClaudeWorkflowTranscriptInput, ClaudeWorkflowTranscriptInputSerializer } from './workflows/claudeWorkflowTranscriptInput.js';
 import { ClawdiusContextBudgetStatusEntry, CONTEXT_BUDGET_WARN_TOKENS_SETTING, OpenContextBudgetAction } from './clawdiusContextBudgetStatusEntry.js';
 import { LintContextAction } from './clawdiusContextBudgetLint.js';
 import { DisableConfirmedLoadsAction, EnableConfirmedLoadsAction } from './clawdiusContextBudgetConfirm.js';
@@ -105,23 +104,6 @@ class ClaudeControlCenterInputSerializer implements IEditorSerializer {
 	canSerialize(): boolean { return true; }
 	serialize(): string { return ''; }
 	deserialize(): EditorInput { return ClaudeControlCenterInput.instance; }
-}
-
-// The transcript drill-in input round-trips its FleetSubagent (a plain labeled index handle - subagent id, parent
-// run id, the opaque transcriptRef, and the honesty labels; never authoritative content). On restore the pane
-// re-reads the transcript live from disk through the seam, so a stale serialized label is refreshed on open.
-class ClaudeMissionTranscriptInputSerializer implements IEditorSerializer {
-	canSerialize(): boolean { return true; }
-	serialize(input: EditorInput): string {
-		return JSON.stringify((input as ClaudeMissionTranscriptInput).subagent);
-	}
-	deserialize(_instantiationService: IInstantiationService, serialized: string): EditorInput | undefined {
-		try {
-			return new ClaudeMissionTranscriptInput(JSON.parse(serialized) as FleetSubagent);
-		} catch {
-			return undefined;
-		}
-	}
 }
 
 // Opens (or reveals) the interactive Control Center. An optional first argument selects which tab to land on;
@@ -305,37 +287,40 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	}];
 	Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews(contextBudgetViews, contextBudgetContainer);
 
-	// The Missions fleet: a Sidebar (Activity Bar) view listing the runs the reader seam enumerates, each with
-	// honest coverage / freshness / completeness + ownership labels (a foreign/suppressed run present-with-label,
-	// never hidden). Activity-bar-backed containers use `ViewContainerLocation.Sidebar` in this fork (there is no
-	// `Activitybar` location). Reuses the same registerViewContainer + registerViews mechanism as the panel above;
-	// the view reads runs ONLY through the seam.
-	const missionsContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
-		id: MISSIONS_VIEW_CONTAINER_ID,
-		title: localize2('clawdius.missions.container', "Claude Code Missions"),
-		ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [MISSIONS_VIEW_CONTAINER_ID, { mergeViewWithContainerWhenSingleView: true }]),
+	// Claude Code Ultracode Workflows: a Sidebar (Activity Bar) view listing the runs the reader seam enumerates,
+	// each with honest coverage / freshness / completeness + ownership labels (a foreign/suppressed run
+	// present-with-label, never hidden). Activity-bar-backed containers use `ViewContainerLocation.Sidebar` in this
+	// fork (there is no `Activitybar` location). Reuses the same registerViewContainer + registerViews mechanism as
+	// the panel above; the view reads runs ONLY through the seam. The container + view icon is the shipped
+	// `clawdiusWorkflowsIcon` (`clawdius-claude-code-workflows`, registered in clawdiusCustomIcons.ts).
+	const workflowsContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
+		id: WORKFLOWS_VIEW_CONTAINER_ID,
+		title: localize2('clawdius.workflows.container', "Claude Code Ultracode Workflows"),
+		ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [WORKFLOWS_VIEW_CONTAINER_ID, { mergeViewWithContainerWhenSingleView: true }]),
 		hideIfEmpty: false,
-		icon: Codicon.rocket,
+		icon: clawdiusWorkflowsIcon,
 		order: 7,
 	}, ViewContainerLocation.Sidebar);
-	const missionsViews: IViewDescriptor[] = [{
-		id: MISSIONS_VIEW_ID,
-		name: localize2('clawdius.missions.view', "Claude Code Missions"),
-		ctorDescriptor: new SyncDescriptor(ClawdiusMissionsView),
-		containerIcon: Codicon.rocket,
+	const workflowsViews: IViewDescriptor[] = [{
+		id: WORKFLOWS_VIEW_ID,
+		name: localize2('clawdius.workflows.view', "Claude Code Ultracode Workflows"),
+		ctorDescriptor: new SyncDescriptor(ClawdiusWorkflowsView),
+		containerIcon: clawdiusWorkflowsIcon,
 		canToggleVisibility: true,
 		canMoveView: true,
 	}];
-	Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews(missionsViews, missionsContainer);
+	Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews(workflowsViews, workflowsContainer);
 
 	// The transcript drill-in: an editor-area EditorPane that opens a subagent's real on-disk transcript through
 	// the seam, honestly completeness-labeled (a missing out-of-band tool-result ref -> partial, not complete).
-	// Opened from the Missions view when a subagent row is clicked. Reads ONLY through the seam.
+	// Opened from the Workflows view when a subagent row is clicked. Reads ONLY through the seam.
 	Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
-		EditorPaneDescriptor.create(ClaudeMissionTranscriptEditor, ClaudeMissionTranscriptEditor.ID, localize('clawdius.missions.transcriptPane', "Claude Code Subagent Transcript")),
-		[new SyncDescriptor(ClaudeMissionTranscriptInput)],
+		EditorPaneDescriptor.create(ClaudeWorkflowTranscriptEditor, ClaudeWorkflowTranscriptEditor.ID, localize('clawdius.workflows.transcriptPane', "Claude Code Subagent Transcript")),
+		[new SyncDescriptor(ClaudeWorkflowTranscriptInput)],
 	);
-	Registry.as<IEditorFactoryRegistry>(EditorExtensions.EditorFactory).registerEditorSerializer(ClaudeMissionTranscriptInput.ID, ClaudeMissionTranscriptInputSerializer);
+	// The registered typeId (ClaudeWorkflowTranscriptInput.ID) is PRESERVED as 'workbench.input.clawdiusMissionTranscript'
+	// for backward compat: a pre-rename persisted editor tab must still restore through this exact serializer key.
+	Registry.as<IEditorFactoryRegistry>(EditorExtensions.EditorFactory).registerEditorSerializer(ClaudeWorkflowTranscriptInput.ID, ClaudeWorkflowTranscriptInputSerializer);
 
 	registerWorkbenchContribution2(ClawdiusContextBudgetStatusEntry.ID, ClawdiusContextBudgetStatusEntry, WorkbenchPhase.BlockRestore);
 	registerAction2(OpenContextBudgetAction);

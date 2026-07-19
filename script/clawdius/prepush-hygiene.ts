@@ -23,7 +23,7 @@ function git(args: string[]): string[] {
 // The Clawdius file set to scan (mirror the OWNED + INTERNAL_REF_SCOPE sets scan-forbidden.ts classifies).
 // agentHost is Clawdius content with upstream headers - the scan treats it as internal-ref scope (no brand).
 const OWNED_PATHSPECS = ['clawdius/**', 'src/vs/workbench/contrib/clawdius/**', 'src/vs/platform/clawdius/**',
-  'src/vs/platform/agentHost/**', 'script/clawdius/**', 'test/clawdius/**', 'extensions/clawdius-*/**',
+  'src/vs/platform/agentHost/**', 'script/clawdius/**', 'test/clawdius/**', 'test/clawdius-e2e/**', 'extensions/clawdius-*/**',
   'docs/BUILD.md', 'docs/MERGING.md', 'docs/CHANGES_AGAINST_UPSTREAM.md', 'docs/CONTRIBUTING.md', 'docs/SECURITY.md']
 const owned = git(['ls-files', ...OWNED_PATHSPECS])
 // Sanity floor: a healthy checkout ALWAYS has owned files; an empty result means git/pathspec failure, and

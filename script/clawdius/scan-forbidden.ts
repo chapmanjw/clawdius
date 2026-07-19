@@ -22,8 +22,10 @@ const OWNED = [/^clawdius\//, /^src\/vs\/workbench\/contrib\/clawdius\//, /^src\
 // Clawdius-CONTENT subsystems that keep upstream (Microsoft) headers and legitimately reference the removed
 // Copilot: scanned for INTERNAL REFERENCES (whole file) but NOT for brand. The Claude agent-host is authored by
 // Clawdius yet keeps upstream headers + names Copilot throughout, so a full brand scan would false-positive;
-// its internal spec/planning references still must not leak into public source.
-const INTERNAL_REF_SCOPE = [/^src\/vs\/platform\/agentHost\//]
+// its internal spec/planning references still must not leak into public source. The local E2E harness
+// (test/clawdius-e2e/) is the same case - it asserts on the ABSENCE of the "copilot" brand, so a full brand
+// scan would false-positive, but its internal spec/task references still must not leak into public source.
+const INTERNAL_REF_SCOPE = [/^src\/vs\/platform\/agentHost\//, /^test\/clawdius-e2e\//]
 // Binary/asset files (icons, images, fonts): skip the internal-reference rules - a coordinate like an SVG
 // moveto "M18" or a path token is not an internal reference, and scanning them only produces false positives.
 const ASSET_EXT = /\.(svg|png|jpe?g|gif|ico|icns|woff2?|ttf|eot|webp|mp4|pdf|wasm)$/i
@@ -89,7 +91,7 @@ const UNIVERSAL_EXEMPT = [/(^|\/)\.github\/workflows\/clawdius-ci\.yml$/]
 // `M1`, a test-case label) and cannot be matched without false positives. Those rely on human review + the
 // commit-message linter; the existing ones were swept by hand.
 const SPEC_LABEL = [
-  { id: 'spec-slice-ref', re: /\bSlice[ -]?\d/ },
+  { id: 'spec-slice-ref', re: /\bslice[ -]?\d/i },
   { id: 'spec-criterion-ref', re: /\bSC-\d{3}\b/ },
   { id: 'spec-requirement-ref', re: /\bFR-\d{3}\b/ },
   { id: 'spec-story-ref', re: /\bUS-?\d{1,3}\b/ },
@@ -190,10 +192,11 @@ for (const f of files) {
     }
   }
   const marked = !owned && text.includes(MARKER_BEGIN)
-  // INTERNAL_REF_SCOPE files (the Claude agent-host subsystem) are Clawdius CONTENT that keeps UPSTREAM
-  // (Microsoft) headers and legitimately names the removed Copilot throughout - so they are scanned for
+  // INTERNAL_REF_SCOPE files (the Claude agent-host subsystem, and the local E2E harness under
+  // test/clawdius-e2e/) are Clawdius CONTENT that legitimately names the removed Copilot - the agent-host keeps
+  // UPSTREAM (Microsoft) headers, and the harness asserts on Copilot's ABSENCE - so they are scanned for
   // INTERNAL REFERENCES + Amazon-internal terms over the WHOLE file, but NOT for brand (a full brand scan
-  // would false-positive on their legitimate Copilot mentions).
+  // would false-positive on those legitimate Copilot mentions).
   const internalScope = !owned && INTERNAL_REF_SCOPE.some((re) => re.test(nf))
   if (!owned && !marked && !internalScope) { continue }
   // Brand/telemetry scope: owned files in full; marked upstream edits only within the Clawdius regions.

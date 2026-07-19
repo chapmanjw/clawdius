@@ -187,7 +187,18 @@
 # match, which caught that two of these guards were masking each other inside one combined fixture and reported
 # themselves covered when they were not.
 
+# Disposition 2026-07-18 (+1 files, +277 insertions): rename the Missions view to "Claude Code Ultracode
+# Workflows" - browser/missions/ -> browser/workflows/, and every Mission*/claudeMissions* identifier, CSS
+# class, localize key, and command title moves to workflow vocabulary; the view carries the composite
+# clawdius-claude-code-workflows icon. Behavior-preserving: the view id, container id, and the transcript
+# serializer typeId keep their pre-rename string VALUES as persistence keys, so a user's pinned placement and
+# open transcript editors still restore - a round-trip unit test guards those keys against a later tidy. The
+# file renames net ~zero; the growth is that guard test, the E2E harness's renamed-surface + command-title +
+# skip-honesty checks and its move to a runnable .mts, and the forbidden-content scan now covering the test
+# trees on the local hook AND CI. The reader seam and fleet read-model keep their Mission* names for a later
+# model change.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
-recorded: 2026-07-17
-baseline: 5596 files changed, 41693 insertions(+), 1456122 deletions(-)
+recorded: 2026-07-18
+baseline: 5597 files changed, 41970 insertions(+), 1456122 deletions(-)

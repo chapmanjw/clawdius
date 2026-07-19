@@ -21,8 +21,10 @@ It runs against an **isolated** user-data/extensions dir, so it never touches yo
 
 From the repo root:
 ```
-node test/clawdius-e2e/harness.ts
+node test/clawdius-e2e/harness.mts
 ```
+(`.mts`, not `.ts`: `test/package.json` is `type: commonjs`, so a `.ts` here is treated as CommonJS and
+rejects the harness's ESM `import`s. The `.mts` extension forces ESM and Node's type-stripping.)
 Options:
 - `--out <dir>` screenshot + report dir (default `.build/clawdius-e2e`)
 - `--grep <substr>` run only scenarios whose name contains `<substr>`
@@ -38,9 +40,11 @@ Each scenario is one boot's worth of driving. `critical` scenarios gate the exit
 | # | Scenario | critical | Replay steps | Assertion / expected |
 |---|---|---|---|---|
 | 1 | `boot-workbench` | yes | launch `.build/electron/Clawdius.exe .` (VSCODE_DEV=1) -> wait `.monaco-workbench` | title matches `Clawdius`; workbench inner text has NO `copilot` |
+| 1b | `workflows-transcript-restore-backcompat` | no | pre-seed workspace storage (`state.vscdb`) with a transcript editor tab serialized under the PRE-rename typeId `workbench.input.clawdiusMissionTranscript`, then boot | a `.clawdius-transcript` pane restores, tab named for the seeded subagent (workflows-rename backward compat). Non-critical: depends on the `sqlite3` CLI + the replicated workspace-storage-id hash (see harness.mts comment) |
 | 2 | `statusbar-pills` | yes | read `.statusbar .statusbar-item` aria-labels | text contains usage + budget + "permission mode" + effort |
 | 3 | `palette-clawdius-commands` | yes | `Ctrl+Shift+P`, type `Clawdius: `, read `.quick-input-list .monaco-list-row` | list contains "Control Center" and "Usage Dashboard" (>=11 commands) |
 | 4 | `control-center` | yes | run cmd "Open Claude Code Control Center" | workbench text shows tabs Usage/Permissions/MCP/Skills/Plugins/Hooks |
+| 4b | `ultracode-workflows-sidebar` | yes | run cmd "Focus on Claude Code Ultracode Workflows View" | rows are workflow runs (never chat), named, real status/completeness spread; NO user-facing "Mission(s)" text; the renamed `clawdius-claude-code-workflows` icon paints |
 | 5 | `usage-dashboard` | yes | run cmd "Open Claude Code Usage Dashboard" | dashboard editor renders (usage text present) |
 | 6 | `context-budget-panel` | no | run cmd "Open Claude Code Context Budget" | opens without throwing |
 | 7 | `permission-picker` | yes | run cmd "Set Default Permission Mode" -> read the quick pick | modes include Plan .. Bypass (4 rows) |
@@ -72,10 +76,17 @@ call.
 
 ## Adding a scenario
 
-In `harness.ts`, add `await scenario('<name>', <critical>, async () => { ...drive...; assert(...); return '<detail>'; });`.
+In `harness.mts`, add `await scenario('<name>', <critical>, async () => { ...drive...; assert(...); return '<detail>'; });`.
 Use `runCommand('<palette title>')`, `setTheme('<label>')`, `statusText()`, and `assert(cond, msg)`.
 A screenshot is captured automatically after each scenario.
 
 ## Last known-good
 
-Post-1.126-merge: **11/11 scenarios pass** (0 critical-fail, 0 warn) on the merged dev build.
+Workflows rename: **12 scenarios pass, 1 skipped** (0 critical-fail, 0 warn) on the real dev build. The
+critical `ultracode-workflows-sidebar` scenario paints 290 workflow runs with the renamed
+container/view/`clawdius-claude-code-workflows` icon and no fork-authored "Mission(s)" chrome. The
+non-critical `workflows-transcript-restore-backcompat` scenario reports SKIPPED when the `sqlite3` CLI is
+absent (it cannot seed pre-rename editor state) - a skip is NOT counted as a pass. The load-bearing
+backward-compat guarantee (the preserved `workbench.input.clawdiusMissionTranscript` serializer typeId and
+the preserved view/container ids) is verified by a serializer round-trip unit test in the
+`claudeWorkflowTranscriptEditor` suite; install the `sqlite3` CLI to also exercise the full restore end to end.

@@ -105,6 +105,27 @@ export function agentInPhase(
 	return agent.phaseIndex !== undefined ? agent.phaseIndex === phase.index : agent.phaseTitle === phase.title;
 }
 
+/** Assign each agent to the FIRST declared phase it belongs to (by {@link agentInPhase}, declared order), returning
+ *  the agents grouped by `phase.index` plus the agents that matched no phase. First-match placement is what makes a
+ *  title-only agent whose title matches DUPLICATE phase titles land in ONE phase, not several - so the reader never
+ *  double-COUNTS it and the tree never double-NESTS it into two rows with the same identity. Shared by both so a
+ *  phase's rendered count can never disagree with the rows beneath it. Phase indices are positional and unique, so
+ *  the grouping map never collapses two phases. */
+export function assignAgentsToPhases<A extends { readonly phaseIndex?: number; readonly phaseTitle?: string }>(
+	agents: readonly A[],
+	phases: readonly { readonly index: number; readonly title: string }[],
+): { readonly byPhaseIndex: ReadonlyMap<number, readonly A[]>; readonly unassigned: readonly A[] } {
+	const byPhaseIndex = new Map<number, A[]>();
+	for (const phase of phases) { byPhaseIndex.set(phase.index, []); }
+	const unassigned: A[] = [];
+	for (const agent of agents) {
+		const phase = phases.find(candidate => agentInPhase(agent, candidate));
+		const bucket = phase ? byPhaseIndex.get(phase.index) : undefined;
+		if (bucket) { bucket.push(agent); } else { unassigned.push(agent); }
+	}
+	return { byPhaseIndex, unassigned };
+}
+
 /** Identities locating one agent's raw on-disk transcript - never a URI. The seam re-derives
  *  `subagents/workflows/wf_<runId>/agent-<agentId>.jsonl` under the resolved root from these three components
  *  before every read, so a restored/serialized ref can never redirect the read elsewhere. */

@@ -229,7 +229,16 @@
 # those identities, with a pre-migration persisted tab still restoring into an honest absent read. Growth is the two
 # new pane/input files + their tests + the tree activation wiring + the pane registration.
 
+# Disposition 2026-07-19 (+0 files, +412 insertions): surface a failed run's errored agents. A run with errored
+# agents shows an errored-count on its row, orders its errored agents before the rest, pre-expands the first phase
+# that contains an error (visible without an extra click), and its errored agent's detail shows the recorded error
+# in full. The same change makes the per-phase agent count and the tree's phase nesting derive from ONE shared
+# first-match assignment, so a count can never disagree with the rows beneath it and an agent whose title matches
+# two like-named phases is placed once (not double-counted nor rendered as two rows with the same identity). Growth
+# is the count/ordering/auto-expand logic + the shared assignment + their unit tests + the failed-run e2e proof; no
+# new files, isolated to the clawdius-owned tree/reader/model.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
 recorded: 2026-07-19
-baseline: 5602 files changed, 45800 insertions(+), 1456122 deletions(-)
+baseline: 5602 files changed, 46212 insertions(+), 1456122 deletions(-)

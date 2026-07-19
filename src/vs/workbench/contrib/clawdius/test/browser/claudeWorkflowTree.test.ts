@@ -24,7 +24,7 @@ import {
 import {
 	buildRunElement, buildTerminalRunChildren, buildWorkflowTreeChildren, computeUniformlyForeign, describeAgent,
 	describePhase, describeRunRow, describeStoryCostParts, describeStoryError, describeStoryResultText,
-	describeStorySummaryText, errorSummary, IWorkflowRenderContext, renderWorkflowsStateMessage,
+	describeStorySummaryText, erroredAgentCount, errorSummary, IWorkflowRenderContext, renderWorkflowsStateMessage,
 	resolveWorkflowsDisplayState, runStatusClass, WorkflowAgentRowRenderer, WorkflowPhaseRowRenderer,
 	WorkflowRunRowRenderer, WorkflowsDisplayState, WorkflowStoryHeightCache, WorkflowStoryLeafRenderer,
 	WorkflowTreeAccessibilityProvider, WorkflowTreeElement, WorkflowTreeIdentityProvider,
@@ -75,6 +75,22 @@ function fakeNode(element: WorkflowTreeElement): ITreeNode<WorkflowTreeElement, 
 }
 
 const fakeHoverDelegate: IHoverDelegate = { showHover: () => undefined, delay: 0 };
+
+/** Renders one run row to a detached container via the real renderer + template lifecycle, for assertions against
+ *  the actual DOM the renderer produces (shared by the ownership-chrome suite and the failure-surfacing suite
+ *  below, rather than duplicated per suite). */
+function renderRunRow(context: IWorkflowRenderContext, run: WorkflowRun): HTMLElement {
+	const renderer = new WorkflowRunRowRenderer(context, fakeHoverDelegate);
+	const container = $('div');
+	const template = renderer.renderTemplate(container);
+	renderer.renderElement(fakeNode({ kind: 'run', run }), 0, template);
+	// `renderTemplate` created an `IconLabel`, a disposable NOT owned by the renderer itself (the real tree owns
+	// each template's lifetime independently and calls `disposeTemplate` when it recycles/discards a row) - so a
+	// direct-render test must dispose the template itself, not just the renderer.
+	renderer.disposeTemplate(template);
+	renderer.dispose();
+	return container;
+}
 
 suite('Clawdius Claude Code Ultracode Workflows - tree identity', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -253,6 +269,21 @@ suite('Clawdius Claude Code Ultracode Workflows - the 0/1/>1 phase-grouping rule
 		}, { analyze: ['a1'], synthesize: [] });
 	});
 
+	test('>1 phases with DUPLICATE titles: a title-only agent nests under the FIRST match once, never double-rendered', () => {
+		// A run may legally declare two phases with the same title. A title-only agent (no phaseIndex) matches BOTH by
+		// title, but the shared first-match assignment nests it under the FIRST only - never two rows with the SAME
+		// identity (which a WorkbenchObjectTree rejects).
+		const run = terminalRun({
+			phases: [phase({ index: 0, title: 'Build' }), phase({ index: 1, title: 'Build' })],
+			agents: [agent({ agentId: 'a1', phaseIndex: undefined, phaseTitle: 'Build' })],
+		});
+		const [, firstBuild, secondBuild] = buildTerminalRunChildren(run);
+		assert.deepStrictEqual({
+			first: [...(firstBuild.children ?? [])].map(c => (c.element as { agent: TerminalWorkflowAgent }).agent.agentId),
+			second: [...(secondBuild.children ?? [])].map(c => (c.element as { agent: TerminalWorkflowAgent }).agent.agentId),
+		}, { first: ['a1'], second: [] });
+	});
+
 	test('>1 phases: an agent matching NO declared phase is never dropped - it hangs after the phase nodes', () => {
 		const run = terminalRun({
 			phases: [phase({ index: 0, title: 'Analyze' }), phase({ index: 1, title: 'Synthesize' })],
@@ -281,6 +312,92 @@ suite('Clawdius Claude Code Ultracode Workflows - the 0/1/>1 phase-grouping rule
 	});
 });
 
+suite('Clawdius Claude Code Ultracode Workflows - failure surfacing', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	function agentIds(children: readonly { element: WorkflowTreeElement }[]): string[] {
+		return children.map(c => (c.element as { agent: TerminalWorkflowAgent }).agent.agentId);
+	}
+
+	test('erroredAgentCount tallies a terminal run\'s errored agents; undefined for a live/unknown-shape run (no agent list exists at all)', () => {
+		const someErrored = terminalRun({ agents: [agent({ agentId: 'a1', state: 'error' }), agent({ agentId: 'a2', state: 'done' }), agent({ agentId: 'a3', state: 'error' })] });
+		const noneErrored = terminalRun({ agents: [agent({ agentId: 'a1', state: 'done' })] });
+		assert.deepStrictEqual([
+			erroredAgentCount(someErrored), erroredAgentCount(noneErrored), erroredAgentCount(liveRun()), erroredAgentCount(unknownRun()),
+		], [2, 0, undefined, undefined]);
+	});
+
+	test('0/1 phase case: errored agents sort first directly under the run, done agents keep their relative order after them (stable)', () => {
+		const run = terminalRun({
+			agents: [agent({ agentId: 'd1', state: 'done' }), agent({ agentId: 'e1', state: 'error' }), agent({ agentId: 'd2', state: 'done' }), agent({ agentId: 'e2', state: 'error' })],
+		});
+		const [, ...agents] = buildTerminalRunChildren(run);
+		assert.deepStrictEqual(agentIds(agents), ['e1', 'e2', 'd1', 'd2']);
+	});
+
+	test('>1 phases: errored agents sort first WITHIN each phase group and among the unassigned leftovers, each preserving relative order (stable)', () => {
+		const run = terminalRun({
+			phases: [phase({ index: 0, title: 'Analyze', errorCount: 1 }), phase({ index: 1, title: 'Synthesize', errorCount: 0 })],
+			agents: [
+				agent({ agentId: 'a-done1', phaseIndex: 0, state: 'done' }),
+				agent({ agentId: 'a-err', phaseIndex: 0, state: 'error' }),
+				agent({ agentId: 'a-done2', phaseIndex: 0, state: 'done' }),
+				agent({ agentId: 'b-done', phaseIndex: 1, state: 'done' }),
+				agent({ agentId: 'orphan-done', state: 'done' }),
+				agent({ agentId: 'orphan-err', state: 'error' }),
+			],
+		});
+		const [, analyze, synthesize, ...unassigned] = buildTerminalRunChildren(run);
+		assert.deepStrictEqual({
+			analyze: agentIds([...(analyze.children ?? [])]),
+			synthesize: agentIds([...(synthesize.children ?? [])]),
+			unassigned: agentIds(unassigned),
+		}, { analyze: ['a-err', 'a-done1', 'a-done2'], synthesize: ['b-done'], unassigned: ['orphan-err', 'orphan-done'] });
+	});
+
+	test('>1 phases: the FIRST error-bearing phase (in declared order) auto-expands (collapsed: false); every other phase is left untouched', () => {
+		const run = terminalRun({
+			phases: [
+				phase({ index: 0, title: 'Analyze', errorCount: 0 }),
+				phase({ index: 1, title: 'Synthesize', errorCount: 2 }),
+				phase({ index: 2, title: 'Report', errorCount: 1 }),
+			],
+			agents: [],
+		});
+		const [, analyze, synthesize, report] = buildTerminalRunChildren(run);
+		assert.deepStrictEqual(
+			{ analyze: analyze.collapsed, synthesize: synthesize.collapsed, report: report.collapsed },
+			{ analyze: undefined, synthesize: false, report: undefined });
+	});
+
+	test('>1 phases: no phase has an error -> nothing auto-expands', () => {
+		const run = terminalRun({
+			phases: [phase({ index: 0, title: 'Analyze', errorCount: 0 }), phase({ index: 1, title: 'Synthesize', errorCount: 0 })],
+			agents: [],
+		});
+		const [, analyze, synthesize] = buildTerminalRunChildren(run);
+		assert.deepStrictEqual([analyze.collapsed, synthesize.collapsed], [undefined, undefined]);
+	});
+
+	test('the run row shows an errored-agent chip only when the tally is > 0, never fabricated for a run with no agent tally', () => {
+		const context: IWorkflowRenderContext = { uniformlyForeign: true, ownedSessionIds: new Set(), badgeOf: () => undefined };
+		const zero = renderRunRow(context, terminalRun({ agents: [agent({ state: 'done' })] }));
+		const two = renderRunRow(context, terminalRun({
+			agents: [agent({ agentId: 'a1', state: 'error' }), agent({ agentId: 'a2', state: 'error' }), agent({ agentId: 'a3', state: 'done' })],
+		}));
+		const live = renderRunRow(context, liveRun());
+		assert.deepStrictEqual({
+			zero: { display: zero.querySelector<HTMLElement>('.errored-chip')!.style.display, text: zero.querySelector('.errored-chip')!.textContent },
+			two: { display: two.querySelector<HTMLElement>('.errored-chip')!.style.display, text: two.querySelector('.errored-chip')!.textContent },
+			live: live.querySelector<HTMLElement>('.errored-chip')!.style.display,
+		}, {
+			zero: { display: 'none', text: '' },
+			two: { display: '', text: '2 errored' },
+			live: 'none',
+		});
+	});
+});
+
 suite('Clawdius Claude Code Ultracode Workflows - ownership-chrome rule', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 	test('computeUniformlyForeign is true only when every run resolves foreign', () => {
@@ -288,19 +405,6 @@ suite('Clawdius Claude Code Ultracode Workflows - ownership-chrome rule', () => 
 		assert.strictEqual(computeUniformlyForeign([terminalRun({ sessionId: 'foreign-1' }), terminalRun({ sessionId: 'foreign-2' })], owned), true);
 		assert.strictEqual(computeUniformlyForeign([terminalRun({ sessionId: 'foreign-1' }), terminalRun({ sessionId: 'owned-session' })], owned), false);
 	});
-
-	function renderRunRow(context: IWorkflowRenderContext, run: WorkflowRun): HTMLElement {
-		const renderer = new WorkflowRunRowRenderer(context, fakeHoverDelegate);
-		const container = $('div');
-		const template = renderer.renderTemplate(container);
-		renderer.renderElement(fakeNode({ kind: 'run', run }), 0, template);
-		// `renderTemplate` created an `IconLabel`, a disposable NOT owned by the renderer itself (the real tree owns
-		// each template's lifetime independently and calls `disposeTemplate` when it recycles/discards a row) - so a
-		// direct-render test must dispose the template itself, not just the renderer.
-		renderer.disposeTemplate(template);
-		renderer.dispose();
-		return container;
-	}
 
 	test('case 1: uniformlyForeign paints NO per-run ownership chrome (the common case)', () => {
 		const context: IWorkflowRenderContext = { uniformlyForeign: true, ownedSessionIds: new Set(), badgeOf: () => undefined };

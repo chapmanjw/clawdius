@@ -824,6 +824,21 @@ suite('Clawdius Claude Code Ultracode Workflows - validated model + root envelop
 		]);
 	});
 
+	test('phase counts assign a title-only agent to the FIRST duplicate-titled phase once, never double-counted', async () => {
+		const fs = makeFs();
+		// Two phases legally share a title; a title-only agent (no phaseIndex) matches BOTH by title but is counted in
+		// the FIRST only - the same first-match assignment the tree nests with, so a count can never exceed the rows.
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', terminalManifest({
+			phases: [{ title: 'Build' }, { title: 'Build' }],
+			workflowProgress: [agentEntry({ agentId: 'a1', phaseIndex: undefined, phaseTitle: 'Build' })],
+		}));
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.deepStrictEqual(run.phases.map(p => ({ index: p.index, title: p.title, agentCount: p.agentCount })), [
+			{ index: 0, title: 'Build', agentCount: 1 },
+			{ index: 1, title: 'Build', agentCount: 0 },
+		]);
+	});
+
 	test('a terminal manifest with no declared agentCount reads it as absent, never derived from its agent list', async () => {
 		const fs = makeFs();
 		// The manifest fixture otherwise declares one valid workflow_agent entry - if the run-level count were still

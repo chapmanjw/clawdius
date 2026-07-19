@@ -101,6 +101,18 @@ suite('Clawdius Claude Code Ultracode Workflows - agent detail render', () => {
 		}, { state: 'error', error: 'boom: script threw' });
 	});
 
+	test('an errored agent with an absent resultPreview reads its error in FULL (never clamped) and its result as a dash - never fabricated', () => {
+		const container = $('div');
+		const fullError = 'boom: script threw\n    at frame (workflow.js:12:3)';
+		store.add(renderAgentDetail(container, agentPayload({ state: 'error', error: fullError, resultPreview: undefined }), () => { }));
+		const field = (key: string) => container.querySelector(`[data-clawdius-detail-field="${key}"] .clawdius-workflow-detail-field-value`)?.textContent;
+		assert.deepStrictEqual({
+			state: container.getAttribute('data-clawdius-detail-state'),
+			error: field('error'),
+			result: field('result'),
+		}, { state: 'error', error: fullError, result: '—' });
+	});
+
 	test('the "Open Transcript" action is withheld when transcriptRef is absent, present only when it is present', () => {
 		const withoutRef = $('div');
 		store.add(renderAgentDetail(withoutRef, agentPayload({ transcriptRef: undefined }), () => { }));

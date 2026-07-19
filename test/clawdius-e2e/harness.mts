@@ -211,6 +211,10 @@ async function setThemeVerified(themeLabel) {
 async function focusWorkflowsView() {
 	await win.waitForSelector('.monaco-workbench', { timeout: 90000 });
 	await win.waitForTimeout(3000);
+	// Dismiss any overlay a preceding scenario left up (e.g. a theme-picker quick input), which would otherwise
+	// block clicks on the tree below and time them out.
+	await win.keyboard.press('Escape');
+	await win.waitForTimeout(150);
 	await runCommand('Focus on Claude Code Ultracode Workflows View');
 	await win.waitForSelector('.clawdius-workflows-tree', { state: 'attached', timeout: 15000 });
 	await win.waitForFunction(
@@ -218,6 +222,14 @@ async function focusWorkflowsView() {
 		undefined, { timeout: 60000 },
 	);
 	await win.waitForTimeout(300);
+	// Reset the virtualized tree to the TOP so every caller finds run rows from a deterministic state (a preceding
+	// scenario may have paged/scrolled it, leaving a stale off-screen handle that then times out on click).
+	const firstRow = await win.$('.clawdius-workflow-run-row');
+	if (firstRow) {
+		await firstRow.click().catch(() => { });
+		await win.keyboard.press('Home');
+		await win.waitForTimeout(250);
+	}
 }
 
 // Expand ONE terminal run's row (click, then ArrowRight, then a twistie-click fallback - the exact sequence
@@ -302,6 +314,42 @@ async function probeAgentPane(pane, agentId) {
 		if ((await f.getAttribute('data-clawdius-detail-field-present')) === 'true') { present++; } else { absent++; }
 	}
 	return { agentId, state, transcriptPresent, present, absent, total: fieldHandles.length, pane };
+}
+
+// --- failure-surfacing driving (errored-chip scan) --------------------------------------------------------------
+
+// Scan the currently-rendered (visible) `.clawdius-workflow-run-row`s for the FIRST one carrying a REAL positive
+// `.errored-chip`. `erroredAgentCount` (claudeWorkflowTree.ts) is `undefined` for a live/unknown-shape run and, for
+// a terminal run, the RENDERER only sets the chip's `textContent` (to "{N} errored") and shows it when the tally is
+// `> 0` - clearing `textContent` to '' and hiding it otherwise. So any non-empty text here is a genuine positive
+// tally, never a fabricated "0 errored". Never scrolls to force a hit: the view orders runs most-actionable-first,
+// so a genuine failure should already be in the first screenful; callers report an empty scan as an honest SKIP.
+async function findErroredChipRun() {
+	// The run list is a VIRTUALIZED tree: an errored run can sit below the initial screenful. Focus the tree, page to
+	// the top, then page DOWN scanning each rendered screenful for the errored-agent chip (bounded). The returned
+	// handle is one currently in the DOM, so the caller can expand it immediately.
+	const first = await win.$('.clawdius-workflow-run-row');
+	if (first) {
+		await first.click();
+		await win.keyboard.press('Home');
+		await win.waitForTimeout(200);
+	}
+	const seen = new Set();
+	for (let page = 0; page < 30; page++) {
+		for (const h of await win.$$('.clawdius-workflow-run-row')) {
+			const runId = await h.getAttribute('data-run-id');
+			if (runId) { seen.add(runId); }
+			const chip = await h.$('.clawdius-workflow-chip.errored-chip');
+			if (!chip) { continue; }
+			const chipText = ((await chip.textContent()) || '').trim();
+			if (chipText) {
+				return { target: h, runId, runKind: await h.getAttribute('data-run-kind'), chipText, scanned: seen.size };
+			}
+		}
+		await win.keyboard.press('PageDown');
+		await win.waitForTimeout(150);
+	}
+	return { target: undefined, runId: undefined, runKind: undefined, chipText: '', scanned: seen.size };
 }
 
 // --- sidebar width driving (theme x width matrix) --------------------------------------------------------------
@@ -821,6 +869,156 @@ try {
 		return `result: run "${firstRunId}" -> ${isNoResult ? '"No result recorded"' : `real result text (${resultText.length} chars)`}; `
 			+ `agent: "${reportProbe.agentId}" state="${reportProbe.state}" fields ${reportProbe.present} present / ${reportProbe.absent} absent (of ${reportProbe.total}); `
 			+ `transcript: ${transcriptDetail}`;
+	});
+
+	// 4e. Failure surfacing: a FAILED/errored terminal run's errored-agent COUNT chip, the ERRORED-FIRST agent
+	// ordering (`erroredAgentsFirst`, claudeWorkflowTree.ts), the auto-expand of the first error-bearing phase
+	// (`collapsed: false` singled out in `buildTerminalRunChildren`), and the errored agent's own detail pane
+	// carrying the AUTHORITATIVE error text (`renderAgentDetail`, claudeWorkflowDetailEditor.ts) - proving the
+	// whole failure-surfacing contract end to end against the real config root (per the corpus scan, 14 terminal
+	// runs here carry >=1 errored agent and 3 are `status: failed`, so a hit is expected, not merely hoped for).
+	await scenario('ultracode-workflows-failure', true, async () => {
+		await focusWorkflowsView();
+
+		const found = await findErroredChipRun();
+		if (!found.target) {
+			return `SKIPPED (scanned ${found.scanned} visible run row(s), none carried a positive errored-chip)`;
+		}
+		assert(/^\d+ errored$/.test(found.chipText), `errored-chip text did not match the expected "{N} errored" shape: "${found.chipText}"`);
+		assert(found.runKind === 'terminal', `run "${found.runId}" carries an errored-chip but data-run-kind="${found.runKind}" (expected "terminal")`);
+		const target = found.target;
+		const runId = found.runId;
+
+		// Expand the RUN only (click + ArrowRight, no phase clicks yet) so any agent rows that show up next are
+		// there SOLELY because of the tree's own auto-expand - never because this harness clicked a phase row.
+		// Scroll the run to the TOP of the (virtualized) tree first: the WorkbenchObjectTree only renders visible
+		// rows, so a run found lower in the list would expand its children BELOW the viewport fold and they would
+		// virtualize out of the DOM - putting the run at the top gives its children room to render in view.
+		await target.evaluate((el: HTMLElement) => el.scrollIntoView({ block: 'start' }));
+		await win.waitForTimeout(300);
+		await target.click();
+		await win.waitForTimeout(150);
+		await win.keyboard.press('ArrowRight');
+		await win.waitForTimeout(400);
+		let storyHandles = await win.$$('.clawdius-workflow-story');
+		if (storyHandles.length === 0) {
+			const twistie = await target.$('.monaco-tl-twistie');
+			if (twistie) {
+				await twistie.click();
+				await win.waitForTimeout(400);
+				storyHandles = await win.$$('.clawdius-workflow-story');
+			}
+		}
+		assert(storyHandles.length > 0, `expanding run "${runId}" did not reveal a .clawdius-workflow-story leaf`);
+
+		// The tree is a VIRTUALIZED WorkbenchObjectTree: a run found lower in the list renders its expanded children
+		// BELOW the viewport fold, so they virtualize OUT of the DOM (a DOM-level scrollIntoView does not move the
+		// tree's own transform-based scroll). Walk the children with the KEYBOARD - the tree auto-scrolls to keep the
+		// focused row visible, rendering each row as focus lands. ArrowDown from the (focused) run walks story ->
+		// agents; a COLLAPSED phase's children are skipped, so any errored agent the walk surfaces proves the error
+		// phase auto-expanded (or is a direct child of a <=1-phase run) - never a manual expand. Collect agent rows in
+		// first-seen DOM order (dedup by id) since only a window is in the DOM at any moment.
+		const orderedAgents: { id: string; state: string }[] = [];
+		const seenAgentIds = new Set<string>();
+		let stepsSinceNew = 0;
+		for (let step = 0; step < 80 && stepsSinceNew < 6; step++) {
+			let foundNew = false;
+			for (const r of await win.$$('.clawdius-workflow-agent-row')) {
+				const id = await r.getAttribute('data-agent-id');
+				if (id && !seenAgentIds.has(id)) {
+					seenAgentIds.add(id);
+					orderedAgents.push({ id, state: (await r.getAttribute('data-agent-state')) || '?' });
+					foundNew = true;
+				}
+			}
+			stepsSinceNew = foundNew ? 0 : stepsSinceNew + 1;
+			await win.keyboard.press('ArrowDown');
+			await win.waitForTimeout(70);
+		}
+		assert(orderedAgents.length > 0, `run "${runId}" carries a positive errored-chip ("${found.chipText}") but a keyboard walk of its expanded children surfaced ZERO .clawdius-workflow-agent-row`);
+		const states = orderedAgents.map(a => a.state);
+		const badStates = states.filter(s => s !== 'error' && s !== 'done');
+		assert(badStates.length === 0, `agent row(s) with an unrecognized data-agent-state: ${JSON.stringify(badStates)}`);
+		const errorIdxs = states.map((s, k) => (s === 'error' ? k : -1)).filter(k => k >= 0);
+		const doneIdxs = states.map((s, k) => (s === 'done' ? k : -1)).filter(k => k >= 0);
+		assert(errorIdxs.length > 0, `run "${runId}" carries a positive errored-chip ("${found.chipText}") but the walk found no data-agent-state="error" row`);
+		const orderingOk = doneIdxs.length === 0 || Math.max(...errorIdxs) < Math.min(...doneIdxs);
+		assert(orderingOk, `errored-first ordering violated for run "${runId}": data-agent-state sequence = ${JSON.stringify(states)}`);
+		const autoExpandDetail = `errored agent surfaced with NO manual phase expand (${states.length} agent row(s) walked)`;
+
+		// Open the FIRST errored agent's detail. Walk back UP (errored agents render first) until its row is in the DOM
+		// again, then activate it while visible. Its pane must read state="error" and carry the AUTHORITATIVE error text.
+		const agentId = orderedAgents.find(a => a.state === 'error')!.id;
+		let firstErrorRow = await win.$(`.clawdius-workflow-agent-row[data-agent-id="${agentId}"]`);
+		for (let up = 0; up < 90 && !firstErrorRow; up++) {
+			await win.keyboard.press('ArrowUp');
+			await win.waitForTimeout(60);
+			firstErrorRow = await win.$(`.clawdius-workflow-agent-row[data-agent-id="${agentId}"]`);
+		}
+		assert(firstErrorRow, `could not bring the first errored agent row "${agentId}" back into view to open its detail`);
+
+		const pane = await activateAndWaitForDetail(firstErrorRow, 'agent');
+		assert(pane, `activating errored agent row "${agentId}" (click, then select+Enter) never attached an agent detail pane`);
+		const probe = await probeAgentPane(pane, agentId);
+		assert(probe.state === 'error', `errored agent "${agentId}" detail pane read data-clawdius-detail-state="${probe.state}" (expected "error")`);
+		const errorField = await pane.$('[data-clawdius-detail-field="error"] .clawdius-workflow-detail-field-value');
+		assert(errorField, `agent "${agentId}" detail pane missing [data-clawdius-detail-field="error"] .clawdius-workflow-detail-field-value`);
+		const errorFieldPresent = await pane.$eval('[data-clawdius-detail-field="error"]', el => el.getAttribute('data-clawdius-detail-field-present'));
+		const errorText = ((await errorField.textContent()) || '').trim();
+		assert(errorFieldPresent === 'true' && errorText.length > 0 && errorText !== '—',
+			`errored agent "${agentId}" error field did not carry the authoritative error text: present="${errorFieldPresent}" text="${errorText.slice(0, 80)}"`);
+		await closeActiveEditorTab();
+
+		return `errored-chip "${found.chipText}" on run "${runId}"; agent-state sequence (${states.length}): ${JSON.stringify(states)} (errored-first ok); `
+			+ `auto-expand: ${autoExpandDetail}; errored agent "${agentId}" detail state="${probe.state}", error field ${errorText.length} chars`;
+	});
+
+	// 4f. Failure surfacing under theme: re-opens the SAME kind of errored-agent detail pane under Clawdius Dark /
+	// Clawdius Light / Clawdius High Contrast and asserts the authoritative error field still renders under each -
+	// screenshot-for-review, non-critical (a render hiccup under one theme should not fail the gate), but the
+	// field's presence is still genuinely asserted per theme, never silently skipped.
+	await scenario('ultracode-workflows-failure-themes', false, async () => {
+		const THEMES = ['Clawdius Dark', 'Clawdius Light', 'Clawdius High Contrast'];
+		const slug = (s2: string) => s2.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+		const rendered: Record<string, string> = {};
+		// Open the errored agent's detail ONCE, then verify the SAME open pane under each theme (a theme change does
+		// NOT close an editor). Re-finding/clicking a virtualized row AFTER a theme switch is what flakes, so we open
+		// the pane first and only switch themes + re-read the (still-open) pane afterwards - no post-switch tree click.
+		await focusWorkflowsView();
+		const found = await findErroredChipRun();
+		if (!found.target) { await setThemeVerified('Clawdius Dark'); return `SKIPPED (no errored-chip run found across ${found.scanned} run(s))`; }
+		await found.target.click();
+		await win.keyboard.press('ArrowRight');
+		await win.waitForTimeout(400);
+		// Walk (keyboard) to the first errored agent - errored-first, so it is near the top of the children.
+		let erroredId: string | null = null;
+		const seenIds = new Set<string>();
+		for (let step = 0; step < 80 && !erroredId; step++) {
+			for (const r of await win.$$('.clawdius-workflow-agent-row')) {
+				const id = await r.getAttribute('data-agent-id');
+				if (id && !seenIds.has(id)) { seenIds.add(id); if ((await r.getAttribute('data-agent-state')) === 'error') { erroredId = id; break; } }
+			}
+			if (!erroredId) { await win.keyboard.press('ArrowDown'); await win.waitForTimeout(70); }
+		}
+		if (!erroredId) { await setThemeVerified('Clawdius Dark'); return `SKIPPED (run "${found.runId}" errored-chip "${found.chipText}" but no errored agent row surfaced)`; }
+		let erroredRow = await win.$(`.clawdius-workflow-agent-row[data-agent-id="${erroredId}"]`);
+		for (let up = 0; up < 90 && !erroredRow; up++) { await win.keyboard.press('ArrowUp'); await win.waitForTimeout(60); erroredRow = await win.$(`.clawdius-workflow-agent-row[data-agent-id="${erroredId}"]`); }
+		if (!erroredRow) { await setThemeVerified('Clawdius Dark'); return `SKIPPED (could not re-reach errored agent "${erroredId}")`; }
+		const openedPane = await activateAndWaitForDetail(erroredRow, 'agent');
+		assert(openedPane, `activating errored agent "${erroredId}" never attached a detail pane`);
+		for (const theme of THEMES) {
+			await setThemeVerified(theme);
+			const actualType = await themeTypeClass();
+			await shot(`failure-${slug(theme)}`);
+			// Re-query the (still-open) pane from the document each iteration - a held handle can go stale across a theme re-render.
+			const errorFieldNode = await win.$('.clawdius-workflow-detail[data-clawdius-detail-kind="agent"] [data-clawdius-detail-field="error"] .clawdius-workflow-detail-field-value');
+			const errorText = errorFieldNode ? ((await errorFieldNode.textContent()) || '').trim() : '';
+			assert(errorText.length > 0 && errorText !== '—', `[${theme}] the errored agent's error field did not render under this theme: "${errorText.slice(0, 60)}"`);
+			rendered[theme] = `rendered (workbench theme-type=${actualType}, error field ${errorText.length} chars)`;
+		}
+		await closeActiveEditorTab();
+		await setThemeVerified('Clawdius Dark');
+		return JSON.stringify(rendered);
 	});
 
 	// 5. Usage dashboard

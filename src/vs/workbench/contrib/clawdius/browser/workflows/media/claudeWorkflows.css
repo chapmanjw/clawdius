@@ -119,6 +119,12 @@
 	color: var(--vscode-editor-background);
 }
 
+/* The run row's errored-agent-count chip - exception-only (see WorkflowRunRowRenderer), shown only for a failed run with one or more errored agents. */
+.clawdius-workflow-chip.errored-chip {
+	background: var(--vscode-errorForeground);
+	color: var(--vscode-editor-background);
+}
+
 /* The LIVE needs-input/completion badge (owned run, real event), distinct from the seam's honesty chips. An empty badge chip (no live signal) collapses to nothing via :empty rather than reserving visible space. */
 .clawdius-workflow-badge:empty {
 	display: none;

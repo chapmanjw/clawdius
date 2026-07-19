@@ -37,7 +37,7 @@ import { defaultButtonStyles } from '../../../../../platform/theme/browser/defau
 import { FleetOwnership } from '../../common/claudeFleetModel.js';
 import { CompletenessState } from '../../common/claudeReaderSeam.js';
 import {
-	agentInPhase, TerminalWorkflowAgent, TerminalWorkflowRun, WorkflowPhase, WorkflowRun, WorkflowRunListResult,
+	assignAgentsToPhases, TerminalWorkflowAgent, TerminalWorkflowRun, WorkflowPhase, WorkflowRun, WorkflowRunListResult,
 } from '../../common/claudeWorkflowModel.js';
 import { formatDuration } from '../usage/claudeUsageData.js';
 import { BadgeSignal } from './claudeWorkflowBadges.js';
@@ -148,6 +148,15 @@ export function runStatusClass(run: WorkflowRun): string {
 	}
 }
 
+/** The run's errored-agent tally: how many of a TERMINAL run's validated agents ended in `state: 'error'`.
+ *  `undefined` for a live/unknown-shape run, which carries no agent list at all - there is no tally to (not) show,
+ *  so the run-row renderer must never fabricate a 0 for it. A terminal run with zero errored agents legitimately
+ *  tallies to 0; whether 0 is shown is the RENDERER's call (exception-only - see `WorkflowRunRowRenderer`), not
+ *  this pure function's. */
+export function erroredAgentCount(run: WorkflowRun): number | undefined {
+	return run.kind === 'terminal' ? run.agents.filter(agent => agent.state === 'error').length : undefined;
+}
+
 /** The story leaf's wrapped-summary text; falls back to an honest "no summary" label rather than an empty node
  *  (a terminal run's `summary` is optional on-disk). */
 export function describeStorySummaryText(run: TerminalWorkflowRun): string {
@@ -226,11 +235,26 @@ function agentLeaf(run: TerminalWorkflowRun, agent: TerminalWorkflowAgent): ITre
 	return { element: { kind: 'agent', run, agent } };
 }
 
-function phaseNode(run: TerminalWorkflowRun, phase: WorkflowPhase, agents: readonly TerminalWorkflowAgent[]): ITreeElement<WorkflowTreeElement> {
-	return {
+/**
+ * Errored-first, STABLE reordering of a group of agents: every `state==='error'` agent before every `state==='done'`
+ * one, with each state's own relative order preserved (a `filter` partition, not a comparator-based sort, so
+ * stability holds independent of the engine's sort implementation). Applied to every place agents are listed -
+ * directly under the run, under a phase, and among the unassigned leftovers - so a run's failure is legible
+ * wherever its agents are shown, never just in the one grouping that happened to be built first.
+ */
+function erroredAgentsFirst(agents: readonly TerminalWorkflowAgent[]): readonly TerminalWorkflowAgent[] {
+	return [...agents.filter(agent => agent.state === 'error'), ...agents.filter(agent => agent.state !== 'error')];
+}
+
+function phaseNode(run: TerminalWorkflowRun, phase: WorkflowPhase, agents: readonly TerminalWorkflowAgent[], collapsed?: boolean): ITreeElement<WorkflowTreeElement> {
+	const node: ITreeElement<WorkflowTreeElement> = {
 		element: { kind: 'phase', run, phase },
 		children: agents.map(agent => agentLeaf(run, agent)),
 	};
+	// `collapsed` is left OFF the returned element (not merely `undefined`) for every phase but the one auto-expand
+	// singles out - an explicit `collapsed: undefined` would still touch the field; the tree's own default-collapse
+	// option must decide for every other phase, untouched.
+	return collapsed === undefined ? node : { ...node, collapsed };
 }
 
 /**
@@ -238,27 +262,29 @@ function phaseNode(run: TerminalWorkflowRun, phase: WorkflowPhase, agents: reado
  * `phases.length > 1` (the 0/1/>1 rule). An agent that matches no declared phase (a gap the seam already tolerates -
  * see `claudeWorkflowModel.ts`) is never dropped: it still hangs directly under the run, after the phase nodes,
  * rather than silently vanishing from the tree.
+ *
+ * Two failure-surfacing rules layer on top, applied in both the phase-grouped and the direct-under-run path:
+ * agents within any one group are reordered errored-first (`erroredAgentsFirst`, stable), and when the run has
+ * more than one phase, the FIRST phase whose `errorCount > 0` (in the manifest's own declared order) renders
+ * pre-expanded (`collapsed: false`) so a failure is visible without an extra click - every other phase is left
+ * untouched, and a run with no errored phase auto-expands nothing.
  */
 export function buildTerminalRunChildren(run: TerminalWorkflowRun): ITreeElement<WorkflowTreeElement>[] {
 	const story: ITreeElement<WorkflowTreeElement> = { element: { kind: 'story', run }, collapsible: false };
 	if (run.phases.length <= 1) {
-		return [story, ...run.agents.map(agent => agentLeaf(run, agent))];
+		return [story, ...erroredAgentsFirst(run.agents).map(agent => agentLeaf(run, agent))];
 	}
-	const assigned = new Set<string>();
+	// The SAME first-match assignment the reader uses to derive `phase.agentCount`, so a phase row's count can never
+	// contradict the agent rows nested beneath it AND an agent whose title-only membership matches DUPLICATE phase
+	// titles is nested ONCE (never two rows with the same identity), not under every same-titled phase.
+	const { byPhaseIndex, unassigned } = assignAgentsToPhases(run.agents, run.phases);
+	const firstErrorPhaseIndex = run.phases.find(candidate => candidate.errorCount > 0)?.index;
 	const phaseNodes = run.phases.map(phase => {
-		const agentsInPhase = run.agents.filter(agent => {
-			// The SAME phase-membership predicate the reader uses to derive `phase.agentCount`, so a phase row's count
-			// can never contradict the agent rows nested beneath it.
-			const matches = agentInPhase(agent, phase);
-			if (matches) {
-				assigned.add(agent.agentId);
-			}
-			return matches;
-		});
-		return phaseNode(run, phase, agentsInPhase);
+		const agentsInPhase = byPhaseIndex.get(phase.index) ?? [];
+		const collapsed = phase.index === firstErrorPhaseIndex ? false : undefined;
+		return phaseNode(run, phase, erroredAgentsFirst(agentsInPhase), collapsed);
 	});
-	const unassigned = run.agents.filter(agent => !assigned.has(agent.agentId));
-	return [story, ...phaseNodes, ...unassigned.map(agent => agentLeaf(run, agent))];
+	return [story, ...phaseNodes, ...erroredAgentsFirst(unassigned).map(agent => agentLeaf(run, agent))];
 }
 
 /** One run's full tree element (its children per {@link buildTerminalRunChildren}, empty for a live/unknown-shape
@@ -366,6 +392,7 @@ interface IWorkflowRunTemplate {
 	readonly icon: HTMLElement;
 	readonly iconLabel: IconLabel;
 	readonly badge: HTMLElement;
+	readonly erroredChip: HTMLElement;
 	readonly completenessChip: HTMLElement;
 	readonly ownershipChip: HTMLElement;
 }
@@ -376,7 +403,10 @@ interface IWorkflowRunTemplate {
  * lives here: the completeness chip is exception-only (shown whenever the run did not read whole, independent of
  * ownership); the ownership chip is exception-only in the OTHER direction (shown only when ownership can differ
  * across the view, i.e. NOT `context.uniformlyForeign` - the common uniformly-foreign case paints no per-run
- * ownership chrome at all, deferring to the view's single surface label).
+ * ownership chrome at all, deferring to the view's single surface label). The errored-agent chip is exception-only
+ * the same way the completeness chip is: shown only when {@link erroredAgentCount} is defined AND greater than 0
+ * (a `completed` run, or a `failed` run whose agents all happened to end `done`, paints no such chip - it is never
+ * fabricated for a run with no agent tally, i.e. live/unknown-shape).
  */
 export class WorkflowRunRowRenderer extends Disposable implements ITreeRenderer<WorkflowTreeElement, FuzzyScore, IWorkflowRunTemplate> {
 	readonly templateId = WorkflowTreeTemplateId.Run;
@@ -394,9 +424,10 @@ export class WorkflowRunRowRenderer extends Disposable implements ITreeRenderer<
 		const iconLabel = new IconLabel(container, { hoverDelegate: this.hoverDelegate });
 		const chips = append(iconLabel.element, $('.clawdius-workflow-chips'));
 		const badge = append(chips, $('.clawdius-workflow-chip.clawdius-workflow-badge'));
+		const erroredChip = append(chips, $('.clawdius-workflow-chip.errored-chip'));
 		const completenessChip = append(chips, $('.clawdius-workflow-chip.completeness-chip'));
 		const ownershipChip = append(chips, $('.clawdius-workflow-chip.ownership-chip'));
-		return { container, icon, iconLabel, badge, completenessChip, ownershipChip };
+		return { container, icon, iconLabel, badge, erroredChip, completenessChip, ownershipChip };
 	}
 
 	renderElement(node: ITreeNode<WorkflowTreeElement, FuzzyScore>, _index: number, template: IWorkflowRunTemplate): void {
@@ -429,6 +460,18 @@ export class WorkflowRunRowRenderer extends Disposable implements ITreeRenderer<
 			template.badge.setAttribute('data-badge-kind', badgeSignal.kind);
 		} else {
 			template.badge.removeAttribute('data-badge-kind');
+		}
+
+		// Exception-only, the same shape as the completeness chip below: shown only for a run whose agent tally is
+		// KNOWN (terminal) and non-zero - never fabricated for a live/unknown-shape run (no tally exists) or painted
+		// for a run whose agents all happened to end `done`.
+		const errored = erroredAgentCount(run);
+		if (errored !== undefined && errored > 0) {
+			template.erroredChip.textContent = localize('clawdius.workflows.run.erroredCount', "{0} errored", errored);
+			template.erroredChip.style.display = '';
+		} else {
+			template.erroredChip.textContent = '';
+			template.erroredChip.style.display = 'none';
 		}
 
 		// Exception-only: shown whenever the run did NOT read whole, independent of ownership.

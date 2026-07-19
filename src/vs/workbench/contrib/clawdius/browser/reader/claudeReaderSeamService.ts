@@ -27,7 +27,7 @@ import {
 } from '../../common/claudeReaderSeam.js';
 import { FleetRun, FleetSubagent, FleetTranscriptSlice, MissionAgent, MissionAgentList, MissionPhase, MissionProgressEntry, MissionProgressKind, MissionRun, MissionStatus } from '../../common/claudeFleetModel.js';
 import {
-	agentInPhase, LiveWorkflowResult, LiveWorkflowRun, TerminalWorkflowAgent, TerminalWorkflowRun, UnrecognizedWorkflowRun,
+	assignAgentsToPhases, LiveWorkflowResult, LiveWorkflowRun, TerminalWorkflowAgent, TerminalWorkflowRun, UnrecognizedWorkflowRun,
 	WorkflowPhase, WorkflowRun, WorkflowRunListResult, WorkflowTranscriptRef, workflowRunIdentity,
 } from '../../common/claudeWorkflowModel.js';
 import { encodeProjectDir } from '../clawdiusConfigStore.js';
@@ -935,8 +935,12 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 			});
 		}
 
+		// First-match assignment (shared with the tree's nesting via `assignAgentsToPhases`): an agent whose title-only
+		// membership matches DUPLICATE phase titles is counted ONCE, in its first phase, never double-counted - and the
+		// tree nests it the same way, so a phase's count never disagrees with the rows beneath it.
+		const { byPhaseIndex } = assignAgentsToPhases(agents, rawPhases);
 		const phases: WorkflowPhase[] = rawPhases.map(p => {
-			const members = agents.filter(a => agentInPhase(a, p));
+			const members = byPhaseIndex.get(p.index) ?? [];
 			return { index: p.index, title: p.title, detail: p.detail, agentCount: members.length, errorCount: members.filter(a => a.state === 'error').length };
 		});
 

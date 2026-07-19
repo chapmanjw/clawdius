@@ -145,6 +145,16 @@
 	letter-spacing: 0.02em;
 }
 
+/* The graduated run's transient post-graduation highlight, skipped entirely under reduced motion - see WorkflowRunRowRenderer / announceGraduations. */
+.clawdius-workflow-run-row.clawdius-workflow-graduated {
+	animation: clawdius-workflow-graduation-flash 1.5s ease-out;
+}
+
+@keyframes clawdius-workflow-graduation-flash {
+	0% { background-color: var(--vscode-list-focusOutline, var(--vscode-charts-blue)); }
+	100% { background-color: transparent; }
+}
+
 /* --- terminal story leaf: variable-height, measured --- */
 
 .clawdius-workflow-story {
@@ -183,6 +193,62 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 	color: var(--vscode-errorForeground);
+}
+
+/* --- live-progress leaf: variable-height, measured (the live analogue of the story leaf) --- */
+
+.clawdius-workflow-live-progress {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 4px 12px 8px 8px;
+	line-height: 18px;
+}
+
+.clawdius-workflow-live-ratio {
+	white-space: normal;
+	word-break: break-word;
+}
+
+.clawdius-workflow-live-running {
+	font-size: 11px;
+	opacity: 0.8;
+}
+
+.clawdius-workflow-live-activity {
+	font-size: 11px;
+	opacity: 0.7;
+	font-style: italic;
+}
+
+.clawdius-workflow-live-degraded {
+	font-size: 11px;
+	color: var(--vscode-editorWarning-foreground);
+}
+
+.clawdius-workflow-live-landed-count {
+	font-size: 11px;
+	opacity: 0.8;
+	margin-top: 2px;
+}
+
+.clawdius-workflow-live-landed-list {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.clawdius-workflow-live-landed-item {
+	font-size: 11px;
+	opacity: 0.85;
+	white-space: normal;
+	word-break: break-word;
+}
+
+.clawdius-workflow-live-landed-more {
+	font-size: 11px;
+	opacity: 0.6;
+	font-style: italic;
 }
 
 /* --- phase row --- */

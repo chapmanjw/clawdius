@@ -238,7 +238,21 @@
 # is the count/ordering/auto-expand logic + the shared assignment + their unit tests + the failed-run e2e proof; no
 # new files, isolated to the clawdius-owned tree/reader/model.
 
+# Disposition 2026-07-19 (+2 files, +1660 insertions): watch workflow runs live and graduate them in place. An
+# observation service watches the config root's projects tree, coalesces bursts of file activity, and re-reads the
+# enumeration under a monotonic generation guard, emitting one immutable snapshot the view renders from instead of
+# reading only when it is opened. A run still in flight (a journal with no manifest beside it yet) shows a live row -
+# a progress bar, an honest "agents seen so far have a result" ratio whose denominator is the distinct agents seen
+# (never a fabricated total/percentage, never a fabricated "paused"), the landed results, and its last-write time -
+# and graduates to its terminal row IN PLACE when the manifest lands: the live and terminal representations never
+# coexist as two rows, expansion/focus are preserved, and the change is announced for accessibility; a rewritten
+# terminal manifest re-renders, a torn one stays live. The +2 files are the new observation service and its unit
+# suite; the rest is the live renderer, the in-place graduation reconciliation, a seen-count model field, and the
+# live/graduation real-build proof. Isolated to the clawdius-owned tree/reader/model/view; no upstream file grows.
+# As with the entries above, the recorded baseline moves by more than the code delta because this block's own
+# comment lines also count toward the fork surface.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
 recorded: 2026-07-19
-baseline: 5602 files changed, 46212 insertions(+), 1456122 deletions(-)
+baseline: 5604 files changed, 47866 insertions(+), 1456122 deletions(-)

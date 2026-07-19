@@ -24,8 +24,8 @@
 import { _electron as electron } from '@playwright/test';
 import { execFileSync } from 'child_process';
 import { createHash } from 'crypto';
-import { mkdtempSync, mkdirSync, statSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
+import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
+import { homedir, tmpdir } from 'os';
 import { join } from 'path';
 
 const REPO = process.cwd();
@@ -502,6 +502,144 @@ function seedPreRenameTranscriptEditorState(userDataDir, repoPath) {
 	} catch (err) {
 		return { seeded: false, workspaceId: undefined, error: (err && err.message) || String(err) };
 	}
+}
+
+// --- live/graduation donor + sandbox driving (real-build live-watch + in-place-graduation proof) ------------
+//
+// The Workflows sidebar's live-watch/graduation behavior can only be proven against a run whose journal exists
+// on disk with no sibling manifest yet (live), followed by that manifest landing (graduation). Rather than
+// hand-authoring a synthetic journal/manifest pair - which would prove the harness's own fixture shape, not a
+// real one - this clones a REAL run's bytes (journal + agent sidecars + the manifest, kept in memory) out of the
+// REAL `~/.claude/projects` corpus into an ISOLATED temp sandbox, then points a SECOND Electron instance's
+// `USERPROFILE`/`HOME` at that sandbox so `IPathService.userHome()` (and therefore the reader's resolved config
+// root) sees ONLY the sandbox tree - never the real user corpus, and the real corpus is never written to.
+
+/** A journal record recognized the same way `toJournalRecord` (claudeReaderSeamService.ts) recognizes one: a
+ *  string `type`, an `agentId` that is either absent or a string, and - for `started`/`result` records
+ *  specifically - a non-empty `agentId` (the record's whole point). Anything else is not a record this function
+ *  counts, mirroring the reader's own drop rules exactly rather than approximating them. */
+function parseJournalRecords(text) {
+	const records = [];
+	for (const line of text.split('\n')) {
+		if (!line.trim()) { continue; }
+		let parsed;
+		try { parsed = JSON.parse(line); } catch { continue; }
+		if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) { continue; }
+		const type = typeof parsed.type === 'string' ? parsed.type : undefined;
+		if (type === undefined) { continue; }
+		const agentId = parsed.agentId;
+		if (agentId !== undefined && typeof agentId !== 'string') { continue; }
+		if ((type === 'started' || type === 'result') && !agentId) { continue; }
+		records.push({ type, agentId, result: type === 'result' ? parsed.result : undefined });
+	}
+	return records;
+}
+
+/** Bound `text` to at most `max` characters, matching `boundedPreview` in claudeReaderSeamService.ts exactly -
+ *  the RESULT_PREVIEW_MAX_CHARS the live-progress leaf's landed-result previews are bounded to. */
+function boundedPreview(text, max) {
+	return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+/** Mirrors `LIVE_PROGRESS_MAX_LANDED_PREVIEWS` (claudeWorkflowTree.ts): the render bound on how many
+ *  landed-result previews the live-progress leaf shows directly, independent of how many actually landed. */
+const LIVE_PROGRESS_MAX_LANDED_PREVIEWS = 5;
+
+/** The exact `{startedCount, resultCount, seenCount, landedResults}` shape `workflowFromJournal` computes off a
+ *  journal's raw text (claudeReaderSeamService.ts) - reproduced here so this harness asserts the live-progress leaf
+ *  against the SAME algorithm the app itself runs, not a re-approximation that could quietly drift from it.
+ *  `seenCount` is the UNION of the started/result agent-id sets (never just `startedCount`) - the honest "agents
+ *  seen so far" denominator the ratio caption and the ProgressBar's total are both built from, so a result whose
+ *  own `started` record was torn or otherwise dropped still counts as "seen" instead of inverting the ratio. */
+function computeLiveProgress(journalText) {
+	const isAgentId = v => typeof v === 'string' && /^[A-Za-z0-9_-]+$/.test(v);
+	const records = parseJournalRecords(journalText);
+	const startedIds = new Set(records.filter(r => r.type === 'started' && isAgentId(r.agentId)).map(r => r.agentId));
+	const resultRecords = records.filter(r => r.type === 'result' && isAgentId(r.agentId));
+	const resultIds = new Set(resultRecords.map(r => r.agentId));
+	const seenIds = new Set([...startedIds, ...resultIds]);
+	const landedByAgent = new Map();
+	for (const r of resultRecords) { landedByAgent.set(r.agentId, r.result); }
+	const landedResults = [...landedByAgent].map(([agentId, result]) => ({
+		agentId,
+		preview: typeof result === 'string' ? boundedPreview(result, 280) : 'Result landed',
+	})).sort((a, b) => a.agentId.localeCompare(b.agentId));
+	return { startedCount: startedIds.size, resultCount: resultIds.size, seenCount: seenIds.size, landedResults };
+}
+
+/** Scan the REAL `~/.claude/projects` corpus (read-only; NEVER written to) for a DONOR: a session whose
+ *  `workflows/<runId>.json` manifest has a sibling `subagents/workflows/<runId>/journal.jsonl` - the on-disk
+ *  pair `enumerateWorkflows` (claudeReaderSeamService.ts) keys a workflow run on. Mirrors that function's own
+ *  directory walk (`projects/<enc>/<session>/`, skipping a `memory` session dir) and the manifest/journal
+ *  filename shape (`RUN_ID_RE` = `^wf_[a-z0-9-]{6,}$`) exactly, so a candidate this finds is one the real reader
+ *  would also recognize. Prefers a donor whose journal carries >=1 `started` and >=1 `result` record (so the
+ *  live progress this scenario asserts against shows a genuine ratio and >=1 landed-result preview, never a
+ *  fabricated one), tie-broken by the smallest combined manifest+journal size so the clone + graduation-write
+ *  stays fast. Returns `undefined` when the corpus has no manifest/journal pair at all - the scenario's own SKIP
+ *  condition, never a false pass. */
+function findWorkflowDonor() {
+	const projectsRoot = join(homedir(), '.claude', 'projects');
+	const isDir = p => { try { return statSync(p).isDirectory(); } catch { return false; } };
+	let projectDirs;
+	try { projectDirs = readdirSync(projectsRoot).filter(d => isDir(join(projectsRoot, d))); } catch { return undefined; }
+
+	const candidates = [];
+	for (const enc of projectDirs) {
+		const projectDir = join(projectsRoot, enc);
+		let sessionDirs;
+		try { sessionDirs = readdirSync(projectDir).filter(d => d !== 'memory' && isDir(join(projectDir, d))); } catch { continue; }
+		for (const session of sessionDirs) {
+			const sessionDir = join(projectDir, session);
+			const workflowsDir = join(sessionDir, 'workflows');
+			let manifestNames;
+			try { manifestNames = readdirSync(workflowsDir).filter(f => f.endsWith('.json') && statSync(join(workflowsDir, f)).isFile()); } catch { continue; }
+			for (const manifestName of manifestNames) {
+				const runId = manifestName.slice(0, -'.json'.length);
+				if (!/^wf_[a-z0-9-]{6,}$/.test(runId)) { continue; }
+				const journalDir = join(sessionDir, 'subagents', 'workflows', runId);
+				const journalFile = join(journalDir, 'journal.jsonl');
+				if (!existsSync(journalFile)) { continue; }
+				let journalText;
+				try { journalText = readFileSync(journalFile, 'utf8'); } catch { continue; }
+				const liveProgress = computeLiveProgress(journalText);
+				let sidecarNames = [];
+				try { sidecarNames = readdirSync(journalDir).filter(f => /^agent-[A-Za-z0-9_-]+\.(jsonl|meta\.json)$/.test(f)); } catch { /* none */ }
+				const manifestFile = join(workflowsDir, manifestName);
+				let manifestSize = 0, journalSize = 0;
+				try { manifestSize = statSync(manifestFile).size; } catch { /* best-effort size, only used to rank candidates */ }
+				try { journalSize = statSync(journalFile).size; } catch { /* best-effort size, only used to rank candidates */ }
+				candidates.push({ enc, session, runId, journalDir, journalFile, sidecarNames, manifestFile, liveProgress, manifestSize, journalSize });
+			}
+		}
+	}
+
+	const qualifying = candidates.filter(c => c.liveProgress.startedCount >= 1 && c.liveProgress.resultCount >= 1);
+	const pool = qualifying.length > 0 ? qualifying : candidates;
+	if (pool.length === 0) { return undefined; }
+	pool.sort((a, b) => (a.manifestSize + a.journalSize) - (b.manifestSize + b.journalSize));
+	const chosen = pool[0];
+	return { ...chosen, manifestBytes: readFileSync(chosen.manifestFile) };
+}
+
+/** Expand a live run's row (click, ArrowRight, twistie fallback - the same sequence {@link expandRunAndGatherAgents}
+ *  uses for a terminal run's story leaf) and return its `.clawdius-workflow-live-progress` leaf handle, or
+ *  undefined if expansion never revealed one. */
+async function expandLiveRunProgress(target) {
+	await target.scrollIntoViewIfNeeded();
+	await target.click();
+	await win.waitForTimeout(150);
+	await win.keyboard.press('ArrowRight');
+	await win.waitForTimeout(400);
+	let progressHandles = await win.$$('.clawdius-workflow-live-progress');
+	if (progressHandles.length === 0) {
+		const twistie = await target.$('.monaco-tl-twistie');
+		if (twistie) {
+			await twistie.click();
+			await win.waitForTimeout(400);
+			progressHandles = await win.$$('.clawdius-workflow-live-progress');
+		}
+	}
+	return progressHandles[0];
 }
 
 // --- launch ----------------------------------------------------------------------------------
@@ -1187,6 +1325,150 @@ try {
 
 		await setThemeVerified('Clawdius Dark');
 		return JSON.stringify(rendered);
+	});
+
+	// 9d. LIVE run + GRADUATION, against the REAL built app: clones a REAL run's journal + agent sidecars (see
+	// `findWorkflowDonor` above) into an isolated sandbox with NO sibling manifest, points a SECOND Electron
+	// instance's `USERPROFILE`/`HOME` at that sandbox ONLY (the real `~/.claude` is never touched), and proves -
+	// against the actual `.build/electron/Clawdius.exe`, not a unit test - that a run whose journal has no
+	// sibling manifest renders LIVE with honest progress (a real started/result ratio phrased "seen so far", a
+	// progress bar, landed-result previews, a live status icon, and no fabricated total/percentage or "paused"),
+	// then GRADUATES IN PLACE the moment the manifest lands - one row per run identity throughout, never a
+	// live/terminal pair - across Dark/Light/High-Contrast. Leaves the main `win`/first app untouched: it
+	// swaps the module's `win` to the second window only for the scope of this scenario and restores it after.
+	await scenario('ultracode-workflows-live-graduation', true, async () => {
+		const donor = findWorkflowDonor();
+		if (!donor) {
+			return 'SKIPPED (no run under the real ~/.claude/projects carries BOTH a workflows/<runId>.json manifest '
+				+ 'and a subagents/workflows/<runId>/journal.jsonl - nothing to clone a live/graduation transition from on this machine)';
+		}
+
+		const sandbox = mkdtempSync(join(tmpdir(), 'clawdius-e2e-sandbox-'));
+		const prof2 = mkdtempSync(join(tmpdir(), 'clawdius-e2e-prof2-'));
+		const exts2 = mkdtempSync(join(tmpdir(), 'clawdius-e2e-exts2-'));
+		const syntheticSession = `${donor.session}-e2e-${process.pid}`;
+		const savedWin = win;
+		let app2;
+		try {
+			// Clone the LIVE fixture: the journal + every agent sidecar, landing under a FRESH synthetic session
+			// so the real runId can be reused with no collision. The manifest's dir is created (so it is already
+			// inside the recursively-watched tree below) but stays EMPTY - a journal with no sibling manifest is
+			// the live shape by construction, never hand-authored.
+			const journalDestDir = join(sandbox, '.claude', 'projects', donor.enc, syntheticSession, 'subagents', 'workflows', donor.runId);
+			mkdirSync(journalDestDir, { recursive: true });
+			copyFileSync(donor.journalFile, join(journalDestDir, 'journal.jsonl'));
+			for (const name of donor.sidecarNames) {
+				copyFileSync(join(donor.journalDir, name), join(journalDestDir, name));
+			}
+			const manifestDestDir = join(sandbox, '.claude', 'projects', donor.enc, syntheticSession, 'workflows');
+			mkdirSync(manifestDestDir, { recursive: true });
+			const manifestDestFile = join(manifestDestDir, `${donor.runId}.json`);
+
+			app2 = await electron.launch({
+				executablePath: join(REPO, '.build', 'electron', 'Clawdius.exe'),
+				cwd: REPO,
+				args: ['.', '--disable-extension=vscode.vscode-api-tests',
+					`--user-data-dir=${prof2}`, `--extensions-dir=${exts2}`,
+					'--no-sandbox', '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust'],
+				env: { ...process.env, VSCODE_DEV: '1', VSCODE_CLI: '1', NODE_ENV: 'development', USERPROFILE: sandbox, HOME: sandbox },
+				timeout: 120000,
+			});
+			win = await app2.firstWindow();
+
+			await win.waitForSelector('.monaco-workbench', { timeout: 90000 });
+			await win.waitForTimeout(6000);
+			await focusWorkflowsView();
+
+			// --- LIVE: exactly one row, honest progress, no fabrication ------------------------------------
+			const rowSelector = `.clawdius-workflow-run-row[data-run-id="${donor.runId}"][data-session-id="${syntheticSession}"]`;
+			await win.waitForSelector(rowSelector, { state: 'attached', timeout: 20000 });
+			let rowsForIdentity = await win.$$(rowSelector);
+			assert(rowsForIdentity.length === 1, `expected exactly one row for the cloned run identity while live, found ${rowsForIdentity.length}`);
+			const liveRow = rowsForIdentity[0];
+			const liveKind = await liveRow.getAttribute('data-run-kind');
+			assert(liveKind === 'live', `cloned run "${donor.runId}" rendered data-run-kind="${liveKind}" (expected "live") - a manifest-less journal did not read as a live run`);
+			const liveIconClass = await liveRow.$eval('.clawdius-workflow-status-icon', el => el.className);
+			assert(/\bstatus-live\b/.test(liveIconClass), `live run's status icon carries no "status-live" class: "${liveIconClass}"`);
+
+			const progress = await expandLiveRunProgress(liveRow);
+			assert(progress, `expanding live run "${donor.runId}" did not reveal a .clawdius-workflow-live-progress leaf`);
+			const progressBar = await progress.$('.monaco-progress-container');
+			assert(progressBar, 'live-progress leaf missing a .monaco-progress-container progress bar');
+
+			const ratioText = ((await progress.$eval('.clawdius-workflow-live-ratio', el => el.textContent || '')) || '').trim();
+			const expectedRatio = donor.liveProgress.seenCount > 0
+				? `${donor.liveProgress.resultCount} of ${donor.liveProgress.seenCount} agents seen so far have a result`
+				: 'No agents observed yet';
+			assert(ratioText === expectedRatio, `live ratio caption read "${ratioText}", expected "${expectedRatio}"`);
+
+			const landedHandles = await progress.$$('.clawdius-workflow-live-landed-item');
+			const expectedLandedShown = Math.min(donor.liveProgress.landedResults.length, LIVE_PROGRESS_MAX_LANDED_PREVIEWS);
+			assert(landedHandles.length === expectedLandedShown, `live-progress leaf showed ${landedHandles.length} landed-result preview(s), expected ${expectedLandedShown}`);
+			const landedTexts = [];
+			for (const h of landedHandles) { landedTexts.push(((await h.textContent()) || '').trim()); }
+			for (let i = 0; i < landedTexts.length; i++) {
+				assert(landedTexts[i] === donor.liveProgress.landedResults[i].preview,
+					`landed-result preview #${i} read "${landedTexts[i].slice(0, 60)}", expected "${donor.liveProgress.landedResults[i].preview.slice(0, 60)}"`);
+			}
+
+			// `textContent` (not `innerText`) deliberately - this must catch a fabrication even if some future
+			// change rendered it into a hidden node, not just what happens to be visible right now.
+			const rowText = await liveRow.evaluate(el => el.textContent || '');
+			const progressText = await progress.evaluate(el => el.textContent || '');
+			const combined = `${rowText}\n${progressText}`;
+			assert(!/\d+\s*%/.test(combined), `live row/progress text fabricated a percentage: ${JSON.stringify(combined.slice(0, 300))}`);
+			assert(!/\d+\s*\/\s*\d+/.test(combined), `live row/progress text fabricated a "N/total" fraction: ${JSON.stringify(combined.slice(0, 300))}`);
+			assert(!/\bpaused\b/i.test(combined), `live row/progress text fabricated a "paused" state: ${JSON.stringify(combined.slice(0, 300))}`);
+
+			const liveDetail = `live: data-run-kind="live", icon has "status-live"; progress bar present; ratio="${ratioText}"; `
+				+ `${landedHandles.length} landed preview(s) shown of ${donor.liveProgress.landedResults.length} total; `
+				+ `no %, no "N/total", no "paused"; exactly 1 row for the identity`;
+
+			// --- GRADUATION: write the manifest, poll past the 250ms coalesce, then re-check the SAME identity ---
+			writeFileSync(manifestDestFile, donor.manifestBytes);
+			await win.waitForFunction((sel) => {
+				const row = document.querySelector(sel);
+				return !!row && row.getAttribute('data-run-kind') === 'terminal';
+			}, rowSelector, { timeout: 20000, polling: 300 });
+
+			rowsForIdentity = await win.$$(rowSelector);
+			assert(rowsForIdentity.length === 1, `expected exactly one row for the run identity AFTER graduation (live and terminal must never coexist as two rows), found ${rowsForIdentity.length}`);
+			const terminalRow = rowsForIdentity[0];
+			const terminalKind = await terminalRow.getAttribute('data-run-kind');
+			assert(terminalKind === 'terminal', `run "${donor.runId}" read data-run-kind="${terminalKind}" after the manifest landed (expected "terminal")`);
+			const terminalIconClass = await terminalRow.$eval('.clawdius-workflow-status-icon', el => el.className);
+			const statusMatch = terminalIconClass.match(/\bstatus-(completed|failed)\b/);
+			assert(statusMatch, `graduated run's status icon carries neither "status-completed" nor "status-failed": "${terminalIconClass}"`);
+
+			const graduationDetail = `graduation: data-run-kind "live" -> "terminal", status icon "status-live" -> "status-${statusMatch[1]}"; `
+				+ `exactly 1 row for the identity after graduation`;
+
+			// --- THEME MATRIX: the graduated row survives Dark / Light / High Contrast --------------------
+			const THEME_MATRIX = ['Clawdius Dark', 'Clawdius Light', 'Clawdius High Contrast'];
+			const themeResults = {};
+			for (const theme of THEME_MATRIX) {
+				await setThemeVerified(theme);
+				await focusWorkflowsView();
+				const rows = await win.$$(rowSelector);
+				assert(rows.length === 1, `[${theme}] expected exactly 1 row for the run identity, found ${rows.length}`);
+				const kind = await rows[0].getAttribute('data-run-kind');
+				assert(kind === 'terminal', `[${theme}] graduated run row read data-run-kind="${kind}" (expected "terminal")`);
+				const actualType = await themeTypeClass();
+				await shot(`live-graduation-${theme.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`);
+				themeResults[theme] = `present, kind=terminal, workbench theme-type=${actualType}`;
+			}
+			await setThemeVerified('Clawdius Dark');
+
+			return `donor: enc="${donor.enc}" session="${donor.session}" runId="${donor.runId}" `
+				+ `(journal: ${donor.liveProgress.startedCount} started / ${donor.liveProgress.resultCount} result / ${donor.liveProgress.landedResults.length} landed); `
+				+ `${liveDetail}; ${graduationDetail}; themes=${JSON.stringify(themeResults)}`;
+		} finally {
+			if (app2) { try { await app2.close(); } catch { /* best-effort cleanup */ } }
+			try { rmSync(sandbox, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+			try { rmSync(prof2, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+			try { rmSync(exts2, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+			win = savedWin;
+		}
 	});
 
 	// 10-11. Themes - switch + screenshot the status bar to eyeball the safety-pill contrast fix

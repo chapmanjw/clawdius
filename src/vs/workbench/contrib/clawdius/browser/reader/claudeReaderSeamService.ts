@@ -970,6 +970,10 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		const { records, sawTorn } = await this.readJournal(journal, true); // manifest-less: in flight, an unterminated tail is the live tail
 		const startedIds = new Set(records.filter(r => r.type === 'started' && isAgentId(r.agentId)).map(r => r.agentId as string));
 		const resultRecords = records.filter(r => r.type === 'result' && isAgentId(r.agentId));
+		const resultIds = new Set(resultRecords.map(r => r.agentId as string));
+		// The union, not either set alone: a `result` whose own `started` line was torn or otherwise dropped must
+		// still count as an agent "seen" - see `LiveWorkflowRun.seenCount`'s doc comment.
+		const seenIds = new Set([...startedIds, ...resultIds]);
 		// Append-only: a later `result` record for the same agent supersedes an earlier one.
 		const landedByAgent = new Map<string, unknown>();
 		for (const r of resultRecords) { landedByAgent.set(r.agentId as string, r.result); }
@@ -986,7 +990,7 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 			records.length === 0 && sawTorn ? 'unknown-shape' : (sawTorn || mtimeUnreadable) ? 'partial' : undefined;
 		return {
 			kind: 'live', sessionId, runId, identity: workflowRunIdentity(sessionId, runId),
-			startedCount: startedIds.size, resultCount: new Set(resultRecords.map(r => r.agentId)).size,
+			startedCount: startedIds.size, resultCount: resultIds.size, seenCount: seenIds.size,
 			landedResults, journalLastWriteTime: mtime, degradation,
 			ownership: 'foreign', coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Live,
 			// DERIVED from `degradation` so the two can never disagree: a known gap (a torn line OR an unreadable

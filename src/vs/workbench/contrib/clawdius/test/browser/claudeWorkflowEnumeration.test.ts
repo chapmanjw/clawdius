@@ -1004,6 +1004,21 @@ suite('Clawdius Claude Code Ultracode Workflows - validated model + root envelop
 			{ started: 2, results: 1, mtime: expectedMtime, degradation: undefined });
 	});
 
+	test('seenCount is the UNION of started/result agent ids - a result whose own started record never survived still counts toward "seen"', async () => {
+		const fs = makeFs();
+		await stageJournal(fs, 'wf_d980f960-543', [
+			{ type: 'started', agentId: 'a1' },
+			{ type: 'result', agentId: 'a1', result: 'ok' },
+			// a2's `started` line never survived (e.g. a torn line dropped it), but its `result` still landed -
+			// resultCount(2) > startedCount(1), the exact shape that used to invert the "agents seen so far" ratio.
+			{ type: 'result', agentId: 'a2', result: 'ok too' },
+		]);
+		const run = await listOne(fs) as LiveWorkflowRun;
+		assert.deepStrictEqual(
+			{ started: run.startedCount, results: run.resultCount, seen: run.seenCount },
+			{ started: 1, results: 2, seen: 2 });
+	});
+
 	test('landed results read a string payload as a preview', async () => {
 		const fs = makeFs();
 		await stageJournal(fs, 'wf_d980f960-543', [{ type: 'started', agentId: 'a1' }, { type: 'result', agentId: 'a1', result: 'The fleet module is clean.' }]);

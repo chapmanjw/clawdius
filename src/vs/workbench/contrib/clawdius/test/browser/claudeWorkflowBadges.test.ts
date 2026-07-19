@@ -98,7 +98,10 @@ suite('Clawdius Claude Code Ultracode Workflows - live badges', () => {
 	 *  once at teardown. Returns the pieces to drive. */
 	function harness(runs: readonly TerminalWorkflowRun[], ownedSessionIds: ReadonlySet<string>) {
 		const badges = new Map<string, BadgeSignal>();
-		const context: IWorkflowRenderContext = { uniformlyForeign: true, ownedSessionIds: new Set(), badgeOf: runId => badges.get(runId) };
+		const context: IWorkflowRenderContext = {
+			uniformlyForeign: true, ownedSessionIds: new Set(), badgeOf: runId => badges.get(runId),
+			runOf: () => undefined, justGraduated: () => false,
+		};
 		const renderer = store.add(new WorkflowRunRowRenderer(context, fakeHoverDelegate));
 		const rows = new Map<string, { container: HTMLElement; template: ReturnType<WorkflowRunRowRenderer['renderTemplate']> }>();
 		for (const r of runs) {
@@ -181,7 +184,10 @@ suite('Clawdius Claude Code Ultracode Workflows - live badges', () => {
 	});
 
 	test('a row with no badge signal renders no badge chip (no fabricated live state)', () => {
-		const context: IWorkflowRenderContext = { uniformlyForeign: true, ownedSessionIds: new Set(), badgeOf: () => undefined };
+		const context: IWorkflowRenderContext = {
+			uniformlyForeign: true, ownedSessionIds: new Set(), badgeOf: () => undefined,
+			runOf: () => undefined, justGraduated: () => false,
+		};
 		const renderer = store.add(new WorkflowRunRowRenderer(context, fakeHoverDelegate));
 		const container = $('div');
 		const template = renderer.renderTemplate(container);

@@ -23,11 +23,11 @@ import {
 } from '../../common/claudeWorkflowModel.js';
 import {
 	buildRunElement, buildTerminalRunChildren, buildWorkflowTreeChildren, computeUniformlyForeign, describeAgent,
-	describePhase, describeRunRow, describeStoryCostParts, describeStoryError, describeStoryResultText,
+	describeLiveProgress, describePhase, describeRunRow, describeStoryCostParts, describeStoryError, describeStoryResultText,
 	describeStorySummaryText, erroredAgentCount, errorSummary, IWorkflowRenderContext, renderWorkflowsStateMessage,
-	resolveWorkflowsDisplayState, runStatusClass, WorkflowAgentRowRenderer, WorkflowPhaseRowRenderer,
-	WorkflowRunRowRenderer, WorkflowsDisplayState, WorkflowStoryHeightCache, WorkflowStoryLeafRenderer,
-	WorkflowTreeAccessibilityProvider, WorkflowTreeElement, WorkflowTreeIdentityProvider,
+	resolveWorkflowsDisplayState, runStatusClass, WorkflowAgentRowRenderer, WorkflowLiveProgressRenderer,
+	WorkflowPhaseRowRenderer, WorkflowRunRowRenderer, WorkflowsDisplayState, WorkflowStoryHeightCache,
+	WorkflowStoryLeafRenderer, WorkflowTreeAccessibilityProvider, WorkflowTreeElement, WorkflowTreeIdentityProvider,
 	WorkflowTreeVirtualDelegate, workflowTreeElementId, STORY_MIN_HEIGHT,
 } from '../../browser/workflows/claudeWorkflowTree.js';
 
@@ -48,7 +48,7 @@ function liveRun(overrides: Partial<LiveWorkflowRun> = {}): LiveWorkflowRun {
 	return {
 		kind: 'live', sessionId: 's1', runId: 'wf_b', identity: workflowRunIdentity('s1', 'wf_b'),
 		...IDENTITY_BASE, freshness: FreshnessLabel.Live,
-		startedCount: 1, resultCount: 0, landedResults: [], journalLastWriteTime: 1_700_000_000_000,
+		startedCount: 1, resultCount: 0, seenCount: 1, landedResults: [], journalLastWriteTime: 1_700_000_000_000,
 		...overrides,
 	};
 }
@@ -201,6 +201,47 @@ suite('Clawdius Claude Code Ultracode Workflows - story leaf content', () => {
 	});
 });
 
+suite('Clawdius Claude Code Ultracode Workflows - live-progress content: the seenCount honesty rule', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('seenCount (not startedCount) is the ratio denominator - a result whose started record never survived still counts as "seen", so the ratio never inverts', () => {
+		// A journal that lost its `started` record for one agent (a torn line) but still landed that agent's
+		// `result`: resultCount(2) > startedCount(1), the exact shape that used to paint "2 of 1 agents seen so far".
+		const run = liveRun({ startedCount: 1, resultCount: 2, seenCount: 2 });
+		const content = describeLiveProgress(run, ms => `t${ms}`);
+		assert.deepStrictEqual(
+			{ ratioCaption: content.ratioCaption, resultCount: content.resultCount, seenCount: content.seenCount, resultAboveSeen: content.resultCount > content.seenCount },
+			{ ratioCaption: '2 of 2 agents seen so far have a result', resultCount: 2, seenCount: 2, resultAboveSeen: false },
+		);
+	});
+
+	test('seenCount === 0 still reads "No agents observed yet", even though startedCount alone used to gate that caption', () => {
+		const run = liveRun({ startedCount: 0, resultCount: 0, seenCount: 0 });
+		assert.strictEqual(describeLiveProgress(run).ratioCaption, 'No agents observed yet');
+	});
+
+	test('the 2-started/2-result case (seenCount equal to both) reads exactly as before: "2 of 2 agents seen so far have a result"', () => {
+		const run = liveRun({ startedCount: 2, resultCount: 2, seenCount: 2 });
+		assert.strictEqual(describeLiveProgress(run).ratioCaption, '2 of 2 agents seen so far have a result');
+	});
+
+	test('the rendered ProgressBar never carries aria-valuenow above aria-valuemax, even when resultCount > startedCount', () => {
+		const heights = new WorkflowStoryHeightCache();
+		const renderer = new WorkflowLiveProgressRenderer(heights);
+		const container = $('div');
+		const template = renderer.renderTemplate(container);
+		const run = liveRun({ startedCount: 1, resultCount: 2, seenCount: 2 });
+		renderer.renderElement(fakeNode({ kind: 'liveProgress', run }), 0, template);
+		const bar = container.querySelector<HTMLElement>('.monaco-progress-container')!;
+		assert.deepStrictEqual(
+			{ valueMax: bar.getAttribute('aria-valuemax'), valueNow: bar.getAttribute('aria-valuenow') },
+			{ valueMax: '2', valueNow: '2' },
+		);
+		renderer.disposeTemplate(template);
+		renderer.dispose();
+	});
+});
+
 suite('Clawdius Claude Code Ultracode Workflows - phase + agent content', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 	test('describePhase carries title/detail/derived agent+error counts, error count only when > 0', () => {
@@ -294,8 +335,9 @@ suite('Clawdius Claude Code Ultracode Workflows - the 0/1/>1 phase-grouping rule
 		assert.strictEqual((children[3].element as { agent: TerminalWorkflowAgent }).agent.agentId, 'orphan');
 	});
 
-	test('a live or unknown-shape run has NO children - a rich live leaf is a later change', () => {
-		assert.strictEqual(buildRunElement(liveRun()).children, undefined);
+	test('a live run has ONE child - its own measured live-progress leaf; an unknown-shape run has none', () => {
+		const liveChildren = [...buildRunElement(liveRun()).children ?? []];
+		assert.deepStrictEqual(liveChildren.map(c => ({ kind: c.element.kind, collapsible: c.collapsible })), [{ kind: 'liveProgress', collapsible: false }]);
 		assert.strictEqual(buildRunElement(unknownRun()).children, undefined);
 	});
 
@@ -380,7 +422,10 @@ suite('Clawdius Claude Code Ultracode Workflows - failure surfacing', () => {
 	});
 
 	test('the run row shows an errored-agent chip only when the tally is > 0, never fabricated for a run with no agent tally', () => {
-		const context: IWorkflowRenderContext = { uniformlyForeign: true, ownedSessionIds: new Set(), badgeOf: () => undefined };
+		const context: IWorkflowRenderContext = {
+			uniformlyForeign: true, ownedSessionIds: new Set(), badgeOf: () => undefined,
+			runOf: () => undefined, justGraduated: () => false,
+		};
 		const zero = renderRunRow(context, terminalRun({ agents: [agent({ state: 'done' })] }));
 		const two = renderRunRow(context, terminalRun({
 			agents: [agent({ agentId: 'a1', state: 'error' }), agent({ agentId: 'a2', state: 'error' }), agent({ agentId: 'a3', state: 'done' })],
@@ -407,14 +452,20 @@ suite('Clawdius Claude Code Ultracode Workflows - ownership-chrome rule', () => 
 	});
 
 	test('case 1: uniformlyForeign paints NO per-run ownership chrome (the common case)', () => {
-		const context: IWorkflowRenderContext = { uniformlyForeign: true, ownedSessionIds: new Set(), badgeOf: () => undefined };
+		const context: IWorkflowRenderContext = {
+			uniformlyForeign: true, ownedSessionIds: new Set(), badgeOf: () => undefined,
+			runOf: () => undefined, justGraduated: () => false,
+		};
 		const container = renderRunRow(context, terminalRun());
 		const chip = container.querySelector<HTMLElement>('.ownership-chip')!;
 		assert.strictEqual(chip.style.display, 'none');
 	});
 
 	test('case 3: NOT uniformlyForeign shows a per-run ownership label, on both the foreign AND the owned run', () => {
-		const context: IWorkflowRenderContext = { uniformlyForeign: false, ownedSessionIds: new Set(['owned-session']), badgeOf: () => undefined };
+		const context: IWorkflowRenderContext = {
+			uniformlyForeign: false, ownedSessionIds: new Set(['owned-session']), badgeOf: () => undefined,
+			runOf: () => undefined, justGraduated: () => false,
+		};
 		const foreignContainer = renderRunRow(context, terminalRun({ sessionId: 'foreign-session' }));
 		const ownedContainer = renderRunRow(context, terminalRun({ sessionId: 'owned-session' }));
 		assert.deepStrictEqual(
@@ -423,15 +474,24 @@ suite('Clawdius Claude Code Ultracode Workflows - ownership-chrome rule', () => 
 	});
 
 	test('a partial/unknown-shape run ALWAYS shows its completeness chip, independent of uniformlyForeign', () => {
-		const uniform: IWorkflowRenderContext = { uniformlyForeign: true, ownedSessionIds: new Set(), badgeOf: () => undefined };
-		const mixed: IWorkflowRenderContext = { uniformlyForeign: false, ownedSessionIds: new Set(['s1']), badgeOf: () => undefined };
+		const uniform: IWorkflowRenderContext = {
+			uniformlyForeign: true, ownedSessionIds: new Set(), badgeOf: () => undefined,
+			runOf: () => undefined, justGraduated: () => false,
+		};
+		const mixed: IWorkflowRenderContext = {
+			uniformlyForeign: false, ownedSessionIds: new Set(['s1']), badgeOf: () => undefined,
+			runOf: () => undefined, justGraduated: () => false,
+		};
 		const partialRun = terminalRun({ completeness: CompletenessState.Partial });
 		assert.strictEqual(renderRunRow(uniform, partialRun).querySelector<HTMLElement>('.completeness-chip')!.style.display, '');
 		assert.strictEqual(renderRunRow(mixed, partialRun).querySelector<HTMLElement>('.completeness-chip')!.style.display, '');
 	});
 
 	test('a complete run shows NO completeness chip - the chip is exception-only', () => {
-		const context: IWorkflowRenderContext = { uniformlyForeign: true, ownedSessionIds: new Set(), badgeOf: () => undefined };
+		const context: IWorkflowRenderContext = {
+			uniformlyForeign: true, ownedSessionIds: new Set(), badgeOf: () => undefined,
+			runOf: () => undefined, justGraduated: () => false,
+		};
 		const container = renderRunRow(context, terminalRun({ completeness: CompletenessState.Complete }));
 		assert.strictEqual(container.querySelector<HTMLElement>('.completeness-chip')!.style.display, 'none');
 	});

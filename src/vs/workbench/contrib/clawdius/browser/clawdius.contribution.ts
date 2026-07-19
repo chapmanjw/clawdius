@@ -53,6 +53,7 @@ import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor,
 import { ClawdiusContextBudgetView, CONTEXT_BUDGET_VIEW_CONTAINER_ID, CONTEXT_BUDGET_VIEW_ID } from './clawdiusContextBudgetView.js';
 import { ClawdiusWorkflowsView, WORKFLOWS_VIEW_CONTAINER_ID, WORKFLOWS_VIEW_ID } from './workflows/claudeWorkflowsView.js';
 import { ClaudeWorkflowDetailEditor } from './workflows/claudeWorkflowDetailEditor.js';
+import { ClaudeWorkflowObservationActivator, ClaudeWorkflowObservationService, IClaudeWorkflowObservationService } from './workflows/claudeWorkflowObservationService.js';
 import { ClaudeWorkflowDetailInput, ClaudeWorkflowDetailInputSerializer } from './workflows/claudeWorkflowDetailInput.js';
 import { ClaudeWorkflowTranscriptEditor } from './workflows/claudeWorkflowTranscriptEditor.js';
 import { ClaudeWorkflowTranscriptInput, ClaudeWorkflowTranscriptInputSerializer } from './workflows/claudeWorkflowTranscriptInput.js';
@@ -288,6 +289,13 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 		canMoveView: true,
 	}];
 	Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews(contextBudgetViews, contextBudgetContainer);
+
+	// The Ultracode Workflows observation service: a delayed singleton watching the resolved config root for
+	// manifest / journal / agent-sidecar changes and coalescing them into one immutable snapshot per refresh - the
+	// Workflows view's primary data source (see workflows/claudeWorkflowObservationService.ts). The activator forces
+	// it to instantiate right after restore, so it starts watching even if the view itself is never opened.
+	registerSingleton(IClaudeWorkflowObservationService, ClaudeWorkflowObservationService, InstantiationType.Delayed);
+	registerWorkbenchContribution2(ClaudeWorkflowObservationActivator.ID, ClaudeWorkflowObservationActivator, WorkbenchPhase.AfterRestored);
 
 	// Claude Code Ultracode Workflows: a Sidebar (Activity Bar) view listing the runs the reader seam enumerates,
 	// each with honest coverage / freshness / completeness + ownership labels (a foreign/suppressed run

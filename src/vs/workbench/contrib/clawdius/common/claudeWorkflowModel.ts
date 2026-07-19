@@ -68,6 +68,12 @@ export interface LiveWorkflowRun extends WorkflowRunBase {
 	readonly startedCount: number;
 	/** Distinct agent ids with a `result` journal record. `started > result` means work is still in flight. */
 	readonly resultCount: number;
+	/** The number of DISTINCT agent ids that have ANY journal record (the union of the started and result id sets) -
+	 *  the honest "agents seen so far" denominator, always >= `resultCount` even when a `started` record was torn
+	 *  or otherwise dropped. `startedCount` and `resultCount` are counted from INDEPENDENT id sets, so a result whose
+	 *  own `started` line never survived would otherwise let `resultCount` exceed `startedCount` - painting a ratio
+	 *  like "3 of 1 agents seen so far" and handing a progress bar a `worked` value above its own `total`. */
+	readonly seenCount: number;
 	/** The results that have landed so far, each a safe preview or the "Result landed" fallback. */
 	readonly landedResults: readonly LiveWorkflowResult[];
 	/** The journal file's mtime - the ONLY time signal a live run has (never a fabricated "paused" state). */

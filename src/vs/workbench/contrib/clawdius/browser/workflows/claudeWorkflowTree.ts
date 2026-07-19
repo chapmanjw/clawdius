@@ -7,9 +7,9 @@
 // Replaces the Workflows view's hand-rolled manual-DOM row list with a real `WorkbenchObjectTree` bound
 // directly to the discriminated `WorkflowRun` union (`common/claudeWorkflowModel.ts`) - no more flattening the
 // validated model back into the legacy `MissionRun` shape. A run is the tree's top-level row; a TERMINAL run
-// additionally expands to a variable-height "story" leaf (summary + cost + result) and its phases/agents (the
-// 0/1/>1 phase-grouping rule below); a LIVE or unknown-shape run is a leaf row with no children (a rich live
-// leaf and failure-aware auto-expand are later changes - see the overview in claudeWorkflowsView.ts).
+// expands to a variable-height "story" leaf (summary + cost + result) and its phases/agents (the 0/1/>1
+// phase-grouping rule below); a LIVE run expands to its own variable-height "live-progress" leaf (the live
+// analogue of the story leaf); an unknown-shape run is a leaf row with no children.
 //
 // The ownership-chrome rule lives in two places by design: `computeUniformlyForeign` is the pure
 // predicate the VIEW evaluates once per refresh (never per-row - it must never re-read disk from inside a
@@ -17,6 +17,12 @@
 // the view owns and updates in place. The SURFACE label (one line above the tree, shown only while every run is
 // foreign) is painted by the view itself, not by any renderer - see `updateSurfaceOwnershipLabel` in
 // claudeWorkflowsView.ts.
+//
+// `reconcileWorkflowTree` (near the bottom of this file, alongside `buildWorkflowTreeChildren`) is the graduation-
+// aware reconciliation the view's snapshot handler calls into: it is the one place that understands the tree's
+// identity-diff subtlety (an unchanged-identity node's own data is never swapped in automatically - see that
+// function's doc comment) and is exported, typed against the plain `ObjectTree` base class, so a test can drive it
+// without constructing the full `ViewPane`.
 
 import { $, append, clearNode } from '../../../../../base/browser/dom.js';
 import { Button } from '../../../../../base/browser/ui/button/button.js';
@@ -24,20 +30,24 @@ import { IHoverDelegate } from '../../../../../base/browser/ui/hover/hoverDelega
 import { IconLabel } from '../../../../../base/browser/ui/iconLabel/iconLabel.js';
 import { IIdentityProvider, IKeyboardNavigationLabelProvider, IListVirtualDelegate } from '../../../../../base/browser/ui/list/list.js';
 import { IListAccessibilityProvider } from '../../../../../base/browser/ui/list/listWidget.js';
-import { ITreeElement, ITreeNode, ITreeRenderer } from '../../../../../base/browser/ui/tree/tree.js';
+import { ProgressBar } from '../../../../../base/browser/ui/progressbar/progressbar.js';
+import { ObjectTree } from '../../../../../base/browser/ui/tree/objectTree.js';
+import { IObjectTreeElement, ITreeElement, ITreeNode, ITreeRenderer, ObjectTreeElementCollapseState } from '../../../../../base/browser/ui/tree/tree.js';
 import { fromNow } from '../../../../../base/common/date.js';
 import { Emitter, Event } from '../../../../../base/common/event.js';
 import { FuzzyScore } from '../../../../../base/common/filters.js';
+import { hash } from '../../../../../base/common/hash.js';
 import { Disposable, DisposableStore, IDisposable } from '../../../../../base/common/lifecycle.js';
 import { formatTokenCount } from '../../../../../base/common/numbers.js';
 import { Codicon } from '../../../../../base/common/codicons.js';
 import { ThemeIcon } from '../../../../../base/common/themables.js';
 import { localize } from '../../../../../nls.js';
-import { defaultButtonStyles } from '../../../../../platform/theme/browser/defaultStyles.js';
+import { defaultButtonStyles, defaultProgressBarStyles } from '../../../../../platform/theme/browser/defaultStyles.js';
 import { FleetOwnership } from '../../common/claudeFleetModel.js';
 import { CompletenessState } from '../../common/claudeReaderSeam.js';
 import {
-	assignAgentsToPhases, TerminalWorkflowAgent, TerminalWorkflowRun, WorkflowPhase, WorkflowRun, WorkflowRunListResult,
+	assignAgentsToPhases, LiveWorkflowResult, LiveWorkflowRun, TerminalWorkflowAgent, TerminalWorkflowRun, UnrecognizedWorkflowRun,
+	WorkflowPhase, WorkflowRun, WorkflowRunListResult,
 } from '../../common/claudeWorkflowModel.js';
 import { formatDuration } from '../usage/claudeUsageData.js';
 import { BadgeSignal } from './claudeWorkflowBadges.js';
@@ -56,11 +66,24 @@ export const DASH = '—';
 export type WorkflowTreeElement =
 	| { readonly kind: 'run'; readonly run: WorkflowRun }
 	| { readonly kind: 'story'; readonly run: TerminalWorkflowRun }
+	| { readonly kind: 'liveProgress'; readonly run: LiveWorkflowRun }
 	| { readonly kind: 'phase'; readonly run: TerminalWorkflowRun; readonly phase: WorkflowPhase }
 	| { readonly kind: 'agent'; readonly run: TerminalWorkflowRun; readonly agent: TerminalWorkflowAgent };
 
 function isStoryElement(element: WorkflowTreeElement): element is Extract<WorkflowTreeElement, { kind: 'story' }> {
 	return element.kind === 'story';
+}
+
+function isLiveProgressElement(element: WorkflowTreeElement): element is Extract<WorkflowTreeElement, { kind: 'liveProgress' }> {
+	return element.kind === 'liveProgress';
+}
+
+/** Either of the two measured, non-twistie leaves: the terminal story leaf and the live-progress leaf both hold
+ *  variable-height, multi-line content (a summary/cost/result block; a progress bar plus landed-result previews),
+ *  so both share the same "no fixed row height" treatment, keyed by the owning run's identity, instead of the
+ *  fixed-height rows every other kind of tree row uses. */
+function isMeasuredLeafElement(element: WorkflowTreeElement): element is Extract<WorkflowTreeElement, { kind: 'story' | 'liveProgress' }> {
+	return element.kind === 'story' || element.kind === 'liveProgress';
 }
 
 // --- identity ----------------------------------------------------------------------------------------------
@@ -72,6 +95,7 @@ export function workflowTreeElementId(element: WorkflowTreeElement): string {
 	switch (element.kind) {
 		case 'run': return `run:${element.run.identity}`;
 		case 'story': return `story:${element.run.identity}`;
+		case 'liveProgress': return `liveProgress:${element.run.identity}`;
 		case 'phase': return `phase:${element.run.identity}:${element.phase.index}`;
 		case 'agent': return `agent:${element.run.identity}:${element.agent.agentId}`;
 	}
@@ -124,8 +148,9 @@ export function describeRunRow(run: WorkflowRun, relativeTimeOf: (ms: number) =>
 			return { primary, secondaryParts };
 		}
 		case 'live':
-			// Honest minimal: NO name/summary exists for a live run (see claudeWorkflowModel.ts). Rich live
-			// rendering (started/result counts, landed-result previews) is a later change.
+			// Honest minimal: NO name/summary exists for a live run (see claudeWorkflowModel.ts), so the ROW stays
+			// runId + last-write time. The rich live progress (started/result counts, landed-result previews) is
+			// rendered by the live-progress leaf beneath the row (see buildLiveProgressChildren), never fabricated here.
 			return { primary: run.runId, secondaryParts: [relativeTimeOf(run.journalLastWriteTime)] };
 		case 'unknown-shape':
 			return { primary: localize('clawdius.workflows.unknownShape', "Shape not recognized"), secondaryParts: [run.runId] };
@@ -187,6 +212,56 @@ export function describeStoryError(run: TerminalWorkflowRun): { readonly summary
 	return run.error ? { summary: errorSummary(run.error), full: run.error } : undefined;
 }
 
+/** The bound on how many landed-result previews the live-progress leaf shows directly - a RENDER bound, not a data
+ *  one: {@link LiveProgressContent.landedCountCaption} always states the true total, so a workflow with many agents
+ *  never reads as having fewer results than it does, it just stops listing them past this count. */
+export const LIVE_PROGRESS_MAX_LANDED_PREVIEWS = 5;
+
+/** The live-progress leaf's content, computed PURELY off the model - unit-testable without a DOM. Honesty rules
+ *  `startedCount`/`resultCount` are never clamped against each other, so the ratio can legitimately
+ *  move BACKWARD between renders (a newly-started agent raises `startedCount` before it raises `resultCount`); the
+ *  caption is phrased "among agents seen so far" because a live run has no known total - a percentage-of-total
+ *  would fabricate a denominator that does not exist yet. `activityCaption` reports only the journal's own
+ *  last-write time - never an inferred "paused" state, which the journal cannot support. */
+export interface LiveProgressContent {
+	readonly startedCount: number;
+	readonly resultCount: number;
+	/** The honest "agents seen so far" denominator - see {@link LiveWorkflowRun.seenCount}. Always >= `resultCount`,
+	 *  even when a `started` record was torn or otherwise dropped, so a progress bar built from this and
+	 *  `resultCount` can never be handed a `worked` value above its own `total`. */
+	readonly seenCount: number;
+	/** `max(0, started - result)` - a COUNT, so unlike the ratio caption this is never negative. */
+	readonly runningCount: number;
+	readonly ratioCaption: string;
+	readonly activityCaption: string;
+	readonly landedCountCaption: string | undefined;
+	readonly landedPreviews: readonly LiveWorkflowResult[];
+	/** True when {@link LiveWorkflowResult}s exist beyond what {@link landedPreviews} lists. */
+	readonly hasMoreLanded: boolean;
+	readonly degradedCaption: string | undefined;
+}
+
+export function describeLiveProgress(run: LiveWorkflowRun, relativeTimeOf: (ms: number) => string = ms => fromNow(ms, true)): LiveProgressContent {
+	const runningCount = Math.max(0, run.startedCount - run.resultCount);
+	const ratioCaption = run.seenCount > 0
+		? localize('clawdius.workflows.live.ratio', "{0} of {1} agents seen so far have a result", run.resultCount, run.seenCount)
+		: localize('clawdius.workflows.live.noneStarted', "No agents observed yet");
+	const activityCaption = localize('clawdius.workflows.live.lastWrite', "Journal last wrote {0}", relativeTimeOf(run.journalLastWriteTime));
+	const landedCountCaption = run.landedResults.length > 0
+		? localize('clawdius.workflows.live.landedCount', "{0} results landed", run.landedResults.length)
+		: undefined;
+	const degradedCaption = run.degradation === 'partial'
+		? localize('clawdius.workflows.live.degradedPartial', "The journal has an unreadable entry; this may undercount.")
+		: run.degradation === 'unknown-shape'
+			? localize('clawdius.workflows.live.degradedUnknown', "The journal's shape was not recognized.")
+			: undefined;
+	return {
+		startedCount: run.startedCount, resultCount: run.resultCount, seenCount: run.seenCount, runningCount, ratioCaption, activityCaption,
+		landedCountCaption, landedPreviews: run.landedResults.slice(0, LIVE_PROGRESS_MAX_LANDED_PREVIEWS),
+		hasMoreLanded: run.landedResults.length > LIVE_PROGRESS_MAX_LANDED_PREVIEWS, degradedCaption,
+	};
+}
+
 export function describePhase(phase: WorkflowPhase): { readonly title: string; readonly detail: string | undefined; readonly agentsLabel: string; readonly errorsLabel: string | undefined } {
 	return {
 		title: phase.title,
@@ -227,6 +302,20 @@ export interface IWorkflowRenderContext {
 	uniformlyForeign: boolean;
 	ownedSessionIds: ReadonlySet<string>;
 	badgeOf(runId: string): BadgeSignal | undefined;
+	/**
+	 * The CURRENT authoritative data for a run, keyed by its stable `identity` - read by the run-row renderer
+	 * INSTEAD of its own tree element's `run` field. This indirection exists because the tree's identity-based
+	 * `setChildren` diff (used for graduation and for ordinary live-progress refreshes; see `claudeWorkflowsView.ts`)
+	 * deliberately leaves an unchanged-identity node's OWN `.element` untouched even when the underlying data
+	 * changed - the same reason the live badge feed already reads its state from an external map rather than the
+	 * element itself. Returns `undefined` when the view has not (yet) populated this run's identity, in which case
+	 * the renderer falls back to its own element's `run`.
+	 */
+	runOf(identity: string): WorkflowRun | undefined;
+	/** Whether `identity` graduated (live -> terminal/unknown-shape) within the last transient highlight window -
+	 *  used to paint a brief, reduced-motion-aware visual cue on the row. Always `false` when nothing tracks this
+	 *  (e.g. a unit test harness that never calls into the graduation path). */
+	justGraduated(identity: string): boolean;
 }
 
 // --- tree shape: the 0/1/>1 phase-grouping rule -------------------------------------------------------------
@@ -287,18 +376,213 @@ export function buildTerminalRunChildren(run: TerminalWorkflowRun): ITreeElement
 	return [story, ...phaseNodes, ...erroredAgentsFirst(unassigned).map(agent => agentLeaf(run, agent))];
 }
 
-/** One run's full tree element (its children per {@link buildTerminalRunChildren}, empty for a live/unknown-shape
- *  run - a rich live leaf is a later change, so a live run is a leaf row here). */
-export function buildRunElement(run: WorkflowRun): ITreeElement<WorkflowTreeElement> {
-	if (run.kind !== 'terminal') {
-		return { element: { kind: 'run', run } };
-	}
-	return { element: { kind: 'run', run }, children: buildTerminalRunChildren(run) };
+/** A live run's single child: the measured, non-twistie live-progress leaf (the live analogue of the terminal
+ *  story leaf - same variable-height treatment, for the same reason: its progress bar plus landed-result previews
+ *  do not fit a fixed row height). Exported so the view can rebuild ONLY this child when a still-live run's counts
+ *  advance, without touching the run's own top-level node. */
+export function buildLiveProgressChildren(run: LiveWorkflowRun): ITreeElement<WorkflowTreeElement>[] {
+	return [{ element: { kind: 'liveProgress', run }, collapsible: false }];
 }
 
-/** The whole tree's top-level children, in the seam's own enumeration order (never re-sorted here). */
+/** One run's full tree element: a terminal run's children per {@link buildTerminalRunChildren}, a live run's
+ *  single live-progress leaf per {@link buildLiveProgressChildren}, empty for an unrecognized-shape run. */
+export function buildRunElement(run: WorkflowRun): ITreeElement<WorkflowTreeElement> {
+	if (run.kind === 'terminal') {
+		return { element: { kind: 'run', run }, children: buildTerminalRunChildren(run) };
+	}
+	if (run.kind === 'live') {
+		return { element: { kind: 'run', run }, children: buildLiveProgressChildren(run) };
+	}
+	return { element: { kind: 'run', run } };
+}
+
+/** The whole tree's top-level children, in the seam's own enumeration order (never re-sorted here) - which is
+ *  already a deterministic sort by `(sessionId, runId)`, so concurrent live runs hold a stable order by run
+ *  identifier for free, with no separate sort step needed here. */
 export function buildWorkflowTreeChildren(runs: readonly WorkflowRun[]): ITreeElement<WorkflowTreeElement>[] {
 	return runs.map(buildRunElement);
+}
+
+// --- graduation-aware reconciliation ----------------------------------------------------------------------------
+
+/** The bookkeeping {@link reconcileWorkflowTree} needs carried from one reconcile to the next. */
+export interface WorkflowTreeReconcileState {
+	/** runId -> the exact element reference the tree currently tracks for that row. */
+	readonly elementByRunId: ReadonlyMap<string, WorkflowTreeElement>;
+	/** The identities carrying `kind: 'live'` as of the last reconcile. */
+	readonly liveIdentities: ReadonlySet<string>;
+	/** runId -> the content signature ({@link computeRunSignature}) that was actually rendered for that run last
+	 *  time - lets a run that was ALREADY terminal/unknown-shape before and after this reconcile detect that its
+	 *  manifest was rewritten (e.g. `completed` corrected to `failed`, or a tally changed) since it was last drawn,
+	 *  and re-render, while a genuinely unchanged run is left untouched (preserving its expansion state). */
+	readonly renderedSignatureByRunId: ReadonlyMap<string, string>;
+}
+
+export interface WorkflowTreeReconcileResult extends WorkflowTreeReconcileState {
+	/** Runs that graduated (were live before, are terminal/unknown-shape now) THIS reconcile - the caller decides
+	 *  what to announce; this function performs no side effect beyond the tree mutation itself. */
+	readonly graduated: readonly (TerminalWorkflowRun | UnrecognizedWorkflowRun)[];
+	/** Every element known to the tree after this reconcile, keyed by its stable id - for a focus/selection
+	 *  restore that was captured by id before the call. */
+	readonly idToElement: ReadonlyMap<string, WorkflowTreeElement>;
+}
+
+/** A stable content signature for one run - changes whenever any field the tree renders for that run (its row,
+ *  its story leaf, its phase nodes, or its agent rows) differs. Used only to detect a REWRITTEN terminal/unknown-
+ *  shape manifest (e.g. `completed` corrected to `failed`, a changed summary/result, or an agent whose label or
+ *  state moved without the tally moving) after that run was already rendered once; see
+ *  {@link WorkflowTreeReconcileState.renderedSignatureByRunId}. It hashes the WHOLE render-relevant projection - not
+ *  a sample of a few scalars - so a rewrite that touches only `summary`, `defaultModel`, a per-agent field, or the
+ *  middle of `resultText` still moves it; hashing (rather than embedding) keeps the stored signature compact even
+ *  when `resultText` is large. The stable identity/version fields (`sessionId`/`runId`/`identity`/`adapterVersion`)
+ *  are omitted deliberately: they never change for a given run, so including them would only add cost. Computed for
+ *  every run kind so the reconcile can always record a fresh signature, even though the live branch never consults
+ *  it (a still-live run's row is replaced unconditionally on every reconcile regardless). */
+function computeRunSignature(run: WorkflowRun): string {
+	const chrome = [run.ownership, run.coverage, run.freshness, run.completeness];
+	if (run.kind === 'terminal') {
+		return `terminal:${hash([...chrome,
+		run.workflowName, run.summary, run.status, run.startTime, run.timestamp, run.durationMs, run.totalTokens,
+		run.totalToolCalls, run.agentCount, run.defaultModel, run.resultText, run.resultPreview, run.error,
+		run.phases.map(phase => [phase.index, phase.title, phase.detail, phase.agentCount, phase.errorCount]),
+		run.agents.map(agent => [agent.agentId, agent.label, agent.state, agent.model, agent.tokens, agent.toolCalls,
+		agent.durationMs, agent.phaseTitle, agent.phaseIndex, agent.lastToolName, agent.agentType,
+		agent.promptPreview, agent.resultPreview, agent.error, agent.attempt, agent.transcriptRef !== undefined])])}`;
+	}
+	if (run.kind === 'live') {
+		return `live:${hash([...chrome, run.startedCount, run.resultCount, run.seenCount, run.journalLastWriteTime,
+		run.degradation, run.landedResults.map(landed => [landed.agentId, landed.preview])])}`;
+	}
+	return `unknown-shape:${hash(chrome)}`;
+}
+
+/**
+ * Apply `runs` to `tree`'s top-level children, graduation-aware - the reconciliation `claudeWorkflowsView.ts`'s
+ * snapshot handler calls into. `WorkbenchObjectTree.setChildren`'s identity diff (`diffIdentityProvider`) is what
+ * gives an unrelated, unchanged run's row its scroll position / expansion / DOM for free, but it comes with a
+ * documented cost: it deliberately leaves an UNCHANGED-identity node's own element untouched even when the
+ * underlying data differs (`objectTree.ts`'s `setChildren` doc comment; traced against `objectTreeModel.ts`'s
+ * `spliceSmart`, which never calls `createTreeNode` for an id the LCS diff finds unchanged). Since a run's identity
+ * is the SAME whether it is live or terminal, that one call alone would silently keep painting a graduated run as
+ * live forever, and would never advance a still-live run's progress leaf either.
+ *
+ * So every run whose identity persists across the reconcile gets a SECOND, TARGETED pass, using the reference the
+ * tree ALREADY tracks for it (never a freshly-built duplicate - `setChildren`/`rerender` scoped to an untracked
+ * reference throw): a still-live run's single progress-leaf child is replaced fresh and its row is `rerender()`ed
+ * every time (cheap - live data changes on every poll); a run that just graduated gets its children replaced with
+ * its real story/phase/agent rows (or none, for an unrecognized shape) and its row `rerender()`ed once. A run that
+ * was already terminal/unknown-shape and stays so is compared against its last RENDERED content signature
+ * ({@link computeRunSignature}): unchanged, it is left untouched (preserving the user's expansion state); changed
+ * - the observation service re-reads on every manifest write, so a terminal manifest CAN legitimately be rewritten
+ * after the fact (e.g. a corrected status or tally) - its children are replaced and its row `rerender()`ed exactly
+ * like a fresh graduation, just without entering `graduated` (no live -> terminal transition happened here, so no
+ * graduation announcement is owed). A brand-new run's INITIAL children are already correct from the first
+ * `setChildren` call and need no second pass.
+ *
+ * The live/terminal representation of one run therefore never coexists as two rows: there is exactly one node per
+ * identity throughout (the top-level `setChildren` either keeps the existing node or creates exactly one new node
+ * per identity; the second pass only ever re-scopes an ALREADY-tracked node's own children, never adds a sibling).
+ *
+ * Typed against the plain `ObjectTree` base class (not `WorkbenchObjectTree`, which needs a workbench's worth of
+ * injected services) so a test can construct a real tree directly and drive this exact code path.
+ */
+export function reconcileWorkflowTree(
+	tree: ObjectTree<WorkflowTreeElement, FuzzyScore>,
+	runs: readonly WorkflowRun[],
+	previous: WorkflowTreeReconcileState,
+): WorkflowTreeReconcileResult {
+	const children: IObjectTreeElement<WorkflowTreeElement>[] = buildWorkflowTreeChildren(runs).map(child =>
+		child.element.kind === 'run' ? { ...child, collapsed: ObjectTreeElementCollapseState.PreserveOrCollapsed } : child);
+	const builtElementByIdentity = new Map<string, WorkflowTreeElement>();
+	for (const child of children) {
+		if (child.element.kind === 'run') { builtElementByIdentity.set(child.element.run.identity, child.element); }
+	}
+
+	tree.setChildren(null, children, { diffIdentityProvider: new WorkflowTreeIdentityProvider() });
+
+	const previousElementByIdentity = new Map<string, WorkflowTreeElement>();
+	for (const element of previous.elementByRunId.values()) {
+		previousElementByIdentity.set(element.run.identity, element);
+	}
+
+	const elementByRunId = new Map<string, WorkflowTreeElement>();
+	const liveIdentities = new Set<string>();
+	const renderedSignatureByRunId = new Map<string, string>();
+	// Deliberately NOT seeded from `children` here: `children`'s own top-level 'run' elements are FRESHLY built on
+	// every call, and for a run whose identity persists across this reconcile the tree keeps its OLD element (the
+	// diff subtlety this whole function exists to work around) - seeding straight from `children` would hand a
+	// focus/selection restore an untracked reference for exactly that run. Each run-row id is set below from
+	// `tracked` instead - the SAME reference `elementByRunId` records for that run.
+	const idToElement = new Map<string, WorkflowTreeElement>();
+	const graduated: (TerminalWorkflowRun | UnrecognizedWorkflowRun)[] = [];
+
+	for (const run of runs) {
+		// The identity diff normally KEEPS the old node for a persisting identity, so its previous element is what the
+		// tree tracks. But if the diff ever fell back to a full rebuild (an LCS `quitEarly` on a very large reordering),
+		// the old element would be dropped and the freshly-built one tracked instead - so prefer the previous element
+		// ONLY while the tree still holds it, else the built one. This keeps `tracked` a reference the tree actually
+		// tracks in every case, so the targeted `setChildren(tracked, ...)`/`rerender(tracked)` below can never throw on
+		// an untracked reference (parity with the `hasElement` guard the focus/selection restore already applies).
+		const previousElement = previousElementByIdentity.get(run.identity);
+		const tracked = (previousElement !== undefined && tree.hasElement(previousElement))
+			? previousElement
+			: builtElementByIdentity.get(run.identity);
+		if (!tracked) {
+			continue; // unreachable: builtElementByIdentity covers every run in `runs`
+		}
+		elementByRunId.set(run.runId, tracked);
+		idToElement.set(workflowTreeElementId({ kind: 'run', run }), tracked);
+		const newSignature = computeRunSignature(run);
+
+		if (run.kind === 'live') {
+			liveIdentities.add(run.identity);
+			const liveChildren = buildLiveProgressChildren(run);
+			tree.setChildren(tracked, liveChildren);
+			tree.rerender(tracked);
+			for (const c of liveChildren) { idToElement.set(workflowTreeElementId(c.element), c.element); }
+		} else if (previous.liveIdentities.has(run.identity)) {
+			graduated.push(run);
+			const newChildren = run.kind === 'terminal' ? buildTerminalRunChildren(run) : [];
+			tree.setChildren(tracked, newChildren);
+			tree.rerender(tracked);
+			for (const c of newChildren) { idToElement.set(workflowTreeElementId(c.element), c.element); }
+		} else if (previous.renderedSignatureByRunId.has(run.runId) && newSignature !== previous.renderedSignatureByRunId.get(run.runId)) {
+			// A run this function has ALREADY rendered before (so a comparison is even meaningful - a brand-new
+			// run has no prior signature and needs no second pass, its initial `setChildren` above already built it
+			// correctly), still terminal/unknown-shape now, but its rendered content signature moved - a rewritten
+			// manifest (see the function doc comment), not a fresh graduation.
+			const newChildren = run.kind === 'terminal' ? buildTerminalRunChildren(run) : [];
+			tree.setChildren(tracked, newChildren);
+			tree.rerender(tracked);
+			for (const c of newChildren) { idToElement.set(workflowTreeElementId(c.element), c.element); }
+		}
+		// else: either a brand-new run (its initial children are already correct) or a run this function has
+		// rendered before, still terminal/unknown-shape now, and unchanged since - left untouched either way
+		// (see the function doc comment).
+
+		renderedSignatureByRunId.set(run.runId, newSignature);
+	}
+
+	return { elementByRunId, liveIdentities, renderedSignatureByRunId, graduated, idToElement };
+}
+
+/** Resolves a captured focus/selection id set against `idToElement`, keeping only an id that both (a) still
+ *  resolves to an element this reconcile knows about and (b) is an element the TREE currently tracks. (b) is a
+ *  belt-and-suspenders check: `idToElement`'s own run-row entries are always the TRACKED reference (see
+ *  `reconcileWorkflowTree`'s doc comment above), but staying defensive here means a caller can never hand
+ *  `setFocus`/`setSelection` an untracked element, whatever future path builds `idToElement`. EXPORTED so
+ *  `claudeWorkflowsView.ts`'s focus/selection restore and a test can drive the exact same resolution logic. */
+export function resolveTrackedElements(
+	ids: ReadonlySet<string>,
+	idToElement: ReadonlyMap<string, WorkflowTreeElement>,
+	hasElement: (element: WorkflowTreeElement) => boolean,
+): WorkflowTreeElement[] {
+	const resolved: WorkflowTreeElement[] = [];
+	for (const id of ids) {
+		const element = idToElement.get(id);
+		if (element !== undefined && hasElement(element)) { resolved.push(element); }
+	}
+	return resolved;
 }
 
 // --- accessibility + keyboard nav -------------------------------------------------------------------------
@@ -317,6 +601,10 @@ export class WorkflowTreeAccessibilityProvider implements IListAccessibilityProv
 			}
 			case 'story':
 				return localize('clawdius.workflows.story.aria', "Summary and result for {0}", describeRunRow(element.run).primary);
+			case 'liveProgress': {
+				const content = describeLiveProgress(element.run);
+				return localize('clawdius.workflows.liveProgress.aria', "{0}. {1}", content.ratioCaption, content.activityCaption);
+			}
 			case 'phase':
 				return localize('clawdius.workflows.phase.aria', "Phase {0}: {1}", element.phase.index + 1, element.phase.title);
 			case 'agent':
@@ -330,6 +618,7 @@ export class WorkflowTreeKeyboardNavigationLabelProvider implements IKeyboardNav
 		switch (element.kind) {
 			case 'run': return describeRunRow(element.run).primary;
 			case 'story': return describeStorySummaryText(element.run);
+			case 'liveProgress': return describeLiveProgress(element.run).ratioCaption;
 			case 'phase': return element.phase.title;
 			case 'agent': return element.agent.label;
 		}
@@ -361,6 +650,7 @@ export class WorkflowStoryHeightCache {
 export const enum WorkflowTreeTemplateId {
 	Run = 'clawdius-workflow-run',
 	Story = 'clawdius-workflow-story',
+	LiveProgress = 'clawdius-workflow-live-progress',
 	Phase = 'clawdius-workflow-phase',
 	Agent = 'clawdius-workflow-agent',
 }
@@ -369,7 +659,7 @@ export class WorkflowTreeVirtualDelegate implements IListVirtualDelegate<Workflo
 	constructor(private readonly storyHeights: WorkflowStoryHeightCache) { }
 
 	getHeight(element: WorkflowTreeElement): number {
-		if (isStoryElement(element)) {
+		if (isMeasuredLeafElement(element)) {
 			return this.storyHeights.get(element.run.identity) ?? STORY_MIN_HEIGHT;
 		}
 		return FIXED_ROW_HEIGHT;
@@ -379,6 +669,7 @@ export class WorkflowTreeVirtualDelegate implements IListVirtualDelegate<Workflo
 		switch (element.kind) {
 			case 'run': return WorkflowTreeTemplateId.Run;
 			case 'story': return WorkflowTreeTemplateId.Story;
+			case 'liveProgress': return WorkflowTreeTemplateId.LiveProgress;
 			case 'phase': return WorkflowTreeTemplateId.Phase;
 			case 'agent': return WorkflowTreeTemplateId.Agent;
 		}
@@ -435,7 +726,11 @@ export class WorkflowRunRowRenderer extends Disposable implements ITreeRenderer<
 		if (element.kind !== 'run') {
 			return;
 		}
-		const run = element.run;
+		// Read the CURRENT data through the context, not the element's own (possibly stale) `run` field - see
+		// `IWorkflowRenderContext.runOf`'s doc comment for why a same-identity node's element can go stale (a
+		// graduation, or an ordinary live-progress tick) without the tree ever swapping it out.
+		const run = this.context.runOf(element.run.identity) ?? element.run;
+		template.container.classList.toggle('clawdius-workflow-graduated', this.context.justGraduated(run.identity));
 		template.container.setAttribute('data-run-id', run.runId);
 		template.container.setAttribute('data-session-id', run.sessionId);
 		template.container.setAttribute('data-kind', 'workflow');
@@ -597,6 +892,135 @@ export class WorkflowStoryLeafRenderer extends Disposable implements ITreeRender
 	}
 
 	private measure(template: IWorkflowStoryTemplate): void {
+		const element = template.element;
+		if (!element) {
+			return;
+		}
+		const measured = Math.max(STORY_MIN_HEIGHT, Math.round(template.container.scrollHeight));
+		const identity = element.run.identity;
+		if (this.heights.get(identity) === measured) {
+			return;
+		}
+		this.heights.set(identity, measured);
+		this._onDidChangeItemHeight.fire({ element, height: measured });
+	}
+}
+
+// --- live-progress leaf renderer (measured, variable height) --------------------------------------------------
+
+interface IWorkflowLiveProgressTemplate {
+	readonly container: HTMLElement;
+	readonly progressBar: ProgressBar;
+	readonly ratio: HTMLElement;
+	readonly running: HTMLElement;
+	readonly activity: HTMLElement;
+	readonly degraded: HTMLElement;
+	readonly landedCount: HTMLElement;
+	readonly landedList: HTMLElement;
+	element: Extract<WorkflowTreeElement, { kind: 'liveProgress' }> | undefined;
+}
+
+/**
+ * The live-progress leaf: the live analogue of {@link WorkflowStoryLeafRenderer} - `collapsible: false`, no
+ * children, measured after every render exactly the same way (see that class's doc for why this is a true leaf
+ * rather than a nested-scroll region). Shows a `ProgressBar` against agents SEEN so far ({@link LiveWorkflowRun.seenCount},
+ * never a fixed total a live run does not have - `seenCount` is itself observed, not declared), the running count,
+ * the journal's own last-write activity text, and up to
+ * {@link LIVE_PROGRESS_MAX_LANDED_PREVIEWS} landed-result previews. The `ProgressBar` is created once per
+ * template (reused across row recycles, exactly like the run/agent rows' `IconLabel`) and disposed in
+ * `disposeTemplate` - never leaked, never recreated per render.
+ */
+export class WorkflowLiveProgressRenderer extends Disposable implements ITreeRenderer<WorkflowTreeElement, FuzzyScore, IWorkflowLiveProgressTemplate> {
+	readonly templateId = WorkflowTreeTemplateId.LiveProgress;
+
+	private readonly _onDidChangeItemHeight = this._register(new Emitter<IWorkflowStoryHeightChange>());
+	readonly onDidChangeItemHeight: Event<IWorkflowStoryHeightChange> = this._onDidChangeItemHeight.event;
+
+	private readonly liveTemplates = new Set<IWorkflowLiveProgressTemplate>();
+
+	constructor(private readonly heights: WorkflowStoryHeightCache) {
+		super();
+	}
+
+	renderTemplate(container: HTMLElement): IWorkflowLiveProgressTemplate {
+		container.classList.add('clawdius-workflow-live-progress');
+		const progressBar = new ProgressBar(container, defaultProgressBarStyles);
+		const ratio = append(container, $('.clawdius-workflow-live-ratio'));
+		const running = append(container, $('.clawdius-workflow-live-running'));
+		const activity = append(container, $('.clawdius-workflow-live-activity'));
+		const degraded = append(container, $('.clawdius-workflow-live-degraded'));
+		const landedCount = append(container, $('.clawdius-workflow-live-landed-count'));
+		const landedList = append(container, $('.clawdius-workflow-live-landed-list'));
+		return { container, progressBar, ratio, running, activity, degraded, landedCount, landedList, element: undefined };
+	}
+
+	renderElement(node: ITreeNode<WorkflowTreeElement, FuzzyScore>, _index: number, template: IWorkflowLiveProgressTemplate): void {
+		const element = node.element;
+		if (!isLiveProgressElement(element)) {
+			return;
+		}
+		template.element = element;
+		const content = describeLiveProgress(element.run);
+
+		if (content.seenCount > 0) {
+			// `seenCount` (the union of started/result agent ids - never just `startedCount`) is the total: using
+			// `startedCount` here could paint `worked` (resultCount) ABOVE `total` whenever a result's own `started`
+			// record was torn or otherwise dropped, an invalid `aria-valuenow` > `aria-valuemax` state.
+			template.progressBar.total(content.seenCount);
+			// `ProgressBar.setWorked` floors its argument to a minimum of 1 (base/browser/ui/progressbar), so calling
+			// it with a genuine 0 would misleadingly paint ONE unit of progress before anything has landed - leave the
+			// bar at its freshly-`total()`-reset zero state instead of coercing an honest zero into a fabricated one.
+			if (content.resultCount > 0) {
+				template.progressBar.setWorked(content.resultCount);
+			}
+		} else {
+			template.progressBar.infinite();
+		}
+
+		template.ratio.textContent = content.ratioCaption;
+		template.running.textContent = content.runningCount > 0
+			? localize('clawdius.workflows.live.running', "{0} still running", content.runningCount)
+			: '';
+		template.running.style.display = content.runningCount > 0 ? '' : 'none';
+		template.activity.textContent = content.activityCaption;
+
+		template.degraded.textContent = content.degradedCaption ?? '';
+		template.degraded.style.display = content.degradedCaption ? '' : 'none';
+
+		template.landedCount.textContent = content.landedCountCaption ?? '';
+		template.landedCount.style.display = content.landedCountCaption ? '' : 'none';
+
+		clearNode(template.landedList);
+		for (const landed of content.landedPreviews) {
+			append(template.landedList, $('.clawdius-workflow-live-landed-item', undefined, landed.preview));
+		}
+		if (content.hasMoreLanded) {
+			append(template.landedList, $('.clawdius-workflow-live-landed-more', undefined,
+				localize('clawdius.workflows.live.moreLanded', "More results have landed than shown here.")));
+		}
+
+		this.liveTemplates.add(template);
+		this.measure(template);
+	}
+
+	disposeElement(_node: ITreeNode<WorkflowTreeElement, FuzzyScore>, _index: number, template: IWorkflowLiveProgressTemplate): void {
+		this.liveTemplates.delete(template);
+		template.element = undefined;
+	}
+
+	disposeTemplate(template: IWorkflowLiveProgressTemplate): void {
+		template.progressBar.dispose();
+	}
+
+	/** Re-measure every currently-rendered live-progress leaf - the same width-change hook `WorkflowStoryLeafRenderer`
+	 *  exposes, called from the view's `layoutBody` alongside it. */
+	remeasureAll(): void {
+		for (const template of this.liveTemplates) {
+			this.measure(template);
+		}
+	}
+
+	private measure(template: IWorkflowLiveProgressTemplate): void {
 		const element = template.element;
 		if (!element) {
 			return;

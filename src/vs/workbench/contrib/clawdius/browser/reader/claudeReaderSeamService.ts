@@ -17,14 +17,19 @@
 import { streamToBuffer, VSBuffer } from '../../../../../base/common/buffer.js';
 import { basename } from '../../../../../base/common/resources.js';
 import { URI } from '../../../../../base/common/uri.js';
-import { IFileService } from '../../../../../platform/files/common/files.js';
+import { FileOperationResult, IFileService, toFileOperationResult } from '../../../../../platform/files/common/files.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
+import { localize } from '../../../../../nls.js';
 import {
 	AdapterVersionStamp, CompletenessState, CostRecord, CoverageLabel, FreshnessLabel, IReaderRequest,
 	IReaderResult, IReaderSeam, ReaderConfigRoot, ReaderEntityKind, ReaderScope, Run, Session, Subagent, TaskList,
 	TeamRoster, Transcript, TranscriptIndexKey,
 } from '../../common/claudeReaderSeam.js';
 import { FleetRun, FleetSubagent, FleetTranscriptSlice, MissionAgent, MissionAgentList, MissionPhase, MissionProgressEntry, MissionProgressKind, MissionRun, MissionStatus } from '../../common/claudeFleetModel.js';
+import {
+	LiveWorkflowResult, LiveWorkflowRun, TerminalWorkflowAgent, TerminalWorkflowRun, UnrecognizedWorkflowRun,
+	WorkflowPhase, WorkflowRun, WorkflowRunListResult, WorkflowTranscriptRef, workflowRunIdentity,
+} from '../../common/claudeWorkflowModel.js';
 import { encodeProjectDir } from '../clawdiusConfigStore.js';
 
 /** The transcript read-model entities this adapter can produce, by request kind. */
@@ -53,6 +58,10 @@ const RUN_ID_RE = /^wf_[a-z0-9-]{6,}$/;
  *  separator, a `..`) is rejected rather than joined, mirroring the guard `oobRef` applies to a transcript's
  *  out-of-band ref. Matches the launcher's own ids, which are plain alphanumeric/dash/underscore. */
 const AGENT_ID_RE = /^[A-Za-z0-9_-]+$/;
+/** A session id, as a PATH-SAFE token - the same charset guard as {@link AGENT_ID_RE} applied to the OTHER
+ *  identity component the transcript join re-derives a path from (the identity-join rule: every identity component is
+ *  validated path-safe, not only `agentId`). Matches the launcher's own session ids (UUIDs). */
+const SESSION_ID_RE = /^[A-Za-z0-9_-]+$/;
 
 /**
  * Whether a value read off the journal is a path-safe agent id. Takes `unknown` and narrows, deliberately: the id
@@ -62,6 +71,22 @@ const AGENT_ID_RE = /^[A-Za-z0-9_-]+$/;
  */
 function isAgentId(id: unknown): id is string {
 	return typeof id === 'string' && AGENT_ID_RE.test(id);
+}
+
+/** Whether a value is a path-safe session id (same coercion trap as {@link isAgentId}; guarded identically). */
+function isSessionId(id: unknown): id is string {
+	return typeof id === 'string' && SESSION_ID_RE.test(id);
+}
+
+/** Bound on a run-level RESULT preview the seam derives itself. Unlike the per-agent `promptPreview` /
+ *  `resultPreview` fields (which the launcher already writes pre-bounded), the manifest's run-level `result` has
+ *  no on-disk bound, so the seam bounds it here - a render budget, not a content-safety measure (escaping for
+ *  display is the editor's `textContent` job). */
+const RESULT_PREVIEW_MAX_CHARS = 280;
+
+/** Bound `text` to at most `max` characters, appending an ellipsis marker when truncated. Pure. */
+function boundedPreview(text: string, max: number): string {
+	return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
 /**
@@ -88,7 +113,7 @@ function toJournalRecord(parsed: unknown): IWorkflowJournalRecord | undefined {
 	// filters, counted as nothing, leaving the read to call itself whole while an agent went missing. Reject it so
 	// the drop is recorded as the gap it is. A non-agent record (phase, log) carrying no id is normal and kept.
 	if ((type === 'started' || type === 'result') && !agentId) { return undefined; }
-	return { type, agentId };
+	return { type, agentId, result: type === 'result' ? obj.result : undefined };
 }
 
 /**
@@ -99,7 +124,10 @@ function toJournalRecord(parsed: unknown): IWorkflowJournalRecord | undefined {
  */
 interface IWorkflowManifest {
 	readonly workflowName?: string;
+	readonly summary?: string;
 	readonly status?: string;
+	readonly startTime?: number;
+	readonly timestamp?: number;
 	readonly agentCount?: number;
 	readonly durationMs?: number;
 	readonly totalTokens?: number;
@@ -107,14 +135,21 @@ interface IWorkflowManifest {
 	readonly defaultModel?: string;
 	readonly scriptPath?: string;
 	readonly error?: string;
+	/** The run's full result, untyped here on purpose - validated at the point of use (a non-string is a dropped
+	 *  field, never carried through as text). */
+	readonly result?: unknown;
 	readonly phases?: readonly { readonly title?: string; readonly detail?: string }[];
-	readonly workflowProgress?: readonly { readonly index?: number; readonly title?: string; readonly type?: string }[];
+	readonly workflowProgress?: readonly { readonly index?: number; readonly title?: string; readonly type?: string; readonly agentId?: string }[];
 }
 
 /** One record of a run journal: a `started` when an agent begins, a `result` when it reports back. */
 interface IWorkflowJournalRecord {
 	readonly type?: string;
 	readonly agentId?: string;
+	/** The raw `result` payload of a `result` record, untyped - validated at the point of use: a live run's
+	 *  landed-result preview reads it as a string when it is one, else falls back to the honest "Result landed"
+	 *  label rather than fabricating or dropping the row. */
+	readonly result?: unknown;
 }
 
 /** Whether a name is a run id (a stray file in the workflows dir is not a mission). */
@@ -126,7 +161,7 @@ function isRunId(name: string): boolean {
  * The manifest's status vocabulary. There is deliberately no running state: the manifest is written only when a
  * run finishes, so a live mission is recognized by its manifest-LESS journal, never by a status field.
  */
-function isTerminalStatus(status: string | undefined): status is MissionStatus {
+function isTerminalStatus(status: string | undefined): status is 'completed' | 'failed' {
 	return status === 'completed' || status === 'failed';
 }
 
@@ -511,11 +546,12 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		const out: MissionRun[] = [];
 		for (const sessionDir of await this.listSessionSidecarDirs(root)) {
 			const sessionId = basename(sessionDir);
-			const manifests = await this.readMissionManifests(sessionDir);
+			const { manifests } = await this.readMissionManifests(sessionDir);
 			for (const [runId, manifest] of manifests) {
 				out.push(this.missionFromManifest(runId, sessionId, manifest));
 			}
-			for (const [runId, journal] of await this.listMissionJournals(sessionDir)) {
+			const { journals } = await this.listMissionJournals(sessionDir);
+			for (const [runId, journal] of journals) {
 				// A manifest wins: it is the terminal record of the same run. Only a manifest-less journal is live.
 				if (!manifests.has(runId)) {
 					out.push(await this.missionFromJournal(runId, sessionId, journal));
@@ -578,6 +614,346 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		})));
 		return { agents: out.sort((a, b) => a.agentId.localeCompare(b.agentId)), completeness: listCompleteness };
 	}
+
+	// --- Claude Code Ultracode Workflows: the validated read model (live / terminal / unknown-shape) ---------
+	// The enumeration below is a SEPARATE, honest walk from {@link enumerateMissions}: it distinguishes a
+	// genuinely-absent `projects/` tree (`ok` + `[]`) from one that exists but could not be read (`read-error`),
+	// which the legacy walk's blanket `catch { return [] }` cannot express (an empty read and a read failure are
+	// distinct outcomes). It
+	// still reuses the leaf-level manifest/journal readers below, which already degrade a single unreadable
+	// session tolerantly - that tolerance is correct there (one bad session must not blank the whole list) and is
+	// folded into this walk's own `partial` state rather than re-implemented.
+
+	/**
+	 * Resolve `dir`'s child directories, distinguishing a directory that genuinely does not exist from one that
+	 * exists but could not be read (permission / provider / IO error) - the distinction the honest root envelope
+	 * needs and the legacy best-effort walks do not. Never throws.
+	 */
+	private async resolveChildDirs(dir: URI): Promise<{ readonly dirs: readonly URI[]; readonly outcome: 'ok' | 'not-found' | 'error' }> {
+		try {
+			const stat = await this.fileService.resolve(dir);
+			return { dirs: (stat.children ?? []).filter(c => c.isDirectory).map(c => c.resource), outcome: 'ok' };
+		} catch (e) {
+			return { dirs: [], outcome: toFileOperationResult(e) === FileOperationResult.FILE_NOT_FOUND ? 'not-found' : 'error' };
+		}
+	}
+
+	/**
+	 * Enumerate every ultracode workflow run under the resolved config root as the typed root envelope
+	 * {@link WorkflowRunListResult} - the Workflows view's PRIMARY read, replacing a bare array so an
+	 * enumeration failure can never collapse to the same shape as a successful empty read. A missing/empty
+	 * `projects/` tree is the honest empty state (`ok` + `[]`); a `projects/` tree that exists but could not be
+	 * read at all is `read-error` (never `[]`); a walk that read some sessions but hit an unreadable one along
+	 * the way is `partial` (real data, known gap). Never reads a transcript up front - zero transcript reads
+	 * during enumeration, only small manifest/journal files and directory listings. Deterministically ordered.
+	 * Read-only.
+	 */
+	async enumerateWorkflows(root: URI): Promise<WorkflowRunListResult> {
+		const projects = await this.resolveChildDirs(URI.joinPath(root, 'projects'));
+		if (projects.outcome === 'not-found') { return { state: 'ok', runs: [] }; }
+		if (projects.outcome === 'error') {
+			return { state: 'read-error', runs: [], message: localize('clawdius.workflows.rootReadError', "The Claude config root could not be read.") };
+		}
+		const out: WorkflowRun[] = [];
+		let degraded = false;
+		for (const projectDir of projects.dirs) {
+			const sessions = await this.resolveChildDirs(projectDir);
+			if (sessions.outcome === 'error') { degraded = true; continue; }
+			for (const sessionDir of sessions.dirs) {
+				const sessionId = basename(sessionDir);
+				if (sessionId === 'memory') { continue; }
+				const { manifests, outcome: manifestsOutcome } = await this.readMissionManifests(sessionDir);
+				if (manifestsOutcome === 'error') { degraded = true; }
+				for (const [runId, manifest] of manifests) {
+					out.push(await this.workflowFromManifest(sessionDir, sessionId, runId, manifest));
+				}
+				const { journals, outcome: journalsOutcome } = await this.listMissionJournals(sessionDir);
+				if (journalsOutcome === 'error') { degraded = true; }
+				for (const [runId, journal] of journals) {
+					// A manifest is the terminal record of the same run; only a manifest-less journal is live.
+					if (!manifests.has(runId)) {
+						out.push(await this.workflowFromJournal(sessionId, runId, journal));
+					}
+				}
+			}
+		}
+		out.sort((a, b) => a.sessionId.localeCompare(b.sessionId) || a.runId.localeCompare(b.runId));
+		if (degraded) {
+			return { state: 'partial', runs: out, message: localize('clawdius.workflows.partialEnumeration', "Some Claude workflow sessions could not be read; this list may be incomplete.") };
+		}
+		return { state: 'ok', runs: out };
+	}
+
+	/** The distinct agent ids with a `started` journal record for one run, used to satisfy the transcript join's
+	 *  "present in journal" condition once per run rather than re-reading the journal per agent. An absent
+	 *  journal (a terminal run whose journal was pruned) yields an empty set - the join simply cannot succeed. */
+	private async startedAgentIdsFor(dir: URI): Promise<ReadonlySet<string>> {
+		const journal = URI.joinPath(dir, JOURNAL_NAME);
+		if (!(await this.fileService.exists(journal))) { return new Set(); }
+		const { records } = await this.readJournal(journal, false); // terminal run: not live, an unterminated tail is damage
+		return new Set(records.filter(r => r.type === 'started' && isAgentId(r.agentId)).map(r => r.agentId as string));
+	}
+
+	/**
+	 * Resolve one agent's {@link WorkflowTranscriptRef} per the deterministic identity join (the identity-join rule):
+	 * present ONLY when the manifest `agentId` is path-safe, unique within the manifest, present as a journal
+	 * `started` record, and its sibling `agent-<id>.jsonl` file exists as a DIRECT child of the run's own journal
+	 * dir. Never a heuristic (positional / label / timing) fallback - a failure of any condition withholds the
+	 * ref rather than guessing. Read-only (an existence check only; the transcript body is never read here).
+	 */
+	private async resolveTranscriptRef(dir: URI, sessionId: string, runId: string, agentId: string, unique: boolean, startedIds: ReadonlySet<string>): Promise<WorkflowTranscriptRef | undefined> {
+		if (!isAgentId(agentId) || !unique || !startedIds.has(agentId)) { return undefined; }
+		const file = URI.joinPath(dir, `agent-${agentId}.jsonl`);
+		// Defense-in-depth: the AGENT_ID_RE charset guard above already makes this true by construction (no `/`,
+		// `\`, or `.` can reach here), but the join's safety must not rest on the charset guard ALONE - assert the
+		// resolved file is a direct child of the run's own dir before trusting it.
+		if (normalizePath(URI.joinPath(file, '..').toString()) !== normalizePath(dir.toString())) { return undefined; }
+		if (!(await this.fileService.exists(file))) { return undefined; }
+		return { sessionId, runId, agentId };
+	}
+
+	/** The session sidecar dir whose basename matches `sessionId` exactly, or undefined when there is none - used
+	 *  by {@link readWorkflowAgentTranscript} to re-derive a transcript path from bare identities alone (never a
+	 *  stored URI). */
+	private async findSessionDir(root: URI, sessionId: string): Promise<URI | undefined> {
+		for (const dir of await this.listSessionSidecarDirs(root)) {
+			if (basename(dir) === sessionId) { return dir; }
+		}
+		return undefined;
+	}
+
+	/**
+	 * Build a {@link WorkflowRun} from a terminal manifest: `TerminalWorkflowRun` when the CORE terminal field
+	 * (`status`) is recognized, else `UnrecognizedWorkflowRun` (a schema shift, surfaced honestly rather than
+	 * guessed). Every other field is read through the same validate-don't-cast guards `missionFromManifest` uses
+	 * - present-but-wrong-type degrades to `partial` and is never carried through; a malformed `workflow_agent`
+	 * entry (missing its required `agentId`/`label`/`state`) is dropped, keeping its siblings. Phase agent/error
+	 * tallies are DERIVED from the validated agents (the manifest carries no such counts). Computes the
+	 * deterministic transcript join per agent (the identity-join rule) - the only I/O beyond the manifest itself, and never a
+	 * transcript body read.
+	 */
+	private async workflowFromManifest(sessionDir: URI, sessionId: string, runId: string, m: IWorkflowManifest): Promise<WorkflowRun> {
+		const raw = m as unknown as Record<string, unknown>;
+		const identity = workflowRunIdentity(sessionId, runId);
+		const statusRaw = raw['status'];
+		const status = typeof statusRaw === 'string' ? statusRaw : undefined;
+		if (!isTerminalStatus(status)) {
+			const unrecognized: UnrecognizedWorkflowRun = {
+				kind: 'unknown-shape', sessionId, runId, identity,
+				ownership: 'foreign', coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled,
+				completeness: CompletenessState.UnknownShape, adapterVersion: this.canaryStamp,
+			};
+			return unrecognized;
+		}
+
+		let droppedField = false;
+		const str = (o: Record<string, unknown>, key: string): string | undefined => {
+			if (o[key] === undefined || o[key] === null) { return undefined; }
+			const v = readString(o, key);
+			if (v === undefined) { droppedField = true; }
+			return v;
+		};
+		// A number that is non-finite OR NEGATIVE is not a valid reading for anything this manifest reports (a
+		// duration, a token total, a timestamp) - dropped like any other unreadable field, never clamped or
+		// coerced. A COUNT field (`integer: true`) additionally cannot be fractional: `2.5` agents is not a
+		// smaller kind of whole number, it is an unreadable one, so it drops exactly like a negative value rather
+		// than being floored or rounded into a plausible-looking int.
+		const num = (o: Record<string, unknown>, key: string, opts?: { readonly integer?: boolean }): number | undefined => {
+			if (o[key] === undefined || o[key] === null) { return undefined; }
+			const v = readNumber(o, key);
+			if (v === undefined || v < 0 || (opts?.integer === true && !Number.isInteger(v))) {
+				droppedField = true;
+				return undefined;
+			}
+			return v;
+		};
+		const entries = (key: string): Record<string, unknown>[] => {
+			const v = raw[key];
+			if (v === undefined || v === null) { return []; }
+			if (!Array.isArray(v)) { droppedField = true; return []; }
+			const kept = v.filter(isObject);
+			if (kept.length !== v.length) { droppedField = true; }
+			return kept as Record<string, unknown>[];
+		};
+
+		const workflowName = str(raw, 'workflowName');
+		const summary = str(raw, 'summary');
+		const startTime = num(raw, 'startTime');
+		const timestamp = num(raw, 'timestamp');
+		const durationMs = num(raw, 'durationMs');
+		const totalTokens = num(raw, 'totalTokens');
+		const totalToolCalls = num(raw, 'totalToolCalls', { integer: true });
+		const defaultModel = str(raw, 'defaultModel');
+		const error = str(raw, 'error');
+
+		const resultRaw = raw['result'];
+		let resultText: string | undefined;
+		if (resultRaw !== undefined && resultRaw !== null) {
+			if (typeof resultRaw === 'string') { resultText = resultRaw; } else { droppedField = true; }
+		}
+		const resultPreview = resultText !== undefined ? boundedPreview(resultText, RESULT_PREVIEW_MAX_CHARS) : undefined;
+
+		// Phases: the manifest's own declared list (title/detail), positionally indexed. Agent/error tallies are
+		// filled in AFTER the agents below are validated - the manifest itself carries no such counts.
+		const rawPhases: { index: number; title: string; detail: string | undefined }[] = [];
+		{
+			let i = 0;
+			for (const p of entries('phases')) {
+				const title = str(p, 'title');
+				if (title === undefined) { droppedField = true; i++; continue; }
+				rawPhases.push({ index: i, title, detail: str(p, 'detail') });
+				i++;
+			}
+		}
+
+		// Agents: validated per-entry from `workflowProgress[type='workflow_agent']`. `agentId`/`label`/`state`
+		// are the required, measured vocabulary; an entry missing any of them cannot be listed and is dropped
+		// like any other malformed entry (the field-validation rule) rather than carried with a fabricated value. Uniqueness
+		// (join condition 2) is a manifest-level property of the RAW id, computed over every path-safe id found -
+		// including one later dropped for an unrelated reason, since a bad label does not un-collide a duplicate.
+		const progressEntries = entries('workflowProgress');
+		const idFreq = new Map<string, number>();
+		for (const p of progressEntries) {
+			if (str(p, 'type') !== 'workflow_agent') { continue; }
+			const id = p['agentId'];
+			if (isAgentId(id)) { idFreq.set(id, (idFreq.get(id) ?? 0) + 1); }
+		}
+
+		const dir = URI.joinPath(sessionDir, 'subagents', 'workflows', runId);
+		const startedIds = await this.startedAgentIdsFor(dir);
+
+		const agents: TerminalWorkflowAgent[] = [];
+		for (const p of progressEntries) {
+			const type = str(p, 'type');
+			if (type !== 'workflow_agent') {
+				// A `workflow_phase` entry is expected here and not an agent; anything else is unmodeled content
+				// this reader does not carry forward - a drop, the same as an unmodeled phase/progress kind.
+				if (type !== 'workflow_phase') { droppedField = true; }
+				continue;
+			}
+			const idRaw = p['agentId'];
+			const label = str(p, 'label');
+			const stateRaw = str(p, 'state');
+			if (!isAgentId(idRaw) || label === undefined || (stateRaw !== 'done' && stateRaw !== 'error')) {
+				droppedField = true; // malformed entry: cannot be listed, drop it, keep its siblings
+				continue;
+			}
+			const agentId = idRaw;
+			const state = stateRaw;
+			const agentError = str(p, 'error');
+			if (state === 'error' && agentError === undefined) {
+				// The authoritative failure content is measured on every errored agent in the real corpus; its
+				// absence here is a real gap, not silence.
+				droppedField = true;
+			}
+			const attemptRaw = num(p, 'attempt', { integer: true });
+			const attempt = attemptRaw !== undefined && attemptRaw > 1 ? attemptRaw : undefined;
+			const unique = (idFreq.get(agentId) ?? 0) === 1;
+			const transcriptRef = await this.resolveTranscriptRef(dir, sessionId, runId, agentId, unique, startedIds);
+			agents.push({
+				agentId, label, state,
+				model: str(p, 'model'),
+				tokens: num(p, 'tokens', { integer: true }),
+				toolCalls: num(p, 'toolCalls', { integer: true }),
+				durationMs: num(p, 'durationMs'),
+				phaseTitle: str(p, 'phaseTitle'),
+				phaseIndex: num(p, 'phaseIndex', { integer: true }),
+				lastToolName: str(p, 'lastToolName'),
+				agentType: str(p, 'agentType'),
+				promptPreview: str(p, 'promptPreview'),
+				resultPreview: str(p, 'resultPreview'),
+				error: agentError,
+				attempt,
+				transcriptRef,
+			});
+		}
+
+		const phases: WorkflowPhase[] = rawPhases.map(p => {
+			const inPhase = (a: TerminalWorkflowAgent) => a.phaseTitle !== undefined ? a.phaseTitle === p.title : a.phaseIndex === p.index;
+			const members = agents.filter(inPhase);
+			return { index: p.index, title: p.title, detail: p.detail, agentCount: members.length, errorCount: members.filter(a => a.state === 'error').length };
+		});
+
+		const workflow: TerminalWorkflowRun = {
+			kind: 'terminal', sessionId, runId, identity,
+			workflowName, summary, status, startTime, timestamp, durationMs, totalTokens, totalToolCalls,
+			// NEVER derived from `agents.length`: a missing manifest agentCount stays absent (renders as a dash),
+			// which is a different fact from "this run had zero agents" - the validated agent list already carries
+			// that count where it is actually needed (`agents.length`), so fabricating it here would assert a
+			// number the manifest itself never recorded.
+			agentCount: num(raw, 'agentCount', { integer: true }), defaultModel, resultText, resultPreview, error,
+			phases, agents,
+			ownership: 'foreign', coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled,
+			completeness: droppedField ? CompletenessState.Partial : CompletenessState.Complete,
+			adapterVersion: this.stamp,
+		};
+		return workflow;
+	}
+
+	/**
+	 * Build a {@link LiveWorkflowRun} from a manifest-less journal - the ONLY shape a run still in flight has on
+	 * disk. Carries only what the journal actually proves (started/result counts, landed results, last-write
+	 * time); a torn line degrades `degradation`/`completeness` to `partial`, and a journal with content but NO
+	 * recognizable record at all degrades to `unknown-shape` rather than being silently treated as empty.
+	 */
+	private async workflowFromJournal(sessionId: string, runId: string, journal: URI): Promise<LiveWorkflowRun> {
+		const { records, sawTorn } = await this.readJournal(journal, true); // manifest-less: in flight, an unterminated tail is the live tail
+		const startedIds = new Set(records.filter(r => r.type === 'started' && isAgentId(r.agentId)).map(r => r.agentId as string));
+		const resultRecords = records.filter(r => r.type === 'result' && isAgentId(r.agentId));
+		// Append-only: a later `result` record for the same agent supersedes an earlier one.
+		const landedByAgent = new Map<string, unknown>();
+		for (const r of resultRecords) { landedByAgent.set(r.agentId as string, r.result); }
+		const landedResults: LiveWorkflowResult[] = [...landedByAgent].map(([agentId, result]) => ({
+			agentId,
+			preview: typeof result === 'string'
+				? boundedPreview(result, RESULT_PREVIEW_MAX_CHARS)
+				: localize('clawdius.workflows.resultLanded', "Result landed"),
+		})).sort((a, b) => a.agentId.localeCompare(b.agentId));
+		let mtime = 0;
+		let mtimeUnreadable = false;
+		try { mtime = (await this.fileService.stat(journal)).mtime; } catch { mtimeUnreadable = true; /* best-effort 0, and the missing write-time is a known gap */ }
+		const degradation: 'partial' | 'unknown-shape' | undefined =
+			records.length === 0 && sawTorn ? 'unknown-shape' : (sawTorn || mtimeUnreadable) ? 'partial' : undefined;
+		return {
+			kind: 'live', sessionId, runId, identity: workflowRunIdentity(sessionId, runId),
+			startedCount: startedIds.size, resultCount: new Set(resultRecords.map(r => r.agentId)).size,
+			landedResults, journalLastWriteTime: mtime, degradation,
+			ownership: 'foreign', coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Live,
+			// DERIVED from `degradation` so the two can never disagree: a known gap (a torn line OR an unreadable
+			// journal write-time) can never ride under a `complete` label, and an all-torn journal reads unknown-shape.
+			completeness: degradation === 'unknown-shape' ? CompletenessState.UnknownShape
+				: degradation === 'partial' ? CompletenessState.Partial
+					: records.length > 0 ? CompletenessState.Complete : CompletenessState.Absent,
+			adapterVersion: this.stamp,
+		};
+	}
+
+	/**
+	 * Read one workflow agent's raw on-disk transcript by IDENTITIES (`sessionId`/`runId`/`agentId`), re-deriving
+	 * `subagents/workflows/<runId>/agent-<agentId>.jsonl` under the resolved root on EVERY call - never trusting
+	 * a stored URI (the identity-join rule / security: a restored/serialized ref can never redirect the read elsewhere).
+	 * All three identity components are validated path-safe before any path is built; an unsafe or unresolvable
+	 * identity degrades to an absent, out-of-scope result rather than guessing. Read-only.
+	 */
+	async readWorkflowAgentTranscript(root: URI, ref: WorkflowTranscriptRef, folders: readonly URI[]): Promise<FleetTranscriptSlice> {
+		if (!isSessionId(ref.sessionId) || !isRunId(ref.runId) || !isAgentId(ref.agentId)) {
+			return { subagentId: ref.agentId, records: [], coverage: CoverageLabel.OutOfScope, freshness: FreshnessLabel.Stale, completeness: CompletenessState.Absent, adapterVersion: this.stamp };
+		}
+		const sessionDir = await this.findSessionDir(root, ref.sessionId);
+		if (!sessionDir) {
+			return { subagentId: ref.agentId, records: [], coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.Absent, adapterVersion: this.stamp };
+		}
+		const dir = URI.joinPath(sessionDir, 'subagents', 'workflows', ref.runId);
+		const file = URI.joinPath(dir, `agent-${ref.agentId}.jsonl`);
+		if (normalizePath(URI.joinPath(file, '..').toString()) !== normalizePath(dir.toString())) {
+			// Structurally unreachable given the charset guards above - kept as an explicit assertion rather than
+			// an implicit one, per the identity-join rule: the join's safety must not rest on the charset guard alone.
+			return { subagentId: ref.agentId, records: [], coverage: CoverageLabel.OutOfScope, freshness: FreshnessLabel.Stale, completeness: CompletenessState.Absent, adapterVersion: this.stamp };
+		}
+		return this.readTranscriptAt(ref.agentId, file, folders);
+	}
+
+	// --- end Claude Code Ultracode Workflows read model ---------------------------------------------------------
 
 	/** Build a mission from its terminal manifest. Status comes straight off the record - never inferred. */
 	private missionFromManifest(runId: string, sessionId: string, m: IWorkflowManifest): MissionRun {
@@ -733,14 +1109,24 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		return dirs;
 	}
 
-	/** The terminal manifests under a session's `workflows/` dir, keyed by run id. Unparseable ones are skipped. */
-	private async readMissionManifests(sessionDir: URI): Promise<Map<string, IWorkflowManifest>> {
+	/**
+	 * The terminal manifests under a session's `workflows/` dir, keyed by run id, plus whether the DIR ITSELF could
+	 * be listed - the same `not-found` vs `error` distinction {@link resolveChildDirs} draws for `projects/` and
+	 * its project dirs, applied one level deeper. A session genuinely has no `workflows/` dir until its first run
+	 * finishes (`not-found`, honestly empty); a dir that exists but could not be listed (permission/provider error)
+	 * is a real gap the caller must not silently swallow (`error`). An individual unparseable/unreadable manifest
+	 * FILE stays tolerated and is simply skipped - that per-file leniency is unrelated to whether the directory
+	 * itself was readable, and one bad manifest must not blank out its siblings.
+	 */
+	private async readMissionManifests(sessionDir: URI): Promise<{ readonly manifests: Map<string, IWorkflowManifest>; readonly outcome: 'ok' | 'not-found' | 'error' }> {
 		const out = new Map<string, IWorkflowManifest>();
 		let files: readonly URI[];
 		try {
 			const stat = await this.fileService.resolve(URI.joinPath(sessionDir, 'workflows'));
 			files = (stat.children ?? []).filter(c => !c.isDirectory && c.name.endsWith('.json')).map(c => c.resource);
-		} catch { return out; }
+		} catch (e) {
+			return { manifests: out, outcome: toFileOperationResult(e) === FileOperationResult.FILE_NOT_FOUND ? 'not-found' : 'error' };
+		}
 		for (const file of files) {
 			const runId = basename(file).slice(0, -'.json'.length);
 			if (!isRunId(runId)) { continue; }
@@ -749,24 +1135,28 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 				if (parsed && typeof parsed === 'object') { out.set(runId, parsed as IWorkflowManifest); }
 			} catch { /* an unreadable/!JSON manifest is simply not a legible mission */ }
 		}
-		return out;
+		return { manifests: out, outcome: 'ok' };
 	}
 
-	/** The run journals under a session's `subagents/workflows/` dir, keyed by run id. */
-	private async listMissionJournals(sessionDir: URI): Promise<Map<string, URI>> {
+	/** The run journals under a session's `subagents/workflows/` dir, keyed by run id, plus whether the dir itself
+	 *  could be listed - the same `not-found` vs `error` distinction {@link readMissionManifests} draws for its
+	 *  sibling `workflows/` dir. */
+	private async listMissionJournals(sessionDir: URI): Promise<{ readonly journals: Map<string, URI>; readonly outcome: 'ok' | 'not-found' | 'error' }> {
 		const out = new Map<string, URI>();
 		let runDirs: readonly URI[];
 		try {
 			const stat = await this.fileService.resolve(URI.joinPath(sessionDir, 'subagents', 'workflows'));
 			runDirs = (stat.children ?? []).filter(c => c.isDirectory).map(c => c.resource);
-		} catch { return out; }
+		} catch (e) {
+			return { journals: out, outcome: toFileOperationResult(e) === FileOperationResult.FILE_NOT_FOUND ? 'not-found' : 'error' };
+		}
 		for (const dir of runDirs) {
 			const runId = basename(dir);
 			if (!isRunId(runId)) { continue; }
 			const journal = URI.joinPath(dir, JOURNAL_NAME);
 			if (await this.fileService.exists(journal)) { out.set(runId, journal); }
 		}
-		return out;
+		return { journals: out, outcome: 'ok' };
 	}
 
 	/** Locate a mission's journal DIR (which also holds its agent transcripts), or undefined when it has none. */
@@ -875,14 +1265,23 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		} catch {
 			return { subagentId: subagent.subagentId, records: [], coverage: CoverageLabel.OutOfScope, freshness: FreshnessLabel.Stale, completeness: CompletenessState.Absent, adapterVersion: this.stamp };
 		}
+		return this.readTranscriptAt(subagent.subagentId, file, folders);
+	}
+
+	/**
+	 * The shared parse+ladder for a single transcript file, given its subagent/agent label and an ALREADY
+	 * RESOLVED file - the read step behind both the opaque-ref path ({@link readTranscriptSlice}) and the
+	 * identity-rederived path ({@link readWorkflowAgentTranscript}). Never throws. Read-only.
+	 */
+	private async readTranscriptAt(subagentId: string, file: URI, folders: readonly URI[]): Promise<FleetTranscriptSlice> {
 		const { parsed, base } = await this.parseFile(file);
 		if (!parsed.sawJson) {
 			// The file is missing / empty (a fresh or removed session): absent, not an error.
-			return { subagentId: subagent.subagentId, records: [], coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.Absent, adapterVersion: this.stamp };
+			return { subagentId, records: [], coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.Absent, adapterVersion: this.stamp };
 		}
 		if (!parsed.recognized) {
 			// JSON present but no recognized shape: a wholesale schema shift - trip the canary.
-			return { subagentId: subagent.subagentId, records: [], coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.UnknownShape, adapterVersion: this.canaryStamp };
+			return { subagentId, records: [], coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.UnknownShape, adapterVersion: this.canaryStamp };
 		}
 		// A known gap ({@link hasKnownGap}) is `partial`, as is - the drill-in's extra probe - a referenced
 		// out-of-band tool-result file that is missing. Otherwise the read is whole.
@@ -890,7 +1289,7 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 			? CompletenessState.Partial
 			: await this.completenessOf(parsed.records, file);
 		return {
-			subagentId: subagent.subagentId,
+			subagentId,
 			records: parsed.records.map(r => ({ type: r.type, isSidechain: r.isSidechain })),
 			coverage: coverageForEnum(parsed.records, folders),
 			freshness: FreshnessLabel.Polled,
@@ -1243,6 +1642,33 @@ export class ClawdiusReaderSeamService implements IReaderSeam {
 	async listMissionAgents(root: ReaderConfigRoot, mission: MissionRun): Promise<MissionAgentList> {
 		if (root.kind === 'no-config') { return { agents: [], completeness: CompletenessState.Absent }; }
 		return this.transcript.enumerateMissionAgents(root.root, mission);
+	}
+
+	/**
+	 * Enumerate every ultracode workflow run under the resolved config root as the typed root envelope
+	 * {@link WorkflowRunListResult} - the Workflows view's PRIMARY read. Replaces a bare array so an enumeration
+	 * failure is never indistinguishable from a successful empty read. Re-callable as the data re-read
+	 * entry point (never a run control): calling it again simply re-enumerates fresh state. Read-only.
+	 */
+	async listWorkflows(root: ReaderConfigRoot): Promise<WorkflowRunListResult> {
+		if (root.kind === 'no-config') { return { state: 'ok', runs: [] }; }
+		return this.transcript.enumerateWorkflows(root.root);
+	}
+
+	/**
+	 * Read one workflow agent's raw on-disk transcript by IDENTITIES alone (never a stored URI) - the drill-in
+	 * the transcript editor binds to. The seam re-derives the file path under the resolved root on every call, so
+	 * a restored/serialized reference can never redirect the read elsewhere (the identity-join rule). A `no-config` root or
+	 * an unsafe/unresolvable identity degrades to an honest absent, out-of-scope result. Read-only.
+	 */
+	async readWorkflowAgentTranscript(root: ReaderConfigRoot, ref: WorkflowTranscriptRef): Promise<FleetTranscriptSlice> {
+		if (root.kind === 'no-config') {
+			return {
+				subagentId: ref.agentId, records: [], coverage: CoverageLabel.OutOfScope, freshness: FreshnessLabel.Stale,
+				completeness: CompletenessState.Absent, adapterVersion: { format: this.transcript.format, versionKey: this.transcript.versionKey },
+			};
+		}
+		return this.transcript.readWorkflowAgentTranscript(root.root, ref, this.scopeFolders());
 	}
 
 	/**

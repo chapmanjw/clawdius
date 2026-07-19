@@ -16,7 +16,8 @@ import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { MissionAgent as WorkflowAgent, MissionAgentList as WorkflowAgentList, MissionRun as WorkflowRun } from '../../common/claudeFleetModel.js';
 import { CompletenessState, CoverageLabel, FreshnessLabel, ReaderConfigRoot } from '../../common/claudeReaderSeam.js';
-import { errorSummary, FleetRunsList, IFleetRowInteractions, IFleetRunSource } from '../../browser/workflows/claudeWorkflowsView.js';
+import { LiveWorkflowRun, TerminalWorkflowRun, UnrecognizedWorkflowRun, workflowRunIdentity } from '../../common/claudeWorkflowModel.js';
+import { errorSummary, FleetRunsList, IFleetRowInteractions, IFleetRunSource, toMissionShape } from '../../browser/workflows/claudeWorkflowsView.js';
 
 /** A fake enumeration source: returns a fixed labeled list, so the view test binds to the SAME `listRuns` shape
  *  the seam produces without touching disk. */
@@ -186,6 +187,84 @@ suite('Clawdius Claude Code Ultracode Workflows - drill-in interactions', () => 
 		await Promise.resolve();
 		assert.strictEqual(container.querySelectorAll('.clawdius-workflows-subrow').length, 0);
 		assert.strictEqual(container.querySelectorAll('.clawdius-workflows-row').length, 1);
+	});
+});
+
+// The temporary bridge: `listWorkflows`' new discriminated model is adapted to the legacy row shape so
+// the render pipeline above renders identically on the real corpus. These tests pin exactly the fields `appendWorkflowRow` reads
+// (name/status/agentCount/phases.length/error/coverage/freshness/completeness/ownership) - the bridge's contract.
+suite('Clawdius Claude Code Ultracode Workflows - toMissionShape (validated-model view bridge)', () => {
+	const store = ensureNoDisposablesAreLeakedInTestSuite();
+	const IDENTITY_BASE = {
+		ownership: 'foreign' as const, coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled,
+		completeness: CompletenessState.Complete, adapterVersion: { format: 'transcript-jsonl', versionKey: 'v1' },
+	};
+
+	test('a terminal run maps its name/status/cost/phases/error - exactly what the row renderer reads', () => {
+		const terminal: TerminalWorkflowRun = {
+			kind: 'terminal', sessionId: 's1', runId: 'wf_a', identity: workflowRunIdentity('s1', 'wf_a'),
+			...IDENTITY_BASE,
+			workflowName: 'audit-fleet', summary: 'ok', status: 'failed', error: 'script threw',
+			durationMs: 100, totalTokens: 200, totalToolCalls: 3, agentCount: 2, defaultModel: 'opus',
+			phases: [{ index: 0, title: 'Analyze', detail: 'one pass', agentCount: 2, errorCount: 1 }],
+			agents: [],
+		};
+		const mapped = toMissionShape(terminal);
+		assert.deepStrictEqual(
+			{ name: mapped.name, status: mapped.status, agentCount: mapped.agentCount, phases: mapped.phases.length, error: mapped.error, coverage: mapped.coverage, freshness: mapped.freshness, completeness: mapped.completeness, ownership: mapped.ownership },
+			{ name: 'audit-fleet', status: 'failed', agentCount: 2, phases: 1, error: 'script threw', coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.Complete, ownership: 'foreign' });
+	});
+
+	test('a terminal run with no workflowName falls back to the runId as its display name', () => {
+		const terminal: TerminalWorkflowRun = {
+			kind: 'terminal', sessionId: 's1', runId: 'wf_b', identity: workflowRunIdentity('s1', 'wf_b'),
+			...IDENTITY_BASE, status: 'completed', phases: [], agents: [{ agentId: 'a1', label: 'x', state: 'done' }, { agentId: 'a2', label: 'y', state: 'done' }],
+		};
+		const mapped = toMissionShape(terminal);
+		// A missing manifest agentCount stays undefined (rendered as a dash), NEVER fabricated from the validated
+		// agents' length - the declared count and the count of readable agents are different facts.
+		assert.deepStrictEqual({ name: mapped.name, agentCount: mapped.agentCount }, { name: 'wf_b', agentCount: undefined });
+	});
+
+	test('a live run maps to status "running" with started/result counts, no phases, no error', () => {
+		const live: LiveWorkflowRun = {
+			kind: 'live', sessionId: 's1', runId: 'wf_c', identity: workflowRunIdentity('s1', 'wf_c'),
+			...IDENTITY_BASE, freshness: FreshnessLabel.Live,
+			startedCount: 3, resultCount: 1, landedResults: [], journalLastWriteTime: 12345,
+		};
+		const mapped = toMissionShape(live);
+		assert.deepStrictEqual(
+			{ name: mapped.name, status: mapped.status, agentCount: mapped.agentCount, startedCount: mapped.startedCount, resultCount: mapped.resultCount, phases: mapped.phases, error: mapped.error },
+			{ name: 'wf_c', status: 'running', agentCount: 3, startedCount: 3, resultCount: 1, phases: [], error: undefined });
+	});
+
+	test('an unrecognized run maps to status "unknown" with no declared agent count and no phases', () => {
+		const unrecognized: UnrecognizedWorkflowRun = {
+			kind: 'unknown-shape', sessionId: 's1', runId: 'wf_d', identity: workflowRunIdentity('s1', 'wf_d'),
+			ownership: 'foreign', coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled,
+			completeness: CompletenessState.UnknownShape, adapterVersion: { format: 'transcript-jsonl', versionKey: 'unknown-shape' },
+		};
+		const mapped = toMissionShape(unrecognized);
+		assert.deepStrictEqual(
+			{ name: mapped.name, status: mapped.status, agentCount: mapped.agentCount, phases: mapped.phases, completeness: mapped.completeness },
+			{ name: 'wf_d', status: 'unknown', agentCount: undefined, phases: [], completeness: CompletenessState.UnknownShape });
+	});
+
+	test('every mapped shape renders identically through the SAME row renderer the pre-bridge model used', () => {
+		const terminal: TerminalWorkflowRun = {
+			kind: 'terminal', sessionId: 's1', runId: 'wf_e', identity: workflowRunIdentity('s1', 'wf_e'),
+			...IDENTITY_BASE, workflowName: 'demo', status: 'completed', agentCount: 5,
+			phases: [{ index: 0, title: 'p1', agentCount: 5, errorCount: 0 }, { index: 1, title: 'p2', agentCount: 0, errorCount: 0 }],
+			agents: [],
+		};
+		const container = $('div');
+		const list = store.add(new FleetRunsList(container));
+		list.render([toMissionShape(terminal)]);
+		assert.deepStrictEqual(rowsOf(container), [
+			// labelCount is 5, not the usual 4: this fixture has phases (2), so the row renderer adds the
+			// "phases: N" label on top of the four always-present ones (agents/freshness/completeness/ownership).
+			{ runId: 'wf_e', sessionId: 's1', kind: 'workflow', status: 'completed', ownership: 'foreign', coverage: 'in-scope', freshness: 'polled', completeness: 'complete', foreignMarked: false, labelCount: 5 },
+		]);
 	});
 });
 // CLAWDIUS-END

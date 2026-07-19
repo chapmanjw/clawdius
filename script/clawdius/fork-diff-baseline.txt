@@ -198,7 +198,18 @@
 # trees on the local hook AND CI. The reader seam and fleet read-model keep their Mission* names for a later
 # model change.
 
+# Disposition 2026-07-18 (+1 files, +1318 insertions): add the validated workflow read model + root envelope +
+# transcript join. A new discriminated model file (a run is live / terminal / unknown-shape; the root read returns
+# an ok / partial / read-error envelope instead of collapsing a failure to the empty state), validated terminal +
+# live projections built by validate-don't-cast (a wrong-typed / negative / non-integer-count field is dropped and
+# the read degrades to partial - never coerced, zero-defaulted, or agents.length-derived; a missing number is a
+# dash), a read error below the session-listing layer degrading the envelope to partial, and a deterministic
+# transcript reference derived from the exact (sessionId, runId, agentId) identity, re-derived from identities on
+# every read so a serialized reference cannot redirect it. Growth is the model file + the reader projections + the
+# mutation-tested honesty guards; the existing view is temporarily bridged onto the new model, behavior-neutral on
+# real data.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
 recorded: 2026-07-18
-baseline: 5597 files changed, 41970 insertions(+), 1456122 deletions(-)
+baseline: 5598 files changed, 43288 insertions(+), 1456122 deletions(-)

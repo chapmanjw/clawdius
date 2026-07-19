@@ -25,11 +25,15 @@ import { Schemas } from '../../../../../base/common/network.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { FileService } from '../../../../../platform/files/common/fileService.js';
+import { createFileSystemProviderError, FileSystemProviderErrorCode, FileType, IStat } from '../../../../../platform/files/common/files.js';
 import { InMemoryFileSystemProvider } from '../../../../../platform/files/common/inMemoryFilesystemProvider.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { testWorkspace } from '../../../../../platform/workspace/test/common/testWorkspace.js';
 import { MissionRun as WorkflowRun } from '../../common/claudeFleetModel.js';
 import { CompletenessState, FreshnessLabel, ReaderConfigRoot } from '../../common/claudeReaderSeam.js';
+import {
+	LiveWorkflowRun, TerminalWorkflowRun, UnrecognizedWorkflowRun, WorkflowRun as WorkflowRunModel, WorkflowTranscriptRef,
+} from '../../common/claudeWorkflowModel.js';
 import { encodeProjectDir } from '../../browser/clawdiusConfigStore.js';
 import { ClawdiusReaderSeamService } from '../../browser/reader/claudeReaderSeamService.js';
 import { TestContextService } from '../../../../test/common/workbenchTestServices.js';
@@ -581,6 +585,550 @@ suite('Clawdius Claude Code Ultracode Workflows - enumeration', () => {
 		// read that lost something) and from a mission that genuinely ran no agents.
 		assert.deepStrictEqual(await service.listMissionAgents(RESOLVED, mission),
 			{ agents: [], completeness: CompletenessState.Absent });
+	});
+});
+
+// A provider that can be told to fail `stat`/`readdir` on one exact path - simulates a `projects/` tree that
+// EXISTS but cannot be read (a permission/provider error), the case the root envelope must tell apart from a
+// tree that genuinely does not exist.
+class FlakyProvider extends InMemoryFileSystemProvider {
+	private brokenPath: string | undefined;
+	private breakStatAfterN = 0;
+	private brokenStatHits = 0;
+	breakOn(path: string): void { this.brokenPath = path; }
+	/** Break `stat` on `path` only from the (n+1)th stat call on it, so an earlier `exists` check can succeed while
+	 *  a later `stat` (e.g. a live journal's mtime read) fails - isolating a stat-only failure on a file the walk
+	 *  also `exists`-checks. */
+	breakStatOnAfter(path: string, n: number): void { this.brokenPath = path; this.breakStatAfterN = n; }
+	override async stat(resource: URI): Promise<IStat> {
+		if (this.brokenPath && resource.path === this.brokenPath && this.brokenStatHits++ >= this.breakStatAfterN) {
+			throw createFileSystemProviderError('simulated read failure', FileSystemProviderErrorCode.NoPermissions);
+		}
+		return super.stat(resource);
+	}
+	override async readdir(resource: URI): Promise<[string, FileType][]> {
+		if (this.brokenPath && resource.path === this.brokenPath) {
+			throw createFileSystemProviderError('simulated read failure', FileSystemProviderErrorCode.NoPermissions);
+		}
+		return super.readdir(resource);
+	}
+}
+
+suite('Clawdius Claude Code Ultracode Workflows - validated model + root envelope + identity join', () => {
+	const store = ensureNoDisposablesAreLeakedInTestSuite();
+
+	const ROOT = URI.file('/home/tester/.claude');
+	const FOLDER = URI.file('/work/fixture-proj');
+	const RESOLVED: ReaderConfigRoot = { kind: 'resolved', root: ROOT };
+	const SESSION = '5c2af930-2a73-4f6b-9011-72fdfa851624';
+
+	function makeFs(): FileService {
+		const fs = store.add(new FileService(new NullLogService()));
+		store.add(fs.registerProvider(Schemas.file, store.add(new InMemoryFileSystemProvider())));
+		return fs;
+	}
+
+	function makeService(fs: FileService): ClawdiusReaderSeamService {
+		return new ClawdiusReaderSeamService(false, fs, new TestContextService(testWorkspace(FOLDER)));
+	}
+
+	function sessionDir(sessionId: string = SESSION): URI {
+		return URI.joinPath(ROOT, 'projects', encodeProjectDir(FOLDER), sessionId);
+	}
+
+	async function stageManifest(fs: FileService, runId: string, manifest: object, sessionId: string = SESSION): Promise<void> {
+		const dir = URI.joinPath(sessionDir(sessionId), 'workflows');
+		await fs.createFolder(dir);
+		await fs.writeFile(URI.joinPath(dir, `${runId}.json`), VSBuffer.fromString(JSON.stringify(manifest)));
+	}
+
+	async function stageJournalText(fs: FileService, runId: string, text: string, sessionId: string = SESSION): Promise<void> {
+		const dir = URI.joinPath(sessionDir(sessionId), 'subagents', 'workflows', runId);
+		await fs.createFolder(dir);
+		await fs.writeFile(URI.joinPath(dir, 'journal.jsonl'), VSBuffer.fromString(text));
+	}
+
+	async function stageJournal(fs: FileService, runId: string, lines: readonly object[], sessionId: string = SESSION): Promise<void> {
+		await stageJournalText(fs, runId, lines.map(l => JSON.stringify(l) + '\n').join(''), sessionId);
+	}
+
+	async function stageAgentTranscript(fs: FileService, runId: string, agentId: string, lines: readonly object[], sessionId: string = SESSION): Promise<void> {
+		const dir = URI.joinPath(sessionDir(sessionId), 'subagents', 'workflows', runId);
+		await fs.createFolder(dir);
+		const text = lines.map(l => JSON.stringify(l) + '\n').join('');
+		await fs.writeFile(URI.joinPath(dir, `agent-${agentId}.jsonl`), VSBuffer.fromString(text));
+	}
+
+	/** A well-formed `workflow_agent` progress entry in the launcher's real shape - every rich field present, so a
+	 *  single override isolates exactly one guard against an otherwise-valid neighbor. */
+	function agentEntry(overrides: object = {}): object {
+		return {
+			type: 'workflow_agent', index: 1, agentId: 'a1', label: 'audit:fleet', state: 'done',
+			model: 'claude-opus-4-8[1m]', tokens: 12000, toolCalls: 6, durationMs: 45000,
+			phaseTitle: 'Analyze', phaseIndex: 0, lastToolName: 'Read', agentType: 'general-purpose',
+			promptPreview: 'Audit the fleet module', resultPreview: 'Found 3 issues',
+			...overrides,
+		};
+	}
+
+	function terminalManifest(overrides: object = {}): object {
+		return {
+			workflowName: 'unreleased-validation-audit', summary: 'Audited the fleet module for correctness.',
+			status: 'completed', startTime: 1750000000000, timestamp: 1750000605027,
+			agentCount: 1, durationMs: 605027, totalTokens: 781753, totalToolCalls: 191,
+			defaultModel: 'claude-opus-4-8[1m]', result: 'The audit found three issues, all fixed.',
+			phases: [{ title: 'Analyze', detail: 'one agent per theme' }],
+			workflowProgress: [agentEntry()],
+			...overrides,
+		};
+	}
+
+	/** List through the new root envelope and assert exactly one `ok` run - the common-case shorthand every
+	 *  field-validation test below builds on. */
+	async function listOne(fs: FileService): Promise<WorkflowRunModel> {
+		const res = await makeService(fs).listWorkflows(RESOLVED);
+		assert.strictEqual(res.state, 'ok');
+		assert.strictEqual(res.runs.length, 1);
+		return res.runs[0];
+	}
+
+	// --- the discriminant literals + stable identity ---------------------------------------------------------
+
+	test('a recognized terminal manifest carries kind:"terminal" and the composite run: identity', async () => {
+		const fs = makeFs();
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', terminalManifest());
+		const run = await listOne(fs);
+		assert.strictEqual(run.kind, 'terminal');
+		assert.strictEqual(run.identity, `run:${SESSION}:wf_a1b2c3d4-e5f`);
+	});
+
+	test('a manifest-less journal carries kind:"live"', async () => {
+		const fs = makeFs();
+		await stageJournal(fs, 'wf_d980f960-543', [{ type: 'started', agentId: 'a1' }]);
+		const run = await listOne(fs);
+		assert.strictEqual(run.kind, 'live');
+	});
+
+	test('an unrecognized manifest carries kind:"unknown-shape"', async () => {
+		const fs = makeFs();
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', { totallyDifferent: true });
+		const run = await listOne(fs);
+		assert.strictEqual(run.kind, 'unknown-shape');
+	});
+
+	// --- the validated TERMINAL projection --------------------------------------------------------------------
+
+	test('a recognized terminal manifest carries its validated summary/cost/result/phase/agent fields', async () => {
+		const fs = makeFs();
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', terminalManifest());
+		await stageJournal(fs, 'wf_a1b2c3d4-e5f', [{ type: 'started', agentId: 'a1' }]);
+		await stageAgentTranscript(fs, 'wf_a1b2c3d4-e5f', 'a1', [{ type: 'user', uuid: 'u1' }]);
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.deepStrictEqual({
+			workflowName: run.workflowName, summary: run.summary, status: run.status,
+			resultText: run.resultText, resultPreview: run.resultPreview, phases: run.phases.length,
+			agentCount: run.agentCount, completeness: run.completeness,
+		}, {
+			workflowName: 'unreleased-validation-audit', summary: 'Audited the fleet module for correctness.',
+			status: 'completed', resultText: 'The audit found three issues, all fixed.',
+			resultPreview: 'The audit found three issues, all fixed.', phases: 1, agentCount: 1,
+			completeness: CompletenessState.Complete,
+		});
+		assert.deepStrictEqual(run.agents.map(a => ({ agentId: a.agentId, label: a.label, state: a.state, model: a.model, tokens: a.tokens, transcriptRef: a.transcriptRef })), [
+			{
+				agentId: 'a1', label: 'audit:fleet', state: 'done', model: 'claude-opus-4-8[1m]', tokens: 12000,
+				transcriptRef: { sessionId: SESSION, runId: 'wf_a1b2c3d4-e5f', agentId: 'a1' },
+			},
+		]);
+	});
+
+	test('a terminal manifest with no declared agentCount reads it as absent, never derived from its agent list', async () => {
+		const fs = makeFs();
+		// The manifest fixture otherwise declares one valid workflow_agent entry - if the run-level count were still
+		// derived from `agents.length` (the fallback this honest model removed), it would read `1` instead of
+		// `undefined`.
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', terminalManifest({ agentCount: undefined }));
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.strictEqual(run.agentCount, undefined);
+	});
+
+	test('a negative durationMs is dropped, not clamped, and degrades the run to partial', async () => {
+		const fs = makeFs();
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', { ...terminalManifest(), durationMs: -5 });
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.deepStrictEqual(
+			{ durationMs: run.durationMs, completeness: run.completeness },
+			{ durationMs: undefined, completeness: CompletenessState.Partial });
+	});
+
+	test('a fractional totalToolCalls is dropped, not rounded, and degrades the run to partial', async () => {
+		const fs = makeFs();
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', { ...terminalManifest(), totalToolCalls: 1.5 });
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.deepStrictEqual(
+			{ totalToolCalls: run.totalToolCalls, completeness: run.completeness },
+			{ totalToolCalls: undefined, completeness: CompletenessState.Partial });
+	});
+
+	test('a wrong-typed run-level scalar field is a drop: erased and the read degrades to partial', async () => {
+		for (const [key, bad] of [['summary', 42], ['startTime', 'yesterday'], ['timestamp', {}], ['workflowName', 7], ['defaultModel', []]] as const) {
+			const fs = makeFs();
+			await stageManifest(fs, 'wf_a1b2c3d4-e5f', { ...terminalManifest(), [key]: bad });
+			const run = await listOne(fs) as TerminalWorkflowRun;
+			assert.deepStrictEqual(
+				{ key, value: (run as unknown as Record<string, unknown>)[key], completeness: run.completeness },
+				{ key, value: undefined, completeness: CompletenessState.Partial });
+		}
+	});
+
+	test('a non-string run-level result is dropped: no resultText/resultPreview, and the read is partial', async () => {
+		const fs = makeFs();
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', { ...terminalManifest(), result: 12345 });
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.deepStrictEqual(
+			{ resultText: run.resultText, resultPreview: run.resultPreview, completeness: run.completeness },
+			{ resultText: undefined, resultPreview: undefined, completeness: CompletenessState.Partial });
+	});
+
+	test('an explicit null run-level field is absent, not a drop - the read stays complete', async () => {
+		const fs = makeFs();
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', { ...terminalManifest(), summary: null, result: null });
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.deepStrictEqual(
+			{ summary: run.summary, resultText: run.resultText, completeness: run.completeness },
+			{ summary: undefined, resultText: undefined, completeness: CompletenessState.Complete });
+	});
+
+	test('an absent run-level field is not a drop - the read stays complete', async () => {
+		const fs = makeFs();
+		const manifest = terminalManifest() as Record<string, unknown>;
+		delete manifest.summary; delete manifest.result; delete manifest.startTime;
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', manifest);
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.deepStrictEqual(
+			{ summary: run.summary, resultText: run.resultText, startTime: run.startTime, completeness: run.completeness },
+			{ summary: undefined, resultText: undefined, startTime: undefined, completeness: CompletenessState.Complete });
+	});
+
+	test('an unrecognized status degrades the WHOLE run to unknown-shape, never guessed into terminal or live', async () => {
+		const fs = makeFs();
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', { ...terminalManifest(), status: 'totally-different' });
+		const run = await listOne(fs) as UnrecognizedWorkflowRun;
+		assert.deepStrictEqual({ kind: run.kind, completeness: run.completeness }, { kind: 'unknown-shape', completeness: CompletenessState.UnknownShape });
+	});
+
+	test('a workflow_agent entry missing agentId/label/a valid state is dropped, siblings preserved, partial', async () => {
+		for (const bad of [
+			{ ...agentEntry(), agentId: undefined },
+			{ ...agentEntry(), label: undefined },
+			{ ...agentEntry(), state: 'running' }, // not in the measured done/error vocabulary
+		]) {
+			const fs = makeFs();
+			await stageManifest(fs, 'wf_a1b2c3d4-e5f', {
+				...terminalManifest(),
+				workflowProgress: [bad, agentEntry({ agentId: 'a2', label: 'audit:trust' })],
+			});
+			const run = await listOne(fs) as TerminalWorkflowRun;
+			assert.deepStrictEqual(
+				{ ids: run.agents.map(a => a.agentId), completeness: run.completeness },
+				{ ids: ['a2'], completeness: CompletenessState.Partial });
+		}
+	});
+
+	test('an errored agent with no authoritative error field degrades the run to partial', async () => {
+		const fs = makeFs();
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', {
+			...terminalManifest(),
+			workflowProgress: [agentEntry({ state: 'error', error: undefined, resultPreview: undefined })],
+		});
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.deepStrictEqual(
+			{ state: run.agents[0].state, error: run.agents[0].error, completeness: run.completeness },
+			{ state: 'error', error: undefined, completeness: CompletenessState.Partial });
+	});
+
+	test('an errored agent WITH its authoritative error stays complete', async () => {
+		const fs = makeFs();
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', {
+			...terminalManifest(),
+			workflowProgress: [agentEntry({ state: 'error', error: 'ENOENT: script not found', resultPreview: undefined })],
+		});
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.deepStrictEqual(
+			{ state: run.agents[0].state, error: run.agents[0].error, completeness: run.completeness },
+			{ state: 'error', error: 'ENOENT: script not found', completeness: CompletenessState.Complete });
+	});
+
+	test('attempt is surfaced only when greater than 1', async () => {
+		const fs = makeFs();
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', {
+			...terminalManifest(),
+			workflowProgress: [agentEntry({ agentId: 'a1', attempt: 1 }), agentEntry({ agentId: 'a2', label: 'a2', attempt: 3 })],
+		});
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.deepStrictEqual(
+			run.agents.map(a => ({ id: a.agentId, attempt: a.attempt })),
+			[{ id: 'a1', attempt: undefined }, { id: 'a2', attempt: 3 }]);
+	});
+
+	test('phase agent/error counts are DERIVED from the validated agents, not a raw manifest field', async () => {
+		const fs = makeFs();
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', {
+			...terminalManifest(),
+			phases: [{ title: 'Analyze' }, { title: 'Synthesize' }],
+			workflowProgress: [
+				agentEntry({ agentId: 'a1', phaseTitle: 'Analyze', state: 'done' }),
+				agentEntry({ agentId: 'a2', label: 'a2', phaseTitle: 'Analyze', state: 'error', error: 'boom' }),
+				agentEntry({ agentId: 'a3', label: 'a3', phaseTitle: 'Synthesize', state: 'done' }),
+			],
+		});
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.deepStrictEqual(
+			run.phases.map(p => ({ index: p.index, title: p.title, agentCount: p.agentCount, errorCount: p.errorCount })),
+			[{ index: 0, title: 'Analyze', agentCount: 2, errorCount: 1 }, { index: 1, title: 'Synthesize', agentCount: 1, errorCount: 0 }]);
+	});
+
+	// --- the validated LIVE projection -----------------------------------------------------------------------
+
+	test('a manifest-less journal reports started/result counts and journalLastWriteTime from the journal mtime', async () => {
+		const fs = makeFs();
+		await stageJournal(fs, 'wf_d980f960-543', [
+			{ type: 'started', agentId: 'a1' }, { type: 'started', agentId: 'a2' },
+			{ type: 'result', agentId: 'a1', result: 'ok' },
+		]);
+		const journalUri = URI.joinPath(sessionDir(), 'subagents', 'workflows', 'wf_d980f960-543', 'journal.jsonl');
+		const expectedMtime = (await fs.stat(journalUri)).mtime;
+		const run = await listOne(fs) as LiveWorkflowRun;
+		assert.deepStrictEqual(
+			{ started: run.startedCount, results: run.resultCount, mtime: run.journalLastWriteTime, degradation: run.degradation },
+			{ started: 2, results: 1, mtime: expectedMtime, degradation: undefined });
+	});
+
+	test('landed results read a string payload as a preview', async () => {
+		const fs = makeFs();
+		await stageJournal(fs, 'wf_d980f960-543', [{ type: 'started', agentId: 'a1' }, { type: 'result', agentId: 'a1', result: 'The fleet module is clean.' }]);
+		const run = await listOne(fs) as LiveWorkflowRun;
+		assert.deepStrictEqual(run.landedResults, [{ agentId: 'a1', preview: 'The fleet module is clean.' }]);
+	});
+
+	test('landed results fall back to "Result landed" for a non-displayable payload', async () => {
+		const fs = makeFs();
+		await stageJournal(fs, 'wf_d980f960-543', [{ type: 'started', agentId: 'a1' }, { type: 'result', agentId: 'a1', result: { ok: true } }]);
+		const run = await listOne(fs) as LiveWorkflowRun;
+		assert.deepStrictEqual(run.landedResults, [{ agentId: 'a1', preview: 'Result landed' }]);
+	});
+
+	test('a torn live journal degrades to degradation: "partial"', async () => {
+		const fs = makeFs();
+		await stageJournalText(fs, 'wf_d980f960-543',
+			JSON.stringify({ type: 'started', agentId: 'a1' }) + '\n'
+			+ '{"type":"started","agen' + '\n'
+			+ JSON.stringify({ type: 'result', agentId: 'a1' }) + '\n');
+		const run = await listOne(fs) as LiveWorkflowRun;
+		assert.deepStrictEqual({ completeness: run.completeness, degradation: run.degradation }, { completeness: CompletenessState.Partial, degradation: 'partial' });
+	});
+
+	test('a journal with content but nothing recognizable degrades to degradation: "unknown-shape"', async () => {
+		const fs = makeFs();
+		await stageJournalText(fs, 'wf_d980f960-543', '{"totally broken\n');
+		const run = await listOne(fs) as LiveWorkflowRun;
+		// completeness is DERIVED from degradation, so an unknown-shape degradation must read UnknownShape too.
+		assert.deepStrictEqual({ degradation: run.degradation, completeness: run.completeness }, { degradation: 'unknown-shape', completeness: CompletenessState.UnknownShape });
+	});
+
+	// --- the deterministic manifest-agent -> transcript join (the #1 must-prove) -------------------------------
+
+	test('the join succeeds end to end: transcriptRef is present and reads the exact agent transcript', async () => {
+		const fs = makeFs();
+		const runId = 'wf_a1b2c3d4-e5f';
+		await stageManifest(fs, runId, { ...terminalManifest(), workflowProgress: [agentEntry({ agentId: 'a1' })] });
+		await stageJournal(fs, runId, [{ type: 'started', agentId: 'a1' }, { type: 'result', agentId: 'a1' }]);
+		await stageAgentTranscript(fs, runId, 'a1', [{ type: 'user', uuid: 'u1' }, { type: 'assistant', uuid: 'u2' }]);
+		const service = makeService(fs);
+		const run = (await service.listWorkflows(RESOLVED)).runs[0] as TerminalWorkflowRun;
+		const ref = run.agents[0].transcriptRef;
+		assert.deepStrictEqual(ref, { sessionId: SESSION, runId, agentId: 'a1' });
+		const slice = await service.readWorkflowAgentTranscript(RESOLVED, ref!);
+		assert.deepStrictEqual({ records: slice.records.length, completeness: slice.completeness }, { records: 2, completeness: CompletenessState.Complete });
+	});
+
+	// The heuristic TRAP: the manifest declares its agents in the OPPOSITE order from the journal's `started`
+	// records, and each agent's transcript file carries a DIFFERENT, distinguishable record count. An
+	// implementation that joined by array position or declaration order rather than exact agentId would pair the
+	// wrong agent with the wrong file; exact identity matching cannot.
+	test('the join is by exact identity, never declaration/journal order (heuristic trap)', async () => {
+		const fs = makeFs();
+		const runId = 'wf_a1b2c3d4-e5f';
+		await stageManifest(fs, runId, {
+			...terminalManifest(),
+			// 'b' declared FIRST, 'a' second - the reverse of the journal's started order below.
+			workflowProgress: [agentEntry({ agentId: 'b', label: 'agent-b' }), agentEntry({ agentId: 'a', label: 'agent-a' })],
+		});
+		await stageJournal(fs, runId, [
+			{ type: 'started', agentId: 'a' }, { type: 'started', agentId: 'b' },
+			{ type: 'result', agentId: 'a' }, { type: 'result', agentId: 'b' },
+		]);
+		await stageAgentTranscript(fs, runId, 'a', [{ type: 'user', uuid: 'u1' }]); // 1 record
+		await stageAgentTranscript(fs, runId, 'b', [{ type: 'user', uuid: 'u1' }, { type: 'assistant', uuid: 'u2' }, { type: 'user', uuid: 'u3' }]); // 3 records
+		const service = makeService(fs);
+		const run = (await service.listWorkflows(RESOLVED)).runs[0] as TerminalWorkflowRun;
+		const byId = new Map(run.agents.map(a => [a.agentId, a]));
+		const sliceA = await service.readWorkflowAgentTranscript(RESOLVED, byId.get('a')!.transcriptRef!);
+		const sliceB = await service.readWorkflowAgentTranscript(RESOLVED, byId.get('b')!.transcriptRef!);
+		assert.deepStrictEqual({ a: sliceA.records.length, b: sliceB.records.length }, { a: 1, b: 3 });
+	});
+
+	test('an agentId that is not path-safe never receives a transcriptRef (the whole entry is dropped)', async () => {
+		const fs = makeFs();
+		const runId = 'wf_a1b2c3d4-e5f';
+		await stageManifest(fs, runId, { ...terminalManifest(), workflowProgress: [agentEntry({ agentId: '../escape', label: 'evil' })] });
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.deepStrictEqual({ agents: run.agents.length, completeness: run.completeness }, { agents: 0, completeness: CompletenessState.Partial });
+	});
+
+	test('a duplicate agentId within the manifest receives NO transcriptRef for either occurrence', async () => {
+		const fs = makeFs();
+		const runId = 'wf_a1b2c3d4-e5f';
+		await stageManifest(fs, runId, {
+			...terminalManifest(),
+			workflowProgress: [agentEntry({ agentId: 'a1', label: 'first' }), agentEntry({ agentId: 'a1', label: 'second' })],
+		});
+		await stageJournal(fs, runId, [{ type: 'started', agentId: 'a1' }]);
+		await stageAgentTranscript(fs, runId, 'a1', [{ type: 'user', uuid: 'u1' }]);
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.deepStrictEqual(run.agents.map(a => a.transcriptRef), [undefined, undefined]);
+	});
+
+	test('an agentId absent from the journal\'s started records receives no transcriptRef', async () => {
+		const fs = makeFs();
+		const runId = 'wf_a1b2c3d4-e5f';
+		await stageManifest(fs, runId, { ...terminalManifest(), workflowProgress: [agentEntry({ agentId: 'a1' })] });
+		// No journal at all staged for this run - the "present in journal" join condition fails.
+		await stageAgentTranscript(fs, runId, 'a1', [{ type: 'user', uuid: 'u1' }]);
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.strictEqual(run.agents[0].transcriptRef, undefined);
+	});
+
+	test('a missing sibling transcript file receives no transcriptRef', async () => {
+		const fs = makeFs();
+		const runId = 'wf_a1b2c3d4-e5f';
+		await stageManifest(fs, runId, { ...terminalManifest(), workflowProgress: [agentEntry({ agentId: 'a1' })] });
+		await stageJournal(fs, runId, [{ type: 'started', agentId: 'a1' }]);
+		// No agent-a1.jsonl staged.
+		const run = await listOne(fs) as TerminalWorkflowRun;
+		assert.strictEqual(run.agents[0].transcriptRef, undefined);
+	});
+
+	test('readWorkflowAgentTranscript re-derives the path from identities and rejects an unsafe component', async () => {
+		const fs = makeFs();
+		const runId = 'wf_a1b2c3d4-e5f';
+		await stageAgentTranscript(fs, runId, 'a1', [{ type: 'user', uuid: 'u1' }]);
+		const service = makeService(fs);
+		const good: WorkflowTranscriptRef = { sessionId: SESSION, runId, agentId: 'a1' };
+		const okSlice = await service.readWorkflowAgentTranscript(RESOLVED, good);
+		assert.strictEqual(okSlice.completeness, CompletenessState.Complete);
+		const badRefs: WorkflowTranscriptRef[] = [
+			{ sessionId: '../../elsewhere', runId, agentId: 'a1' },
+			{ sessionId: SESSION, runId: '../escape', agentId: 'a1' },
+			{ sessionId: SESSION, runId, agentId: '../../etc/passwd' },
+		];
+		for (const bad of badRefs) {
+			const slice = await service.readWorkflowAgentTranscript(RESOLVED, bad);
+			assert.deepStrictEqual({ records: slice.records.length, completeness: slice.completeness }, { records: 0, completeness: CompletenessState.Absent });
+		}
+	});
+
+	// --- the typed root envelope - read-error != empty != no-match -------------------------------------------
+
+	test('a projects dir that EXISTS but cannot be read is read-error, never the empty [] state', async () => {
+		const fs = store.add(new FileService(new NullLogService()));
+		const provider = store.add(new FlakyProvider());
+		store.add(fs.registerProvider(Schemas.file, provider));
+		const projectsDir = URI.joinPath(ROOT, 'projects');
+		await fs.createFolder(projectsDir);
+		provider.breakOn(projectsDir.path);
+		const res = await makeService(fs).listWorkflows(RESOLVED);
+		assert.strictEqual(res.state, 'read-error');
+		assert.deepStrictEqual(res.runs, []);
+		assert.ok(res.state === 'read-error' && res.message.length > 0, 'a read-error result must carry a message');
+	});
+
+	test('a project directory that exists but cannot be listed degrades the read to partial, readable runs still present', async () => {
+		const fs = store.add(new FileService(new NullLogService()));
+		const provider = store.add(new FlakyProvider());
+		store.add(fs.registerProvider(Schemas.file, provider));
+		// A SIBLING project dir, unrelated to the fixture's own `FOLDER` project - breaking it must not blank the
+		// list, only degrade it: the healthy project beside it still enumerates.
+		const brokenProjectDir = URI.joinPath(ROOT, 'projects', 'broken-project');
+		await fs.createFolder(brokenProjectDir);
+		provider.breakOn(brokenProjectDir.path);
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', terminalManifest());
+		const res = await makeService(fs).listWorkflows(RESOLVED);
+		assert.strictEqual(res.state, 'partial');
+		assert.deepStrictEqual(res.runs.map(r => r.runId), ['wf_a1b2c3d4-e5f']);
+	});
+
+	test('a session whose manifest dir cannot be read degrades the read to partial, readable runs still present', async () => {
+		const fs = store.add(new FileService(new NullLogService()));
+		const provider = store.add(new FlakyProvider());
+		store.add(fs.registerProvider(Schemas.file, provider));
+		// A SIBLING session under the same project, unrelated to the fixture's own `SESSION` - a provider error
+		// reading its `workflows/` dir (a real, non-FileNotFound error, not "the dir does not exist yet") must
+		// degrade the list rather than being swallowed the way a genuinely-absent dir is.
+		const brokenWorkflowsDir = URI.joinPath(sessionDir('broken-session'), 'workflows');
+		await fs.createFolder(brokenWorkflowsDir);
+		provider.breakOn(brokenWorkflowsDir.path);
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', terminalManifest());
+		const res = await makeService(fs).listWorkflows(RESOLVED);
+		assert.strictEqual(res.state, 'partial');
+		assert.deepStrictEqual(res.runs.map(r => r.runId), ['wf_a1b2c3d4-e5f']);
+	});
+
+	test('a live journal whose write-time cannot be read degrades to partial, never complete', async () => {
+		const fs = store.add(new FileService(new NullLogService()));
+		const provider = store.add(new FlakyProvider());
+		store.add(fs.registerProvider(Schemas.file, provider));
+		// A manifest-LESS journal is a LIVE run: its records read fine (via readFile), but a `stat` failure means the
+		// journal write-time - the only freshness signal a live run has - is a known gap. So the run must read
+		// `partial`, NEVER `complete`. The walk's own `exists(journal)` stat must still succeed (so the run projects
+		// at all), so the mtime `stat` is broken only from the THIRD stat on that path (exists + readFile's own
+		// stat succeed first).
+		await stageJournal(fs, 'wf_live0000-aaa', [{ type: 'started', agentId: 'a1' }]);
+		provider.breakStatOnAfter(URI.joinPath(sessionDir(), 'subagents', 'workflows', 'wf_live0000-aaa', 'journal.jsonl').path, 2);
+		const run = await listOne(fs) as LiveWorkflowRun;
+		// startedCount > 0 proves the journal CONTENT read fine (readFile succeeded); only the mtime stat failed -
+		// the exact case that must NOT ride under a `complete` label.
+		assert.deepStrictEqual(
+			{ kind: run.kind, contentRead: run.startedCount > 0, completeness: run.completeness, degradation: run.degradation },
+			{ kind: 'live', contentRead: true, completeness: CompletenessState.Partial, degradation: 'partial' });
+	});
+
+	test('a missing projects dir is the honest empty state ("ok" + []), not read-error', async () => {
+		const res = await makeService(makeFs()).listWorkflows(RESOLVED);
+		assert.deepStrictEqual(res, { state: 'ok', runs: [] });
+	});
+
+	test('a no-config root is the honest empty state', async () => {
+		const res = await makeService(makeFs()).listWorkflows({ kind: 'no-config' });
+		assert.deepStrictEqual(res, { state: 'ok', runs: [] });
+	});
+
+	test('listWorkflows is re-callable and returns fresh data on every call - a re-read, never a cache', async () => {
+		const fs = makeFs();
+		const service = makeService(fs);
+		const first = await service.listWorkflows(RESOLVED);
+		assert.deepStrictEqual(first, { state: 'ok', runs: [] });
+		await stageManifest(fs, 'wf_a1b2c3d4-e5f', terminalManifest());
+		const second = await service.listWorkflows(RESOLVED);
+		assert.strictEqual(second.state, 'ok');
+		assert.strictEqual(second.runs.length, 1);
+	});
+
+	test('the seam exposes no run-control verb anywhere on its public surface', () => {
+		const methods = Object.getOwnPropertyNames(ClawdiusReaderSeamService.prototype);
+		for (const verb of ['launch', 'stop', 'steer', 'cancel', 'retry']) {
+			assert.ok(!methods.some(m => m.toLowerCase().includes(verb)), `unexpected control verb "${verb}" on the reader seam: ${methods.join(', ')}`);
+		}
 	});
 });
 // CLAWDIUS-END

@@ -5,13 +5,17 @@
 
 // CLAWDIUS-BEGIN Claude Code Ultracode Workflows - Sidebar (Activity Bar) ViewPane
 // A native-DOM ViewPane (pattern: clawdiusContextBudgetView) listing the ultracode WORKFLOWS the reader seam
-// enumerates (listMissions) - workflow runs, not chat sessions. Each WorkflowRun renders with the name its script
-// declared, its real status, and the honesty labels (coverage / freshness / completeness + ownership); a foreign
-// or suppressed run is rendered PRESENT-WITH-LABEL, never hidden. The view consumes ONLY the seam: it
-// resolves the config root from IPathService.userHome (never a hardcoded ~/.claude) and calls listMissions - no
-// direct Claude config-tree read, no egress. Rows carry data-* hooks so the real-build Playwright render can
-// assert them. A large fleet is appended in animation-frame batches so enumeration never blocks the workbench
-// thread.
+// enumerates - workflow runs, not chat sessions. The top-level list is sourced through the validated root envelope
+// `listWorkflows` (the discriminated live/terminal/unknown-shape model + the honest ok/partial/read-error
+// envelope), then ADAPTED to the render pipeline's existing row shape by `toMissionShape` - a temporary bridge so
+// this data-path change is behavior-neutral on the REAL corpus (which always carries a workflowName); the tree/renderers are re-modeled in a later slice. Each
+// row renders with the name its script declared, its real status, and the honesty labels (coverage / freshness /
+// completeness + ownership); a foreign or suppressed run is rendered PRESENT-WITH-LABEL, never hidden. The
+// row-expand/transcript-open drill-in still reads through the shipped `listMissionAgents` journal path (unchanged
+// by the bridge). The view consumes ONLY the seam: it resolves the config root from IPathService.userHome (never a
+// hardcoded ~/.claude) - no direct Claude config-tree read, no egress. Rows carry data-* hooks so the real-build
+// Playwright render can assert them. A large fleet is appended in animation-frame batches so enumeration never
+// blocks the workbench thread.
 //
 // READ-ONLY BY CONSTRUCTION, not by policy. The view observes; it cannot act on a workflow run. Clawdius holds a
 // live `Query` only for a session IT launched, so a run launched by the Claude Code CLI - which today is every
@@ -40,6 +44,7 @@ import { IEditorService } from '../../../../services/editor/common/editorService
 import { IPathService } from '../../../../services/path/common/pathService.js';
 import { FleetSubagent, MissionAgent as WorkflowAgent, MissionAgentList as WorkflowAgentList, MissionRun as WorkflowRun } from '../../common/claudeFleetModel.js';
 import { CompletenessState, CoverageLabel, ReaderConfigRoot, resolveConfigRoot } from '../../common/claudeReaderSeam.js';
+import { WorkflowRun as WorkflowRunModel } from '../../common/claudeWorkflowModel.js';
 import { ClawdiusReaderSeamService } from '../reader/claudeReaderSeamService.js';
 import { BadgeSignal, ClaudeWorkflowBadgeFeed } from './claudeWorkflowBadges.js';
 import { ownedSessionIdsFromHost } from './claudeWorkflowOwnership.js';
@@ -122,7 +127,7 @@ export function appendWorkflowRow(parent: HTMLElement, run: WorkflowRun, badge?:
 		'data-kind': 'workflow',
 		'data-status': run.status,
 		'data-workflow-name': run.name,
-		'data-agent-count': String(run.agentCount),
+		'data-agent-count': run.agentCount === undefined ? '' : String(run.agentCount),
 		'data-ownership': run.ownership,
 		'data-coverage': run.coverage,
 		'data-freshness': run.freshness,
@@ -141,7 +146,7 @@ export function appendWorkflowRow(parent: HTMLElement, run: WorkflowRun, badge?:
 	// report; a terminal run reports the agent count its manifest recorded.
 	const agents = run.status === 'running' && run.resultCount !== undefined
 		? localize('clawdius.workflows.agentsProgress', "agents: {0}/{1}", run.resultCount, run.agentCount)
-		: localize('clawdius.workflows.agents', "agents: {0}", run.agentCount);
+		: localize('clawdius.workflows.agents', "agents: {0}", run.agentCount === undefined ? '—' : run.agentCount);
 	append(labels, $('.clawdius-workflows-label.agents', undefined, agents));
 	if (run.phases.length > 0) {
 		append(labels, $('.clawdius-workflows-label.phases', undefined, localize('clawdius.workflows.phases', "phases: {0}", run.phases.length)));
@@ -347,6 +352,45 @@ export class FleetRunsList extends Disposable {
 	}
 }
 
+/**
+ * Adapt the validated {@link WorkflowRunModel} (the seam's new discriminated live/terminal/unknown-shape read
+ * model, `listWorkflows`) into the legacy {@link WorkflowRun} shape this view's render pipeline
+ * (`appendWorkflowRow` / `FleetRunsList`) already consumes. A TEMPORARY BRIDGE: this moves the view's data path
+ * onto the new validated model + honest root envelope WITHOUT re-modeling the tree/renderers (that is a later
+ * piece of work), so on the REAL corpus it renders identically - every field the renderer reads (name/status/agentCount/
+ * phases.length/error/coverage/freshness/completeness/ownership) is carried through unchanged; the fields the
+ * renderer never reads (`progress`) are simply empty. The row-expand/transcript-open interactions are untouched
+ * and keep reading through the shipped `listMissionAgents`/journal path - only the top-level list is re-sourced.
+ * One input-space divergence (absent from the real corpus, which always carries a workflowName): a MALFORMED
+ * manifest with a valid status but no workflowName reads terminal-by-status here with the runId as its name, where
+ * the legacy projection read unknown-shape - the more honest reading of a missing optional field, not a regression.
+ */
+export function toMissionShape(run: WorkflowRunModel): WorkflowRun {
+	const base = {
+		runId: run.runId, sessionId: run.sessionId, progress: [],
+		ownership: run.ownership, coverage: run.coverage, freshness: run.freshness,
+		completeness: run.completeness, adapterVersion: run.adapterVersion,
+	};
+	switch (run.kind) {
+		case 'live':
+			return {
+				...base, name: run.runId, status: 'running',
+				agentCount: run.startedCount, startedCount: run.startedCount, resultCount: run.resultCount,
+				phases: [],
+			};
+		case 'terminal':
+			return {
+				...base, name: run.workflowName ?? run.runId, status: run.status,
+				agentCount: run.agentCount,
+				phases: run.phases.map(p => (p.detail !== undefined ? { title: p.title, detail: p.detail } : { title: p.title })),
+				durationMs: run.durationMs, totalTokens: run.totalTokens, totalToolCalls: run.totalToolCalls,
+				defaultModel: run.defaultModel, error: run.error,
+			};
+		case 'unknown-shape':
+			return { ...base, name: run.runId, status: 'unknown', agentCount: undefined, phases: [] };
+	}
+}
+
 /** The Claude Code Ultracode Workflows Sidebar view: enumerates runs through the reader seam and lists them,
  *  honestly labeled. */
 export class ClawdiusWorkflowsView extends ViewPane {
@@ -450,21 +494,24 @@ export class ClawdiusWorkflowsView extends ViewPane {
 		}
 	}
 
-	/** Resolve the config root from the active window's home (never a hardcoded path) and list the enumerated runs
-	 *  through the seam (the only data path). Honest on failure: an empty labeled list renders the empty
-	 *  state rather than throwing. */
+	/**
+	 * Resolve the config root from the active window's home (never a hardcoded path) and list the enumerated runs
+	 * through the seam's validated root envelope (`listWorkflows`) - the honest replacement for the previous
+	 * blanket `catch { runs = [] }` (a read failure and a genuinely empty read are no longer the same code path,
+	 * even though this bridge paints them the same until the read-error state gets its own row in a later piece
+	 * of work). `listWorkflows` itself never throws; it degrades to a labeled `read-error` instead.
+	 */
 	private async refresh(): Promise<void> {
 		const home = await this.pathService.userHome();
 		if (this.disposed) { return; }
 		const root = resolveConfigRoot(undefined, home);
 		this.root = root;
-		let runs: readonly WorkflowRun[] = [];
-		try {
-			runs = await this.seam.listMissions(root);
-		} catch {
-			runs = [];
-		}
+		const result = await this.seam.listWorkflows(root);
 		if (this.disposed) { return; }
+		// The temporary bridge: `read-error` paints the same empty list its predecessor's catch already produced
+		// (the distinct honest read-error row is a later piece of work); `ok`/`partial` both render whatever runs
+		// WERE read, adapted to the render pipeline's legacy shape.
+		const runs: readonly WorkflowRun[] = result.state === 'read-error' ? [] : result.runs.map(toMissionShape);
 		this.currentRuns = runs;
 		// Drop badges for runs no longer enumerated so a stale live badge never outlives its run.
 		const present = new Set(runs.map(run => run.runId));

@@ -85,7 +85,7 @@ export interface MissionRun {
 	/** Terminal status from the manifest, or `running` inferred from a manifest-less journal. */
 	readonly status: MissionStatus;
 	/** How many agents the run declared (manifest) or has started (live journal). */
-	readonly agentCount: number;
+	readonly agentCount: number | undefined;   // undefined when the manifest declared no count — rendered as a dash, never fabricated from agents.length
 	/** Agents whose journal `started` record was seen. Present for live reads. */
 	readonly startedCount?: number;
 	/** Agents whose journal `result` record was seen. `started > result` means work still in flight. */

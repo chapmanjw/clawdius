@@ -345,10 +345,21 @@
 # comment. As with the entries above, the recorded baseline moves by more than the code delta because this
 # block's own comment lines also count toward the fork surface.
 #
+# Disposition 2026-07-20 (+0 files, +38 insertions): make the acceptance run say what it found. It set an exit
+# code and let the process wind down on its own, which on a machine where something the window opened outlives
+# closing it means the run reports its result and then never ends - a runner reads that as a timeout on a run
+# that passed. It now leaves once its summary and report are written. Fixing that surfaced a worse one: opening
+# the view accepted the empty message as an answer, but on a cold start against a large config root that message
+# arrives while the read is still going, so a check would see no rows and report the root as having none. That is
+# why these checks pass in a full run, where an earlier one has already warmed the read, and skip when run singly
+# - which is how they are run when someone is reviewing them. Opening now waits for the read; and where there
+# genuinely are no rows, the message says which state was painted rather than naming a cause, since an empty
+# root, a failed read and a read still going all look alike from a row count. Harness only.
+#
 # FINAL RECONCILIATION (2026-07-19): this baseline is the net fork surface across every shipped slice of this
 # feature, each of which recorded its own disposition above; `diff-stat --check` passes against it on the final tree.
 
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
 recorded: 2026-07-19
-baseline: 5608 files changed, 51076 insertions(+), 1456122 deletions(-)
+baseline: 5608 files changed, 51125 insertions(+), 1456122 deletions(-)

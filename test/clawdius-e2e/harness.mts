@@ -221,6 +221,17 @@ async function focusWorkflowsView() {
 		() => document.querySelector('.clawdius-workflow-run-row') !== null || document.querySelector('[data-clawdius-workflows-state]') !== null,
 		undefined, { timeout: 60000 },
 	);
+	// That wait is satisfied by the EMPTY state as readily as by rows, and on a cold start the empty state is what
+	// appears first - the read of a large config root has not finished yet. A caller that took it at face value
+	// would decide the root holds no runs and skip, which is how this scenario passes in a full suite (earlier
+	// scenarios warmed the read) and skips when run on its own. So when there are no rows, keep waiting: rows
+	// appearing later is the read finishing, and only a state that OUTLASTS this is a real answer.
+	if (!(await win.$('.clawdius-workflow-run-row'))) {
+		await win.waitForFunction(
+			() => document.querySelector('.clawdius-workflow-run-row') !== null,
+			undefined, { timeout: 45000 },
+		).catch(() => { /* genuinely empty, unreadable, or slower than this - the caller reports which */ });
+	}
 	await win.waitForTimeout(300);
 	// Reset the virtualized tree to the TOP so every caller finds run rows from a deterministic state (a preceding
 	// scenario may have paged/scrolled it, leaving a stale off-screen handle that then times out on click).
@@ -816,6 +827,18 @@ function startEgressRecorder() {
  *  see the negative-controls scenario below. Both "rerun" and "re-run" are listed since either spelling is
  *  common UI copy for the same action. */
 const WORKFLOW_CONTROL_VERBS = ['stop', 'cancel', 'kill', 'pause', 'resume', 'retry', 'rerun', 're-run', 'restart', 'abort', 'terminate', 'start', 'launch', 'delete', 'remove'];
+
+/** What the surface is actually showing when it has no rows. The list being empty does not say WHY - a config
+ *  root with no runs, a read that failed, and a read that has not finished all look the same from a row count -
+ *  so a caller skipping on "no rows" must report the state the view painted rather than name a cause it has not
+ *  established. */
+async function describeEmptyWorkflowsSurface() {
+	const state = await win.$('[data-clawdius-workflows-state]');
+	if (!state) { return 'no rows and no state message rendered - the view painted neither, which is itself unexpected'; }
+	const kind = (await state.getAttribute('data-clawdius-workflows-state')) || 'unknown';
+	const text = ((await state.innerText()) || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+	return `the view showed its "${kind}" state ("${text}") - which is what an empty root, a failed read, and a read still in flight all look like from here`;
+}
 
 /** Locate the workflows `ViewPane`'s own `.pane` root (header + body) starting from its body element
  *  (`.clawdius-workflows`, the container `renderBody` receives - `claudeWorkflowsView.ts`). The base `ViewPane`
@@ -2841,7 +2864,7 @@ try {
 
 		const beforeRows = await win.$$eval('.clawdius-workflow-run-row', els => els.map(el => el.getAttribute('data-run-id')));
 		if (beforeRows.length === 0) {
-			return 'SKIPPED (no workflow runs on this config root - nothing to filter or sort)';
+			return `SKIPPED (no run rows to filter or sort: ${await describeEmptyWorkflowsSurface()})`;
 		}
 		const targetRunId = beforeRows[0];
 
@@ -2979,7 +3002,7 @@ try {
 
 			const rowHandles = await win.$$('.clawdius-workflow-run-row');
 			if (rowHandles.length === 0) {
-				return `SKIPPED (no workflow runs on this config root - nothing to exercise); ${recorder.seen.length} request(s) observed opening the empty view`;
+				return `SKIPPED (no run rows to exercise: ${await describeEmptyWorkflowsSurface()}); ${recorder.seen.length} request(s) observed opening it`;
 			}
 
 			let target;
@@ -3092,7 +3115,7 @@ try {
 
 		const rowHandles = await win.$$('.clawdius-workflow-run-row');
 		if (rowHandles.length === 0) {
-			return 'SKIPPED (no workflow runs on this config root - nothing to check)';
+			return `SKIPPED (no run rows to check: ${await describeEmptyWorkflowsSurface()})`;
 		}
 
 		// --- (a) only WORKFLOW runs are listed ---------------------------------------------------------------------
@@ -3295,5 +3318,20 @@ try {
 		}
 	}
 	if (!KEEP_OPEN) { await app.close(); }
-	process.exitCode = (fails.length || provedNothing) ? 1 : 0;
+	const code = (fails.length || provedNothing) ? 1 : 0;
+	process.exitCode = code;
+
+	// Leave, rather than waiting for the event loop to drain. Closing the app is not the same as every handle it
+	// opened being released: an Electron helper socket or the driver connection can outlive `close()`, and since
+	// the summary above is already written, the process would sit there having reported its result and never
+	// exit - which a CI runner records as a timeout on a run that actually passed. Seen once on another machine,
+	// not reproducible here, which is exactly the shape of thing to make impossible rather than to chase.
+	//
+	// Everything that matters is already durable: the summary is on stdout and report.json was written at the top
+	// of this block, both before this point, so nothing is lost by not draining. `--keep-open` is the one case
+	// that must NOT exit, since its whole purpose is to leave the window up for a human.
+	if (!KEEP_OPEN) {
+		// A beat for stdout to flush if it is a pipe, then go regardless of what is still held open.
+		setTimeout(() => process.exit(code), 250).unref();
+	}
 }

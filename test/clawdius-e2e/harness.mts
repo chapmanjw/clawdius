@@ -2877,8 +2877,11 @@ try {
 	// FINAL ACCEPTANCE - network egress guard: the workflows surface reads only the local Claude config root and
 	// never talks to the network. Installs the request recorder (see startEgressRecorder's own doc comment for
 	// exactly what it can and cannot see) BEFORE the surface is touched, then drives it end to end: open the
-	// view, expand a terminal run, drill into its result and an agent's detail, close the tab, filter, sort, and
-	// switch a theme. Asserts the recorded requests carry ZERO external urls (see isExternalEgressUrl for the
+	// view, expand a terminal run, drill into whichever of its result and agent detail the run actually has,
+	// close the tab, filter, sort, and switch a theme. The view, filter and sort must all render or the scenario
+	// fails; the drill depends on the corpus, so a run row that IS present must open, while a genuinely absent
+	// terminal run, story or agent is reported as absent in the detail rather than passed over in silence.
+	// Asserts the recorded requests carry ZERO external urls (see isExternalEgressUrl for the
 	// exact local-vs-external classification), after setting aside Clawdius's own first-run plugin-bootstrap
 	// gallery traffic (see isPluginBootstrapGalleryUrl's own doc comment for exactly why that one, NAMED
 	// exception exists and how narrowly it is matched) - reported in full either way, never silently dropped.
@@ -2897,26 +2900,37 @@ try {
 			for (const h of rowHandles) {
 				if ((await h.getAttribute('data-run-kind')) === 'terminal') { target = h; break; }
 			}
-			let drillDetail = 'no terminal run available to drill into';
+			// A corpus need not contain a terminal run, and a terminal run need not carry a story or any agents -
+			// those are legitimately absent, so their absence is reported rather than failed. But if the row IS
+			// there, opening it must WORK: treating a present-but-unopenable pane as a pass would let this
+			// scenario report "no requests while exercising the surface" without having exercised that pane at all.
+			let drillDetail = 'no terminal run on this config root, so no detail pane was opened';
 			if (target) {
 				const runId = await target.getAttribute('data-run-id');
 				const expanded = await expandRunAndGatherAgents(target);
-				let resultOpened = false;
+				let resultState = 'absent (run has no story row)';
 				if (expanded.story) {
 					const resultPane = await activateAndWaitForDetail(expanded.story, 'result');
-					if (resultPane) { resultOpened = true; await closeActiveEditorTab(); }
+					assert(resultPane, `run "${runId}" has a story row but its result pane did not open - the drill this scenario claims to have performed did not happen`);
+					resultState = 'opened';
+					await closeActiveEditorTab();
 				}
-				let agentOpened = false;
+				let agentState = 'absent (run has no agent rows)';
 				const reExpanded = await expandRunAndGatherAgents(target);
 				if (reExpanded.agentRows.length > 0) {
 					const agentPane = await activateAndWaitForDetail(reExpanded.agentRows[0], 'agent');
-					if (agentPane) { agentOpened = true; await closeActiveEditorTab(); }
+					assert(agentPane, `run "${runId}" has an agent row but its agent pane did not open - the drill this scenario claims to have performed did not happen`);
+					agentState = 'opened';
+					await closeActiveEditorTab();
 				}
-				drillDetail = `run "${runId}": result pane ${resultOpened ? 'opened' : 'not opened'}, agent pane ${agentOpened ? 'opened' : 'not opened'}`;
+				drillDetail = `run "${runId}": result pane ${resultState}, agent pane ${agentState}`;
 			}
 
+			// Hard-assert, as with the sort below: filtering is part of the surface this scenario claims to have
+			// exercised, so a filter that failed to render must fail the scenario rather than quietly narrow it.
 			const filterInput = await win.$('.clawdius-workflows-filter input');
-			if (filterInput) {
+			assert(filterInput, 'the filter input did not render (.clawdius-workflows-filter input) - the surface was not fully exercised, so "no requests" would be an incomplete claim');
+			{
 				await filterInput.fill((await rowHandles[0].getAttribute('data-run-id')) || '');
 				await win.waitForTimeout(400);
 				await filterInput.fill('');

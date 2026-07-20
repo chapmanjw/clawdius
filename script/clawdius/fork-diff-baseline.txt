@@ -297,9 +297,11 @@
 
 # Disposition 2026-07-19 (+0 files, +289 insertions): closing acceptance checks for the workflows surface. A request
 # recorder installed before the surface is touched observes every request the window makes while the view is opened,
-# a run expanded, a result and an agent opened, the filter typed, the sort changed and the theme switched, and
-# asserts none went anywhere external (it witnesses the renderer, not the whole application, and says so where it is
-# defined). A second check asserts what must never appear: every listed row is a workflow run rather than a chat or
+# a run expanded, whichever of its result and agent detail that run actually has opened, the filter typed, the sort
+# changed and the theme switched, and asserts none went anywhere external (it witnesses the renderer, not the whole
+# application, and says so where it is defined). What must be there to call the surface exercised - the view, the
+# filter, the sort - is required; a detail row that is present must open, while one the run simply does not have is
+# reported as absent rather than passed over, so the check cannot claim a drill it did not perform. A second check asserts what must never appear: every listed row is a workflow run rather than a chat or
 # a subagent, checked across the whole virtualized list; no control verb anywhere on the surface outside a run's own
 # text, since the view can observe a run but never act on one; and no re-read affordance while the read is healthy.
 # Also proves the third display state for real - a filter no run can match shows its own message, not an empty list.
@@ -330,4 +332,4 @@
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
 recorded: 2026-07-19
-baseline: 5608 files changed, 50929 insertions(+), 1456122 deletions(-)
+baseline: 5608 files changed, 50945 insertions(+), 1456122 deletions(-)

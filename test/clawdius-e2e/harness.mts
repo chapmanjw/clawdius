@@ -3017,8 +3017,10 @@ try {
 		const controlVerbHits = await paneRoot.evaluate((root, args) => {
 			const [userSel, source] = args;
 			const rx = new RegExp(source, 'i');
-			// Normalize before subtracting below: the DOM renders some separators as non-breaking spaces, so an
-			// attribute and the leaf text it contains would not compare equal raw. `\s` already covers U+00A0.
+			// Normalize BOTH the attribute text and the leaf text the tokens below are split out of. The DOM
+			// renders some separators as non-breaking spaces, so a token taken from leaf text (ordinary spaces)
+			// would not be found in an attribute that carries U+00A0, and the user's own word would go
+			// unattributed. `\s` already covers U+00A0, so one pass over each side is enough.
 			const norm = s => (s || '').replace(/\s+/g, ' ').trim();
 			const out = [];
 			for (const el of root.querySelectorAll('*')) {

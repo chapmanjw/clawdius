@@ -233,13 +233,13 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	// reads allowed). Runs after restore so the trust decision and workspace folders are settled before the push.
 	registerWorkbenchContribution2(ClawdiusTrustForwarder.ID, ClawdiusTrustForwarder, WorkbenchPhase.AfterRestored);
 
-	// Permission-mode status pill (N3-3a): shows + sets the DEFAULT permission mode for new Claude
+	// Permission-mode status pill: shows + sets the DEFAULT permission mode for new Claude
 	// conversations (claudeCode.initialPermissionMode), named exactly as the CLI and color-coded by risk.
 	// It is a default control, not a live-session mirror - the plugin does not expose the live mode (see file).
 	registerWorkbenchContribution2(ClawdiusPermissionModeStatusEntry.ID, ClawdiusPermissionModeStatusEntry, WorkbenchPhase.BlockRestore);
 	registerAction2(SetPermissionModeAction);
 
-	// Effort-level status pill (N3-3d): shows + sets the DEFAULT effort for new Claude conversations, backed by
+	// Effort-level status pill: shows + sets the DEFAULT effort for new Claude conversations, backed by
 	// ~/.claude/settings.json (effortLevel + the ultracode flag) - the same file the plugin's chat selector uses.
 	registerWorkbenchContribution2(ClawdiusEffortStatusEntry.ID, ClawdiusEffortStatusEntry, WorkbenchPhase.BlockRestore);
 	registerAction2(SetEffortLevelAction);
@@ -268,7 +268,7 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 	Registry.as<IEditorFactoryRegistry>(EditorExtensions.EditorFactory).registerEditorSerializer(ClaudeControlCenterInput.ID, ClaudeControlCenterInputSerializer);
 	registerAction2(OpenClaudeControlCenterAction);
 
-	// Context Budget Inspector (N2 2a): a bottom-Panel view answering "what does Claude see for THIS file?"
+	// Context Budget Inspector: a bottom-Panel view answering "what does Claude see for THIS file?"
 	// (memories + path-scoped rules + skills, split always-on / on-invoke / not-applied, each with an estimated
 	// token cost), plus a status-bar pill showing the always-on total that opens the panel. Reads the shared
 	// config snapshot through a pure resolver; no I/O of its own. Token numbers are estimates (chars/4).

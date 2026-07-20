@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN permission-mode status pill (N3-3a) unit tests
+// CLAWDIUS-BEGIN permission-mode status pill unit tests
 // Covers the user-visible behaviors of the default-permission-mode pill without booting a workbench:
 // the chat-matching titles/descriptions, the tone->color mapping, the effective-mode honesty clamp (a
 // configured-but-gated-off Bypass must display as the Default mode), and the one-way bypass-enable on select.

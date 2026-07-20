@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN effort-level status-bar indicator (N3-3d)
+// CLAWDIUS-BEGIN effort-level status-bar indicator
 // A bottom-right status-bar pill showing the DEFAULT effort level for new Claude conversations, with a 10-cell
 // block-bar intensity meter (matching the usage bar's width) and the plugin's exact labels (Low / Medium /
 // High / Extra high / Max). A sixth option, Ultracode, is the plugin's "Extra high + workflows" superset.

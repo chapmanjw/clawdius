@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN effort-level status pill (N3-3d) unit tests
+// CLAWDIUS-BEGIN effort-level status pill unit tests
 // Covers the chat-matching labels, the 10-cell meter mapping (Max one short of full, only Ultracode full),
 // the animation state per selection (rainbow for Max, purple-white for Ultracode), Ultracode winning over the
 // level, and the settings.json write logic (a normal level clears the ultracode key; Ultracode sets it true).

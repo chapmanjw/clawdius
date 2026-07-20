@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 // CLAWDIUS-BEGIN Claude Code Ultracode Workflows - live badge feed tests
-// The POSITIVE-path proof the sanitized Playwright harness cannot provide (its null agent host's onDidAction is
+// The POSITIVE-path proof the sanitized real-build harness cannot provide (its null agent host's onDidAction is
 // Event.None): an injected onDidAction event drives the SAME production path the ViewPane wires - the badge feed
 // correlates the event to a run, gates on ownership, and re-renders that run's tree row through
 // `WorkflowRunRowRenderer` reading the SAME `IWorkflowRenderContext.badgeOf` the view feeds it (see

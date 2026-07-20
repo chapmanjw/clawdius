@@ -807,7 +807,7 @@ try {
 		// showing rows or is hidden behind the state-message overlay.
 		await win.waitForSelector('.clawdius-workflows-tree', { state: 'attached', timeout: 15000 });
 		// `refresh()` is async (IPathService.userHome() -> resolveConfigRoot -> seam.listWorkflows(root), a REAL
-		// disk read+validate of the REAL config root - on this machine that is ~1200+ runs, not a synthetic
+		// disk read+validate of the REAL config root - on a populated root that is ~1200+ runs, not a synthetic
 		// fixture) and neither rows nor the state-message container exist until `applyDisplayState` runs. Poll
 		// for that real completion signal instead of a fixed sleep - a fixed short sleep is exactly what raced
 		// the read on a large real root and left the pane looking (falsely) empty.
@@ -862,7 +862,7 @@ try {
 			completeness: el.getAttribute('data-completeness'),
 		})));
 		if (rows.length === 0) {
-			// An honest empty state is a legitimate outcome (no workflows on this machine), not a pass. The
+			// An honest empty state is a legitimate outcome (no workflows on the config root), not a pass. The
 			// state attribute is set directly ON `.clawdius-workflows-state` (not a descendant of it).
 			const empty = await win.$$('.clawdius-workflows-state[data-clawdius-workflows-state="empty"]');
 			assert(empty.length === 1, 'Workflows rendered neither run rows nor a distinct empty state');
@@ -1378,7 +1378,7 @@ try {
 		const donor = findWorkflowDonor();
 		if (!donor) {
 			return 'SKIPPED (no run under the real ~/.claude/projects carries BOTH a workflows/<runId>.json manifest '
-				+ 'and a subagents/workflows/<runId>/journal.jsonl - nothing to clone a live/graduation transition from on this machine)';
+				+ 'and a subagents/workflows/<runId>/journal.jsonl - nothing to clone a live/graduation transition from)';
 		}
 
 		const sandbox = mkdtempSync(join(tmpdir(), 'clawdius-e2e-sandbox-'));

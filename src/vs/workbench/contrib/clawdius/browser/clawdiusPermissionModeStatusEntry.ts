@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN permission-mode status-bar indicator (N3-3a)
+// CLAWDIUS-BEGIN permission-mode status-bar indicator
 // A bottom-right status-bar pill showing the DEFAULT Claude permission mode for new conversations. Titles,
 // descriptions, and ordering mirror the official `anthropic.claude-code` chat selector (Plan mode / Ask before
 // edits / Edit automatically / Bypass permissions) so the two surfaces read the same. Clicking it (or running

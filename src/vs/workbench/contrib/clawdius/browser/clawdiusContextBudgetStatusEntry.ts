@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Context Budget Inspector - status-bar pill (N2 2a)
+// CLAWDIUS-BEGIN Context Budget Inspector - status-bar pill
 // An at-a-glance status-bar item showing the estimated ALWAYS-ON token total Claude loads for the active file
 // ($(book) ~695). Hovering shows the per-source breakdown; clicking opens the full Context Budget panel
 // (clawdius.openContextBudget). Reacts to the active file changing (different glob rules apply) and to config

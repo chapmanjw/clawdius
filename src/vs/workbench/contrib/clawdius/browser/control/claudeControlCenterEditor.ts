@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Claude Code Control Center editor pane (Permissions tab, MVP)
+// CLAWDIUS-BEGIN Claude Code Control Center editor pane (Permissions tab)
 // A native DOM editor pane (no webview => zero-egress) that turns the Permissions config from an inert index
 // into an interactive control surface. Two parts:
 //   - Default mode for new conversations: the SAME control as the status-bar permission pill - it reuses the

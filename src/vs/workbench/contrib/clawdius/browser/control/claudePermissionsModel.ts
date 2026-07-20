@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN permissions control model (Config Control Center MVP)
+// CLAWDIUS-BEGIN permissions control model (Config Control Center)
 // Pure, UI-free logic for the interactive Permissions control pane: parse the `permissions` block of a Claude
 // Code settings.json and compute the exact IJSONEditingService write intents for editing it (set defaultMode,
 // add / remove / move a rule between the allow / ask / deny buckets). A rule lives in exactly ONE bucket, so

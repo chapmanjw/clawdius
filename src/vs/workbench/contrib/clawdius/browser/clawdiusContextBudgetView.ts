@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// CLAWDIUS-BEGIN Context Budget Inspector - Panel view (N2 2a)
+// CLAWDIUS-BEGIN Context Budget Inspector - Panel view
 // "What does Claude see for THIS file?" A panel (bottom Panel, beside Problems/Output) that, for the active
 // editor, lists the memory / rule / skill sources Claude loads, split into ALWAYS-ON (every turn), ON-INVOKE
 // (skills), and NOT-APPLIED (glob rules the file does not match), each with an estimated token cost. Reads the

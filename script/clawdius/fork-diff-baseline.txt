@@ -307,7 +307,7 @@
 # passing quietly. Several attempts were made to
 # tell those requests apart from a leak by what they contained, and each was either too strict, rejecting a real
 # one, or left room to hide something in a field it allowed; what a request contains cannot establish who sent
-# it. Waiting removes the question. It witnesses the renderer, not the whole application, and says so where it is
+# it. Waiting sidesteps that question; it does not settle it. It witnesses the renderer, not the whole application, and says so where it is
 # defined; requests to this machine are outside what it claims, and it says that too. What must be there to call the surface exercised - the view, the
 # filter, the sort, and the run's own result pane - is required, and a config root with no finished run to open
 # reports as skipped rather than passing, so the check can never claim a drill it did not perform. The one real

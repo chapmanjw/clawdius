@@ -3017,10 +3017,13 @@ try {
 		const controlVerbHits = await paneRoot.evaluate((root, args) => {
 			const [userSel, source] = args;
 			const rx = new RegExp(source, 'i');
-			// Normalize BOTH the attribute text and the leaf text the tokens below are split out of. The DOM
-			// renders some separators as non-breaking spaces, so a token taken from leaf text (ordinary spaces)
-			// would not be found in an attribute that carries U+00A0, and the user's own word would go
-			// unattributed. `\s` already covers U+00A0, so one pass over each side is enough.
+			// Collapse whitespace on both sides. The side that MATTERS is the leaf: the DOM renders some
+			// separators as U+00A0, and the tokens below come from splitting leaf text on a plain space, so
+			// without this a multi-word name would glue into ONE token carrying U+00A0 - which then matches
+			// nothing, leaving the user's own word unattributed and reported as if the fork wrote it.
+			// Normalizing the attribute is defensive rather than load-bearing: tokens are single words by
+			// construction, and `\b` already treats U+00A0 as a boundary exactly like a space, so a separator
+			// elsewhere in the attribute cannot hide a token. `\s` covers U+00A0, so one pass does both.
 			const norm = s => (s || '').replace(/\s+/g, ' ').trim();
 			const out = [];
 			for (const el of root.querySelectorAll('*')) {

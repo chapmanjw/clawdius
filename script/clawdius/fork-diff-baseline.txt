@@ -295,7 +295,22 @@
 # reduced motion; no new files. Isolated to the clawdius-owned reader/tree/view + the harness. As with the entries
 # above, the recorded baseline moves by more than the code delta because this block's own comment lines also count.
 
+# Disposition 2026-07-19 (+0 files, +289 insertions): closing acceptance checks for the workflows surface. A request
+# recorder installed before the surface is touched observes every request the window makes while the view is opened,
+# a run expanded, a result and an agent opened, the filter typed, the sort changed and the theme switched, and
+# asserts none went anywhere external (it witnesses the renderer, not the whole application, and says so where it is
+# defined). A second check asserts what must never appear: every listed row is a workflow run rather than a chat or
+# a subagent, checked across the whole virtualized list; no control verb anywhere on the surface outside a run's own
+# text, since the view can observe a run but never act on one; and no re-read affordance while the read is healthy.
+# Also proves the third display state for real - a filter no run can match shows its own message, not an empty list.
+# Growth is those checks and their driving helpers, in the harness only; no new files and no product change. As with
+# the entries above, the recorded baseline moves by more than the code delta because this block's own comment lines
+# also count toward the fork surface.
+#
+# FINAL RECONCILIATION (2026-07-19): this baseline is the net fork surface across every shipped slice of this
+# feature, each of which recorded its own disposition above; `diff-stat --check` passes against it on the final tree.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
 recorded: 2026-07-19
-baseline: 5608 files changed, 50427 insertions(+), 1456122 deletions(-)
+baseline: 5608 files changed, 50719 insertions(+), 1456122 deletions(-)

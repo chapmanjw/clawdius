@@ -676,6 +676,116 @@ async function expandLiveRunProgress(target) {
 	return progressHandles[0];
 }
 
+// --- egress recording driving (network egress guard) ---------------------------------------------------------
+//
+// The product's guarantee under test: the workflows surface reads only the local Claude config root and never
+// talks to the network. Proven by recording every request the renderer page makes while the surface is
+// exercised, then asserting none of them is EXTERNAL.
+
+/** Classify `url` as EXTERNAL for the egress guard: an http(s)/ws(s) scheme talking to a host that is not
+ *  localhost/127.0.0.1/::1. Every other scheme this workbench legitimately uses at runtime - `file:`,
+ *  `vscode-file:`, `vscode-webview:`, `devtools:`, `data:`, `blob:`, `chrome-extension:` - never leaves the
+ *  machine, so none of those count no matter what host portion (if any) they carry. An unparseable url is
+ *  treated as not-external rather than thrown on; `request.url()` should always be a valid url, so this is
+ *  defensive, not expected to matter in practice. */
+const EGRESS_LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+function isExternalEgressUrl(url) {
+	let parsed;
+	try { parsed = new URL(url); } catch { return false; }
+	if (!['http:', 'https:', 'ws:', 'wss:'].includes(parsed.protocol)) { return false; }
+	return !EGRESS_LOCAL_HOSTS.has(parsed.hostname.toLowerCase());
+}
+
+/** Clawdius's OWN first-run plugin bootstrap (`ClawdiusPluginSetupContribution`, `clawdiusPluginSetup.ts`)
+ *  installs its 3 default extensions from the configured gallery (Open VSX) whenever one is missing from the
+ *  profile's extensions dir - UNCONDITIONALLY, on any fresh-enough profile, entirely independent of whether the
+ *  workflows sidebar is ever opened; that file's own doc comment says the critical one (`anthropic.claude-code`)
+ *  is even "RE-OFFERED on a later launch ... regardless of the one-time done flag" whenever it stays absent.
+ *  Nothing in that file references the workflows view, tree, or reader seam. Confirmed empirically while writing
+ *  this scenario: a profile still mid-bootstrap makes exactly nine gallery requests (three per extension - a
+ *  gallery lookup, an asset manifest, and a mirrored package.json) for these three ids, well after the workflows
+ *  surface was already done being exercised. Matched by NAME (the known gallery hosts this build is configured
+ *  to use, AND one of the three specific extension ids that bootstrap installs) rather than by broadly
+ *  allowlisting the gallery host outright, so a genuine leak that happened to route through the same host for
+ *  anything else would still be caught by the egress scenario below. */
+const PLUGIN_BOOTSTRAP_GALLERY_HOSTS = new Set(['open-vsx.org', 'openvsx.eclipsecontent.org']);
+const PLUGIN_BOOTSTRAP_EXTENSION_IDS = ['anthropic/claude-code', 'jeanp413/open-remote-ssh', 'jeanp413/open-remote-wsl'];
+function isPluginBootstrapGalleryUrl(url) {
+	let parsed;
+	try { parsed = new URL(url); } catch { return false; }
+	if (!PLUGIN_BOOTSTRAP_GALLERY_HOSTS.has(parsed.hostname.toLowerCase())) { return false; }
+	const path = decodeURIComponent(parsed.pathname).toLowerCase();
+	return PLUGIN_BOOTSTRAP_EXTENSION_IDS.some(id => path.includes(id));
+}
+
+/** Install a request recorder on the renderer page BEFORE exercising a surface. Listens on the page's OWN
+ *  `request` event (every HTTP(S) request the Chrome DevTools Protocol reports for this page's frame tree,
+ *  including iframes) and its `websocket` event (a `ws:`/`wss:` connection is a distinct Playwright event, never
+ *  reported through `request`) - never `page.route()`, which would INTERCEPT and hold every request for the
+ *  rest of the run instead of merely observing it. Returns the live array of every url seen so far (mutated in
+ *  place - read it any time) and a `stop()` to detach both listeners once the caller is done recording.
+ *
+ *  Stated honestly, what this can NOT see: a request the Electron MAIN process itself issues over plain Node.js
+ *  networking, never touching this page's Chromium network stack at all (an update check or telemetry call
+ *  fired from the main process rather than the renderer would be invisible here); and anything from a separate
+ *  guest process this page does not own (a `<webview>` tag's own WebContents, or the extension host, each its
+ *  own process with its own network stack). A page-level recorder is a real but PARTIAL witness: it proves the
+ *  RENDERER made no external request, not that no process anywhere in the app did. */
+function startEgressRecorder() {
+	const seen = [];
+	const onRequest = request => { try { seen.push(request.url()); } catch { /* ignore */ } };
+	const onWebSocket = ws => { try { seen.push(ws.url()); } catch { /* ignore */ } };
+	win.on('request', onRequest);
+	win.on('websocket', onWebSocket);
+	return { seen, stop: () => { win.off('request', onRequest); win.off('websocket', onWebSocket); } };
+}
+
+// --- negative-controls driving (control-verb scan, full run-id paging) -----------------------------------------
+
+/** The whole-word control verbs that must never appear on the read-only workflows surface OUTSIDE user data -
+ *  see the negative-controls scenario below. Both "rerun" and "re-run" are listed since either spelling is
+ *  common UI copy for the same action. */
+const WORKFLOW_CONTROL_VERBS = ['stop', 'cancel', 'kill', 'pause', 'resume', 'retry', 'rerun', 're-run', 'restart', 'abort', 'terminate', 'start', 'launch', 'delete', 'remove'];
+
+/** Locate the workflows `ViewPane`'s own `.pane` root (header + body) starting from its body element
+ *  (`.clawdius-workflows`, the container `renderBody` receives - `claudeWorkflowsView.ts`). The base `ViewPane`
+ *  renders the header (title + toolbar action items - `base/browser/ui/splitview/paneview.ts`) as a SIBLING of
+ *  that body inside one shared `.pane` element, so scanning from here in one pass covers both. */
+async function workflowsPaneRoot() {
+	const body = await win.$('.clawdius-workflows');
+	if (!body) { return null; }
+	const handle = await body.evaluateHandle(el => el.closest('.pane') || el);
+	return handle.asElement();
+}
+
+/** Page the (virtualized) tree with the keyboard from Home through PageDown to End, collecting every DISTINCT
+ *  `data-run-id` seen along the way - far beyond whatever one screenful shows, so a row rendered only deep in
+ *  the list is never missed. Used by the negative-controls scenario to check every row's run id, not just the
+ *  first page. */
+async function collectAllWorkflowRunIds() {
+	const ids = new Set();
+	const collectVisible = async () => {
+		for (const h of await win.$$('.clawdius-workflow-run-row')) {
+			const id = await h.getAttribute('data-run-id');
+			if (id) { ids.add(id); }
+		}
+	};
+	const first = await win.$('.clawdius-workflow-run-row');
+	if (first) { await first.click(); }
+	await win.keyboard.press('Home');
+	await win.waitForTimeout(250);
+	await collectVisible();
+	for (let page = 0; page < 40; page++) {
+		await win.keyboard.press('PageDown');
+		await win.waitForTimeout(120);
+		await collectVisible();
+	}
+	await win.keyboard.press('End');
+	await win.waitForTimeout(250);
+	await collectVisible();
+	return ids;
+}
+
 // --- launch ----------------------------------------------------------------------------------
 
 const prof = mkdtempSync(join(tmpdir(), 'clawdius-e2e-prof-'));
@@ -2617,6 +2727,21 @@ try {
 		assert(narrowedIds.length < beforeRows.length || beforeRows.length === 1,
 			`the filter matched ${narrowedIds.length} row(s) but the unfiltered view already showed only ${beforeRows.length}`);
 
+		// --- a filter matching NOTHING shows the distinct no-match state, not a bare empty list -------------------
+		// This is the third of the surface's three display states (a successful but empty read, a failed read, and a
+		// filter that matched nothing). The first is covered by the sidebar scenario's honest-empty path; the third
+		// is cheap to reach for real - a needle no run can carry - so it is proven here against the real config root
+		// rather than only in unit tests.
+		await filterInput.fill('zzz-no-run-can-carry-this-needle-zzz');
+		await win.waitForFunction(
+			() => document.querySelector('.clawdius-workflows-state[data-clawdius-workflows-state="no-match"]') !== null,
+			undefined, { timeout: 10000, polling: 100 }).catch(() => { });
+		const noMatchState = await win.$('.clawdius-workflows-state[data-clawdius-workflows-state="no-match"]');
+		assert(noMatchState, 'a filter that no run can match did not show the distinct no-match state');
+		const noMatchRows = await win.$$('.clawdius-workflow-run-row');
+		assert(noMatchRows.length === 0, `the no-match state still showed ${noMatchRows.length} run row(s); it must show none`);
+		const noMatchText = ((await noMatchState.textContent()) || '').replace(/\s+/g, ' ').trim().slice(0, 70);
+
 		// --- clear the filter, restore the full (unfiltered, still recency-sorted) list ---------------------------
 		await filterInput.fill('');
 		await win.waitForTimeout(400);
@@ -2678,8 +2803,160 @@ try {
 		await win.waitForTimeout(200);
 
 		return `filter: run id "${targetRunId}" narrowed ${beforeRows.length} -> ${narrowedIds.length} visible row(s) in ~${settleMs}ms (target ~300ms budget); `
+			+ `a needle no run can carry showed the distinct no-match state ("${noMatchText}") with zero rows; `
 			+ `sort: switching to "status" ${reordered ? 'reordered' : 'left the order unchanged (already status-ordered)'} `
 			+ `${afterStatusSort.length} visible row(s) - live-first and failed-before-completed held on real data, and a repeat selection reproduced the identical order`;
+	});
+
+	// FINAL ACCEPTANCE - network egress guard: the workflows surface reads only the local Claude config root and
+	// never talks to the network. Installs the request recorder (see startEgressRecorder's own doc comment for
+	// exactly what it can and cannot see) BEFORE the surface is touched, then drives it end to end: open the
+	// view, expand a terminal run, drill into its result and an agent's detail, close the tab, filter, sort, and
+	// switch a theme. Asserts the recorded requests carry ZERO external urls (see isExternalEgressUrl for the
+	// exact local-vs-external classification), after setting aside Clawdius's own first-run plugin-bootstrap
+	// gallery traffic (see isPluginBootstrapGalleryUrl's own doc comment for exactly why that one, NAMED
+	// exception exists and how narrowly it is matched) - reported in full either way, never silently dropped.
+	// SKIPs+WARNs (never a false pass) only when the config root carries no workflow runs to exercise at all.
+	await scenario('ultracode-workflows-no-egress', true, async () => {
+		const recorder = startEgressRecorder();
+		try {
+			await focusWorkflowsView();
+
+			const rowHandles = await win.$$('.clawdius-workflow-run-row');
+			if (rowHandles.length === 0) {
+				return `SKIPPED (no workflow runs on this config root - nothing to exercise); ${recorder.seen.length} request(s) observed opening the empty view`;
+			}
+
+			let target;
+			for (const h of rowHandles) {
+				if ((await h.getAttribute('data-run-kind')) === 'terminal') { target = h; break; }
+			}
+			let drillDetail = 'no terminal run available to drill into';
+			if (target) {
+				const runId = await target.getAttribute('data-run-id');
+				const expanded = await expandRunAndGatherAgents(target);
+				let resultOpened = false;
+				if (expanded.story) {
+					const resultPane = await activateAndWaitForDetail(expanded.story, 'result');
+					if (resultPane) { resultOpened = true; await closeActiveEditorTab(); }
+				}
+				let agentOpened = false;
+				const reExpanded = await expandRunAndGatherAgents(target);
+				if (reExpanded.agentRows.length > 0) {
+					const agentPane = await activateAndWaitForDetail(reExpanded.agentRows[0], 'agent');
+					if (agentPane) { agentOpened = true; await closeActiveEditorTab(); }
+				}
+				drillDetail = `run "${runId}": result pane ${resultOpened ? 'opened' : 'not opened'}, agent pane ${agentOpened ? 'opened' : 'not opened'}`;
+			}
+
+			const filterInput = await win.$('.clawdius-workflows-filter input');
+			if (filterInput) {
+				await filterInput.fill((await rowHandles[0].getAttribute('data-run-id')) || '');
+				await win.waitForTimeout(400);
+				await filterInput.fill('');
+				await win.waitForTimeout(300);
+			}
+
+			const sortSelect = await win.$('.clawdius-workflows-sort select');
+			if (sortSelect) {
+				await win.selectOption('.clawdius-workflows-sort select', { label: 'Sort: Failed First' });
+				await win.waitForTimeout(300);
+				await win.selectOption('.clawdius-workflows-sort select', { label: 'Sort: Newest First' });
+				await win.waitForTimeout(300);
+			}
+
+			await setThemeVerified('Clawdius Light');
+			await setThemeVerified('Clawdius Dark');
+			await focusWorkflowsView();
+
+			const externalUrls = recorder.seen.filter(isExternalEgressUrl);
+			const bootstrapNoise = [...new Set(externalUrls.filter(isPluginBootstrapGalleryUrl))];
+			const unexplainedExternal = [...new Set(externalUrls.filter(u => !isPluginBootstrapGalleryUrl(u)))];
+			assert(unexplainedExternal.length === 0,
+				`the workflows surface made ${unexplainedExternal.length} external request(s) while exercised: ${JSON.stringify(unexplainedExternal)}`);
+
+			return `${recorder.seen.length} request(s) observed while exercising the surface (open, ${drillDetail}, filter, sort, theme switch); `
+				+ `${bootstrapNoise.length} set aside as Clawdius's own first-run plugin-bootstrap gallery traffic (unrelated to the workflows surface - see isPluginBootstrapGalleryUrl): ${JSON.stringify(bootstrapNoise)}; `
+				+ `0 other external (page-level recorder only - see startEgressRecorder's doc comment for what it structurally cannot see)`;
+		} finally {
+			recorder.stop();
+		}
+	});
+
+	// FINAL ACCEPTANCE - negative controls: what must NEVER appear on the workflows surface, against the real
+	// config root with the view open. (a) every rendered run row's run id matches the launcher's own "wf_" shape -
+	// a chat session, background conversation, or Task subagent must never be rendered as a workflow run - checked
+	// across the full virtualized list, not just the first screenful. (b) no run-level control verb anywhere on
+	// the surface: the product is read-only by construction (see claudeWorkflowsView.ts's own "READ-ONLY BY
+	// CONSTRUCTION" note) - it can observe a run but never act on one - so a scan for stop/cancel/kill/pause/
+	// resume/retry/rerun/re-run/restart/abort/terminate/start/launch/delete/remove as whole words must come back
+	// empty, excluding the same USER-DATA leaves (a run's own name/summary/result/error text, agent rows) the
+	// sidebar scenario's own rename scan already excludes for the identical reason - user content is not fork
+	// chrome. (c) "Read Again" - the read-error state's own re-enumeration affordance - is the SOLE exempt
+	// control-shaped text, and only in that state; it must be absent here, in the healthy populated state.
+	await scenario('ultracode-workflows-negative-controls', true, async () => {
+		await focusWorkflowsView();
+
+		const rowHandles = await win.$$('.clawdius-workflow-run-row');
+		if (rowHandles.length === 0) {
+			return 'SKIPPED (no workflow runs on this config root - nothing to check)';
+		}
+
+		// --- (a) only WORKFLOW runs are listed ---------------------------------------------------------------------
+		const allRunIds = await collectAllWorkflowRunIds();
+		const nonWorkflowIds = [...allRunIds].filter(id => !/^wf_/.test(id));
+		assert(nonWorkflowIds.length === 0,
+			`row(s) rendered with a run id not shaped "wf_..." - a chat session, background conversation, or Task subagent rendered as a run: ${JSON.stringify(nonWorkflowIds)}`);
+
+		// --- (b) no run-level control verb anywhere on the surface -------------------------------------------------
+		const paneRoot = await workflowsPaneRoot();
+		assert(paneRoot, 'could not locate the workflows view\'s .pane ancestor to scan');
+		const userDataSel = '.clawdius-workflow-run-row, .clawdius-workflow-story-summary, .clawdius-workflow-story-result, .clawdius-workflow-story-error, .clawdius-workflow-agent-row';
+		const verbSource = `\\b(${WORKFLOW_CONTROL_VERBS.join('|')})\\b`;
+		const controlVerbHits = await paneRoot.evaluate((root, args) => {
+			const [userSel, source] = args;
+			const rx = new RegExp(source, 'i');
+			const out = [];
+			for (const el of root.querySelectorAll('*')) {
+				const label = (typeof el.className === 'string' && el.className) ? el.className : el.tagName;
+				const withinUserData = !!el.closest(userSel);
+				if (!withinUserData) {
+					const text = el.childElementCount === 0 ? (el.textContent || '') : '';
+					if (rx.test(text)) { out.push('text ' + label + ' :: ' + text.trim().slice(0, 80)); }
+				}
+				const wrapperOwnsUserData = el.matches('.monaco-list-row') && el.querySelector(userSel);
+				if (!withinUserData && !wrapperOwnsUserData) {
+					for (const attr of ['title', 'aria-label']) {
+						const v = el.getAttribute && el.getAttribute(attr);
+						if (v && rx.test(v)) { out.push(attr + ' ' + label + ' :: ' + v.trim().slice(0, 80)); }
+					}
+				}
+			}
+			return Array.from(new Set(out));
+		}, [userDataSel, verbSource]);
+		assert(controlVerbHits.length === 0, `a run-level control verb was found on the workflows surface outside user data: ${JSON.stringify(controlVerbHits)}`);
+
+		// --- (c) "Read Again" is the sole exempt affordance, and only in the read-error state ----------------------
+		// The read-error state's own "Read Again" button (renderWorkflowsStateMessage, claudeWorkflowTree.ts) is a
+		// RE-READ of the same enumeration, never a run control - a genuine read error is what would exercise its
+		// own rendering; this scenario only proves the affordance stays absent here, in the healthy state actually
+		// reachable against the real config root.
+		const readAgainHits = await paneRoot.evaluate(root => {
+			const out = [];
+			for (const el of root.querySelectorAll('*')) {
+				if (el.childElementCount === 0) {
+					const t = (el.textContent || '').trim();
+					if (/\bread\s+again\b/i.test(t)) { out.push(t.slice(0, 80)); }
+				}
+			}
+			return out;
+		});
+		assert(readAgainHits.length === 0, `a "Read Again" control is present outside the read-error state: ${JSON.stringify(readAgainHits)}`);
+
+		return `(a) ${allRunIds.size} distinct run id(s) checked across the full virtualized list (Home/PageDown.../End), all shaped "wf_..."; `
+			+ `(b) scanned the view's .pane subtree (header/title/toolbar action items + .clawdius-workflows body: filter/sort toolbar, tree rows, state overlay) `
+			+ `for ${WORKFLOW_CONTROL_VERBS.length} control verb(s) as whole words, excluding user-data leaves (run row label, story summary/result/error, agent rows) - none found; `
+			+ `(c) no "Read Again" control present in the healthy state`;
 	});
 
 	// 10-11. Themes - switch + screenshot the status bar to eyeball the safety-pill contrast fix

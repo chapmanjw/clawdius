@@ -704,124 +704,58 @@ function isExternalEgressUrl(url) {
 	return !EGRESS_LOCAL_HOSTS.has(parsed.hostname.toLowerCase());
 }
 
-/** Clawdius's OWN first-run plugin bootstrap (`ClawdiusPluginSetupContribution`, `clawdiusPluginSetup.ts`)
- *  installs its 3 default extensions from the configured gallery (Open VSX) whenever one is missing from the
- *  profile's extensions dir - UNCONDITIONALLY, on any fresh-enough profile, entirely independent of whether the
- *  workflows sidebar is ever opened; that file's own doc comment says the critical one (`anthropic.claude-code`)
- *  is even "RE-OFFERED on a later launch ... regardless of the one-time done flag" whenever it stays absent.
- *  Nothing in that file references the workflows view, tree, or reader seam. On a profile still mid-bootstrap it
- *  makes per-extension asset requests that carry the id in the URL path, PLUS a gallery query that does not: the
- *  query endpoint takes its ids in the request BODY, so its url is the same for any lookup. An earlier version of
- *  this matcher keyed only on the path ids and so let that one query through as unexplained egress - it fails the
- *  egress scenario on a FRESH profile while passing on an already-bootstrapped one, which is precisely the kind of
- *  environment-dependent green this acceptance run must not have. Both shapes are recognised now.
+/** Wait for the fork's own first-run extension bootstrap to run AND finish, so a surface can be exercised
+ *  against a network that has already gone still.
  *
- *  Matched by NAME in every case, never by allowlisting a host or a path outright. The request must be to a
- *  known gallery host this build is configured to use, AND name one of the three specific extension ids that
- *  bootstrap installs - in the url path for the asset fetches, or in the request BODY for the query endpoint,
- *  whose address deliberately names nothing. An earlier version excused the query endpoint on its address alone;
- *  that is a path allowlist wearing a name's clothing, and it would have set aside a genuine regression that
- *  queried the same endpoint for anything at all - precisely the request this guard exists to catch. Naming is
- *  checked wherever the name actually lives.
+ *  This replaces classifying that bootstrap's requests out of the results. `ClawdiusPluginSetupContribution`
+ *  installs three default extensions from the configured gallery on any profile missing them, entirely
+ *  independent of the workflows surface, and on a fresh profile it overlaps the window this scenario records.
+ *  Four rounds of review went into trying to tell those requests apart from a leak by their CONTENT - by
+ *  address, then by the extension named in the body, then by the shape of the query, then by the values inside
+ *  it - and each attempt was either too strict (rejecting a real lookup) or left a channel open (a payload
+ *  chunked into fields the check permitted). Content cannot establish who sent a request. Waiting removes the
+ *  question entirely: with the bootstrap finished before recording starts there is nothing to excuse, and the
+ *  assertion becomes the honest one - no external requests at all, no exceptions.
  *
- *  What this establishes, stated no more strongly than it holds: a set-aside request goes to a configured
- *  gallery host, names one of the three extensions, and carries nothing but values the gallery client itself
- *  uses - numbers, a version uuid, the fixed product target, and short machine tokens. It does NOT prove the
- *  request came from the bootstrap. Two residuals follow, and neither is closed here:
- *    - a regression that reproduced a bootstrap lookup exactly would be indistinguishable - though it would
- *      then be a request whose every field is fixed or numeric, so it has almost nothing to carry;
- *    - "almost nothing" is not nothing. A determined sender could still signal through choices this check
- *      permits: which of the three extensions it asks about, how many requests it makes, their timing. Closing
- *      that would need attribution by initiator rather than by content, which a page-level recorder cannot do.
- *  Every set-aside request is counted in the scenario's detail, never silently dropped, so the size and shape of
- *  what was excused stays visible in the receipt. */
-const PLUGIN_BOOTSTRAP_GALLERY_HOSTS = new Set(['open-vsx.org', 'openvsx.eclipsecontent.org']);
-const PLUGIN_BOOTSTRAP_EXTENSION_IDS = ['anthropic/claude-code', 'jeanp413/open-remote-ssh', 'jeanp413/open-remote-wsl'];
-/** The gallery's own query endpoint - ids travel in the POST body, so the url alone cannot name an extension. */
-const PLUGIN_BOOTSTRAP_QUERY_PATHS = ['/vscode/gallery/extensionquery', '/api/-/query'];
-/** Takes a RECORD ({url, method, body}) from startEgressRecorder, not a bare url, because the query endpoint can
- *  only be attributed by what it asks for. */
-function isPluginBootstrapGalleryRequest(record) {
-	return explainBootstrapMismatch(record) === null;
-}
-
-/** The gallery client's own value vocabulary, taken from how it actually builds a query
- *  (`extensionGalleryService.ts`): a by-id lookup carries the extension name, the fixed product Target, and a
- *  numeric ExcludeWithFlags; `getVersions` can carry an id as a UUID instead. Anything outside this vocabulary
- *  is not something the gallery client asks for, so it is not bootstrap traffic. */
-const GALLERY_PRODUCT_TARGET = 'microsoft.visualstudio.code';
-const GALLERY_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-/** Asset type names and url query values are short machine tokens; a payload is not. */
-const GALLERY_TOKEN_RE = /^[\w.\-+]{0,80}$/;
-
-/** THE single decision for whether a request is the fork's own extension bootstrap, and - when it is not, but
- *  looks like it might have been - WHY not. One ladder, so the predicate and the diagnostic can never drift
- *  apart. Returns null to mean "this IS bootstrap traffic"; a string to mean "not attributed, here is the
- *  reason"; and for a request that is nothing to do with the gallery, the generic reason (callers only surface
- *  reasons for requests that reached a gallery endpoint).
+ *  Quiet alone is NOT enough, and assuming it was is why the first version of this failed: the bootstrap starts
+ *  some way into workbench startup, so a window that has not begun it yet looks exactly like one that has
+ *  finished. So wait to SEE it work - a request leaving, or an extension appearing on disk - and only then let
+ *  its silence mean "done".
  *
- *  Keys alone are not enough. An earlier version constrained which keys a query could carry but never looked at
- *  their VALUES, so a request could pass carrying an entire transcript in `assetTypes`, or run contents in
- *  `flags`/`pageNumber`, or a payload in a criterion whose value simply had no dot in it. Every value a
- *  bootstrap query can legitimately hold is a number or a short machine token, so that is what is required. */
-function explainBootstrapMismatch(record) {
-	let parsed;
-	try { parsed = new URL(record.url); } catch { return 'url did not parse'; }
-	if (!PLUGIN_BOOTSTRAP_GALLERY_HOSTS.has(parsed.hostname.toLowerCase())) { return 'not a configured gallery host'; }
-	const path = decodeURIComponent(parsed.pathname).toLowerCase();
-
-	if (!PLUGIN_BOOTSTRAP_QUERY_PATHS.includes(path)) {
-		// An asset/metadata address, which names the extension itself. It must not also carry a payload: a body,
-		// or a long url parameter, would convey data alongside a legitimate-looking download.
-		if (!PLUGIN_BOOTSTRAP_EXTENSION_IDS.some(id => path.includes(id))) { return 'address names no bootstrap extension'; }
-		if ((record.body || '').length > 0) { return 'an asset request carried a body'; }
-		for (const [key, value] of parsed.searchParams) {
-			if (!GALLERY_TOKEN_RE.test(value)) { return `an asset request carried a non-token url parameter: ${JSON.stringify(key)}`; }
+ *  Returns settled:false if that never happened, so the caller can skip rather than assert against a moving
+ *  target. */
+async function waitForExtensionBootstrapToSettle(extensionsDir, quietMs = 5000, timeoutMs = 180000) {
+	const watcher = startEgressRecorder();
+	try {
+		const startedAt = Date.now();
+		let sawActivity = false;
+		let lastExternal = 0;
+		let lastInstalled = 0;
+		let lastChangeAt = Date.now();
+		// Record how long the bootstrap goes silent BETWEEN installs. The quiet window has to be longer than the
+		// longest of those gaps or it will declare "done" in one of them, and the gaps are a property of the
+		// product, not something to guess at - so measure them and report them in the receipt.
+		const gaps = [];
+		while (Date.now() - startedAt < timeoutMs) {
+			await win.waitForTimeout(500);
+			const external = watcher.seen.filter(r => isExternalEgressUrl(r.url)).length;
+			let installed = 0;
+			try { installed = existsSync(extensionsDir) ? readdirSync(extensionsDir).length : 0; } catch { /* mid-write */ }
+			if (external !== lastExternal || installed !== lastInstalled) {
+				// The bootstrap is doing something. Only once we have SEEN it work can its silence mean "done".
+				if (sawActivity) { gaps.push(Date.now() - lastChangeAt); }
+				sawActivity = true;
+				lastExternal = external;
+				lastInstalled = installed;
+				lastChangeAt = Date.now();
+			} else if (sawActivity && Date.now() - lastChangeAt >= quietMs) {
+				return { settled: true, external: lastExternal, installed: lastInstalled, longestGapMs: Math.max(0, ...gaps), quietMs };
+			}
 		}
-		return null;
+		return { settled: false, external: lastExternal, installed: lastInstalled, longestGapMs: Math.max(0, ...gaps), quietMs };
+	} finally {
+		watcher.stop();
 	}
-
-	// The lookup address names nothing, so the body must - and must carry nothing else.
-	if ((record.method || '').toUpperCase() !== 'POST') { return `method was ${record.method || 'unknown'}, not POST`; }
-	let query;
-	try { query = JSON.parse(record.body || ''); } catch { return 'body was not JSON'; }
-	if (!query || typeof query !== 'object' || Array.isArray(query)) { return 'body was not a JSON object'; }
-	const unexpected = Object.keys(query).filter(k => !['filters', 'assetTypes', 'flags'].includes(k));
-	if (unexpected.length > 0) { return `body carried unexpected top-level key(s): ${JSON.stringify(unexpected)}`; }
-	if (query.flags !== undefined && typeof query.flags !== 'number') { return 'flags was not a number'; }
-	if (query.assetTypes !== undefined) {
-		if (!Array.isArray(query.assetTypes)) { return 'assetTypes was not an array'; }
-		const badAsset = query.assetTypes.find(a => typeof a !== 'string' || !GALLERY_TOKEN_RE.test(a));
-		if (badAsset !== undefined) { return `assetTypes carried a value that is not a short token: ${JSON.stringify(String(badAsset).slice(0, 40))}`; }
-	}
-	if (!Array.isArray(query.filters) || query.filters.length === 0) { return 'body carried no filters'; }
-	const namedExtensions = [];
-	for (const filter of query.filters) {
-		if (!filter || typeof filter !== 'object' || Array.isArray(filter)) { return 'a filter was not an object'; }
-		const badFilterKeys = Object.keys(filter).filter(k => !['criteria', 'pageNumber', 'pageSize', 'sortBy', 'sortOrder'].includes(k));
-		if (badFilterKeys.length > 0) { return `a filter carried unexpected key(s): ${JSON.stringify(badFilterKeys)}`; }
-		for (const numeric of ['pageNumber', 'pageSize', 'sortBy', 'sortOrder']) {
-			if (filter[numeric] !== undefined && typeof filter[numeric] !== 'number') { return `${numeric} was not a number`; }
-		}
-		if (!Array.isArray(filter.criteria)) { return 'a filter carried no criteria array'; }
-		for (const criterion of filter.criteria) {
-			if (!criterion || typeof criterion !== 'object' || Array.isArray(criterion)) { return 'a criterion was not an object'; }
-			const badKeys = Object.keys(criterion).filter(k => !['filterType', 'value'].includes(k));
-			if (badKeys.length > 0) { return `a criterion carried unexpected key(s): ${JSON.stringify(badKeys)}`; }
-			if (criterion.filterType !== undefined && typeof criterion.filterType !== 'number') { return 'a criterion filterType was not a number'; }
-			if (criterion.value === undefined) { continue; }
-			if (typeof criterion.value !== 'string') { return 'a criterion value was not a string'; }
-			const value = criterion.value.toLowerCase();
-			const isBootstrapId = PLUGIN_BOOTSTRAP_EXTENSION_IDS.some(id => value === id || value === id.replace('/', '.'));
-			if (isBootstrapId) { namedExtensions.push(value); continue; }
-			// The product Target, a numeric flag value, and a version uuid are the only other things the gallery
-			// client puts in a criterion. Anything else is this check being asked to carry something.
-			if (value === GALLERY_PRODUCT_TARGET || /^[0-9]+$/.test(value) || GALLERY_UUID_RE.test(value)) { continue; }
-			return `a criterion carried a value the gallery client does not use: ${JSON.stringify(criterion.value.slice(0, 40))}`;
-		}
-	}
-	if (namedExtensions.length === 0) { return 'the query named none of the bootstrap extensions'; }
-	return null;
 }
 
 /** Install a request recorder on the renderer page BEFORE exercising a surface. Listens on the page's OWN
@@ -2999,12 +2933,18 @@ try {
 	// never legitimate absence. A config root with no terminal run at all SKIPS rather than passes, since the
 	// detail panes would go unexercised. Only "this run declares no agents" is a real absence, and a phase row
 	// that fails to expand is reported as a failure rather than counted as having no agents.
-	// Asserts the recorded requests carry ZERO external urls (see isExternalEgressUrl for the
-	// exact local-vs-external classification), after setting aside Clawdius's own first-run plugin-bootstrap
-	// gallery traffic (see isPluginBootstrapGalleryRequest's own doc comment for exactly why that one, NAMED
-	// exception exists and how narrowly it is matched) - reported in full either way, never silently dropped.
-	// SKIPs+WARNs (never a false pass) only when the config root carries no workflow runs to exercise at all.
+	// Asserts the recorded requests carry ZERO external urls (see isExternalEgressUrl for the exact
+	// local-vs-external classification), with NO exception of any kind. It earns that by waiting for the window
+	// to go quiet BEFORE recording (see waitForExtensionBootstrapToSettle), so the fork's own first-run extension
+	// bootstrap - which is nothing to do with this surface but overlaps it on a fresh profile - has finished and
+	// there is no traffic to classify out. SKIPs rather than passes when the config root carries no workflow runs
+	// or no finished run to open, and when the window never goes quiet, since none of those can support the claim.
 	await scenario('ultracode-workflows-no-egress', true, async () => {
+		// Do this first, before anything is recorded: the point is to start from stillness.
+		const bootstrap = await waitForExtensionBootstrapToSettle(exts, 30000, 300000);
+		if (!bootstrap.settled) {
+			return `SKIPPED (the fork's own extension bootstrap never ran and finished within the wait - saw ${bootstrap.external} external request(s) and ${bootstrap.installed} installed extension(s) - so its traffic could not be told apart from the surface's, and "no external requests" could not be asserted honestly)`;
+		}
 		const recorder = startEgressRecorder();
 		try {
 			await focusWorkflowsView();
@@ -3078,42 +3018,26 @@ try {
 			await setThemeVerified('Clawdius Dark');
 			await focusWorkflowsView();
 
+			// The network was already still before recording began (see waitForExtensionBootstrapToSettle), so there is
+			// no traffic here that belongs to anything but the surface, and nothing to argue about. Any external
+			// request is a finding.
 			const externalRequests = recorder.seen.filter(r => isExternalEgressUrl(r.url));
-			const externalUrls = externalRequests.map(r => r.url);
-			const bootstrapNoise = [...new Set(externalRequests.filter(isPluginBootstrapGalleryRequest).map(r => r.url))];
-			const unexplainedExternal = [...new Set(externalRequests.filter(r => !isPluginBootstrapGalleryRequest(r)).map(r => r.url))];
-			// If any unexplained request was to the gallery's query endpoint, say WHY it failed attribution. That
-			// distinguishes a real leak from this check having been tightened past the shape the gallery actually
-			// sends - a distinction the url alone cannot carry, and one this machine cannot test for itself.
-			const queryMismatches = externalRequests
-				.filter(r => unexplainedExternal.includes(r.url))
-				.map(r => ({ url: r.url, why: explainBootstrapMismatch(r) }))
-				.filter(entry => entry.why !== null);
-			assert(unexplainedExternal.length === 0,
-				`the workflows surface made ${unexplainedExternal.length} external request(s) while exercised: ${JSON.stringify(unexplainedExternal)}`
-				+ (queryMismatches.length > 0
-					? ` - of these, ${queryMismatches.length} went to the gallery's query endpoint and were NOT attributed to the extension bootstrap because: ${JSON.stringify(queryMismatches.map(m => m.why))}. If that reason describes the gallery's own lookup rather than a leak, this check is stricter than the real request and the shape it accepts needs widening, NOT the assertion relaxing.`
-					: ''));
+			const distinctExternal = [...new Set(externalRequests.map(r => r.url))];
+			assert(distinctExternal.length === 0,
+				`the workflows surface made ${externalRequests.length} external request(s) to ${distinctExternal.length} distinct url(s) while exercised: ${JSON.stringify(distinctExternal)}`);
 
-			// Report the observed total for what it is. It counts every request the WINDOW made during the exercise
-			// - overwhelmingly the application loading its own local resources - not requests the surface caused.
-			// It swings enormously with what was already warm (thousands when this scenario runs alone and the
-			// workbench is still loading, near zero inside a full run where earlier scenarios warmed it), so it is
-			// context, not a property of the surface. The number that carries the claim is the EXTERNAL count.
-			// Report counts that RECONCILE. The set-aside and unexplained lists are de-duplicated by url, so quoting
-			// them against the raw request count would read as if the difference went unaccounted for: a cold run
-			// showing "15 external, 9 set aside" invites the conclusion that 6 slipped through, when in truth those
-			// 15 requests are 9 distinct urls and every one of them was set aside. Quote distinct against distinct.
-			const distinctExternal = [...new Set(externalUrls)];
-			// Name this bucket by what it IS - everything the classifier did not call external - rather than
-			// "local application resource loads". It is dominated by the app fetching its own files, but it also
-			// admits loopback and non-http schemes, and calling those "resource loads" would assert a benignness
-			// this scenario never establishes. (The claim here is about EXTERNAL egress; loopback is out of scope
-			// by the classifier's own definition, which is a limit worth stating rather than dressing up.)
-			const nonExternalCount = recorder.seen.length - externalUrls.length;
-			return `${distinctExternal.length} distinct external url(s) observed while exercising the surface (open, ${drillDetail}, filter, sort, theme switch) across ${externalUrls.length} external request(s), of which ${bootstrapNoise.length} distinct were set aside and ${unexplainedExternal.length} were unexplained; ${recorder.seen.length} total requests came from the window, ${nonExternalCount} of them not classified as external (mostly the application loading its own files, and by definition also loopback and non-http schemes - see isExternalEgressUrl) - that total varies with what was already warm and is not a property of the surface; `
-				+ `${bootstrapNoise.length} set aside as Clawdius's own first-run plugin-bootstrap gallery traffic (unrelated to the workflows surface - see isPluginBootstrapGalleryRequest): ${JSON.stringify(bootstrapNoise)}; `
-				+ `0 other external (page-level recorder only - see startEgressRecorder's doc comment for what it structurally cannot see)`;
+			// Report the observed total for what it is: every request the WINDOW made during the exercise,
+			// overwhelmingly the application loading its own files, not requests the surface caused. It swings
+			// with what was already warm, so it is context rather than a property of the surface. The number that
+			// carries the claim is the external count, and it is zero.
+			const nonExternalCount = recorder.seen.length - externalRequests.length;
+			return `0 external request(s) while exercising the surface (open, ${drillDetail}, filter, sort, theme switch), `
+				+ `after the fork's own extension bootstrap ran and finished (${bootstrap.installed} extension(s) installed, ${bootstrap.external} request(s), longest silence between them ${bootstrap.longestGapMs}ms against a ${bootstrap.quietMs}ms wait); `
+				+ `asserted with NO exception, because there was no traffic left to classify out; `
+				+ `${recorder.seen.length} total request(s) came from the window, ${nonExternalCount} not classified as external `
+				+ `(mostly the application loading its own files, and by definition also loopback and non-http schemes - see isExternalEgressUrl) `
+				+ `- that total varies with what was already warm and is not a property of the surface; `
+				+ `page-level recorder only - see startEgressRecorder's doc comment for what it structurally cannot see`;
 		} finally {
 			recorder.stop();
 		}

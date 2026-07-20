@@ -3111,8 +3111,10 @@ try {
 		// containers themselves: `closest()` matches ancestors, so excluding a row would skip that row's entire
 		// subtree, and a control added inside a row - exactly where a run control would go - would go unseen.
 		// Everything else in a row (its container, status icon, chips, agent icon, and any element a future change
-		// adds) stays in scope. The residual blind spot is a control nested INSIDE a name/description leaf, which is
-		// a text node, not a container.
+		// adds) stays in scope. The residual blind spot: a name/description leaf is an ELEMENT (an anchor built by
+		// IconLabel), not a bare text node, so `closest()` excludes its whole subtree - a control nested inside one
+		// would be skipped. That is accepted because those leaves hold the user's own words and nothing else today,
+		// not because they are incapable of holding anything.
 		const userDataSel = [
 			'.clawdius-workflow-run-row .label-name',
 			'.clawdius-workflow-run-row .label-description',

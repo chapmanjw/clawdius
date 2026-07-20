@@ -1188,9 +1188,9 @@ export type WorkflowsDisplayState =
 
 /**
  * Resolve which of the three (or the populated-tree) states the view should show, purely off the seam's envelope
- * plus whether a filter is currently active. `filterActive` is threaded through now (the state +
- * wiring to exist) even though nothing yet sets it true - the filter itself is a later change; until then this
- * always resolves `empty` on a genuinely empty read, never `no-match`.
+ * plus whether a filter is currently active. `filterActive` distinguishes the two ways a run list can come back
+ * empty: nothing was read at all (`empty`) versus runs were read but the active filter matched none of them
+ * (`no-match`). The view sets it from the live filter (see `claudeWorkflowsView.ts`), so both are reachable.
  */
 export function resolveWorkflowsDisplayState(result: WorkflowRunListResult, filterActive: boolean): WorkflowsDisplayState {
 	if (result.state === 'read-error') {

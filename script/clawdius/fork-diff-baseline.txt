@@ -70,7 +70,7 @@
 # rule, and two tests pinning torn-vs-live-tail. No new files; isolated to the clawdius-owned reader seam.
 
 # Disposition 2026-07-16 (-4 files, -653 insertions): delete the unreachable mission control path, and CORRECT the
-# three blocks above. Missions ships read-only; launching workflows from Clawdius is a roadmap item. A control
+# three blocks above. The surface ships read-only, and Clawdius does not launch runs of its own. A control
 # cannot act on a mission Clawdius does not hold: it has a live SDK Query only for a session it launched itself, so
 # a CLI-launched run - which is every mission on disk - has no handle to stop or steer. Owned-gating was never a
 # policy choice, so the controls were unreachable by construction rather than merely unwired. Removed:

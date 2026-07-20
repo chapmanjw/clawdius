@@ -758,15 +758,37 @@ async function workflowsPaneRoot() {
 	return handle.asElement();
 }
 
-/** Page the (virtualized) tree with the keyboard from Home through PageDown to End, collecting every DISTINCT
- *  `data-run-id` seen along the way - far beyond whatever one screenful shows, so a row rendered only deep in
- *  the list is never missed. Used by the negative-controls scenario to check every row's run id, not just the
- *  first page. */
+/** Page the (virtualized) tree with the keyboard from Home downward, collecting every DISTINCT `data-run-id`
+ *  seen along the way - far beyond whatever one screenful shows, so a row rendered only deep in the list is
+ *  never missed.
+ *
+ *  Paging alone is not proof of coverage: a fixed number of PageDowns can leave an unvisited band in the middle
+ *  of a long list, and the caller would still report "the whole list". So this carries its own COMPLETENESS
+ *  ORACLE, taken from the list rather than from this harness: a run row's `aria-setsize` is the number of
+ *  children the tree's ROOT is showing, i.e. the total run count. Every run row is a root child (agents and
+ *  story leaves are deeper, and are not run rows), so all run rows report the same setsize. Paging continues
+ *  until the number of DISTINCT run ids collected equals that declared total, and the function THROWS if it
+ *  stalls or hits its iteration ceiling first. Seeing N distinct ids out of a declared N is exactly the claim
+ *  "every run in the list was inspected" - a caller can never mistake a partial sweep for a full one.
+ *
+ *  Deliberately NOT built on `aria-posinset`: in a tree that attribute is PARENT-relative
+ *  (`getPosInSet` returns `node.visibleChildIndex + 1`, abstractTree.ts), so positions repeat across branches
+ *  and never form a flat 1..setsize cover. Counting distinct ids against the root's child count is the
+ *  equivalent claim without depending on a flat index that does not exist here. */
 async function collectAllWorkflowRunIds() {
 	const ids = new Set();
+	let declaredRuns = 0;
 	const collectVisible = async () => {
-		for (const h of await win.$$('.clawdius-workflow-run-row')) {
-			const id = await h.getAttribute('data-run-id');
+		for (const row of await win.$$('.clawdius-workflows .monaco-list-row')) {
+			const runRow = await row.$('.clawdius-workflow-run-row[data-run-id]');
+			if (!runRow) {
+				continue; // an agent row or a story leaf - a child node, not one of the root's runs
+			}
+			const size = Number(await row.getAttribute('aria-setsize'));
+			assert(Number.isInteger(size) && size > 0,
+				`a run row is missing the aria-setsize attribute this sweep's coverage oracle depends on (setsize=${size}) - without it a partial sweep could not be told from a full one`);
+			declaredRuns = Math.max(declaredRuns, size);
+			const id = await runRow.getAttribute('data-run-id');
 			if (id) { ids.add(id); }
 		}
 	};
@@ -775,15 +797,36 @@ async function collectAllWorkflowRunIds() {
 	await win.keyboard.press('Home');
 	await win.waitForTimeout(250);
 	await collectVisible();
-	for (let page = 0; page < 40; page++) {
+
+	// Page until every declared run has been materialized at least once. Bounded by an iteration ceiling that is a
+	// runaway guard, NOT a coverage limit: reaching it without full coverage is a failure, never a pass.
+	const CEILING = 400;
+	let pages = 0;
+	let stalls = 0;
+	while ((declaredRuns === 0 || ids.size < declaredRuns) && pages < CEILING) {
+		const before = ids.size;
 		await win.keyboard.press('PageDown');
 		await win.waitForTimeout(120);
 		await collectVisible();
+		pages++;
+		// Tolerate a single unproductive page (the viewport can land on already-seen rows) but do not spin.
+		stalls = ids.size === before ? stalls + 1 : 0;
+		if (stalls >= 3) {
+			break;
+		}
 	}
 	await win.keyboard.press('End');
 	await win.waitForTimeout(250);
 	await collectVisible();
-	return ids;
+
+	// Guard the oracle against reading as satisfied when it in fact observed nothing. If the row selector stopped
+	// matching, `declaredRuns` would stay 0, the comparison below would be 0 === 0, and the sweep would return an
+	// empty set that every downstream check passes vacuously - a green result from zero evidence.
+	assert(declaredRuns > 0 && ids.size > 0,
+		`the sweep observed no run rows at all (declared=${declaredRuns}, collected=${ids.size}) - the row selector no longer matches, so this sweep proves nothing and must not be read as "all runs checked"`);
+	assert(ids.size === declaredRuns,
+		`the sweep collected ${ids.size} distinct run id(s) but the list declares ${declaredRuns} run(s) after ${pages} page(s) - coverage of the full list is NOT proven, so no conclusion may be drawn from the rows it did see`);
+	return { ids, declaredRuns, pages };
 }
 
 // --- launch ----------------------------------------------------------------------------------
@@ -2857,8 +2900,11 @@ try {
 				await win.waitForTimeout(300);
 			}
 
+			// Hard-assert rather than skip-if-absent: sorting is part of the surface this scenario claims to have
+			// exercised, so a sort control that failed to render must fail the scenario, not quietly narrow it.
 			const sortSelect = await win.$('.clawdius-workflows-sort select');
-			if (sortSelect) {
+			assert(sortSelect, 'the sort control did not render (.clawdius-workflows-sort select) - the surface was not fully exercised, so "no requests" would be an incomplete claim');
+			{
 				await win.selectOption('.clawdius-workflows-sort select', { label: 'Sort: Failed First' });
 				await win.waitForTimeout(300);
 				await win.selectOption('.clawdius-workflows-sort select', { label: 'Sort: Newest First' });
@@ -2903,15 +2949,40 @@ try {
 		}
 
 		// --- (a) only WORKFLOW runs are listed ---------------------------------------------------------------------
-		const allRunIds = await collectAllWorkflowRunIds();
-		const nonWorkflowIds = [...allRunIds].filter(id => !/^wf_/.test(id));
+		// Hold the rendered ids to the SAME contract the reader admits runs by (RUN_ID_RE in the reader seam), not
+		// a looser "starts with wf_" proxy, so a malformed id cannot satisfy the check by prefix alone.
+		const sweep = await collectAllWorkflowRunIds();
+		const allRunIds = sweep.ids;
+		const nonWorkflowIds = [...allRunIds].filter(id => !/^wf_[a-z0-9-]{6,}$/.test(id));
 		assert(nonWorkflowIds.length === 0,
-			`row(s) rendered with a run id not shaped "wf_..." - a chat session, background conversation, or Task subagent rendered as a run: ${JSON.stringify(nonWorkflowIds)}`);
+			`row(s) rendered with a run id that does not match the reader's run-id contract /^wf_[a-z0-9-]{6,}$/ - a chat session, background conversation, or Task subagent rendered as a run: ${JSON.stringify(nonWorkflowIds)}`);
 
 		// --- (b) no run-level control verb anywhere on the surface -------------------------------------------------
 		const paneRoot = await workflowsPaneRoot();
 		assert(paneRoot, 'could not locate the workflows view\'s .pane ancestor to scan');
-		const userDataSel = '.clawdius-workflow-run-row, .clawdius-workflow-story-summary, .clawdius-workflow-story-result, .clawdius-workflow-story-error, .clawdius-workflow-agent-row';
+		// The scan has to skip text the USER supplied - a run legitimately named "Stop the deploy" is not a control -
+		// while still covering every element the FORK renders. So the exclusion names the user-data LEAVES only: the
+		// label's name and description elements inside a row, and the story panes. It must NOT name the row
+		// containers themselves: `closest()` matches ancestors, so excluding a row would skip that row's entire
+		// subtree, and a control added inside a row - exactly where a run control would go - would go unseen.
+		// Everything else in a row (its container, status icon, chips, agent icon, and any element a future change
+		// adds) stays in scope. The residual blind spot is a control nested INSIDE a name/description leaf, which is
+		// a text node, not a container.
+		const userDataSel = [
+			'.clawdius-workflow-run-row .label-name',
+			'.clawdius-workflow-run-row .label-description',
+			'.clawdius-workflow-agent-row .label-name',
+			'.clawdius-workflow-agent-row .label-description',
+			'.clawdius-workflow-story-summary',
+			'.clawdius-workflow-story-result',
+			'.clawdius-workflow-story-error'
+		].join(', ');
+		// Self-check the exclusion still resolves. If a future DOM change renamed these leaves the selector would
+		// silently exclude nothing; that direction is safe (the scan only gets stricter) but it would quietly stop
+		// meaning what this scenario says it means, so prove the leaves are really there.
+		const userDataLeafCount = await paneRoot.evaluate((root, sel) => root.querySelectorAll(sel).length, userDataSel);
+		assert(userDataLeafCount > 0,
+			`the user-data leaf selector matched nothing (${userDataSel}) - the row DOM changed shape, so this scan is no longer excluding what it claims to exclude`);
 		const verbSource = `\\b(${WORKFLOW_CONTROL_VERBS.join('|')})\\b`;
 		const controlVerbHits = await paneRoot.evaluate((root, args) => {
 			const [userSel, source] = args;
@@ -2919,13 +2990,14 @@ try {
 			const out = [];
 			for (const el of root.querySelectorAll('*')) {
 				const label = (typeof el.className === 'string' && el.className) ? el.className : el.tagName;
-				const withinUserData = !!el.closest(userSel);
-				if (!withinUserData) {
-					const text = el.childElementCount === 0 ? (el.textContent || '') : '';
-					if (rx.test(text)) { out.push('text ' + label + ' :: ' + text.trim().slice(0, 80)); }
+				if (el.closest(userSel)) {
+					continue; // user-supplied text - its content and its own attributes are the user's words
 				}
-				const wrapperOwnsUserData = el.matches('.monaco-list-row') && el.querySelector(userSel);
-				if (!withinUserData && !wrapperOwnsUserData) {
+				const text = el.childElementCount === 0 ? (el.textContent || '') : '';
+				if (rx.test(text)) { out.push('text ' + label + ' :: ' + text.trim().slice(0, 80)); }
+				// An element that WRAPS a user-data leaf (the list row, the icon-label) rolls that user text up
+				// into its own title/aria-label, so skip its attributes - but its own text is still scanned above.
+				if (!el.querySelector(userSel)) {
 					for (const attr of ['title', 'aria-label']) {
 						const v = el.getAttribute && el.getAttribute(attr);
 						if (v && rx.test(v)) { out.push(attr + ' ' + label + ' :: ' + v.trim().slice(0, 80)); }
@@ -2953,9 +3025,12 @@ try {
 		});
 		assert(readAgainHits.length === 0, `a "Read Again" control is present outside the read-error state: ${JSON.stringify(readAgainHits)}`);
 
-		return `(a) ${allRunIds.size} distinct run id(s) checked across the full virtualized list (Home/PageDown.../End), all shaped "wf_..."; `
+		return `(a) ${allRunIds.size} distinct run id(s) checked, all matching the reader's run-id contract; that equals the `
+			+ `${sweep.declaredRuns} run(s) the list itself declares, reached over ${sweep.pages} page(s) - full-list coverage is proven by `
+			+ `reconciling against the list's own count, not assumed from a page count; `
 			+ `(b) scanned the view's .pane subtree (header/title/toolbar action items + .clawdius-workflows body: filter/sort toolbar, tree rows, state overlay) `
-			+ `for ${WORKFLOW_CONTROL_VERBS.length} control verb(s) as whole words, excluding user-data leaves (run row label, story summary/result/error, agent rows) - none found; `
+			+ `for ${WORKFLOW_CONTROL_VERBS.length} control verb(s) as whole words, excluding ${userDataLeafCount} user-data leaf element(s) (label name/description within a row, story summary/result/error) `
+			+ `but NOT the rows themselves, so a control placed inside a row would be caught - none found; `
 			+ `(c) no "Read Again" control present in the healthy state`;
 	});
 
@@ -2974,6 +3049,15 @@ try {
 	const passes = results.filter(r => r.ok && !r.skipped);
 	console.log(`\n=== ${results.length} scenarios: ${passes.length} pass, ${skips.length} skipped, ${fails.length} critical-fail, ${warns.length} warn ===`);
 	console.log(`screenshots + report.json in ${OUT}`);
+	// A run that executed NOTHING must never read as a clean run. `--grep` is a plain substring match, so a
+	// pattern that matches no scenario name (a regex alternation, say, or a typo) would otherwise print
+	// "0 scenarios ... 0 critical-fail" and exit 0 - indistinguishable at a glance from a green sweep.
+	const selectedNothing = results.length === 0;
+	if (selectedNothing) {
+		console.log(GREP
+			? `FAILED: --grep ${JSON.stringify(GREP)} matched no scenario name (it is a substring match, not a regex) - nothing ran, so this run proves nothing.`
+			: 'FAILED: no scenarios ran at all - this run proves nothing.');
+	}
 	if (!KEEP_OPEN) { await app.close(); }
-	process.exitCode = fails.length ? 1 : 0;
+	process.exitCode = (fails.length || selectedNothing) ? 1 : 0;
 }

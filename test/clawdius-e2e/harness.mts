@@ -2242,7 +2242,8 @@ try {
 			// stale silently in the DANGEROUS direction: if the product debounce ever DROPPED, subtracting a larger
 			// stale floor would clamp the computed work down and absorb a genuine re-render regression.
 			const viewSrc = readFileSync(join(REPO, 'src/vs/workbench/contrib/clawdius/browser/workflows/claudeWorkflowsView.ts'), 'utf8');
-			const debounceMatch = /const FILTER_DEBOUNCE_MS = (\d+)/.exec(viewSrc);
+			// Anchor to the start of a line so a commented-out or quoted mention cannot be read as the declaration.
+			const debounceMatch = /^const FILTER_DEBOUNCE_MS = (\d+)/m.exec(viewSrc);
 			assert(debounceMatch, 'could not read FILTER_DEBOUNCE_MS from claudeWorkflowsView.ts - this budget subtracts that floor, so it must not guess at it');
 			const FILTER_DEBOUNCE_FLOOR_MS = Number(debounceMatch[1]);
 			const filterWorkMs = Math.max(0, filterMs - FILTER_DEBOUNCE_FLOOR_MS);
@@ -3036,8 +3037,8 @@ try {
 				// An element that WRAPS a user-data leaf (the list row, the icon-label) rolls that user's words up
 				// into its own title/aria-label. Do NOT skip such an attribute wholesale - that would let a
 				// fork-authored aria-label="Stop workflow" on a row hide behind the fact that the row also contains
-				// the run's name. Instead SUBTRACT the user's words and scan what remains, so a run named
-				// "Stop the deploy" contributes nothing while a verb the fork itself wrote still surfaces.
+				// the run's name. So the attribute IS scanned, and each control word found in it is attributed to
+				// either the user or the fork, as follows.
 				//
 				// Do NOT delete the user's words and then test what is left. Deleting text before testing is
 				// unsound in both directions and two rounds of this scan proved it: deleting whole strings failed
@@ -3060,9 +3061,15 @@ try {
 				const userSpans = [];
 				for (const leaf of el.querySelectorAll(userSel)) {
 					for (const w of norm(leaf.textContent).split(' ')) {
-						// Skip pure punctuation (the " · " separator): \b around a non-word char does not anchor.
+						// Skip pure punctuation (the " · " separator): there is no word in it to attribute.
 						if (w.length === 0 || !/[\w]/.test(w)) { continue; }
-						userSpans.push(new RegExp('\\b' + escapeRx(w) + '\\b', 'gi'));
+						// Anchor with \b only on an edge that IS a word character. \b asserts a word/non-word
+						// transition, so wrapping a token that starts or ends with punctuation - "(Stop)", "#stop" -
+						// or with a non-\w script (CJK) in \b...\b can never match, which would leave the user's own
+						// word unattributed and report it as if the fork had written it.
+						const left = /^[\w]/.test(w) ? '\\b' : '';
+						const right = /[\w]$/.test(w) ? '\\b' : '';
+						userSpans.push(new RegExp(left + escapeRx(w) + right, 'gi'));
 					}
 				}
 				const verbScan = new RegExp(source, 'gi');

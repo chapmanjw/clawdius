@@ -724,13 +724,17 @@ function isExternalEgressUrl(url) {
  *  queried the same endpoint for anything at all - precisely the request this guard exists to catch. Naming is
  *  checked wherever the name actually lives.
  *
- *  A leak routing through the same host on any other path, or through the query endpoint naming any other
- *  extension, or carrying anything beyond a gallery query, is still reported. What this CANNOT do is prove a
- *  request came from the bootstrap: it proves the request is shaped exactly like one and asks only for those
- *  three extensions. A regression that reproduced that shape faithfully, asking for nothing else and carrying
- *  nothing else, would be indistinguishable here - it would also be a request that conveys nothing. Every
- *  set-aside request is counted in the scenario's detail, never silently dropped, so the size and shape of what
- *  was excused stays visible in the receipt. */
+ *  What this establishes, stated no more strongly than it holds: a set-aside request goes to a configured
+ *  gallery host, names one of the three extensions, and carries nothing but values the gallery client itself
+ *  uses - numbers, a version uuid, the fixed product target, and short machine tokens. It does NOT prove the
+ *  request came from the bootstrap. Two residuals follow, and neither is closed here:
+ *    - a regression that reproduced a bootstrap lookup exactly would be indistinguishable - though it would
+ *      then be a request whose every field is fixed or numeric, so it has almost nothing to carry;
+ *    - "almost nothing" is not nothing. A determined sender could still signal through choices this check
+ *      permits: which of the three extensions it asks about, how many requests it makes, their timing. Closing
+ *      that would need attribution by initiator rather than by content, which a page-level recorder cannot do.
+ *  Every set-aside request is counted in the scenario's detail, never silently dropped, so the size and shape of
+ *  what was excused stays visible in the receipt. */
 const PLUGIN_BOOTSTRAP_GALLERY_HOSTS = new Set(['open-vsx.org', 'openvsx.eclipsecontent.org']);
 const PLUGIN_BOOTSTRAP_EXTENSION_IDS = ['anthropic/claude-code', 'jeanp413/open-remote-ssh', 'jeanp413/open-remote-wsl'];
 /** The gallery's own query endpoint - ids travel in the POST body, so the url alone cannot name an extension. */
@@ -738,76 +742,85 @@ const PLUGIN_BOOTSTRAP_QUERY_PATHS = ['/vscode/gallery/extensionquery', '/api/-/
 /** Takes a RECORD ({url, method, body}) from startEgressRecorder, not a bare url, because the query endpoint can
  *  only be attributed by what it asks for. */
 function isPluginBootstrapGalleryRequest(record) {
-	let parsed;
-	try { parsed = new URL(record.url); } catch { return false; }
-	if (!PLUGIN_BOOTSTRAP_GALLERY_HOSTS.has(parsed.hostname.toLowerCase())) { return false; }
-	const path = decodeURIComponent(parsed.pathname).toLowerCase();
-	if (PLUGIN_BOOTSTRAP_QUERY_PATHS.includes(path)) {
-		// The address names nothing, so the BODY has to. Searching it for the id as a SUBSTRING is not enough:
-		// a request carrying run data would be excused merely for mentioning one of the ids somewhere in the
-		// payload ({"extension":"anthropic.claude-code","runs":[...],"summary":"private"}), which is exactly the
-		// leak this check exists to catch. So validate the SHAPE: it must be a POST whose body is a gallery
-		// query and NOTHING else - known keys only, every named extension one of the three, and no smuggled
-		// fields. A payload that carries anything beyond a gallery query fails to attribute and is reported.
-		if ((record.method || '').toUpperCase() !== 'POST') { return false; }
-		let query;
-		try { query = JSON.parse(record.body || ''); } catch { return false; }
-		if (!query || typeof query !== 'object' || Array.isArray(query)) { return false; }
-		const GALLERY_QUERY_KEYS = new Set(['filters', 'assetTypes', 'flags']);
-		if (!Object.keys(query).every(k => GALLERY_QUERY_KEYS.has(k))) { return false; }
-		if (!Array.isArray(query.filters) || query.filters.length === 0) { return false; }
-		const named = [];
-		for (const filter of query.filters) {
-			if (!filter || typeof filter !== 'object') { return false; }
-			if (!Object.keys(filter).every(k => ['criteria', 'pageNumber', 'pageSize', 'sortBy', 'sortOrder'].includes(k))) { return false; }
-			if (!Array.isArray(filter.criteria)) { return false; }
-			for (const criterion of filter.criteria) {
-				if (!criterion || typeof criterion !== 'object') { return false; }
-				if (!Object.keys(criterion).every(k => ['filterType', 'value'].includes(k))) { return false; }
-				if (typeof criterion.value === 'string' && /[./]/.test(criterion.value)) { named.push(criterion.value.toLowerCase()); }
-			}
-		}
-		// Every extension this query names must be one of the three, and it must name at least one.
-		const isBootstrapId = v => PLUGIN_BOOTSTRAP_EXTENSION_IDS.some(id => v === id || v === id.replace('/', '.'));
-		return named.length > 0 && named.every(isBootstrapId);
-	}
-	return PLUGIN_BOOTSTRAP_EXTENSION_IDS.some(id => path.includes(id));
+	return explainBootstrapMismatch(record) === null;
 }
 
-/** Why a request to the gallery's QUERY endpoint was not attributed to the bootstrap. The shape check above is
- *  deliberately strict, and it is asserted against a request this machine never makes - the gallery client here
- *  only ever uses id-bearing addresses. If the real lookup carries a field this check does not expect, the
- *  scenario would fail with nothing but a url, and the reader would have no way to tell a tightened-too-far
- *  check from an actual leak. So say which condition failed. Returns null when the request is not a query at
- *  all (the caller has nothing to explain). */
-function explainBootstrapQueryMismatch(record) {
+/** The gallery client's own value vocabulary, taken from how it actually builds a query
+ *  (`extensionGalleryService.ts`): a by-id lookup carries the extension name, the fixed product Target, and a
+ *  numeric ExcludeWithFlags; `getVersions` can carry an id as a UUID instead. Anything outside this vocabulary
+ *  is not something the gallery client asks for, so it is not bootstrap traffic. */
+const GALLERY_PRODUCT_TARGET = 'microsoft.visualstudio.code';
+const GALLERY_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** Asset type names and url query values are short machine tokens; a payload is not. */
+const GALLERY_TOKEN_RE = /^[\w.\-+]{0,80}$/;
+
+/** THE single decision for whether a request is the fork's own extension bootstrap, and - when it is not, but
+ *  looks like it might have been - WHY not. One ladder, so the predicate and the diagnostic can never drift
+ *  apart. Returns null to mean "this IS bootstrap traffic"; a string to mean "not attributed, here is the
+ *  reason"; and for a request that is nothing to do with the gallery, the generic reason (callers only surface
+ *  reasons for requests that reached a gallery endpoint).
+ *
+ *  Keys alone are not enough. An earlier version constrained which keys a query could carry but never looked at
+ *  their VALUES, so a request could pass carrying an entire transcript in `assetTypes`, or run contents in
+ *  `flags`/`pageNumber`, or a payload in a criterion whose value simply had no dot in it. Every value a
+ *  bootstrap query can legitimately hold is a number or a short machine token, so that is what is required. */
+function explainBootstrapMismatch(record) {
 	let parsed;
-	try { parsed = new URL(record.url); } catch { return null; }
-	if (!PLUGIN_BOOTSTRAP_GALLERY_HOSTS.has(parsed.hostname.toLowerCase())) { return null; }
-	if (!PLUGIN_BOOTSTRAP_QUERY_PATHS.includes(decodeURIComponent(parsed.pathname).toLowerCase())) { return null; }
+	try { parsed = new URL(record.url); } catch { return 'url did not parse'; }
+	if (!PLUGIN_BOOTSTRAP_GALLERY_HOSTS.has(parsed.hostname.toLowerCase())) { return 'not a configured gallery host'; }
+	const path = decodeURIComponent(parsed.pathname).toLowerCase();
+
+	if (!PLUGIN_BOOTSTRAP_QUERY_PATHS.includes(path)) {
+		// An asset/metadata address, which names the extension itself. It must not also carry a payload: a body,
+		// or a long url parameter, would convey data alongside a legitimate-looking download.
+		if (!PLUGIN_BOOTSTRAP_EXTENSION_IDS.some(id => path.includes(id))) { return 'address names no bootstrap extension'; }
+		if ((record.body || '').length > 0) { return 'an asset request carried a body'; }
+		for (const [key, value] of parsed.searchParams) {
+			if (!GALLERY_TOKEN_RE.test(value)) { return `an asset request carried a non-token url parameter: ${JSON.stringify(key)}`; }
+		}
+		return null;
+	}
+
+	// The lookup address names nothing, so the body must - and must carry nothing else.
 	if ((record.method || '').toUpperCase() !== 'POST') { return `method was ${record.method || 'unknown'}, not POST`; }
 	let query;
 	try { query = JSON.parse(record.body || ''); } catch { return 'body was not JSON'; }
 	if (!query || typeof query !== 'object' || Array.isArray(query)) { return 'body was not a JSON object'; }
 	const unexpected = Object.keys(query).filter(k => !['filters', 'assetTypes', 'flags'].includes(k));
 	if (unexpected.length > 0) { return `body carried unexpected top-level key(s): ${JSON.stringify(unexpected)}`; }
+	if (query.flags !== undefined && typeof query.flags !== 'number') { return 'flags was not a number'; }
+	if (query.assetTypes !== undefined) {
+		if (!Array.isArray(query.assetTypes)) { return 'assetTypes was not an array'; }
+		const badAsset = query.assetTypes.find(a => typeof a !== 'string' || !GALLERY_TOKEN_RE.test(a));
+		if (badAsset !== undefined) { return `assetTypes carried a value that is not a short token: ${JSON.stringify(String(badAsset).slice(0, 40))}`; }
+	}
 	if (!Array.isArray(query.filters) || query.filters.length === 0) { return 'body carried no filters'; }
-	const named = [];
+	const namedExtensions = [];
 	for (const filter of query.filters) {
-		if (!filter || typeof filter !== 'object') { return 'a filter was not an object'; }
+		if (!filter || typeof filter !== 'object' || Array.isArray(filter)) { return 'a filter was not an object'; }
 		const badFilterKeys = Object.keys(filter).filter(k => !['criteria', 'pageNumber', 'pageSize', 'sortBy', 'sortOrder'].includes(k));
 		if (badFilterKeys.length > 0) { return `a filter carried unexpected key(s): ${JSON.stringify(badFilterKeys)}`; }
+		for (const numeric of ['pageNumber', 'pageSize', 'sortBy', 'sortOrder']) {
+			if (filter[numeric] !== undefined && typeof filter[numeric] !== 'number') { return `${numeric} was not a number`; }
+		}
 		if (!Array.isArray(filter.criteria)) { return 'a filter carried no criteria array'; }
 		for (const criterion of filter.criteria) {
-			if (!criterion || typeof criterion !== 'object') { return 'a criterion was not an object'; }
+			if (!criterion || typeof criterion !== 'object' || Array.isArray(criterion)) { return 'a criterion was not an object'; }
 			const badKeys = Object.keys(criterion).filter(k => !['filterType', 'value'].includes(k));
 			if (badKeys.length > 0) { return `a criterion carried unexpected key(s): ${JSON.stringify(badKeys)}`; }
-			if (typeof criterion.value === 'string' && /[./]/.test(criterion.value)) { named.push(criterion.value.toLowerCase()); }
+			if (criterion.filterType !== undefined && typeof criterion.filterType !== 'number') { return 'a criterion filterType was not a number'; }
+			if (criterion.value === undefined) { continue; }
+			if (typeof criterion.value !== 'string') { return 'a criterion value was not a string'; }
+			const value = criterion.value.toLowerCase();
+			const isBootstrapId = PLUGIN_BOOTSTRAP_EXTENSION_IDS.some(id => value === id || value === id.replace('/', '.'));
+			if (isBootstrapId) { namedExtensions.push(value); continue; }
+			// The product Target, a numeric flag value, and a version uuid are the only other things the gallery
+			// client puts in a criterion. Anything else is this check being asked to carry something.
+			if (value === GALLERY_PRODUCT_TARGET || /^[0-9]+$/.test(value) || GALLERY_UUID_RE.test(value)) { continue; }
+			return `a criterion carried a value the gallery client does not use: ${JSON.stringify(criterion.value.slice(0, 40))}`;
 		}
 	}
-	if (named.length === 0) { return 'the query named no extension'; }
-	const foreign = named.filter(v => !PLUGIN_BOOTSTRAP_EXTENSION_IDS.some(id => v === id || v === id.replace('/', '.')));
-	if (foreign.length > 0) { return `the query named extension(s) outside the bootstrap set: ${JSON.stringify(foreign)}`; }
+	if (namedExtensions.length === 0) { return 'the query named none of the bootstrap extensions'; }
 	return null;
 }
 
@@ -3074,7 +3087,7 @@ try {
 			// sends - a distinction the url alone cannot carry, and one this machine cannot test for itself.
 			const queryMismatches = externalRequests
 				.filter(r => unexplainedExternal.includes(r.url))
-				.map(r => ({ url: r.url, why: explainBootstrapQueryMismatch(r) }))
+				.map(r => ({ url: r.url, why: explainBootstrapMismatch(r) }))
 				.filter(entry => entry.why !== null);
 			assert(unexplainedExternal.length === 0,
 				`the workflows surface made ${unexplainedExternal.length} external request(s) while exercised: ${JSON.stringify(unexplainedExternal)}`

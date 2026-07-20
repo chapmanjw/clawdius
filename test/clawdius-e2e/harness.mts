@@ -3075,9 +3075,11 @@ try {
 	});
 
 	// FINAL ACCEPTANCE - negative controls: what must NEVER appear on the workflows surface, against the real
-	// config root with the view open. (a) every rendered run row's run id matches the launcher's own "wf_" shape -
-	// a chat session, background conversation, or Task subagent must never be rendered as a workflow run - checked
-	// across the full virtualized list, not just the first screenful. (b) no run-level control verb anywhere on
+	// config root with the view open. (a) every rendered run row's run id matches the reader's own run-id contract,
+	// checked across the full virtualized list rather than the first screenful. Read that for what it is: it bounds
+	// the ID NAMESPACE, so a chat session or Task subagent carrying its own kind of id cannot appear as a run. It
+	// does NOT establish what a record contains - the reader admits a manifest it does not recognise as
+	// `unknown-shape`, so a file whose NAME matched this contract would still render, and this check would pass. (b) no run-level control verb anywhere on
 	// the surface: the product is read-only by construction (see claudeWorkflowsView.ts's own "READ-ONLY BY
 	// CONSTRUCTION" note) - it can observe a run but never act on one - so a scan for stop/cancel/kill/pause/
 	// resume/retry/rerun/re-run/restart/abort/terminate/start/launch/delete/remove as whole words must come back
@@ -3100,7 +3102,7 @@ try {
 		const allRunIds = sweep.ids;
 		const nonWorkflowIds = [...allRunIds].filter(id => !/^wf_[a-z0-9-]{6,}$/.test(id));
 		assert(nonWorkflowIds.length === 0,
-			`row(s) rendered with a run id that does not match the reader's run-id contract /^wf_[a-z0-9-]{6,}$/ - a chat session, background conversation, or Task subagent rendered as a run: ${JSON.stringify(nonWorkflowIds)}`);
+			`row(s) rendered with a run id outside the reader's run-id contract /^wf_[a-z0-9-]{6,}$/, so something carrying a foreign id - a chat session, background conversation, or Task subagent - reached the list: ${JSON.stringify(nonWorkflowIds)}`);
 
 		// --- (b) no run-level control verb anywhere on the surface -------------------------------------------------
 		const paneRoot = await workflowsPaneRoot();
@@ -3111,8 +3113,8 @@ try {
 		// containers themselves: `closest()` matches ancestors, so excluding a row would skip that row's entire
 		// subtree, and a control added inside a row - exactly where a run control would go - would go unseen.
 		// Everything else in a row (its container, status icon, chips, agent icon, and any element a future change
-		// adds) stays in scope. The residual blind spot: a name/description leaf is an ELEMENT (an anchor built by
-		// IconLabel), not a bare text node, so `closest()` excludes its whole subtree - a control nested inside one
+		// adds) stays in scope. The residual blind spot: a name/description leaf is an ELEMENT (IconLabel builds the name as
+		// an anchor and the description as a span), not a bare text node, so `closest()` excludes its whole subtree - a control nested inside one
 		// would be skipped. That is accepted because those leaves hold the user's own words and nothing else today,
 		// not because they are incapable of holding anything.
 		const userDataSel = [

@@ -317,9 +317,12 @@
 # that fails to reveal, are both failures rather than absences. The result carries what the wait actually saw -
 # how many requests, how long the longest silence between them was, and how much silence ended the wait - and
 # says plainly that silence is not proof those installs finished. Not reaching a still enough starting point
-# fails rather than reporting as skipped, so this check cannot quietly drop out of a passing run. A second check asserts what must never appear: every listed row is a workflow run rather than a chat or
-# a subagent, checked across the whole virtualized list; no control verb anywhere on the surface outside a run's own
-# text, since the view can observe a run but never act on one; and no re-read affordance while the read is healthy.
+# fails rather than reporting as skipped, so this check cannot quietly drop out of a passing run. A second check asserts what must never appear. Every listed row carries a run id inside the
+# reader's own contract, checked across the whole virtualized list rather than the first screenful; that bounds
+# the id namespace, so a chat or a subagent carrying its own kind of id cannot appear under one, but it says
+# nothing about what a record holds - a file merely NAMED to fit the contract would still be listed. No control
+# verb appears anywhere on the surface outside a run's own text, since the view can observe a run but never act
+# on one. And no re-read affordance is offered while the read is healthy.
 # Also proves the third display state for real - a filter no run can match shows its own message, not an empty list.
 # Growth is those checks and their driving helpers, in the harness only; no new files and no product change. As with
 # the entries above, the recorded baseline moves by more than the code delta because this block's own comment lines
@@ -348,4 +351,4 @@
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
 recorded: 2026-07-19
-baseline: 5608 files changed, 51071 insertions(+), 1456122 deletions(-)
+baseline: 5608 files changed, 51076 insertions(+), 1456122 deletions(-)

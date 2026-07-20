@@ -258,16 +258,22 @@ async function expandRunAndGatherAgents(target) {
 		return { story: undefined, agentRows: [] };
 	}
 	const phaseRows = await win.$$('.clawdius-workflow-phase-row');
+	// Record rather than swallow. A phase that fails to expand hides the agents beneath it, so treating that as
+	// "this run has no agents" would let a caller report genuine agents as absent - the difference between data
+	// that is not there and a surface that would not open. Callers that assert on absence must check this.
+	const phaseErrors = [];
 	for (const phaseRow of phaseRows) {
 		try {
 			await phaseRow.click();
 			await win.waitForTimeout(100);
 			await win.keyboard.press('ArrowRight');
 			await win.waitForTimeout(250);
-		} catch { /* best-effort: a phase row that can't expand just contributes no agent rows below */ }
+		} catch (err) {
+			phaseErrors.push(String((err && err.message) || err));
+		}
 	}
 	const agentRows = await win.$$('.clawdius-workflow-agent-row');
-	return { story: storyHandles[0], agentRows };
+	return { story: storyHandles[0], agentRows, phaseErrors };
 }
 
 // Activate a leaf (story or agent row) and wait for its drill-in pane to attach in the editor area. Click first
@@ -701,20 +707,28 @@ function isExternalEgressUrl(url) {
  *  profile's extensions dir - UNCONDITIONALLY, on any fresh-enough profile, entirely independent of whether the
  *  workflows sidebar is ever opened; that file's own doc comment says the critical one (`anthropic.claude-code`)
  *  is even "RE-OFFERED on a later launch ... regardless of the one-time done flag" whenever it stays absent.
- *  Nothing in that file references the workflows view, tree, or reader seam. Confirmed empirically while writing
- *  this scenario: a profile still mid-bootstrap makes exactly nine gallery requests (three per extension - a
- *  gallery lookup, an asset manifest, and a mirrored package.json) for these three ids, well after the workflows
- *  surface was already done being exercised. Matched by NAME (the known gallery hosts this build is configured
- *  to use, AND one of the three specific extension ids that bootstrap installs) rather than by broadly
- *  allowlisting the gallery host outright, so a genuine leak that happened to route through the same host for
- *  anything else would still be caught by the egress scenario below. */
+ *  Nothing in that file references the workflows view, tree, or reader seam. On a profile still mid-bootstrap it
+ *  makes per-extension asset requests that carry the id in the URL path, PLUS a gallery query that does not: the
+ *  query endpoint takes its ids in the request BODY, so its url is the same for any lookup. An earlier version of
+ *  this matcher keyed only on the path ids and so let that one query through as unexplained egress - it fails the
+ *  egress scenario on a FRESH profile while passing on an already-bootstrapped one, which is precisely the kind of
+ *  environment-dependent green this acceptance run must not have. Both shapes are recognised now.
+ *
+ *  Still matched by NAME, never by allowlisting the host outright: the request must be to a known gallery host
+ *  this build is configured to use AND either carry one of the three specific extension ids bootstrap installs, or
+ *  be the gallery's own query endpoint. A genuine leak routing through the same host on any other path is still
+ *  caught. Every set-aside request is reported in the scenario's detail, never silently dropped, so the size and
+ *  shape of what was excused stays visible in the receipt. */
 const PLUGIN_BOOTSTRAP_GALLERY_HOSTS = new Set(['open-vsx.org', 'openvsx.eclipsecontent.org']);
 const PLUGIN_BOOTSTRAP_EXTENSION_IDS = ['anthropic/claude-code', 'jeanp413/open-remote-ssh', 'jeanp413/open-remote-wsl'];
+/** The gallery's own query endpoint - ids travel in the POST body, so the url alone cannot name an extension. */
+const PLUGIN_BOOTSTRAP_QUERY_PATHS = ['/vscode/gallery/extensionquery', '/api/-/query'];
 function isPluginBootstrapGalleryUrl(url) {
 	let parsed;
 	try { parsed = new URL(url); } catch { return false; }
 	if (!PLUGIN_BOOTSTRAP_GALLERY_HOSTS.has(parsed.hostname.toLowerCase())) { return false; }
 	const path = decodeURIComponent(parsed.pathname).toLowerCase();
+	if (PLUGIN_BOOTSTRAP_QUERY_PATHS.includes(path)) { return true; }
 	return PLUGIN_BOOTSTRAP_EXTENSION_IDS.some(id => path.includes(id));
 }
 
@@ -2877,10 +2891,12 @@ try {
 	// FINAL ACCEPTANCE - network egress guard: the workflows surface reads only the local Claude config root and
 	// never talks to the network. Installs the request recorder (see startEgressRecorder's own doc comment for
 	// exactly what it can and cannot see) BEFORE the surface is touched, then drives it end to end: open the
-	// view, expand a terminal run, drill into whichever of its result and agent detail the run actually has,
-	// close the tab, filter, sort, and switch a theme. The view, filter and sort must all render or the scenario
-	// fails; the drill depends on the corpus, so a run row that IS present must open, while a genuinely absent
-	// terminal run, story or agent is reported as absent in the detail rather than passed over in silence.
+	// view, expand a terminal run, open its result pane and (when the run declares any) an agent's detail, close
+	// the tab, filter, sort, and switch a theme. The view, filter, sort and the result pane must all open or the
+	// scenario FAILS - a terminal run always has a story leaf, so a missing one is a surface that would not open,
+	// never legitimate absence. A config root with no terminal run at all SKIPS rather than passes, since the
+	// detail panes would go unexercised. Only "this run declares no agents" is a real absence, and a phase row
+	// that fails to expand is reported as a failure rather than counted as having no agents.
 	// Asserts the recorded requests carry ZERO external urls (see isExternalEgressUrl for the
 	// exact local-vs-external classification), after setting aside Clawdius's own first-run plugin-bootstrap
 	// gallery traffic (see isPluginBootstrapGalleryUrl's own doc comment for exactly why that one, NAMED
@@ -2900,31 +2916,36 @@ try {
 			for (const h of rowHandles) {
 				if ((await h.getAttribute('data-run-kind')) === 'terminal') { target = h; break; }
 			}
-			// A corpus need not contain a terminal run, and a terminal run need not carry a story or any agents -
-			// those are legitimately absent, so their absence is reported rather than failed. But if the row IS
-			// there, opening it must WORK: treating a present-but-unopenable pane as a pass would let this
-			// scenario report "no requests while exercising the surface" without having exercised that pane at all.
-			let drillDetail = 'no terminal run on this config root, so no detail pane was opened';
-			if (target) {
-				const runId = await target.getAttribute('data-run-id');
-				const expanded = await expandRunAndGatherAgents(target);
-				let resultState = 'absent (run has no story row)';
-				if (expanded.story) {
-					const resultPane = await activateAndWaitForDetail(expanded.story, 'result');
-					assert(resultPane, `run "${runId}" has a story row but its result pane did not open - the drill this scenario claims to have performed did not happen`);
-					resultState = 'opened';
-					await closeActiveEditorTab();
-				}
-				let agentState = 'absent (run has no agent rows)';
-				const reExpanded = await expandRunAndGatherAgents(target);
-				if (reExpanded.agentRows.length > 0) {
-					const agentPane = await activateAndWaitForDetail(reExpanded.agentRows[0], 'agent');
-					assert(agentPane, `run "${runId}" has an agent row but its agent pane did not open - the drill this scenario claims to have performed did not happen`);
-					agentState = 'opened';
-					await closeActiveEditorTab();
-				}
-				drillDetail = `run "${runId}": result pane ${resultState}, agent pane ${agentState}`;
+			// The detail panes are the highest-risk part of this surface to claim "made no request" about, so this
+			// scenario must not pass having skipped them. If the config root has no terminal run at all there is
+			// nothing to drill, and that is reported as a SKIP rather than a pass - a green result here would
+			// otherwise mean "no requests" from a run that never opened a pane.
+			if (!target) {
+				return 'SKIPPED (no terminal run on this config root, so neither detail pane could be exercised)';
 			}
+			const runId = await target.getAttribute('data-run-id');
+			const expanded = await expandRunAndGatherAgents(target);
+			// A terminal run ALWAYS has a story leaf - `buildTerminalRunChildren` puts it first unconditionally -
+			// so a missing story row is never "this run has no story", it is expansion having failed. Assert it
+			// rather than reporting a legitimate-sounding absence for something that cannot legitimately be absent.
+			assert(expanded.story, `terminal run "${runId}" rendered no story row after expanding - every terminal run has one, so the row did not expand and neither detail pane was exercised`);
+			const resultPane = await activateAndWaitForDetail(expanded.story, 'result');
+			assert(resultPane, `run "${runId}" has a story row but its result pane did not open - the drill this scenario claims to have performed did not happen`);
+			await closeActiveEditorTab();
+
+			const reExpanded = await expandRunAndGatherAgents(target);
+			// A run legitimately may have no agents; a phase that FAILED to expand is a different thing entirely
+			// and would hide real agents beneath it, so refuse to call that absence.
+			assert(reExpanded.phaseErrors.length === 0,
+				`run "${runId}" had ${reExpanded.phaseErrors.length} phase row(s) fail to expand, so any agents beneath them are hidden and "no agent rows" would be a false reading: ${JSON.stringify(reExpanded.phaseErrors.slice(0, 3))}`);
+			let agentState = 'absent (this run declares no agents)';
+			if (reExpanded.agentRows.length > 0) {
+				const agentPane = await activateAndWaitForDetail(reExpanded.agentRows[0], 'agent');
+				assert(agentPane, `run "${runId}" has an agent row but its agent pane did not open - the drill this scenario claims to have performed did not happen`);
+				agentState = 'opened';
+				await closeActiveEditorTab();
+			}
+			const drillDetail = `run "${runId}": result pane opened, agent pane ${agentState}`;
 
 			// Hard-assert, as with the sort below: filtering is part of the surface this scenario claims to have
 			// exercised, so a filter that failed to render must fail the scenario rather than quietly narrow it.
@@ -2958,7 +2979,18 @@ try {
 			assert(unexplainedExternal.length === 0,
 				`the workflows surface made ${unexplainedExternal.length} external request(s) while exercised: ${JSON.stringify(unexplainedExternal)}`);
 
-			return `${recorder.seen.length} request(s) observed while exercising the surface (open, ${drillDetail}, filter, sort, theme switch); `
+			// Report the observed total for what it is. It counts every request the WINDOW made during the exercise
+			// - overwhelmingly the application loading its own local resources - not requests the surface caused.
+			// It swings enormously with what was already warm (thousands when this scenario runs alone and the
+			// workbench is still loading, near zero inside a full run where earlier scenarios warmed it), so it is
+			// context, not a property of the surface. The number that carries the claim is the EXTERNAL count.
+			// Report counts that RECONCILE. The set-aside and unexplained lists are de-duplicated by url, so quoting
+			// them against the raw request count would read as if the difference went unaccounted for: a cold run
+			// showing "15 external, 9 set aside" invites the conclusion that 6 slipped through, when in truth those
+			// 15 requests are 9 distinct urls and every one of them was set aside. Quote distinct against distinct.
+			const distinctExternal = [...new Set(externalUrls)];
+			const localCount = recorder.seen.length - externalUrls.length;
+			return `${distinctExternal.length} distinct external url(s) observed while exercising the surface (open, ${drillDetail}, filter, sort, theme switch) across ${externalUrls.length} external request(s), of which ${bootstrapNoise.length} distinct were set aside and ${unexplainedExternal.length} were unexplained; ${recorder.seen.length} total requests came from the window, ${localCount} of them local application resource loads - that total varies with what was already warm and is not a property of the surface; `
 				+ `${bootstrapNoise.length} set aside as Clawdius's own first-run plugin-bootstrap gallery traffic (unrelated to the workflows surface - see isPluginBootstrapGalleryUrl): ${JSON.stringify(bootstrapNoise)}; `
 				+ `0 other external (page-level recorder only - see startEgressRecorder's doc comment for what it structurally cannot see)`;
 		} finally {
@@ -3143,7 +3175,7 @@ try {
 		return `(a) ${allRunIds.size} distinct run id(s) checked, all matching the reader's run-id contract; that equals the `
 			+ `${sweep.declaredRuns} run(s) the list itself declares, reached over ${sweep.pages} page(s) - full-list coverage is proven by `
 			+ `reconciling against the list's own count, not assumed from a page count; `
-			+ `(b) scanned the view's .pane subtree (header/title/toolbar action items + .clawdius-workflows body: filter/sort toolbar, tree rows, state overlay) `
+			+ `(b) scanned the view's .pane subtree (header/title/toolbar action items + .clawdius-workflows body: filter/sort toolbar, tree rows; the state overlay is NOT reachable here - it renders only in the empty/no-match/read-error states and this scenario runs only when rows are present) `
 			+ `for ${WORKFLOW_CONTROL_VERBS.length} control verb(s) as whole words - none found. Text is scanned per element, skipping the ${userDataLeafCount} `
 			+ `user-data leaf element(s) (label name/description within a row, story summary/result/error, phase title/detail, landed result preview) but NOT the rows `
 			+ `themselves, so a control placed inside a row is caught; title/aria-label is scanned WITHOUT editing it, reporting any verb occurrence that does not sit `

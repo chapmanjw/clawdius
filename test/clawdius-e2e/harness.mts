@@ -255,7 +255,9 @@ async function expandRunAndGatherAgents(target) {
 		}
 	}
 	if (storyHandles.length === 0) {
-		return { story: undefined, agentRows: [] };
+		// Keep the shape identical on both paths. A caller that checks `phaseErrors` would otherwise crash here
+		// with an opaque TypeError instead of reporting what actually went wrong.
+		return { story: undefined, agentRows: [], phaseErrors: [] };
 	}
 	const phaseRows = await win.$$('.clawdius-workflow-phase-row');
 	// Record rather than swallow. A phase that fails to expand hides the agents beneath it, so treating that as
@@ -714,21 +716,34 @@ function isExternalEgressUrl(url) {
  *  egress scenario on a FRESH profile while passing on an already-bootstrapped one, which is precisely the kind of
  *  environment-dependent green this acceptance run must not have. Both shapes are recognised now.
  *
- *  Still matched by NAME, never by allowlisting the host outright: the request must be to a known gallery host
- *  this build is configured to use AND either carry one of the three specific extension ids bootstrap installs, or
- *  be the gallery's own query endpoint. A genuine leak routing through the same host on any other path is still
- *  caught. Every set-aside request is reported in the scenario's detail, never silently dropped, so the size and
- *  shape of what was excused stays visible in the receipt. */
+ *  Matched by NAME in every case, never by allowlisting a host or a path outright. The request must be to a
+ *  known gallery host this build is configured to use, AND name one of the three specific extension ids that
+ *  bootstrap installs - in the url path for the asset fetches, or in the request BODY for the query endpoint,
+ *  whose address deliberately names nothing. An earlier version excused the query endpoint on its address alone;
+ *  that is a path allowlist wearing a name's clothing, and it would have set aside a genuine regression that
+ *  queried the same endpoint for anything at all - precisely the request this guard exists to catch. Naming is
+ *  checked wherever the name actually lives.
+ *
+ *  A genuine leak routing through the same host on any other path, or through the query endpoint for any other
+ *  extension, is still reported. Every set-aside request is counted in the scenario's detail, never silently
+ *  dropped, so the size and shape of what was excused stays visible in the receipt. */
 const PLUGIN_BOOTSTRAP_GALLERY_HOSTS = new Set(['open-vsx.org', 'openvsx.eclipsecontent.org']);
 const PLUGIN_BOOTSTRAP_EXTENSION_IDS = ['anthropic/claude-code', 'jeanp413/open-remote-ssh', 'jeanp413/open-remote-wsl'];
 /** The gallery's own query endpoint - ids travel in the POST body, so the url alone cannot name an extension. */
 const PLUGIN_BOOTSTRAP_QUERY_PATHS = ['/vscode/gallery/extensionquery', '/api/-/query'];
-function isPluginBootstrapGalleryUrl(url) {
+/** Takes a RECORD ({url, method, body}) from startEgressRecorder, not a bare url, because the query endpoint can
+ *  only be attributed by what it asks for. */
+function isPluginBootstrapGalleryRequest(record) {
 	let parsed;
-	try { parsed = new URL(url); } catch { return false; }
+	try { parsed = new URL(record.url); } catch { return false; }
 	if (!PLUGIN_BOOTSTRAP_GALLERY_HOSTS.has(parsed.hostname.toLowerCase())) { return false; }
 	const path = decodeURIComponent(parsed.pathname).toLowerCase();
-	if (PLUGIN_BOOTSTRAP_QUERY_PATHS.includes(path)) { return true; }
+	if (PLUGIN_BOOTSTRAP_QUERY_PATHS.includes(path)) {
+		// The address names nothing, so the BODY must name one of the three - a query for anything else, or a
+		// query carrying no body at all, is not bootstrap traffic and stays reported.
+		const body = (record.body || '').toLowerCase();
+		return PLUGIN_BOOTSTRAP_EXTENSION_IDS.some(id => body.includes(id) || body.includes(id.replace('/', '.')));
+	}
 	return PLUGIN_BOOTSTRAP_EXTENSION_IDS.some(id => path.includes(id));
 }
 
@@ -746,9 +761,15 @@ function isPluginBootstrapGalleryUrl(url) {
  *  own process with its own network stack). A page-level recorder is a real but PARTIAL witness: it proves the
  *  RENDERER made no external request, not that no process anywhere in the app did. */
 function startEgressRecorder() {
+	// Record the METHOD and BODY, not just the url. The gallery's query endpoint names no extension in its
+	// address - the names travel in the body - so a url-only record cannot tell the fork's own bootstrap lookup
+	// apart from any other query to the same endpoint, and excusing it by address alone would excuse exactly the
+	// kind of request this recorder exists to catch.
 	const seen = [];
-	const onRequest = request => { try { seen.push(request.url()); } catch { /* ignore */ } };
-	const onWebSocket = ws => { try { seen.push(ws.url()); } catch { /* ignore */ } };
+	const onRequest = request => {
+		try { seen.push({ url: request.url(), method: request.method(), body: request.postData() || '' }); } catch { /* ignore */ }
+	};
+	const onWebSocket = ws => { try { seen.push({ url: ws.url(), method: 'WEBSOCKET', body: '' }); } catch { /* ignore */ } };
 	win.on('request', onRequest);
 	win.on('websocket', onWebSocket);
 	return { seen, stop: () => { win.off('request', onRequest); win.off('websocket', onWebSocket); } };
@@ -2934,6 +2955,9 @@ try {
 			await closeActiveEditorTab();
 
 			const reExpanded = await expandRunAndGatherAgents(target);
+			// Hold the SECOND expansion to the same standard as the first: a story row that vanished means this
+			// re-expansion failed, and any agent count taken from it would be meaningless.
+			assert(reExpanded.story, `terminal run "${runId}" did not re-expand after the result tab was closed, so its agent rows could not be reached`);
 			// A run legitimately may have no agents; a phase that FAILED to expand is a different thing entirely
 			// and would hide real agents beneath it, so refuse to call that absence.
 			assert(reExpanded.phaseErrors.length === 0,
@@ -2973,9 +2997,10 @@ try {
 			await setThemeVerified('Clawdius Dark');
 			await focusWorkflowsView();
 
-			const externalUrls = recorder.seen.filter(isExternalEgressUrl);
-			const bootstrapNoise = [...new Set(externalUrls.filter(isPluginBootstrapGalleryUrl))];
-			const unexplainedExternal = [...new Set(externalUrls.filter(u => !isPluginBootstrapGalleryUrl(u)))];
+			const externalRequests = recorder.seen.filter(r => isExternalEgressUrl(r.url));
+			const externalUrls = externalRequests.map(r => r.url);
+			const bootstrapNoise = [...new Set(externalRequests.filter(isPluginBootstrapGalleryRequest).map(r => r.url))];
+			const unexplainedExternal = [...new Set(externalRequests.filter(r => !isPluginBootstrapGalleryRequest(r)).map(r => r.url))];
 			assert(unexplainedExternal.length === 0,
 				`the workflows surface made ${unexplainedExternal.length} external request(s) while exercised: ${JSON.stringify(unexplainedExternal)}`);
 
@@ -2989,8 +3014,13 @@ try {
 			// showing "15 external, 9 set aside" invites the conclusion that 6 slipped through, when in truth those
 			// 15 requests are 9 distinct urls and every one of them was set aside. Quote distinct against distinct.
 			const distinctExternal = [...new Set(externalUrls)];
-			const localCount = recorder.seen.length - externalUrls.length;
-			return `${distinctExternal.length} distinct external url(s) observed while exercising the surface (open, ${drillDetail}, filter, sort, theme switch) across ${externalUrls.length} external request(s), of which ${bootstrapNoise.length} distinct were set aside and ${unexplainedExternal.length} were unexplained; ${recorder.seen.length} total requests came from the window, ${localCount} of them local application resource loads - that total varies with what was already warm and is not a property of the surface; `
+			// Name this bucket by what it IS - everything the classifier did not call external - rather than
+			// "local application resource loads". It is dominated by the app fetching its own files, but it also
+			// admits loopback and non-http schemes, and calling those "resource loads" would assert a benignness
+			// this scenario never establishes. (The claim here is about EXTERNAL egress; loopback is out of scope
+			// by the classifier's own definition, which is a limit worth stating rather than dressing up.)
+			const nonExternalCount = recorder.seen.length - externalUrls.length;
+			return `${distinctExternal.length} distinct external url(s) observed while exercising the surface (open, ${drillDetail}, filter, sort, theme switch) across ${externalUrls.length} external request(s), of which ${bootstrapNoise.length} distinct were set aside and ${unexplainedExternal.length} were unexplained; ${recorder.seen.length} total requests came from the window, ${nonExternalCount} of them not classified as external (mostly the application loading its own files, and by definition also loopback and non-http schemes - see isExternalEgressUrl) - that total varies with what was already warm and is not a property of the surface; `
 				+ `${bootstrapNoise.length} set aside as Clawdius's own first-run plugin-bootstrap gallery traffic (unrelated to the workflows surface - see isPluginBootstrapGalleryUrl): ${JSON.stringify(bootstrapNoise)}; `
 				+ `0 other external (page-level recorder only - see startEgressRecorder's doc comment for what it structurally cannot see)`;
 		} finally {

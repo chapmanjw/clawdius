@@ -297,9 +297,11 @@
 
 # Disposition 2026-07-19 (+0 files, +289 insertions): closing acceptance checks for the workflows surface. A request
 # recorder installed before the surface is touched observes every request the window makes while the view is opened,
-# a run expanded, whichever of its result and agent detail that run actually has opened, the filter typed, the sort
-# changed and the theme switched, and asserts none went anywhere external (it witnesses the renderer, not the whole
-# application, and says so where it is defined). What must be there to call the surface exercised - the view, the
+# a run expanded, its result opened along with an agent's detail where the run has agents, the filter typed, the
+# sort changed and the theme switched. It asserts that no request went anywhere outside this machine except the
+# fork's own first-run extension bootstrap, which is identified by the extensions it names - in the address for the
+# downloads, in the request itself for the lookup, which names nothing in its address - and counted in the receipt
+# rather than waved through. It witnesses the renderer, not the whole application, and says so where it is defined. What must be there to call the surface exercised - the view, the
 # filter, the sort, and the run's own result pane - is required, and a config root with no finished run to open
 # reports as skipped rather than passing, so the check can never claim a drill it did not perform. The one real
 # absence, a run that declares no agents, is named in the receipt; a row that fails to open, and a group of agents
@@ -337,4 +339,4 @@
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
 recorded: 2026-07-19
-baseline: 5608 files changed, 50982 insertions(+), 1456122 deletions(-)
+baseline: 5608 files changed, 51014 insertions(+), 1456122 deletions(-)

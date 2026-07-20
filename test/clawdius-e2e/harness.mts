@@ -704,26 +704,40 @@ function isExternalEgressUrl(url) {
 	return !EGRESS_LOCAL_HOSTS.has(parsed.hostname.toLowerCase());
 }
 
-/** Wait for the fork's own first-run extension bootstrap to run AND finish, so a surface can be exercised
- *  against a network that has already gone still.
+/** Wait for an OBSERVED QUIET WINDOW before a surface is exercised, so the fork's own extension installs are
+ *  unlikely to be running while requests are being recorded. It does not - and cannot - establish that they
+ *  finished; read the rest of this comment before quoting it as if it did.
  *
- *  This replaces classifying that bootstrap's requests out of the results. `ClawdiusPluginSetupContribution`
- *  installs three default extensions from the configured gallery on any profile missing them, entirely
- *  independent of the workflows surface, and on a fresh profile it overlaps the window this scenario records.
- *  Four rounds of review went into trying to tell those requests apart from a leak by their CONTENT - by
- *  address, then by the extension named in the body, then by the shape of the query, then by the values inside
- *  it - and each attempt was either too strict (rejecting a real lookup) or left a channel open (a payload
- *  chunked into fields the check permitted). Content cannot establish who sent a request. Waiting removes the
- *  question entirely: with the bootstrap finished before recording starts there is nothing to excuse, and the
- *  assertion becomes the honest one - no external requests at all, no exceptions.
+ *  Why waiting at all. `ClawdiusPluginSetupContribution` installs default extensions from the configured
+ *  gallery on any profile missing them, entirely independent of the workflows surface, and on a fresh profile
+ *  that overlaps the window this scenario records. Several rounds went into trying to tell those requests apart
+ *  from a leak by their CONTENT - by address, then by the extension named in the body, then by the shape of the
+ *  query, then by the values inside it - and each was either too strict, rejecting a real lookup, or left a
+ *  channel open. Content cannot establish who sent a request. Waiting sidesteps that: if nothing is in flight
+ *  when recording starts, the assertion can be the honest one - no external requests at all, no exceptions.
  *
- *  Quiet alone is NOT enough, and assuming it was is why the first version of this failed: the bootstrap starts
- *  some way into workbench startup, so a window that has not begun it yet looks exactly like one that has
- *  finished. So wait to SEE it work - a request leaving, or an extension appearing on disk - and only then let
- *  its silence mean "done".
+ *  What it actually does. It watches for EXTERNAL REQUESTS - not entries appearing in the extensions directory,
+ *  which the workbench writes as its own bookkeeping during startup, and which would start the silence clock
+ *  before anything had been fetched. It returns once it has seen `quietMs` of no external request AND observed
+ *  for at least `minObserveMs`.
  *
- *  Returns settled:false if that never happened, so the caller can skip rather than assert against a moving
- *  target. */
+ *  What it does NOT establish, in two distinct cases:
+ *    - Requests were seen, then stopped. Silence is not completion. A gap between installs longer than
+ *      `quietMs` is indistinguishable from being finished, so a slow or loaded machine can settle mid-run and
+ *      the next install lands during the recording. That surfaces as this check FAILING on the fork's own
+ *      traffic - wrong, but loudly wrong, never a quiet pass.
+ *    - No request was seen at all. This also returns settled, on the reasoning that traffic which never
+ *      happened cannot collide with the recording. But it cannot distinguish "the gallery is unreachable or
+ *      the installs had nothing to do" from "they simply had not started yet", so on a machine slower than
+ *      `minObserveMs` this is the same premature-settle risk as above, reached a different way.
+ *
+ *  Both windows are calibrated from observation, not from any guarantee the product makes, and observation
+ *  differs sharply between machines: one run here saw fifteen requests, another elsewhere saw two. The caller
+ *  reports the figures it actually measured rather than these constants.
+ *
+ *  Returns `settled:false` only when the window never went quiet for long enough within `timeoutMs` - which
+ *  means the check could not establish a starting point, and the caller FAILS rather than skipping, so a
+ *  product change that stopped the installs settling cannot quietly remove this check from a passing run. */
 async function waitForExtensionBootstrapToSettle(extensionsDir, quietMs = 30000, minObserveMs = 45000, timeoutMs = 300000) {
 	const watcher = startEgressRecorder();
 	try {
@@ -2944,11 +2958,13 @@ try {
 	// detail panes would go unexercised. Only "this run declares no agents" is a real absence, and a phase row
 	// that fails to expand is reported as a failure rather than counted as having no agents.
 	// Asserts the recorded requests carry ZERO external urls (see isExternalEgressUrl for the exact
-	// local-vs-external classification), with NO exception of any kind. It earns that by waiting for the window
-	// to go quiet BEFORE recording (see waitForExtensionBootstrapToSettle), so the fork's own first-run extension
-	// bootstrap - which is nothing to do with this surface but overlaps it on a fresh profile - has finished and
-	// there is no traffic to classify out. SKIPs rather than passes when the config root carries no workflow runs
-	// or no finished run to open, and when the window never goes quiet, since none of those can support the claim.
+	// local-vs-external classification), with NO exception of any kind. It earns that by waiting for an observed
+	// quiet window BEFORE recording (see waitForExtensionBootstrapToSettle), so the fork's own extension installs
+	// - nothing to do with this surface, but overlapping it on a fresh profile - are unlikely to be in flight.
+	// That wait observes silence; it does not prove those installs finished, and its limits are set out where it
+	// is defined. SKIPs when the config root carries no workflow runs or no finished run to open. FAILS, rather
+	// than skipping, when the window never goes quiet: that means the check could not establish a starting point,
+	// and a skip would let it drop out of a passing run without anything saying egress went untested.
 	await scenario('ultracode-workflows-no-egress', true, async () => {
 		// Do this first, before anything is recorded: the point is to start from stillness.
 		const bootstrap = await waitForExtensionBootstrapToSettle(exts);
@@ -3030,9 +3046,10 @@ try {
 			await setThemeVerified('Clawdius Dark');
 			await focusWorkflowsView();
 
-			// The network was already still before recording began (see waitForExtensionBootstrapToSettle), so there is
-			// no traffic here that belongs to anything but the surface, and nothing to argue about. Any external
-			// request is a finding.
+			// Recording began after an observed quiet window (see waitForExtensionBootstrapToSettle), so external
+			// traffic here is most likely the surface's - though a late install starting after that window would
+			// also land here, which is why the receipt reports what the wait actually saw. Either way it is
+			// reported, never classified away.
 			const externalRequests = recorder.seen.filter(r => isExternalEgressUrl(r.url));
 			const distinctExternal = [...new Set(externalRequests.map(r => r.url))];
 			assert(distinctExternal.length === 0,
@@ -3045,9 +3062,9 @@ try {
 			const nonExternalCount = recorder.seen.length - externalRequests.length;
 			return `0 external request(s) while exercising the surface (open, ${drillDetail}, filter, sort, theme switch), `
 				+ (bootstrap.sawExternal
-					? `after waiting out the fork's own extension installs: ${bootstrap.external} request(s), ${bootstrap.entries} entr(ies) in the extensions dir, longest silence BETWEEN requests ${bootstrap.longestGapBetweenMs}ms, and ${bootstrap.settlingGapMs}ms of silence before recording began (needed ${bootstrap.quietMs}ms). Silence is not proof the installs finished - a slow enough machine could still start one afterwards, which would surface as this check failing on the fork's own traffic rather than as a quiet pass; `
-					: `having seen NO external request at all while waiting (${bootstrap.entries} entr(ies) in the extensions dir) - the gallery was unreachable or the installs never ran here, so there was no such traffic to collide with; `)
-				+ `asserted with NO exception, because there was no traffic left to classify out; `
+					? `recording began after an observed quiet window, not after any signal that the fork's own installs finished: ${bootstrap.external} request(s) seen, ${bootstrap.entries} entr(ies) in the extensions dir, longest silence BETWEEN requests ${bootstrap.longestGapBetweenMs}ms, ${bootstrap.settlingGapMs}ms of silence before recording (needed ${bootstrap.quietMs}ms). A gap longer than that window is indistinguishable from being finished, so a slower machine could start an install afterwards - which would surface as this check failing on the fork's own traffic, never as a quiet pass; `
+					: `recording began having seen NO external request at all while waiting (${bootstrap.entries} entr(ies) in the extensions dir), which means the installs had nothing to fetch, could not reach the gallery, OR had not started yet - this cannot tell those apart, so on a machine slower than the wait it is the same risk as above; `)
+				+ `asserted with NO exception - nothing is classified out, so anything external here is reported; `
 				+ `${recorder.seen.length} total request(s) came from the window, ${nonExternalCount} not classified as external `
 				+ `(mostly the application loading its own files, and by definition also loopback and non-http schemes - see isExternalEgressUrl) `
 				+ `- that total varies with what was already warm and is not a property of the surface; `

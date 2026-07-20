@@ -2975,7 +2975,14 @@ try {
 			'.clawdius-workflow-agent-row .label-description',
 			'.clawdius-workflow-story-summary',
 			'.clawdius-workflow-story-result',
-			'.clawdius-workflow-story-error'
+			'.clawdius-workflow-story-error',
+			// A phase's title and detail are the workflow author's own words (rendered verbatim from the run's
+			// declared phases), and a landed item is the agent's own result text - user data exactly like a run
+			// name, so a phase called "Launch" must not read as a control. Their sibling counts ("N agents",
+			// "N errored") and the "+N more" affordance are fork chrome and deliberately stay in scope.
+			'.clawdius-workflow-phase-title',
+			'.clawdius-workflow-phase-detail',
+			'.clawdius-workflow-live-landed-item'
 		].join(', ');
 		// Self-check the exclusion still resolves. If a future DOM change renamed these leaves the selector would
 		// silently exclude nothing; that direction is safe (the scan only gets stricter) but it would quietly stop
@@ -2987,21 +2994,46 @@ try {
 		const controlVerbHits = await paneRoot.evaluate((root, args) => {
 			const [userSel, source] = args;
 			const rx = new RegExp(source, 'i');
+			// Normalize before subtracting below: the DOM renders some separators as non-breaking spaces, so an
+			// attribute and the leaf text it contains would not compare equal raw. `\s` already covers U+00A0.
+			const norm = s => (s || '').replace(/\s+/g, ' ').trim();
 			const out = [];
 			for (const el of root.querySelectorAll('*')) {
 				const label = (typeof el.className === 'string' && el.className) ? el.className : el.tagName;
 				if (el.closest(userSel)) {
 					continue; // user-supplied text - its content and its own attributes are the user's words
 				}
-				const text = el.childElementCount === 0 ? (el.textContent || '') : '';
-				if (rx.test(text)) { out.push('text ' + label + ' :: ' + text.trim().slice(0, 80)); }
-				// An element that WRAPS a user-data leaf (the list row, the icon-label) rolls that user text up
-				// into its own title/aria-label, so skip its attributes - but its own text is still scanned above.
-				if (!el.querySelector(userSel)) {
-					for (const attr of ['title', 'aria-label']) {
-						const v = el.getAttribute && el.getAttribute(attr);
-						if (v && rx.test(v)) { out.push(attr + ' ' + label + ' :: ' + v.trim().slice(0, 80)); }
+				// Scan this element's OWN text nodes rather than its whole subtree. That keeps each element's text
+				// scanned exactly once, and - unlike a childless-only test - it still catches a control that both
+				// carries its own text and wraps a user-data leaf, e.g. <button>Stop<span class="label-name">...
+				const ownText = norm(Array.from(el.childNodes).filter(n => n.nodeType === 3).map(n => n.textContent).join(' '));
+				if (rx.test(ownText)) { out.push('text ' + label + ' :: ' + ownText.slice(0, 80)); }
+				// An element that WRAPS a user-data leaf (the list row, the icon-label) rolls that user's words up
+				// into its own title/aria-label. Do NOT skip such an attribute wholesale - that would let a
+				// fork-authored aria-label="Stop workflow" on a row hide behind the fact that the row also contains
+				// the run's name. Instead SUBTRACT the user's words and scan what remains, so a run named
+				// "Stop the deploy" contributes nothing while any verb the fork itself wrote still surfaces.
+				//
+				// Subtract WORD BY WORD, not whole leaf strings: an aria-label re-joins the same fields with its
+				// own separators (", ") while the label element renders them with others (" · "), so a whole-string
+				// match would fail and leave the user's words in the residue - which is exactly how a run actually
+				// named "...-resume-..." first tripped this scan. Word-level removal is separator-independent.
+				// Residual: a run whose name literally contains a control verb subtracts that word too, so a fork
+				// control using only that same word in that same attribute would not surface.
+				const leafWords = new Set();
+				for (const leaf of el.querySelectorAll(userSel)) {
+					for (const w of norm(leaf.textContent).split(' ')) {
+						if (w.length > 0) { leafWords.add(w); }
 					}
+				}
+				for (const attr of ['title', 'aria-label']) {
+					const raw = el.getAttribute && el.getAttribute(attr);
+					if (!raw) { continue; }
+					let residue = norm(raw);
+					for (const w of leafWords) {
+						residue = residue.split(w).join(' ');
+					}
+					if (rx.test(residue)) { out.push(attr + ' ' + label + ' :: ' + norm(residue).slice(0, 80)); }
 				}
 			}
 			return Array.from(new Set(out));
@@ -3049,15 +3081,22 @@ try {
 	const passes = results.filter(r => r.ok && !r.skipped);
 	console.log(`\n=== ${results.length} scenarios: ${passes.length} pass, ${skips.length} skipped, ${fails.length} critical-fail, ${warns.length} warn ===`);
 	console.log(`screenshots + report.json in ${OUT}`);
-	// A run that executed NOTHING must never read as a clean run. `--grep` is a plain substring match, so a
-	// pattern that matches no scenario name (a regex alternation, say, or a typo) would otherwise print
-	// "0 scenarios ... 0 critical-fail" and exit 0 - indistinguishable at a glance from a green sweep.
-	const selectedNothing = results.length === 0;
-	if (selectedNothing) {
-		console.log(GREP
-			? `FAILED: --grep ${JSON.stringify(GREP)} matched no scenario name (it is a substring match, not a regex) - nothing ran, so this run proves nothing.`
-			: 'FAILED: no scenarios ran at all - this run proves nothing.');
+	// A run that PROVED nothing must never read as a clean run. Two ways that happens, both of which used to
+	// print a summary and exit 0 - indistinguishable to a caller from a green sweep:
+	//   1. `--grep` matched no scenario name (it is a plain substring match, not a regex), so nothing ran.
+	//   2. Everything that ran skipped - e.g. a single-scenario filter on a config root that has no runs.
+	// Exit non-zero for both. A skip is honest about itself in the log, but it is not evidence, so a run that
+	// produced no passing scenario is a failed run as far as automation is concerned.
+	const provedNothing = passes.length === 0;
+	if (provedNothing) {
+		if (results.length === 0) {
+			console.log(GREP
+				? `FAILED: --grep ${JSON.stringify(GREP)} matched no scenario name (it is a substring match, not a regex) - nothing ran, so this run proves nothing.`
+				: 'FAILED: no scenarios ran at all - this run proves nothing.');
+		} else {
+			console.log(`FAILED: ${results.length} scenario(s) ran but none passed (${skips.length} skipped) - this run proves nothing.`);
+		}
 	}
 	if (!KEEP_OPEN) { await app.close(); }
-	process.exitCode = (fails.length || selectedNothing) ? 1 : 0;
+	process.exitCode = (fails.length || provedNothing) ? 1 : 0;
 }

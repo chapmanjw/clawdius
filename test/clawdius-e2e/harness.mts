@@ -2227,15 +2227,24 @@ try {
 			const filterMs = Date.now() - filterStart;
 			assert(narrowedIds.length === 1 && narrowedIds[0] === targetRunId,
 				`filtering to "${targetRunId}" left ${JSON.stringify(narrowedIds)} visible`);
-			// Budget the WORK, not the deliberate wait. `filterMs` starts at the keystroke, so it always contains
-			// the view's own FILTER_DEBOUNCE_MS floor (200ms, claudeWorkflowsView.ts) - a constant the fork chose,
-			// not something the filter can be faster than. Asserting the total against 300ms therefore left only
-			// ~100ms for the actual re-render, measured through a poll whose quantum (a 10ms wait plus an IPC
-			// roundtrip per iteration) is itself a sizeable fraction of that. It failed once at 302ms and passed at
-			// 244ms with no code change, which is the signature of a gate sitting inside its own measurement noise.
-			// So assert on the re-render above the known floor, and keep a separate generous ceiling on the TOTAL
-			// so that a regression in the debounce itself - or any wait the test cannot see - still fails.
-			const FILTER_DEBOUNCE_FLOOR_MS = 200; // keep in step with FILTER_DEBOUNCE_MS in claudeWorkflowsView.ts
+			// Budget the WORK separately from the deliberate wait. `filterMs` starts at the keystroke, so it always
+			// contains the view's own debounce floor - a constant the fork chose, not something the filter can be
+			// faster than. The previous single 300ms end-to-end gate therefore left only ~100ms for the actual
+			// re-render, measured through a poll whose quantum (a 10ms wait plus an IPC roundtrip per iteration) is
+			// itself a sizeable fraction of that; it failed once at 302ms and passed at 244ms with no code change.
+			//
+			// Be straight about the trade: the work budget below is TIGHTER than what 300ms end-to-end implied
+			// (~150ms allowed against ~40ms real cost), while the end-to-end ceiling is genuinely LOOSER than it
+			// was - 500ms rather than 300ms. The end-to-end number is kept as a real ceiling so a regression in the
+			// wait itself, or any delay this test cannot see, still fails; it is not a tightening.
+			//
+			// Read the floor from the product source rather than mirroring it as a literal. A hardcoded copy goes
+			// stale silently in the DANGEROUS direction: if the product debounce ever DROPPED, subtracting a larger
+			// stale floor would clamp the computed work down and absorb a genuine re-render regression.
+			const viewSrc = readFileSync(join(REPO, 'src/vs/workbench/contrib/clawdius/browser/workflows/claudeWorkflowsView.ts'), 'utf8');
+			const debounceMatch = /const FILTER_DEBOUNCE_MS = (\d+)/.exec(viewSrc);
+			assert(debounceMatch, 'could not read FILTER_DEBOUNCE_MS from claudeWorkflowsView.ts - this budget subtracts that floor, so it must not guess at it');
+			const FILTER_DEBOUNCE_FLOOR_MS = Number(debounceMatch[1]);
 			const filterWorkMs = Math.max(0, filterMs - FILTER_DEBOUNCE_FLOOR_MS);
 			assert(filterWorkMs <= 150,
 				`re-rendering the filtered list took ${filterWorkMs}ms above the ${FILTER_DEBOUNCE_FLOOR_MS}ms debounce floor (${filterMs}ms end to end), budget is <=150ms of work`);
@@ -3030,35 +3039,58 @@ try {
 				// the run's name. Instead SUBTRACT the user's words and scan what remains, so a run named
 				// "Stop the deploy" contributes nothing while a verb the fork itself wrote still surfaces.
 				//
-				// Subtract per token, and only on WORD BOUNDARIES. Two constraints force that shape:
-				//   - Whole-string subtraction fails, because an aria-label re-joins the same fields with its own
-				//     separators (", ") while the label element renders them with others (" · "). That is how a run
-				//     actually named "...-resume-..." first tripped this scan. Per-token is separator-independent.
-				//   - Plain substring subtraction is UNSOUND in the other direction: a leaf token that happens to
-				//     sit inside a verb would nibble it away ("run" would reduce a fork-authored "Rerun" to "Re",
-				//     "art" would reduce "Restart" to "Rest"), silently masking exactly what this scan exists to
-				//     find. Anchoring each removal with \b keeps the comma-glued token cancelling while leaving
-				//     any verb that merely CONTAINS a user token intact.
-				// Removal is case-insensitive so a differently-cased echo of the user's word still cancels.
-				// Residual: a user token that IS a whole control verb (a run literally named "Stop") cancels that
-				// word, so a fork control using only that word in that same attribute would not surface here - it
-				// would still be caught by the own-text scan above if it renders any visible text.
+				// Do NOT delete the user's words and then test what is left. Deleting text before testing is
+				// unsound in both directions and two rounds of this scan proved it: deleting whole strings failed
+				// to cancel anything when the label re-joined the same fields with different separators (", " vs
+				// " · "), and deleting per token ATE verbs that merely contained a user token - "run" reduced a
+				// fork-authored "Re-run" to "Re-", and under plain substring removal "art" reduced "Restart" to
+				// "Rest". Any delete-then-test scheme can destroy the evidence it is about to look for.
+				//
+				// Invert it. Find every verb occurrence in the attribute FIRST, then ask of each one: is this
+				// occurrence attributable to the user? It is only attributable if it falls entirely inside a
+				// single occurrence of one of the user's own tokens. A verb the fork wrote stands on its own and
+				// is reported. This is separator-independent (it never compares whole strings) and it cannot
+				// nibble (it never rewrites the text it tests).
+				//
+				// Residual, stated exactly: a verb occurrence sitting wholly inside ONE user token is treated as
+				// the user's word - a run literally named "Stop", or one named "stop-the-deploy". A fork control
+				// whose verb is split across two user tokens is NOT excused (that is why "re-run" survives a run
+				// named "re run"). Anything the fork wrote outside a user token surfaces.
 				const escapeRx = t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-				const leafWords = new Set();
+				const userSpans = [];
 				for (const leaf of el.querySelectorAll(userSel)) {
 					for (const w of norm(leaf.textContent).split(' ')) {
 						// Skip pure punctuation (the " · " separator): \b around a non-word char does not anchor.
-						if (w.length > 0 && /[\w]/.test(w)) { leafWords.add(w); }
+						if (w.length === 0 || !/[\w]/.test(w)) { continue; }
+						userSpans.push(new RegExp('\\b' + escapeRx(w) + '\\b', 'gi'));
 					}
 				}
+				const verbScan = new RegExp(source, 'gi');
 				for (const attr of ['title', 'aria-label']) {
 					const raw = el.getAttribute && el.getAttribute(attr);
 					if (!raw) { continue; }
-					let residue = norm(raw);
-					for (const w of leafWords) {
-						residue = residue.replace(new RegExp('\\b' + escapeRx(w) + '\\b', 'gi'), ' ');
+					const text = norm(raw);
+					// Collect the character spans covered by each occurrence of each user token.
+					const covered = [];
+					for (const tokenRx of userSpans) {
+						tokenRx.lastIndex = 0;
+						let m;
+						while ((m = tokenRx.exec(text)) !== null) {
+							covered.push([m.index, m.index + m[0].length]);
+							if (m[0].length === 0) { tokenRx.lastIndex++; }
+						}
 					}
-					if (rx.test(residue)) { out.push(attr + ' ' + label + ' :: ' + norm(residue).slice(0, 80)); }
+					verbScan.lastIndex = 0;
+					let vm;
+					while ((vm = verbScan.exec(text)) !== null) {
+						const vStart = vm.index;
+						const vEnd = vm.index + vm[0].length;
+						const attributable = covered.some(([cStart, cEnd]) => cStart <= vStart && cEnd >= vEnd);
+						if (!attributable) {
+							out.push(attr + ' ' + label + ' :: ' + vm[0] + ' in "' + text.slice(0, 80) + '"');
+						}
+						if (vm[0].length === 0) { verbScan.lastIndex++; }
+					}
 				}
 			}
 			return Array.from(new Set(out));
@@ -3086,8 +3118,10 @@ try {
 			+ `${sweep.declaredRuns} run(s) the list itself declares, reached over ${sweep.pages} page(s) - full-list coverage is proven by `
 			+ `reconciling against the list's own count, not assumed from a page count; `
 			+ `(b) scanned the view's .pane subtree (header/title/toolbar action items + .clawdius-workflows body: filter/sort toolbar, tree rows, state overlay) `
-			+ `for ${WORKFLOW_CONTROL_VERBS.length} control verb(s) as whole words, excluding ${userDataLeafCount} user-data leaf element(s) (label name/description within a row, story summary/result/error, phase title/detail, landed result preview) `
-			+ `but NOT the rows themselves, so a control placed inside a row would be caught - none found; `
+			+ `for ${WORKFLOW_CONTROL_VERBS.length} control verb(s) as whole words - none found. Text is scanned per element, skipping the ${userDataLeafCount} `
+			+ `user-data leaf element(s) (label name/description within a row, story summary/result/error, phase title/detail, landed result preview) but NOT the rows `
+			+ `themselves, so a control placed inside a row is caught; title/aria-label is scanned WITHOUT editing it, reporting any verb occurrence that does not sit `
+			+ `wholly inside one of the user's own words, so a verb the fork wrote surfaces even where it adjoins or is spelled across user text; `
 			+ `(c) no "Read Again" control present in the healthy state`;
 	});
 

@@ -313,11 +313,11 @@
 # one would go, would not have been caught. It now names only the leaves that carry user text (a row label's name
 # and description, the story panes, a phase's title and detail, a landed result preview) and scans every other
 # element, including each row's own container, icons and chips. Where a wrapper repeats the user's words in its
-# own title or aria-label, the words are subtracted and the remainder scanned - per token so that a label which
-# re-joins the same fields with different separators still cancels out, and only on word boundaries so that a
-# token sitting inside a longer word cannot nibble it away. A run whose name happens to read like a verb
-# therefore stays quiet, while a verb the fork itself wrote is left standing unless the user's own text used
-# that whole word. The row sweep no longer trusts
+# own title or aria-label, the check does not edit the text before testing it - deleting the user's words first
+# can destroy the very thing being looked for. It finds each control word in the attribute and asks whether that
+# occurrence sits wholly inside one of the user's own words. If it does it is the user's writing and is ignored;
+# otherwise it is reported. So a run named after a control word stays quiet, while a control word the fork wrote
+# is reported even when it merely contains, adjoins, or is spelled across the user's words. The row sweep no longer trusts
 # a fixed number of pages: it reconciles the runs it collected against the count the list itself reports and
 # fails when they differ. A run that proves nothing - a filter matching no check, or every check skipping - now
 # exits as a failure instead of printing a clean summary. Harness only; no product change beyond one corrected
@@ -330,4 +330,4 @@
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
 recorded: 2026-07-19
-baseline: 5608 files changed, 50883 insertions(+), 1456122 deletions(-)
+baseline: 5608 files changed, 50917 insertions(+), 1456122 deletions(-)

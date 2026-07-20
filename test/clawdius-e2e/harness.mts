@@ -724,35 +724,46 @@ function isExternalEgressUrl(url) {
  *
  *  Returns settled:false if that never happened, so the caller can skip rather than assert against a moving
  *  target. */
-async function waitForExtensionBootstrapToSettle(extensionsDir, quietMs = 5000, timeoutMs = 180000) {
+async function waitForExtensionBootstrapToSettle(extensionsDir, quietMs = 30000, minObserveMs = 45000, timeoutMs = 300000) {
 	const watcher = startEgressRecorder();
 	try {
 		const startedAt = Date.now();
-		let sawActivity = false;
 		let lastExternal = 0;
-		let lastInstalled = 0;
-		let lastChangeAt = Date.now();
-		// Record how long the bootstrap goes silent BETWEEN installs. The quiet window has to be longer than the
-		// longest of those gaps or it will declare "done" in one of them, and the gaps are a property of the
-		// product, not something to guess at - so measure them and report them in the receipt.
-		const gaps = [];
+		let lastEntries = 0;
+		let sawExternal = false;
+		let lastExternalAt = 0;
+		// Gaps BETWEEN external requests, plus the gap that ends the wait. Recording only the former would be
+		// self-censoring: a gap is pushed when the NEXT request arrives, so a gap that reaches the quiet window
+		// ends the loop before it can ever be recorded, and the reported maximum could never approach the wait it
+		// is quoted against. The settling gap is the one that matters when judging whether the wait is generous.
+		const gapsBetween = [];
 		while (Date.now() - startedAt < timeoutMs) {
 			await win.waitForTimeout(500);
 			const external = watcher.seen.filter(r => isExternalEgressUrl(r.url)).length;
-			let installed = 0;
-			try { installed = existsSync(extensionsDir) ? readdirSync(extensionsDir).length : 0; } catch { /* mid-write */ }
-			if (external !== lastExternal || installed !== lastInstalled) {
-				// The bootstrap is doing something. Only once we have SEEN it work can its silence mean "done".
-				if (sawActivity) { gaps.push(Date.now() - lastChangeAt); }
-				sawActivity = true;
+			let entries = 0;
+			try { entries = existsSync(extensionsDir) ? readdirSync(extensionsDir).length : 0; } catch { /* mid-write */ }
+			if (external !== lastExternal) {
+				// Only a REQUEST counts as the installs working. An entry appearing in the extensions directory
+				// does not: the workbench writes its own metadata there during startup, so treating that as
+				// activity would let the wait start counting silence before anything had been fetched at all.
+				if (sawExternal) { gapsBetween.push(Date.now() - lastExternalAt); }
+				sawExternal = true;
 				lastExternal = external;
-				lastInstalled = installed;
-				lastChangeAt = Date.now();
-			} else if (sawActivity && Date.now() - lastChangeAt >= quietMs) {
-				return { settled: true, external: lastExternal, installed: lastInstalled, longestGapMs: Math.max(0, ...gaps), quietMs };
+				lastExternalAt = Date.now();
+			}
+			lastEntries = entries;
+			const quietFor = sawExternal ? Date.now() - lastExternalAt : Date.now() - startedAt;
+			if (quietFor >= quietMs && Date.now() - startedAt >= minObserveMs) {
+				return {
+					settled: true, sawExternal, external: lastExternal, entries: lastEntries,
+					longestGapBetweenMs: Math.max(0, ...gapsBetween), settlingGapMs: quietFor, quietMs
+				};
 			}
 		}
-		return { settled: false, external: lastExternal, installed: lastInstalled, longestGapMs: Math.max(0, ...gaps), quietMs };
+		return {
+			settled: false, sawExternal, external: lastExternal, entries: lastEntries,
+			longestGapBetweenMs: Math.max(0, ...gapsBetween), settlingGapMs: sawExternal ? Date.now() - lastExternalAt : 0, quietMs
+		};
 	} finally {
 		watcher.stop();
 	}
@@ -772,15 +783,14 @@ async function waitForExtensionBootstrapToSettle(extensionsDir, quietMs = 5000, 
  *  own process with its own network stack). A page-level recorder is a real but PARTIAL witness: it proves the
  *  RENDERER made no external request, not that no process anywhere in the app did. */
 function startEgressRecorder() {
-	// Record the METHOD and BODY, not just the url. The gallery's query endpoint names no extension in its
-	// address - the names travel in the body - so a url-only record cannot tell the fork's own bootstrap lookup
-	// apart from any other query to the same endpoint, and excusing it by address alone would excuse exactly the
-	// kind of request this recorder exists to catch.
+	// Record the url only. Bodies were captured while this harness tried to tell the fork's own extension
+	// installs apart from a leak by what they contained; that no longer exists (the scenario waits them out
+	// instead), so capturing request bodies would be collecting content for nothing.
 	const seen = [];
 	const onRequest = request => {
-		try { seen.push({ url: request.url(), method: request.method(), body: request.postData() || '' }); } catch { /* ignore */ }
+		try { seen.push({ url: request.url() }); } catch { /* ignore */ }
 	};
-	const onWebSocket = ws => { try { seen.push({ url: ws.url(), method: 'WEBSOCKET', body: '' }); } catch { /* ignore */ } };
+	const onWebSocket = ws => { try { seen.push({ url: ws.url() }); } catch { /* ignore */ } };
 	win.on('request', onRequest);
 	win.on('websocket', onWebSocket);
 	return { seen, stop: () => { win.off('request', onRequest); win.off('websocket', onWebSocket); } };
@@ -2941,10 +2951,12 @@ try {
 	// or no finished run to open, and when the window never goes quiet, since none of those can support the claim.
 	await scenario('ultracode-workflows-no-egress', true, async () => {
 		// Do this first, before anything is recorded: the point is to start from stillness.
-		const bootstrap = await waitForExtensionBootstrapToSettle(exts, 30000, 300000);
-		if (!bootstrap.settled) {
-			return `SKIPPED (the fork's own extension bootstrap never ran and finished within the wait - saw ${bootstrap.external} external request(s) and ${bootstrap.installed} installed extension(s) - so its traffic could not be told apart from the surface's, and "no external requests" could not be asserted honestly)`;
-		}
+		const bootstrap = await waitForExtensionBootstrapToSettle(exts);
+		// FAIL, do not skip. A skip counts as ok, so a product change that stopped the installs settling would
+		// quietly delete this critical check from a green gate - the surface's egress would simply stop being
+		// tested and nothing would say so. Not reaching a still starting point is a failure to be able to test.
+		assert(bootstrap.settled,
+			`the window never went quiet enough to record against: it made ${bootstrap.external} external request(s) and reached only ${bootstrap.settlingGapMs}ms of silence, short of the ${bootstrap.quietMs}ms needed. Egress was NOT tested - treat this as the check being unable to run, not as the surface being clean.`);
 		const recorder = startEgressRecorder();
 		try {
 			await focusWorkflowsView();
@@ -3032,7 +3044,9 @@ try {
 			// carries the claim is the external count, and it is zero.
 			const nonExternalCount = recorder.seen.length - externalRequests.length;
 			return `0 external request(s) while exercising the surface (open, ${drillDetail}, filter, sort, theme switch), `
-				+ `after the fork's own extension bootstrap ran and finished (${bootstrap.installed} extension(s) installed, ${bootstrap.external} request(s), longest silence between them ${bootstrap.longestGapMs}ms against a ${bootstrap.quietMs}ms wait); `
+				+ (bootstrap.sawExternal
+					? `after waiting out the fork's own extension installs: ${bootstrap.external} request(s), ${bootstrap.entries} entr(ies) in the extensions dir, longest silence BETWEEN requests ${bootstrap.longestGapBetweenMs}ms, and ${bootstrap.settlingGapMs}ms of silence before recording began (needed ${bootstrap.quietMs}ms). Silence is not proof the installs finished - a slow enough machine could still start one afterwards, which would surface as this check failing on the fork's own traffic rather than as a quiet pass; `
+					: `having seen NO external request at all while waiting (${bootstrap.entries} entr(ies) in the extensions dir) - the gallery was unreachable or the installs never ran here, so there was no such traffic to collide with; `)
 				+ `asserted with NO exception, because there was no traffic left to classify out; `
 				+ `${recorder.seen.length} total request(s) came from the window, ${nonExternalCount} not classified as external `
 				+ `(mostly the application loading its own files, and by definition also loopback and non-http schemes - see isExternalEgressUrl) `

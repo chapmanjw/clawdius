@@ -309,9 +309,10 @@
 # filter, the sort, and the run's own result pane - is required, and a config root with no finished run to open
 # reports as skipped rather than passing, so the check can never claim a drill it did not perform. The one real
 # absence, a run that declares no agents, is named in the receipt; a row that fails to open, and a group of agents
-# that fails to reveal, are both failures rather than absences. How long the fork's own installs went quiet
-# between one another is measured and reported alongside the wait that covered it, so a future change that makes
-# them slower shows up as a number rather than as a check that quietly starts recording too early. A second check asserts what must never appear: every listed row is a workflow run rather than a chat or
+# that fails to reveal, are both failures rather than absences. The result carries what the wait actually saw -
+# how many requests, how long the longest silence between them was, and how much silence ended the wait - and
+# says plainly that silence is not proof those installs finished. Not reaching a still enough starting point
+# fails rather than reporting as skipped, so this check cannot quietly drop out of a passing run. A second check asserts what must never appear: every listed row is a workflow run rather than a chat or
 # a subagent, checked across the whole virtualized list; no control verb anywhere on the surface outside a run's own
 # text, since the view can observe a run but never act on one; and no re-read affordance while the read is healthy.
 # Also proves the third display state for real - a filter no run can match shows its own message, not an empty list.
@@ -342,4 +343,4 @@
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
 recorded: 2026-07-19
-baseline: 5608 files changed, 51032 insertions(+), 1456122 deletions(-)
+baseline: 5608 files changed, 51047 insertions(+), 1456122 deletions(-)

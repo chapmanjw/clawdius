@@ -283,7 +283,19 @@
 # to the clawdius-owned reader + tests. As with the entries above, the recorded baseline moves by more than the code
 # delta because this block's own comment lines also count toward the fork surface.
 
+# Disposition 2026-07-19 (+0 files, +904 insertions): bound the workflows read and complete its aria labels. The
+# enumeration now reads a session's manifests, journals, and per-agent transcript joins concurrently instead of one
+# at a time, with the fanned-out reads passed through a shared concurrency cap so a large config root cannot put
+# thousands of simultaneous operations on the file service; the walk's sequential directory listings stay unqueued,
+# and no capped read waits on another (which would deadlock the cap). A run row's accessible label now carries its
+# status and errored-agent count and resolves current data, so a run that finishes while its row is selected
+# announces the state it ended in rather than the one it was drawn with; phase labels carry their error count.
+# Growth is that read/aria work plus real-build measurements (a thousand-agent expand, first paint and filtering
+# across three hundred runs, scroll pacing) and proofs of keyboard-only operation, screen-reader labelling, and
+# reduced motion; no new files. Isolated to the clawdius-owned reader/tree/view + the harness. As with the entries
+# above, the recorded baseline moves by more than the code delta because this block's own comment lines also count.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
 recorded: 2026-07-19
-baseline: 5608 files changed, 49522 insertions(+), 1456122 deletions(-)
+baseline: 5608 files changed, 50427 insertions(+), 1456122 deletions(-)

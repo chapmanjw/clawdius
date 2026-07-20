@@ -21,18 +21,30 @@ import {
 	LiveWorkflowRun, TerminalWorkflowAgent, TerminalWorkflowRun, UnrecognizedWorkflowRun, WorkflowPhase, WorkflowRun,
 	WorkflowRunListResult, workflowRunIdentity,
 } from '../../common/claudeWorkflowModel.js';
+import { BadgeSignal } from '../../browser/workflows/claudeWorkflowBadges.js';
 import {
 	buildRunElement, buildTerminalRunChildren, buildWorkflowTreeChildren, computeUniformlyForeign, describeAgent,
-	describeLiveProgress, describePhase, describeRunRow, describeStoryCostParts, describeStoryError, describeStoryResultText,
-	describeStorySummaryText, erroredAgentCount, errorSummary, IWorkflowRenderContext, renderWorkflowsStateMessage,
-	resolveWorkflowsDisplayState, runStatusClass, WorkflowAgentRowRenderer, WorkflowLiveProgressRenderer,
-	WorkflowPhaseRowRenderer, WorkflowRunRowRenderer, WorkflowsDisplayState, WorkflowStoryHeightCache,
-	WorkflowStoryLeafRenderer, WorkflowTreeAccessibilityProvider, WorkflowTreeElement, WorkflowTreeIdentityProvider,
-	WorkflowTreeVirtualDelegate, workflowTreeElementId, STORY_MIN_HEIGHT,
+	describeLiveProgress, describePhase, describeRunRow, describeRunStatusForAria, describeStoryCostParts, describeStoryError,
+	describeStoryResultText, describeStorySummaryText, erroredAgentCount, errorSummary, IWorkflowRenderContext,
+	renderWorkflowsStateMessage, resolveWorkflowsDisplayState, runStatusClass, WorkflowAgentRowRenderer,
+	WorkflowLiveProgressRenderer, WorkflowPhaseRowRenderer, WorkflowRunRowRenderer, WorkflowsDisplayState,
+	WorkflowStoryHeightCache, WorkflowStoryLeafRenderer, WorkflowTreeAccessibilityProvider, WorkflowTreeElement,
+	WorkflowTreeIdentityProvider, WorkflowTreeVirtualDelegate, workflowTreeElementId, STORY_MIN_HEIGHT,
 } from '../../browser/workflows/claudeWorkflowTree.js';
 import {
 	matchesWorkflowFilter, matchesWorkflowStatusFilter, sortWorkflowRuns, WorkflowSortMode, WorkflowStatusFilter,
 } from '../../browser/workflows/claudeWorkflowsView.js';
+
+/** A default, inert {@link IWorkflowRenderContext} for a test that does not care about ownership/badges/staleness -
+ *  `runOf` always falls through to the tree element's own `run` (never resolves a fresher one), matching every
+ *  OTHER context literal already used throughout this file. */
+function fakeContext(overrides: Partial<IWorkflowRenderContext> = {}): IWorkflowRenderContext {
+	return {
+		uniformlyForeign: true, ownedSessionIds: new Set(), badgeOf: () => undefined,
+		runOf: () => undefined, justGraduated: () => false,
+		...overrides,
+	};
+}
 
 const IDENTITY_BASE = {
 	ownership: 'foreign' as const, coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled,
@@ -521,25 +533,57 @@ suite('Clawdius Claude Code Ultracode Workflows - ownership-chrome rule', () => 
 
 suite('Clawdius Claude Code Ultracode Workflows - accessibility', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
-	const a11y = new WorkflowTreeAccessibilityProvider();
+	const a11y = new WorkflowTreeAccessibilityProvider(fakeContext());
 
-	test('each element kind gets a distinct, informative aria label', () => {
+	test('each element kind gets a distinct, informative aria label, including RUN status/errored-count', () => {
 		const run = terminalRun({ agents: [agent({ agentId: 'a1', label: 'audit:fleet', state: 'error' })], phases: [phase({ index: 0, title: 'Analyze' })] });
 		assert.deepStrictEqual([
 			a11y.getAriaLabel({ kind: 'run', run }),
 			a11y.getAriaLabel({ kind: 'story', run }),
-			a11y.getAriaLabel({ kind: 'phase', run, phase: phase({ index: 0, title: 'Analyze' }) }),
+			a11y.getAriaLabel({ kind: 'phase', run, phase: phase({ index: 0, title: 'Analyze', errorCount: 0 }) }),
+			a11y.getAriaLabel({ kind: 'phase', run, phase: phase({ index: 1, title: 'Report', errorCount: 2 }) }),
 			a11y.getAriaLabel({ kind: 'agent', run, agent: agent({ agentId: 'a1', label: 'audit:fleet', state: 'error' }) }),
 		], [
-			describeRunRow(run).primary,
+			`${describeRunRow(run).primary}. completed, 1 errored.`,
 			'Summary and result for ' + describeRunRow(run).primary,
 			`Phase ${0 + 1}: Analyze`,
+			`Phase ${1 + 1}: Report, 2 errors`,
 			'Agent audit:fleet, error',
 		]);
 	});
 
 	test('getWidgetAriaLabel names the view', () => {
 		assert.strictEqual(a11y.getWidgetAriaLabel(), 'Claude Code Ultracode Workflows');
+	});
+
+	test('describeRunStatusForAria: status word, errored count, completeness, and live badge - each exception-only', () => {
+		const needsInputBadge: BadgeSignal = { runId: 'wf_b', kind: 'needs-input', freshness: FreshnessLabel.Live, source: 'live-event' };
+		assert.deepStrictEqual({
+			completed: describeRunStatusForAria(terminalRun({ status: 'completed' }), undefined),
+			failed: describeRunStatusForAria(terminalRun({ status: 'failed' }), undefined),
+			errored: describeRunStatusForAria(terminalRun({ agents: [agent({ state: 'error' })] }), undefined),
+			partial: describeRunStatusForAria(terminalRun({ completeness: CompletenessState.Partial }), undefined),
+			live: describeRunStatusForAria(liveRun(), undefined),
+			unknownShape: describeRunStatusForAria(unknownRun(), undefined),
+			badgedLive: describeRunStatusForAria(liveRun(), needsInputBadge),
+		}, {
+			completed: 'completed', failed: 'failed', errored: 'completed, 1 errored', partial: 'completed, partial data',
+			live: 'in progress', unknownShape: '', badgedLive: 'in progress, needs input',
+		});
+	});
+
+	test('the RUN label reads the CURRENT run via context.runOf, never a STALE element.run - the graduation case', () => {
+		// `reconcileWorkflowTree` deliberately leaves an unchanged-identity node's OWN element pointing at the
+		// pre-graduation data (see that function's doc comment) - the tree element handed to `getAriaLabel` here is
+		// exactly that stale reference. Only `context.runOf` carries the fresh, graduated (terminal, failed) run.
+		const staleLive = liveRun({ runId: 'wf_g' });
+		const freshTerminal = terminalRun({ runId: 'wf_g', sessionId: staleLive.sessionId, status: 'failed' });
+		const graduated = new WorkflowTreeAccessibilityProvider(fakeContext({
+			runOf: identity => (identity === freshTerminal.identity ? freshTerminal : undefined),
+		}));
+		const label = graduated.getAriaLabel({ kind: 'run', run: staleLive });
+		assert.ok(label.includes('failed'), `expected the graduated (terminal, failed) status in the label, got: "${label}"`);
+		assert.ok(!label.includes('in progress'), `label still described the pre-graduation live state: "${label}"`);
 	});
 });
 

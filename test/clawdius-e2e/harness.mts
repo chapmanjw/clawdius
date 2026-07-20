@@ -1872,6 +1872,716 @@ try {
 		}
 	});
 
+	// --- scale fixtures (real-build interactivity budgets at scale) --------------------------------------------------
+	//
+	// Both fixtures below are HAND-AUTHORED, not cloned from the real corpus: the budgets are stated at a specific
+	// scale (~300 runs, ~1000 agents) the real corpus is not guaranteed to have, so these sandboxes exist purely to
+	// exercise that scale deterministically. Mirrors the honest-edges sandbox pattern: a temp `USERPROFILE`/`HOME`
+	// so the reader sees ONLY the sandbox, the real `~/.claude` untouched.
+
+	const SCALE_LIST_RUN_COUNT = 300;
+	const SCALE_EXPAND_AGENT_COUNT = 1000;
+
+	function scaleListRunId(index) {
+		return `wf_scale${String(index).padStart(4, '0')}`;
+	}
+
+	/** One small terminal-run manifest for the ~300-run first-paint/filter fixture: real cost numbers, one agent, no
+	 *  journal/sidecars at all (nothing here exercises the transcript join - that is the OTHER fixture's job) - kept
+	 *  minimal so writing and parsing 300 of them stays fast, which is the point: this budget measures the LIST
+	 *  path itself, not agent volume. */
+	function buildScaleListManifest(index) {
+		return {
+			workflowName: `scale-run-${index}`, summary: `Synthetic scale-fixture run number ${index}.`, status: 'completed',
+			timestamp: new Date(2026, 0, 1, 0, 0, index).toISOString(), durationMs: 1500, totalTokens: 4000 + index, totalToolCalls: 2,
+			defaultModel: 'claude-opus-4-8[1m]',
+			workflowProgress: [
+				{ type: 'workflow_agent', agentId: 'a0', label: `scale-agent-${index}`, state: 'done', model: 'claude-opus-4-8[1m]', tokens: 800, toolCalls: 2, durationMs: 400 },
+			],
+		};
+	}
+
+	/** The ~1000-agent manifest for the expand/scroll fixture: `agentCount` is set EXPLICITLY
+	 *  (the reader never derives it from the agent list - see claudeReaderSeamService.ts) so the story leaf's
+	 *  rendered count is a direct, checkable proof the row came from the manifest. Every `workflow_agent` entry
+	 *  carries real cost numbers so an agent row never falls back to a dash. */
+	function buildScaleExpandManifest() {
+		const workflowProgress = [];
+		for (let i = 0; i < SCALE_EXPAND_AGENT_COUNT; i++) {
+			workflowProgress.push({
+				type: 'workflow_agent', agentId: `a${i}`, label: `scale-agent-${i}`, state: 'done',
+				model: 'claude-opus-4-8[1m]', tokens: 500 + i, toolCalls: 2, durationMs: 200,
+			});
+		}
+		return {
+			workflowName: 'scale-expand-fixture', summary: 'Synthetic scale fixture with 1000 agents.', status: 'completed',
+			timestamp: new Date().toISOString(), durationMs: 120000, totalTokens: 900000, totalToolCalls: 2000,
+			agentCount: SCALE_EXPAND_AGENT_COUNT, defaultModel: 'claude-opus-4-8[1m]', workflowProgress,
+		};
+	}
+
+	/** The expand fixture's journal: a `started` record for every one of its {@link SCALE_EXPAND_AGENT_COUNT}
+	 *  agents - satisfying the identity join's first three conditions (path-safe id, present in a `started` record,
+	 *  unique) for EVERY agent, so the join genuinely reaches its fourth condition (the sibling `agent-<id>.jsonl`
+	 *  file) for each one instead of short-circuiting earlier. See the expand scenario body for why the sidecar
+	 *  files are then never created at all - the fixture half of the sidecars-absent check. */
+	function buildScaleExpandJournal() {
+		const lines = [];
+		for (let i = 0; i < SCALE_EXPAND_AGENT_COUNT; i++) {
+			lines.push(JSON.stringify({ type: 'started', agentId: `a${i}` }));
+		}
+		return lines.join('\n') + '\n';
+	}
+
+	/** Sample `requestAnimationFrame` deltas for `durationMs`, resolving with every delta measured (the caller drops
+	 *  however many leading samples it judges as start-up scheduling noise). Runs entirely in-page; the caller
+	 *  drives the actual scroll input concurrently (see the scroll scenario body) so the samples cover active
+	 *  scrolling, not an idle tree. */
+	async function sampleAnimationFrameDeltas(durationMs) {
+		return win.evaluate((duration) => new Promise((resolve) => {
+			const deltas = [];
+			const start = performance.now();
+			let last = start;
+			const tick = () => {
+				const now = performance.now();
+				deltas.push(now - last);
+				last = now;
+				if (now - start < duration) {
+					requestAnimationFrame(tick);
+				} else {
+					resolve(deltas);
+				}
+			};
+			requestAnimationFrame(tick);
+		}), durationMs);
+	}
+
+	function median(numbers) {
+		const sorted = [...numbers].sort((a, b) => a - b);
+		const mid = Math.floor(sorted.length / 2);
+		return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+	}
+
+	/** Open the workflows view and return ONLY the time from the moment the command palette's already-narrowed
+	 *  exact row is CLICKED to the first run row (or an honest state message) appearing - never including how long
+	 *  it took to open the palette or type into it. `runCommand` (used elsewhere in this file for ordinary UI
+	 *  driving) pads a full command invocation with realism-motivated fixed waits - up to ~2s of typing-settle
+	 *  delay unrelated to the view's own react time - which would swallow a sub-second budget outright if the
+	 *  timer started there; this measures the app's OWN latency, isolated from how this harness happens to drive
+	 *  the palette. */
+	async function focusWorkflowsViewTimed() {
+		await win.keyboard.press('Control+Shift+P');
+		await win.waitForSelector('.quick-input-widget', { state: 'visible', timeout: 8000 });
+		await win.keyboard.type('Focus on Claude Code Ultracode Workflows View', { delay: 0 });
+		let target;
+		for (let poll = 0; poll < 40 && !target; poll++) {
+			await win.waitForTimeout(50);
+			const rows = await win.$$('.quick-input-list .monaco-list-row');
+			if (rows.length === 0 || rows.length > 8) { continue; }
+			for (const row of rows) {
+				const label = await row.$('.quick-input-list-label .label-name');
+				const text = label ? ((await label.innerText()) || '').trim() : ((await row.innerText()) || '').trim();
+				// Command palette rows combine category + title into ONE label ("{0}: {1}", commandsQuickAccess.ts -
+				// `registerFocusViewAction` uses the view CONTAINER's own title as the category), so match the row
+				// whose label ENDS WITH the bare title rather than requiring an exact full-string match.
+				if (text.endsWith('Focus on Claude Code Ultracode Workflows View')) { target = row; break; }
+			}
+		}
+		if (!target) { throw new Error('command palette never narrowed to an exact "Focus on Claude Code Ultracode Workflows View" row'); }
+		const paintStart = Date.now();
+		await target.click();
+		await win.waitForSelector('.clawdius-workflows-tree', { state: 'attached', timeout: 15000 });
+		await win.waitForFunction(
+			() => document.querySelector('.clawdius-workflow-run-row') !== null || document.querySelector('[data-clawdius-workflows-state]') !== null,
+			undefined, { timeout: 60000 },
+		);
+		return Date.now() - paintStart;
+	}
+
+	// SCALE: ~300-run first paint + filter, against a hand-authored fixture sized to the stated budgets - a
+	// deterministic stand-in for the real corpus, which is not guaranteed to carry ~300 runs. First paint is timed
+	// from issuing the view-open command to the first run row (or an honest state message) appearing; the filter
+	// budget covers the SAME 200ms debounce + render the real-corpus find-sort scenario above already documents,
+	// just measured against a fixture large and deterministic enough to assert a hard number rather than merely
+	// report one. The tree is VIRTUALIZED - only the rows that fit the viewport (plus overscan) are ever in the
+	// DOM at once, so the full 300-run enumeration is proven the SAME way the ~1000-agent expand scenario proves
+	// its full set below: keyboard Home/End bounds-check the newest and oldest run against the default
+	// newest-first sort, rather than counting DOM nodes.
+	await scenario('ultracode-workflows-scale-first-paint', true, async () => {
+		const sandbox = mkdtempSync(join(tmpdir(), 'clawdius-e2e-scale-list-sandbox-'));
+		const prof = mkdtempSync(join(tmpdir(), 'clawdius-e2e-scale-list-prof-'));
+		const exts = mkdtempSync(join(tmpdir(), 'clawdius-e2e-scale-list-exts-'));
+		const savedWin = win;
+		let app5;
+		try {
+			const workflowsDir = join(sandbox, '.claude', 'projects', 'scale-list', 'session-scale-list', 'workflows');
+			mkdirSync(workflowsDir, { recursive: true });
+			for (let i = 0; i < SCALE_LIST_RUN_COUNT; i++) {
+				writeFileSync(join(workflowsDir, `${scaleListRunId(i)}.json`), JSON.stringify(buildScaleListManifest(i)));
+			}
+
+			app5 = await electron.launch({
+				executablePath: join(REPO, '.build', 'electron', 'Clawdius.exe'),
+				cwd: REPO,
+				args: ['.', '--disable-extension=vscode.vscode-api-tests',
+					`--user-data-dir=${prof}`, `--extensions-dir=${exts}`,
+					'--no-sandbox', '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust'],
+				env: { ...process.env, VSCODE_DEV: '1', VSCODE_CLI: '1', NODE_ENV: 'development', USERPROFILE: sandbox, HOME: sandbox },
+				timeout: 120000,
+			});
+			win = await app5.firstWindow();
+			await win.waitForSelector('.monaco-workbench', { timeout: 90000 });
+			await win.waitForTimeout(3000);
+			await win.keyboard.press('Escape');
+			await win.waitForTimeout(150);
+
+			// --- first paint: view-open trigger to the first run row - the <=500ms budget ---------------------------
+			const firstPaintMs = await focusWorkflowsViewTimed();
+
+			const expectedIds = new Set();
+			for (let i = 0; i < SCALE_LIST_RUN_COUNT; i++) { expectedIds.add(scaleListRunId(i)); }
+			const rowIdsAtTop = await win.$$eval('.clawdius-workflow-run-row', els => els.map(el => el.getAttribute('data-run-id')));
+			assert(rowIdsAtTop.length > 0 && rowIdsAtTop.every(id => expectedIds.has(id)),
+				`expected the visible rows to be the synthetic fixture's own run ids, got ${JSON.stringify(rowIdsAtTop)}`);
+			assert(rowIdsAtTop.includes(scaleListRunId(SCALE_LIST_RUN_COUNT - 1)),
+				`the newest synthetic run ("${scaleListRunId(SCALE_LIST_RUN_COUNT - 1)}") was not among the top rows under the default newest-first sort: ${JSON.stringify(rowIdsAtTop)}`);
+			assert(firstPaintMs <= 500, `first paint of ${SCALE_LIST_RUN_COUNT} runs took ${firstPaintMs}ms, budget is <=500ms`);
+
+			// The full 300-run set materialized (not merely the visible top slice) - keyboard End bounds-checks the
+			// OLDEST run, the same technique the ~1000-agent expand scenario uses for its own full-set proof. Click
+			// the top row first to establish DOM/keyboard focus ON THE TREE (the "Focus on View" command that just
+			// triggered the timed paint focuses the VIEW pane, not necessarily a specific row yet).
+			const topRow = await win.$('.clawdius-workflow-run-row');
+			if (topRow) { await topRow.click(); }
+			await win.waitForTimeout(150);
+			await win.keyboard.press('End');
+			const oldestRow = await win.waitForSelector(`.clawdius-workflow-run-row[data-run-id="${scaleListRunId(0)}"]`, { state: 'attached', timeout: 15000 }).catch(() => null);
+			assert(oldestRow, `the oldest synthetic run ("${scaleListRunId(0)}") never appeared after jumping to the end of the ${SCALE_LIST_RUN_COUNT}-run list`);
+			await win.keyboard.press('Home');
+			await win.waitForTimeout(200);
+
+			// --- filter: narrow to one exact run id - the <=300ms budget --------------------------------------------
+			const targetRunId = scaleListRunId(150);
+			const filterInput = await win.$('.clawdius-workflows-filter input');
+			assert(filterInput, 'the persistent filter InputBox did not render (.clawdius-workflows-filter input)');
+			const filterStart = Date.now();
+			await filterInput.fill(targetRunId);
+			let narrowedIds = await win.$$eval('.clawdius-workflow-run-row', els => els.map(el => el.getAttribute('data-run-id')));
+			for (let i = 0; i < 40 && !(narrowedIds.length === 1 && narrowedIds[0] === targetRunId); i++) {
+				await win.waitForTimeout(10);
+				narrowedIds = await win.$$eval('.clawdius-workflow-run-row', els => els.map(el => el.getAttribute('data-run-id')));
+			}
+			const filterMs = Date.now() - filterStart;
+			assert(narrowedIds.length === 1 && narrowedIds[0] === targetRunId,
+				`filtering to "${targetRunId}" left ${JSON.stringify(narrowedIds)} visible`);
+			assert(filterMs <= 300, `filtering ${SCALE_LIST_RUN_COUNT} runs down to one took ${filterMs}ms, budget is <=300ms`);
+
+			await filterInput.fill('');
+			await win.waitForTimeout(300);
+
+			return `first paint: ${SCALE_LIST_RUN_COUNT} runs in ${firstPaintMs}ms (budget <=500ms), full range confirmed newest-to-oldest via keyboard Home/End; `
+				+ `filter: narrowed to 1 of ${SCALE_LIST_RUN_COUNT} in ${filterMs}ms (budget <=300ms)`;
+		} finally {
+			if (app5) { try { await app5.close(); } catch { /* best-effort cleanup */ } }
+			try { rmSync(sandbox, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+			try { rmSync(prof, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+			try { rmSync(exts, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+			win = savedWin;
+		}
+	});
+
+	// SCALE: expand a synthetic ~1000-agent run and measure how the listing path behaves at that size. The run's OWN
+	// journal carries a `started` record for every one of its 1000 agents, so the identity join's per-agent check
+	// genuinely reaches its FOURTH condition (does `agent-<id>.jsonl` exist as a sibling file) for each one - never
+	// short-circuited earlier. Those 1000 sibling files are then never created AT ALL, and the run is asserted to
+	// still read `complete` with all 1000 agent rows present and correctly labeled straight off the manifest.
+	//
+	// What that establishes, stated no more strongly than it holds: listing a run's agents does not DEPEND on the
+	// transcript sidecars - every row's content comes off the manifest, and the run still reads whole with none of
+	// them on disk. That is ALL it establishes. It is explicitly NOT a zero-transcript-reads proof, and completeness
+	// is not the instrument that would catch one: a missing sidecar resolves the join to "no transcript ref" for that
+	// agent WITHOUT marking the read degraded, so a read added on this path that swallowed its own file-not-found
+	// would leave the run `complete` and pass this scenario unchanged. That the path performs no transcript BODY read
+	// today is a source-level property of `resolveTranscriptRef` (claudeReaderSeamService.ts), which only ever calls
+	// `fileService.exists()` against that path and never `readFile()`. A guard that could actually fail on a future
+	// read would have to count reads at the file service rather than infer them from this output.
+	await scenario('ultracode-workflows-scale-expand', true, async () => {
+		const sandbox = mkdtempSync(join(tmpdir(), 'clawdius-e2e-scale-expand-sandbox-'));
+		const prof = mkdtempSync(join(tmpdir(), 'clawdius-e2e-scale-expand-prof-'));
+		const exts = mkdtempSync(join(tmpdir(), 'clawdius-e2e-scale-expand-exts-'));
+		const savedWin = win;
+		let app6;
+		try {
+			const runId = 'wf_scaleexpand';
+			const sessionDir = join(sandbox, '.claude', 'projects', 'scale-expand', 'session-scale-expand');
+			const workflowsDir = join(sessionDir, 'workflows');
+			mkdirSync(workflowsDir, { recursive: true });
+			writeFileSync(join(workflowsDir, `${runId}.json`), JSON.stringify(buildScaleExpandManifest()));
+			// The run's own journal (required for the join's first three conditions - see buildScaleExpandJournal's
+			// doc comment). Its agent sidecar files (agent-<id>.jsonl - the join's fourth condition, and the ONLY
+			// thing a transcript drill-in ever reads) are deliberately never created.
+			const journalDir = join(sessionDir, 'subagents', 'workflows', runId);
+			mkdirSync(journalDir, { recursive: true });
+			writeFileSync(join(journalDir, 'journal.jsonl'), buildScaleExpandJournal());
+
+			app6 = await electron.launch({
+				executablePath: join(REPO, '.build', 'electron', 'Clawdius.exe'),
+				cwd: REPO,
+				args: ['.', '--disable-extension=vscode.vscode-api-tests',
+					`--user-data-dir=${prof}`, `--extensions-dir=${exts}`,
+					'--no-sandbox', '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust'],
+				env: { ...process.env, VSCODE_DEV: '1', VSCODE_CLI: '1', NODE_ENV: 'development', USERPROFILE: sandbox, HOME: sandbox },
+				timeout: 120000,
+			});
+			win = await app6.firstWindow();
+			await win.waitForSelector('.monaco-workbench', { timeout: 90000 });
+			await win.waitForTimeout(3000);
+			await win.keyboard.press('Escape');
+			await win.waitForTimeout(150);
+			await runCommand('Focus on Claude Code Ultracode Workflows View');
+			await win.waitForSelector('.clawdius-workflows-tree', { state: 'attached', timeout: 15000 });
+			const rowSelector = `.clawdius-workflow-run-row[data-run-id="${runId}"]`;
+			// No stated budget on reaching this point - only the EXPAND action itself (below) is budgeted. Listing
+			// resolves the whole run (including every agent's transcript-join check) BEFORE the row ever paints, so
+			// that cost is already sunk by the time this wait resolves; expand is then a pure tree operation.
+			await win.waitForSelector(rowSelector, { state: 'attached', timeout: 60000 });
+
+			const row = await win.$(rowSelector);
+			const runKind = await row.getAttribute('data-run-kind');
+			const completeness = await row.getAttribute('data-completeness');
+			assert(runKind === 'terminal', `synthetic 1000-agent run rendered data-run-kind="${runKind}" (expected "terminal")`);
+			assert(completeness === 'complete', `expected data-completeness="complete" with every transcript sidecar absent (see this scenario's doc comment for exactly what that does and does not establish), read "${completeness}"`);
+
+			// --- expand: click + ArrowRight to the story leaf attaching - the <=500ms budget -------------------------
+			const expandStart = Date.now();
+			await row.scrollIntoViewIfNeeded();
+			await row.click();
+			await win.waitForTimeout(50);
+			await win.keyboard.press('ArrowRight');
+			let storyHandle = await win.waitForSelector('.clawdius-workflow-story', { state: 'attached', timeout: 5000 }).catch(() => null);
+			if (!storyHandle) {
+				const twistie = await row.$('.monaco-tl-twistie');
+				if (twistie) {
+					await twistie.click();
+					storyHandle = await win.waitForSelector('.clawdius-workflow-story', { state: 'attached', timeout: 5000 }).catch(() => null);
+				}
+			}
+			const expandMs = Date.now() - expandStart;
+			assert(storyHandle, 'expanding the synthetic 1000-agent run never revealed a .clawdius-workflow-story leaf');
+			assert(expandMs <= 500, `expanding the 1000-agent run took ${expandMs}ms, budget is <=500ms`);
+
+			const costText = (await storyHandle.$eval('.clawdius-workflow-story-cost', el => el.textContent || '')) || '';
+			assert(costText.includes(`${SCALE_EXPAND_AGENT_COUNT} agents`), `story leaf cost line did not report "${SCALE_EXPAND_AGENT_COUNT} agents" (sourced straight from the manifest's own agentCount field): "${costText}"`);
+
+			const transcriptPanesAfterExpand = await win.$$('.clawdius-transcript');
+			assert(transcriptPanesAfterExpand.length === 0, 'a .clawdius-transcript editor pane exists after expand alone - transcripts open only on an explicit drill-in');
+
+			// --- the full 1000-row set materialized, not a truncated slice - keyboard End reaches the LAST row --------
+			await win.keyboard.press('End');
+			const lastAgentRow = await win.waitForSelector(`.clawdius-workflow-agent-row[data-agent-id="a${SCALE_EXPAND_AGENT_COUNT - 1}"]`, { state: 'attached', timeout: 15000 }).catch(() => null);
+			assert(lastAgentRow, `the last agent row (a${SCALE_EXPAND_AGENT_COUNT - 1}) never appeared after jumping to the end of the expanded run`);
+			const lastAgentState = await lastAgentRow.getAttribute('data-agent-state');
+			assert(lastAgentState === 'done', `last agent row read data-agent-state="${lastAgentState}" (expected "done")`);
+			const topAgentIdAtEnd = (await win.$$eval('.clawdius-workflow-agent-row', els => (els[0] ? els[0].getAttribute('data-agent-id') : undefined)));
+
+			// --- baseline: this environment's OWN idle frame cadence, no scroll input driven at all - a strict <=16ms
+			// budget is only meaningful against the TREE's behavior when the environment itself can sustain that
+			// cadence at rest; never a weakened budget, but an honest SKIP when the display/compositor cannot hit
+			// 60fps here regardless of page content, rather than attributing an environment ceiling to the tree.
+			const baselineDeltas = await sampleAnimationFrameDeltas(1000);
+			const baselineMedian = median(baselineDeltas.slice(2));
+
+			// --- scroll: drive real wheel input over the expanded list while sampling rAF cadence ---------------------
+			const treeBox = await win.$eval('.clawdius-workflows-tree', el => {
+				const r = el.getBoundingClientRect();
+				return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+			});
+			await win.mouse.move(treeBox.x, treeBox.y);
+			const SCROLL_SAMPLE_MS = 2500;
+			const samplePromise = sampleAnimationFrameDeltas(SCROLL_SAMPLE_MS);
+			const scrollDeadline = Date.now() + SCROLL_SAMPLE_MS;
+			while (Date.now() < scrollDeadline) {
+				await win.mouse.wheel(0, -240); // scroll back up through the 1000-row list, away from the End position
+				await win.waitForTimeout(30);
+			}
+			const deltas = await samplePromise;
+			const settled = deltas.slice(2); // drop the sampler's own leading start-up scheduling samples
+			const frameMedian = median(settled);
+			const frameMax = Math.max(...settled);
+			const topAgentIdAfterScroll = (await win.$$eval('.clawdius-workflow-agent-row', els => (els[0] ? els[0].getAttribute('data-agent-id') : undefined)));
+			assert(topAgentIdAfterScroll !== topAgentIdAtEnd, 'the visible agent rows never changed while scrolling - the scroll input did not reach the tree');
+
+			const expandDetail = `expand: ${expandMs}ms (budget <=500ms); the enumeration stayed "complete" with all ${SCALE_EXPAND_AGENT_COUNT} `
+				+ `agent-<id>.jsonl sidecars absent from disk, so listing a run's agents does not depend on reading them; `
+				+ `last row "a${SCALE_EXPAND_AGENT_COUNT - 1}" reached via keyboard End`;
+
+			// The scroll frame budget is reported as its OWN result. It is environment-dependent - an idle baseline
+			// already above the budget means this machine cannot hold the cadence with nothing on screen - and
+			// folding it into this scenario's verdict would let one unmeasurable budget mask the expand assertions
+			// that DID run and pass.
+			await scenario('ultracode-workflows-scale-scroll', false, async () => {
+				if (baselineMedian > 16) {
+					return `SKIPPED (not measurable here: the idle baseline is itself median ${baselineMedian.toFixed(2)}ms with nothing on screen, `
+						+ `above the <=16ms budget - not attributable to the workflows tree); for reference: median ${frameMedian.toFixed(2)}ms / `
+						+ `max ${frameMax.toFixed(2)}ms over ${settled.length} sampled frames`;
+				}
+				assert(frameMedian <= 16, `scroll median frame time ${frameMedian.toFixed(2)}ms exceeds the <=16ms budget (${settled.length} frames sampled; idle baseline was ${baselineMedian.toFixed(2)}ms)`);
+				assert(frameMax <= 50, `scroll saw a frame of ${frameMax.toFixed(2)}ms, exceeding the <=50ms no-frame-over-budget (${settled.length} frames sampled)`);
+				return `median ${frameMedian.toFixed(2)}ms / max ${frameMax.toFixed(2)}ms over ${settled.length} sampled frames (budgets <=16ms / <=50ms; idle baseline ${baselineMedian.toFixed(2)}ms)`;
+			});
+
+			return expandDetail;
+		} finally {
+			if (app6) { try { await app6.close(); } catch { /* best-effort cleanup */ } }
+			try { rmSync(sandbox, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+			try { rmSync(prof, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+			try { rmSync(exts, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+			win = savedWin;
+		}
+	});
+
+	// --- accessibility fixtures + proof ---------------------------------------------------------------------------
+
+	function buildA11yFailedRunManifest() {
+		return {
+			workflowName: 'a11y-failed-run', summary: 'Accessibility fixture: one errored agent across two phases.',
+			status: 'failed', timestamp: new Date().toISOString(), durationMs: 3000, totalTokens: 6000, totalToolCalls: 5,
+			defaultModel: 'claude-opus-4-8[1m]',
+			phases: [{ title: 'Analyze' }, { title: 'Report' }],
+			workflowProgress: [
+				{ type: 'workflow_agent', agentId: 'a1', label: 'analyzer', state: 'error', error: 'The analyzer crashed.', phaseIndex: 0, model: 'claude-opus-4-8[1m]', tokens: 2000, toolCalls: 2, durationMs: 1000 },
+				{ type: 'workflow_agent', agentId: 'a2', label: 'reporter', state: 'done', phaseIndex: 1, model: 'claude-opus-4-8[1m]', tokens: 4000, toolCalls: 3, durationMs: 2000 },
+			],
+		};
+	}
+
+	function buildA11yLiveJournal() {
+		return [
+			JSON.stringify({ type: 'started', agentId: 'a1' }),
+			JSON.stringify({ type: 'started', agentId: 'a2' }),
+			JSON.stringify({ type: 'result', agentId: 'a1', result: 'Analysis complete.' }),
+		].join('\n') + '\n';
+	}
+
+	const A11Y_GRADUATION_SUMMARY = 'Accessibility fixture graduation target';
+	const A11Y_MOTION_SUMMARY = 'Accessibility fixture, motion-reduced graduation target';
+
+	function buildA11yGraduationManifest() {
+		return {
+			workflowName: 'a11y-graduation-run', summary: A11Y_GRADUATION_SUMMARY, status: 'failed',
+			timestamp: new Date().toISOString(), durationMs: 500, totalTokens: 1000, totalToolCalls: 1,
+			defaultModel: 'claude-opus-4-8[1m]',
+			workflowProgress: [{ type: 'workflow_agent', agentId: 'a1', label: 'grad-agent', state: 'done', model: 'claude-opus-4-8[1m]', tokens: 500, toolCalls: 1, durationMs: 500 }],
+		};
+	}
+
+	/** The `.monaco-list-row` wrapper the tree's own accessibility renderer sets `aria-label` on - one level ABOVE
+	 *  the row-kind renderer's own element (`.clawdius-workflow-run-row` etc.), the same wrapper/element
+	 *  relationship the fork-chrome text scan earlier in this file already reasons about. */
+	async function ariaLabelOf(handle) {
+		return handle.evaluate(el => {
+			const wrapper = el.closest('.monaco-list-row');
+			return wrapper ? (wrapper.getAttribute('aria-label') || '') : '';
+		});
+	}
+
+	/** Start recording EVERY announcement `IAccessibilityService.alert()` writes into the alternating
+	 *  `.monaco-alert[role="alert"]` containers (base/browser/ui/aria/aria.ts). Reading the containers' CURRENT text
+	 *  is not sufficient: there are only two and each new announcement OVERWRITES one, so any unrelated notification
+	 *  landing between the moment under test and the read silently erases the evidence - a race that makes such a
+	 *  check pass or fail on timing alone. Observing every mutation captures an announcement whether or not something
+	 *  later overwrote it. Install this BEFORE triggering the moment under test. */
+	async function startAlertRecorder() {
+		await win.evaluate(() => {
+			const seen = [];
+			window.__clawdiusRecordedAlerts = seen;
+			if (window.__clawdiusAlertObserver) { window.__clawdiusAlertObserver.disconnect(); }
+			// Record from the MUTATION RECORDS, never by re-reading a container's current text: observer callbacks
+			// are BATCHED, so two announcements landing in one batch would collapse to whichever wrote last. aria.ts
+			// clears the container and appends a fresh text node per announcement, so each added node IS exactly one
+			// announcement. Nothing already present is seeded either, so text sitting in a container BEFORE this
+			// installs can never satisfy a later assertion - only announcements that actually fire afterwards count.
+			const observer = new MutationObserver(records => {
+				for (const record of records) {
+					for (const node of record.addedNodes) {
+						const text = (node.textContent || '').trim();
+						if (text) { seen.push(text); }
+					}
+					if (record.type === 'characterData') {
+						const text = (record.target.textContent || '').trim();
+						if (text) { seen.push(text); }
+					}
+				}
+			});
+			window.__clawdiusAlertObserver = observer;
+			for (const el of document.querySelectorAll('.monaco-alert')) {
+				observer.observe(el, { childList: true, characterData: true, subtree: true });
+			}
+		});
+	}
+
+	/** Every announcement {@link startAlertRecorder} has captured since it was installed. */
+	async function recordedAlertTexts() {
+		return win.evaluate(() => window.__clawdiusRecordedAlerts || []);
+	}
+
+	/** Wait until the recorder has captured `expected`, then return everything captured (the full list makes a
+	 *  failure legible - it shows exactly which announcements DID fire). */
+	async function waitForRecordedAlert(expected) {
+		await win.waitForFunction(exp => (window.__clawdiusRecordedAlerts || []).includes(exp), expected,
+			{ timeout: 15000, polling: 100 }).catch(() => { });
+		return recordedAlertTexts();
+	}
+
+	// ACCESSIBILITY: aria-label content per element kind (run status/errored-count, story, phase error-count, agent
+	// state, live-progress ratio/activity), full keyboard-only operability (expand + drill-in, no mouse), aria
+	// persisting under High Contrast, and - across a real live-to-terminal graduation - the row's aria-label
+	// switching to the FRESH graduated state, focus staying on the same row, and the accessibility-service
+	// announcement firing.
+	await scenario('ultracode-workflows-accessibility', true, async () => {
+		const sandbox = mkdtempSync(join(tmpdir(), 'clawdius-e2e-a11y-sandbox-'));
+		const prof = mkdtempSync(join(tmpdir(), 'clawdius-e2e-a11y-prof-'));
+		const exts = mkdtempSync(join(tmpdir(), 'clawdius-e2e-a11y-exts-'));
+		const savedWin = win;
+		let app7;
+		try {
+			const sessionDir = join(sandbox, '.claude', 'projects', 'a11y-fixtures', 'session-a11y');
+			const workflowsDir = join(sessionDir, 'workflows');
+			mkdirSync(workflowsDir, { recursive: true });
+			writeFileSync(join(workflowsDir, 'wf_a11yfailed.json'), JSON.stringify(buildA11yFailedRunManifest()));
+
+			const liveJournalDir = join(sessionDir, 'subagents', 'workflows', 'wf_a11ylive');
+			mkdirSync(liveJournalDir, { recursive: true });
+			writeFileSync(join(liveJournalDir, 'journal.jsonl'), buildA11yLiveJournal());
+
+			const gradJournalDir = join(sessionDir, 'subagents', 'workflows', 'wf_a11ygrad');
+			mkdirSync(gradJournalDir, { recursive: true });
+			writeFileSync(join(gradJournalDir, 'journal.jsonl'), '{"type":"started","agentId":"a1"}\n');
+
+			app7 = await electron.launch({
+				executablePath: join(REPO, '.build', 'electron', 'Clawdius.exe'),
+				cwd: REPO,
+				args: ['.', '--disable-extension=vscode.vscode-api-tests',
+					`--user-data-dir=${prof}`, `--extensions-dir=${exts}`,
+					'--no-sandbox', '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust'],
+				env: { ...process.env, VSCODE_DEV: '1', VSCODE_CLI: '1', NODE_ENV: 'development', USERPROFILE: sandbox, HOME: sandbox },
+				timeout: 120000,
+			});
+			win = await app7.firstWindow();
+			await win.waitForSelector('.monaco-workbench', { timeout: 90000 });
+			await win.waitForTimeout(6000);
+			await focusWorkflowsView();
+			// `focusWorkflowsView`'s own "reset scroll to top" step clicks the FIRST row to establish a
+			// deterministic focus point - for a collapsible row that ALSO expands it here (this tree does not gate
+			// expand-on-click to the twistie alone). The default newest-first sort pins live runs first by
+			// identity, so that first row is `wf_a11ygrad` - collapse it immediately so exactly one row is expanded
+			// at a time from here on, the same discipline the honest-edges scenario's own `collapse` helper
+			// documents as required for the SHARED `expandRunAndGatherAgents`/`expandLiveRunProgress` helpers'
+			// global `.clawdius-workflow-story` / `.clawdius-workflow-live-progress` lookups to stay unambiguous.
+			const collapse = async row => { await row.click(); await win.keyboard.press('ArrowLeft'); await win.waitForTimeout(200); };
+			const gradRowInitial = await win.$('.clawdius-workflow-run-row[data-run-id="wf_a11ygrad"]');
+			if (gradRowInitial) { await collapse(gradRowInitial); }
+
+			const results = {};
+
+			// --- 1. aria labels: run status/errored-count, story, phase error-count, agent state ----------------------
+			const failedRow = await win.waitForSelector('.clawdius-workflow-run-row[data-run-id="wf_a11yfailed"]', { state: 'attached', timeout: 15000 });
+			const failedRunAria = await ariaLabelOf(failedRow);
+			assert(/failed/.test(failedRunAria) && /1 errored/.test(failedRunAria),
+				`failed run's aria-label missing status/errored-count: "${failedRunAria}"`);
+
+			const failedExpand = await expandRunAndGatherAgents(failedRow);
+			assert(failedExpand.story, 'wf_a11yfailed did not reveal its story leaf');
+			const storyAria = await ariaLabelOf(failedExpand.story);
+			assert(storyAria.startsWith('Summary and result for'), `story leaf aria-label missing the expected prefix: "${storyAria}"`);
+
+			const phaseRows = await win.$$('.clawdius-workflow-phase-row');
+			assert(phaseRows.length === 2, `expected 2 phase rows for wf_a11yfailed, found ${phaseRows.length}`);
+			const phaseArias = [];
+			for (const p of phaseRows) { phaseArias.push(await ariaLabelOf(p)); }
+			const erroredPhaseAria = phaseArias.find(a => /errors/.test(a));
+			const cleanPhaseAria = phaseArias.find(a => !/errors/.test(a));
+			assert(erroredPhaseAria && /Analyze/.test(erroredPhaseAria), `no phase aria-label named its error count: ${JSON.stringify(phaseArias)}`);
+			assert(cleanPhaseAria && /Report/.test(cleanPhaseAria), `the error-free phase's aria-label unexpectedly mentioned errors: ${JSON.stringify(phaseArias)}`);
+
+			assert(failedExpand.agentRows.length === 2, `expected 2 agent rows for wf_a11yfailed, found ${failedExpand.agentRows.length}`);
+			const agentAriaById = {};
+			for (const r of failedExpand.agentRows) {
+				const id = await r.getAttribute('data-agent-id');
+				agentAriaById[id] = await ariaLabelOf(r);
+			}
+			assert(/error/.test(agentAriaById['a1'] || ''), `errored agent a1's aria-label did not mention its state: "${agentAriaById['a1']}"`);
+			assert(/done/.test(agentAriaById['a2'] || ''), `done agent a2's aria-label did not mention its state: "${agentAriaById['a2']}"`);
+			results.ariaLabels = `run: "${failedRunAria}"; story: "${storyAria}"; phases: ${JSON.stringify(phaseArias)}; agents: ${JSON.stringify(agentAriaById)}`;
+			await collapse(failedRow);
+
+			// --- 2. live progress aria: ratio + activity captions ------------------------------------------------------
+			// Reset to a deterministic top-of-list scroll position and re-query the row FRESH immediately before
+			// interacting with it - the SAME defensive pattern the failure-surfacing scenario above uses when several
+			// rows sit adjacent to each other in the virtualized tree, so a stale handle can never be clicked.
+			await win.keyboard.press('Home');
+			await win.waitForTimeout(200);
+			const liveRow = await win.$('.clawdius-workflow-run-row[data-run-id="wf_a11ylive"]');
+			assert(liveRow, 'wf_a11ylive run row not found at the top-of-list scroll position');
+			const liveRowId = await liveRow.getAttribute('data-run-id');
+			assert(liveRowId === 'wf_a11ylive', `resolved the wrong row before expanding: data-run-id="${liveRowId}"`);
+			const liveProgress = await expandLiveRunProgress(liveRow);
+			assert(liveProgress, 'wf_a11ylive did not reveal its live-progress leaf');
+			const liveAria = await ariaLabelOf(liveProgress);
+			assert(liveAria.includes('1 of 2 agents seen so far have a result') && liveAria.includes('Journal last wrote'),
+				`live-progress aria-label missing the ratio/activity captions: "${liveAria}"`);
+			results.liveProgressAria = liveAria;
+			await collapse(liveRow);
+
+			// --- 3. keyboard-only operability: Home, walk to the failed run, expand, drill in - no mouse used ----------
+			await win.keyboard.press('Home');
+			await win.waitForTimeout(150);
+			let onTarget = false;
+			for (let step = 0; step < 20 && !onTarget; step++) {
+				const focusedRunId = await win.$eval('.monaco-list-row.focused .clawdius-workflow-run-row', el => el.getAttribute('data-run-id')).catch(() => undefined);
+				if (focusedRunId === 'wf_a11yfailed') { onTarget = true; break; }
+				await win.keyboard.press('ArrowDown');
+				await win.waitForTimeout(60);
+			}
+			assert(onTarget, 'keyboard-only ArrowDown walk from Home never reached the wf_a11yfailed run row');
+			await win.keyboard.press('ArrowRight'); // expand
+			await win.waitForTimeout(300);
+			await win.keyboard.press('ArrowDown'); // move focus onto the story leaf, the run's first child
+			await win.waitForTimeout(150);
+			await win.keyboard.press('Enter'); // drill in
+			const detailPane = await win.waitForSelector('.clawdius-workflow-detail[data-clawdius-detail-kind="result"]', { state: 'attached', timeout: 8000 }).catch(() => null);
+			assert(detailPane, 'keyboard-only navigation (Home, ArrowDown*, ArrowRight, ArrowDown, Enter) never opened the result detail pane');
+			await closeActiveEditorTab();
+			results.keyboardOnly = 'Home -> ArrowDown* -> ArrowRight (expand) -> ArrowDown -> Enter opened the result detail pane, no mouse used';
+
+			// --- 4. High Contrast: the same aria-label content survives a theme change -----------------------------------
+			await setThemeVerified('Clawdius High Contrast');
+			await focusWorkflowsView();
+			const hcRow = await win.waitForSelector('.clawdius-workflow-run-row[data-run-id="wf_a11yfailed"]', { state: 'attached', timeout: 15000 });
+			const hcAria = await ariaLabelOf(hcRow);
+			assert(hcAria === failedRunAria, `aria-label changed under High Contrast: "${failedRunAria}" -> "${hcAria}"`);
+			const hcRows = await win.$$('.clawdius-workflow-run-row');
+			assert(hcRows.length > 0, 'the tree rendered no rows under Clawdius High Contrast');
+			await setThemeVerified('Clawdius Dark');
+			await focusWorkflowsView();
+			results.highContrast = `aria-label unchanged under High Contrast ("${hcAria}"); ${hcRows.length} rows rendered`;
+
+			// --- 5. graduation: aria updates to the FRESH (terminal) state, alert fires, focus preserved -----------------
+			const gradRowSelector = '.clawdius-workflow-run-row[data-run-id="wf_a11ygrad"]';
+			const gradRow = await win.waitForSelector(gradRowSelector, { state: 'attached', timeout: 15000 });
+			await gradRow.click();
+			await win.waitForTimeout(200);
+			const gradAriaLive = await ariaLabelOf(gradRow);
+			assert(gradAriaLive.includes('in progress'), `live run's aria-label did not read "in progress" before graduation: "${gradAriaLive}"`);
+			const focusedBefore = await win.$eval('.monaco-list-row.focused .clawdius-workflow-run-row', el => el.getAttribute('data-run-id')).catch(() => undefined);
+			assert(focusedBefore === 'wf_a11ygrad', `expected wf_a11ygrad focused before graduation, DOM focus was on "${focusedBefore}"`);
+
+			// Record announcements from BEFORE the graduation is triggered - the alert containers are overwritten by
+			// any later announcement, so sampling them after the fact would pass or fail on timing alone.
+			await startAlertRecorder();
+			writeFileSync(join(workflowsDir, 'wf_a11ygrad.json'), JSON.stringify(buildA11yGraduationManifest()));
+			await win.waitForFunction((sel) => {
+				const row = document.querySelector(sel);
+				return !!row && row.getAttribute('data-run-kind') === 'terminal';
+			}, gradRowSelector, { timeout: 20000, polling: 300 });
+
+			const gradRowAfter = await win.$(gradRowSelector);
+			const gradAriaAfter = await ariaLabelOf(gradRowAfter);
+			assert(gradAriaAfter.includes('failed') && !gradAriaAfter.includes('in progress'),
+				`aria-label did not switch to the FRESH graduated (failed) state, still read: "${gradAriaAfter}"`);
+			const focusedAfter = await win.$eval('.monaco-list-row.focused .clawdius-workflow-run-row', el => el.getAttribute('data-run-id')).catch(() => undefined);
+			assert(focusedAfter === 'wf_a11ygrad', `focus was not preserved across graduation - the focused row read "${focusedAfter}"`);
+
+			const expectedAlert = `Workflow run ${A11Y_GRADUATION_SUMMARY} failed.`;
+			const alertTexts = await waitForRecordedAlert(expectedAlert);
+			assert(alertTexts.includes(expectedAlert), `no announcement carried the expected graduation text "${expectedAlert}"; recorded: ${JSON.stringify(alertTexts)}`);
+			results.graduation = `aria-label "in progress" -> "${gradAriaAfter}"; focus preserved on the same row; alert fired: "${expectedAlert}"`;
+
+			return Object.entries(results).map(([k, v]) => `${k}: ${v}`).join(' | ');
+		} finally {
+			if (app7) { try { await app7.close(); } catch { /* best-effort cleanup */ } }
+			try { rmSync(sandbox, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+			try { rmSync(prof, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+			try { rmSync(exts, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+			win = savedWin;
+		}
+	});
+
+	// ACCESSIBILITY (reduced motion): the announcement still fires and the transient graduation highlight class
+	// never applies, with `workbench.reduceMotion` seeded directly into the profile's settings BEFORE launch (the
+	// same seed-before-boot approach the pre-rename transcript-editor-state seed above uses, rather than driving
+	// the Settings UI).
+	await scenario('ultracode-workflows-accessibility-reduced-motion', true, async () => {
+		const sandbox = mkdtempSync(join(tmpdir(), 'clawdius-e2e-a11y-motion-sandbox-'));
+		const prof = mkdtempSync(join(tmpdir(), 'clawdius-e2e-a11y-motion-prof-'));
+		const exts = mkdtempSync(join(tmpdir(), 'clawdius-e2e-a11y-motion-exts-'));
+		const savedWin = win;
+		let app8;
+		try {
+			const sessionDir = join(sandbox, '.claude', 'projects', 'a11y-motion', 'session-a11y-motion');
+			const workflowsDir = join(sessionDir, 'workflows');
+			const journalDir = join(sessionDir, 'subagents', 'workflows', 'wf_a11ymotion');
+			mkdirSync(workflowsDir, { recursive: true });
+			mkdirSync(journalDir, { recursive: true });
+			writeFileSync(join(journalDir, 'journal.jsonl'), '{"type":"started","agentId":"a1"}\n');
+
+			const settingsDir = join(prof, 'User');
+			mkdirSync(settingsDir, { recursive: true });
+			writeFileSync(join(settingsDir, 'settings.json'), JSON.stringify({ 'workbench.reduceMotion': 'on' }, null, 2));
+
+			app8 = await electron.launch({
+				executablePath: join(REPO, '.build', 'electron', 'Clawdius.exe'),
+				cwd: REPO,
+				args: ['.', '--disable-extension=vscode.vscode-api-tests',
+					`--user-data-dir=${prof}`, `--extensions-dir=${exts}`,
+					'--no-sandbox', '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust'],
+				env: { ...process.env, VSCODE_DEV: '1', VSCODE_CLI: '1', NODE_ENV: 'development', USERPROFILE: sandbox, HOME: sandbox },
+				timeout: 120000,
+			});
+			win = await app8.firstWindow();
+			await win.waitForSelector('.monaco-workbench', { timeout: 90000 });
+			await win.waitForTimeout(6000);
+			await focusWorkflowsView();
+
+			const rowSelector = '.clawdius-workflow-run-row[data-run-id="wf_a11ymotion"]';
+			const row = await win.waitForSelector(rowSelector, { state: 'attached', timeout: 15000 });
+			await row.click();
+			await win.waitForTimeout(200);
+
+			// Record announcements from BEFORE the graduation is triggered - see startAlertRecorder.
+			await startAlertRecorder();
+			writeFileSync(join(workflowsDir, 'wf_a11ymotion.json'), JSON.stringify({
+				workflowName: 'a11y-motion-run', summary: A11Y_MOTION_SUMMARY, status: 'completed',
+				timestamp: new Date().toISOString(), durationMs: 200, totalTokens: 400, totalToolCalls: 1,
+				defaultModel: 'claude-opus-4-8[1m]',
+				workflowProgress: [{ type: 'workflow_agent', agentId: 'a1', label: 'motion-agent', state: 'done', model: 'claude-opus-4-8[1m]', tokens: 400, toolCalls: 1, durationMs: 200 }],
+			}));
+			await win.waitForFunction((sel) => {
+				const r = document.querySelector(sel);
+				return !!r && r.getAttribute('data-run-kind') === 'terminal';
+			}, rowSelector, { timeout: 20000, polling: 300 });
+
+			const expectedAlert = `Workflow run ${A11Y_MOTION_SUMMARY} finished.`;
+			const alertTexts = await waitForRecordedAlert(expectedAlert);
+			assert(alertTexts.includes(expectedAlert), `the announcement must not be skipped under reduced motion; expected "${expectedAlert}", recorded: ${JSON.stringify(alertTexts)}`);
+
+			const graduatedRow = await win.$(rowSelector);
+			const rowClass = await graduatedRow.evaluate(el => el.className);
+			assert(!/clawdius-workflow-graduated/.test(rowClass), `the transient graduation highlight class was applied under reduced motion: "${rowClass}"`);
+			await win.waitForTimeout(2000); // past the highlight window a non-reduced-motion run would have used - still must never appear
+			const rowClassLater = await graduatedRow.evaluate(el => el.className);
+			assert(!/clawdius-workflow-graduated/.test(rowClassLater), `the graduation highlight class appeared after a delay under reduced motion: "${rowClassLater}"`);
+
+			return `the announcement fired ("${expectedAlert}") with reduced motion on; the transient highlight class never applied`;
+		} finally {
+			if (app8) { try { await app8.close(); } catch { /* best-effort cleanup */ } }
+			try { rmSync(sandbox, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+			try { rmSync(prof, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+			try { rmSync(exts, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+			win = savedWin;
+		}
+	});
+
 	// 9. Find/sort against the REAL config root: typing into the persistent filter InputBox narrows the visible
 	// rows to an exact run id (the filter matches a run's OWN runId, so this is a deterministic, always-findable
 	// needle - never a synthetic fixture), measured against the ~300ms budget; switching the sort SelectBox to

@@ -14,6 +14,7 @@
 // trailing line is never emitted as a complete record. Reads are target-aware (`IFileService` over URIs that keep the active
 // window's scheme + authority), read-only, and never register as the SDK `sessionStore`.
 
+import { Limiter } from '../../../../../base/common/async.js';
 import { streamToBuffer, VSBuffer } from '../../../../../base/common/buffer.js';
 import { basename } from '../../../../../base/common/resources.js';
 import { URI } from '../../../../../base/common/uri.js';
@@ -463,10 +464,45 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 	 *  config store's own tail reads). Injectable so a test can force the `start > 0` window path. */
 	static readonly DEFAULT_MAX_TAIL_BYTES = 1024 * 1024;
 
+	/** How many of the enumeration walk's FANNED-OUT reads this adapter keeps in flight at once. The walk fans out
+	 *  per session (each manifest, each journal) and again per agent (the transcript join's existence check), so
+	 *  leaving those reads unbounded over a large config root can put thousands of simultaneous operations on the
+	 *  file service - whose read path, unlike its write path, has no queue of its own. That monopolizes the provider
+	 *  and delays unrelated workbench file work, and it is worst exactly where it is least acceptable: a slow,
+	 *  network, or scanned config root.
+	 *
+	 *  Scope, stated precisely. The dividing line is CONCURRENCY, not how a read is spelled and not whether its count
+	 *  grows with the corpus: what is queued here is exactly the reads the walk can have MANY OF IN FLIGHT AT ONCE,
+	 *  each arising from a `Promise.all` fan-out (either issued directly by one, or issued by a call that one
+	 *  dispatched) - the per-manifest read, the per-run journal read and its stat, and the per-agent transcript
+	 *  existence check. This is NOT a cap on every file operation the adapter can issue.
+	 *  The walk also performs these SEQUENTIALLY, one in flight at a time, and they are deliberately left unqueued:
+	 *  resolving the `projects` directory, resolving each project directory, resolving a session's `workflows`
+	 *  (manifest) directory, resolving its `subagents/workflows` (journal) directory, and the per-run
+	 *  `exists(journal)` probe taken while listing journals. That last one is a per-run FILE probe whose count does
+	 *  grow with the corpus - it is unqueued not because it is rare but because the loop issuing it awaits each call
+	 *  before the next, so it can never contribute to the simultaneous-operation storm this exists to prevent. Two
+	 *  overlapping walks can therefore have a handful of those sequential operations outstanding on top of this
+	 *  limiter's slots; that excess is bounded by the number of concurrent walks, not by corpus size.
+	 *
+	 *  ONLY LEAF READS are queued here - never the orchestration that awaits them. A wrapper that both holds a slot
+	 *  and awaits an inner task queued on the same limiter self-deadlocks the moment a corpus has more runs than the
+	 *  limiter has slots: every slot ends up held by an outer task waiting on an inner task that can never start.
+	 *  Bounding the leaves is also what actually matters, since the leaves are where the file operations happen. */
+	private static readonly READ_CONCURRENCY = 32;
+	private readonly readLimiter = new Limiter<unknown>(TranscriptJsonlAdapter.READ_CONCURRENCY);
+
 	constructor(
 		private readonly fileService: IFileService,
 		private readonly maxTailBytes: number = TranscriptJsonlAdapter.DEFAULT_MAX_TAIL_BYTES,
 	) { super(); }
+
+	/** Run a LEAF read under {@link readLimiter} (see that field's note on why a caller that awaits another queued
+	 *  task must never queue itself). The limiter is intentionally one shared, result-type-agnostic queue - the cast
+	 *  is confined to this helper so every caller stays fully typed. */
+	private queueRead<T>(task: () => Promise<T>): Promise<T> {
+		return this.readLimiter.queue(task as () => Promise<unknown>) as Promise<T>;
+	}
 
 	/**
 	 * Read the active transcript for `folder` under the resolved config `root`, as the requested entity. Never
@@ -696,17 +732,23 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 				if (sessionId === 'memory') { continue; }
 				const { manifests, outcome: manifestsOutcome } = await this.readMissionManifests(sessionDir);
 				if (manifestsOutcome === 'error') { degraded = true; }
-				for (const [runId, manifest] of manifests) {
-					out.push(await this.workflowFromManifest(sessionDir, sessionId, runId, manifest));
-				}
+				// Build every manifest's WorkflowRun CONCURRENTLY - each is independent (see `readMissionManifests`'s
+				// own doc comment for the same reasoning); the final list is sorted below, so the order these resolve
+				// in does not matter. A session accumulating hundreds of runs made this loop's own sequential
+				// per-manifest cost dominate a first read's latency.
+				// Deliberately NOT queued on `readLimiter`: these are orchestration, not I/O. Each one's actual file
+				// work is the leaf read it queues internally, so bounding here as well would let a full limiter hold
+				// every slot with outer tasks that are each awaiting an inner task which can then never start - a
+				// self-deadlock that only appears once a corpus has more runs than the limiter has slots.
+				const manifestRuns = await Promise.all([...manifests].map(([runId, manifest]) =>
+					this.workflowFromManifest(sessionDir, sessionId, runId, manifest)));
+				out.push(...manifestRuns);
 				const { journals, outcome: journalsOutcome } = await this.listMissionJournals(sessionDir);
 				if (journalsOutcome === 'error') { degraded = true; }
-				for (const [runId, journal] of journals) {
-					// A manifest is the terminal record of the same run; only a manifest-less journal is live.
-					if (!manifests.has(runId)) {
-						out.push(await this.workflowFromJournal(sessionId, runId, journal));
-					}
-				}
+				// A manifest is the terminal record of the same run; only a manifest-less journal is live.
+				const journalRuns = await Promise.all([...journals].filter(([runId]) => !manifests.has(runId)).map(([runId, journal]) =>
+					this.workflowFromJournal(sessionId, runId, journal)));
+				out.push(...journalRuns);
 			}
 		}
 		out.sort((a, b) => a.sessionId.localeCompare(b.sessionId) || a.runId.localeCompare(b.runId));
@@ -721,9 +763,14 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 	 *  journal (a terminal run whose journal was pruned) yields an empty set - the join simply cannot succeed. */
 	private async startedAgentIdsFor(dir: URI): Promise<ReadonlySet<string>> {
 		const journal = URI.joinPath(dir, JOURNAL_NAME);
-		if (!(await this.fileService.exists(journal))) { return new Set(); }
-		const { records } = await this.readJournal(journal, false); // terminal run: not live, an unterminated tail is damage
-		return new Set(records.filter(r => r.type === 'started' && isAgentId(r.agentId)).map(r => r.agentId as string));
+		// A leaf read (the existence check plus the journal itself) held as ONE slot under the shared bound - this
+		// runs once per terminal run, so an unbounded corpus would otherwise put one of these per run in flight at
+		// once. Safe to queue: nothing inside it is itself queued (see `readLimiter`).
+		return this.queueRead(async () => {
+			if (!(await this.fileService.exists(journal))) { return new Set<string>(); }
+			const { records } = await this.readJournal(journal, false); // terminal run: not live, an unterminated tail is damage
+			return new Set(records.filter(r => r.type === 'started' && isAgentId(r.agentId)).map(r => r.agentId as string));
+		});
 	}
 
 	/**
@@ -894,7 +941,6 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		const dir = URI.joinPath(sessionDir, 'subagents', 'workflows', runId);
 		const startedIds = await this.startedAgentIdsFor(dir);
 
-		const agents: TerminalWorkflowAgent[] = [];
 		// Every agentId LISTED so far - the duplicate-id guard below. A manifest that names the SAME agentId twice
 		// (a launcher bug, not a read gap) would otherwise hand the tree two rows sharing one `workflowTreeElementId`
 		// (`agent:<identity>:<agentId>`), which the tree's diff-by-identity model resolves by SILENTLY tracking only
@@ -902,7 +948,18 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		// the double-count/duplicate-row shape the honest-degradation contract forbids. First occurrence wins
 		// (declared order, the same determinism the phase-assignment first-match rule already uses); every later
 		// occurrence is dropped like any other entry this read cannot carry forward whole, degrading to `partial`.
+		//
+		// This pass builds every agent EXCEPT its `transcriptRef` and stays entirely SYNCHRONOUS (no `await`
+		// inside the loop): the duplicate-id check reads and writes `seenAgentIds` across iterations, which is
+		// only safe without interleaving if nothing here ever yields to the event loop mid-iteration - a bug a
+		// concurrent per-agent resolution could introduce even though JS itself is single-threaded, since two
+		// `await`-separated halves of different iterations could otherwise interleave their `seenAgentIds`
+		// checks. The transcript join's own existence check (a pure, independent per-agent read) is resolved in
+		// the SEPARATE, safely-parallel pass below instead of once per iteration here - the one part of a real
+		// corpus's manifest read that dominated its own latency at real-world agent counts.
 		const seenAgentIds = new Set<string>();
+		const pendingAgents: Omit<TerminalWorkflowAgent, 'transcriptRef'>[] = [];
+		const pendingUnique: boolean[] = [];
 		for (const p of progressEntries) {
 			const type = str(p, 'type');
 			if (type !== 'workflow_agent') {
@@ -933,9 +990,7 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 			}
 			const attemptRaw = num(p, 'attempt', { integer: true });
 			const attempt = attemptRaw !== undefined && attemptRaw > 1 ? attemptRaw : undefined;
-			const unique = (idFreq.get(agentId) ?? 0) === 1;
-			const transcriptRef = await this.resolveTranscriptRef(dir, sessionId, runId, agentId, unique, startedIds);
-			agents.push({
+			pendingAgents.push({
 				agentId, label, state,
 				model: str(p, 'model'),
 				tokens: num(p, 'tokens', { integer: true }),
@@ -949,9 +1004,16 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 				resultPreview: str(p, 'resultPreview'),
 				error: agentError,
 				attempt,
-				transcriptRef,
 			});
+			pendingUnique.push((idFreq.get(agentId) ?? 0) === 1);
 		}
+		// Resolve every agent's transcript ref CONCURRENTLY - each is an independent, read-only existence check
+		// (see `resolveTranscriptRef`) with no shared state, so nothing here needs the sequential ordering the
+		// validation pass above required. `Promise.all` keeps its results index-aligned with `pendingAgents`
+		// regardless of completion order, so declared order is preserved exactly as before.
+		const transcriptRefs = await Promise.all(pendingAgents.map((agent, index) =>
+			this.queueRead(() => this.resolveTranscriptRef(dir, sessionId, runId, agent.agentId, pendingUnique[index], startedIds))));
+		const agents: TerminalWorkflowAgent[] = pendingAgents.map((agent, index) => ({ ...agent, transcriptRef: transcriptRefs[index] }));
 
 		// First-match assignment (shared with the tree's nesting via `assignAgentsToPhases`): an agent whose title-only
 		// membership matches DUPLICATE phase titles is counted ONCE, in its first phase, never double-counted - and the
@@ -985,7 +1047,9 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 	 * recognizable record at all degrades to `unknown-shape` rather than being silently treated as empty.
 	 */
 	private async workflowFromJournal(sessionId: string, runId: string, journal: URI): Promise<LiveWorkflowRun> {
-		const { records, sawTorn } = await this.readJournal(journal, true); // manifest-less: in flight, an unterminated tail is the live tail
+		// A leaf read, held under the shared bound - one of these runs per manifest-less run, so an unbounded corpus
+		// would otherwise put one per live run in flight at once (see `readLimiter`).
+		const { records, sawTorn } = await this.queueRead(() => this.readJournal(journal, true)); // manifest-less: in flight, an unterminated tail is the live tail
 		const startedIds = new Set(records.filter(r => r.type === 'started' && isAgentId(r.agentId)).map(r => r.agentId as string));
 		const resultRecords = records.filter(r => r.type === 'result' && isAgentId(r.agentId));
 		const resultIds = new Set(resultRecords.map(r => r.agentId as string));
@@ -1003,7 +1067,7 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		})).sort((a, b) => a.agentId.localeCompare(b.agentId));
 		let mtime = 0;
 		let mtimeUnreadable = false;
-		try { mtime = (await this.fileService.stat(journal)).mtime; } catch { mtimeUnreadable = true; /* best-effort 0, and the missing write-time is a known gap */ }
+		try { mtime = (await this.queueRead(() => this.fileService.stat(journal))).mtime; } catch { mtimeUnreadable = true; /* best-effort 0, and the missing write-time is a known gap */ }
 		const degradation: 'partial' | 'unknown-shape' | undefined =
 			records.length === 0 && sawTorn ? 'unknown-shape' : (sawTorn || mtimeUnreadable) ? 'partial' : undefined;
 		return {
@@ -1219,13 +1283,23 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		} catch (e) {
 			return { manifests: out, outcome: toFileOperationResult(e) === FileOperationResult.FILE_NOT_FOUND ? 'not-found' : 'error' };
 		}
-		for (const file of files) {
+		// Read every manifest file CONCURRENTLY - each is an independent file, keyed by its own filename-derived
+		// runId, so there is no shared state or ordering requirement across them (unlike the per-agent duplicate-id
+		// pass in `workflowFromManifest`, which stays sequential for exactly that reason). A real corpus with
+		// hundreds of runs made this loop's own per-file round-trip latency the dominant cost of a first read when
+		// run one file at a time.
+		const entries = await Promise.all(files.map(file => this.queueRead(async (): Promise<readonly [string, IWorkflowManifest] | undefined> => {
 			const runId = basename(file).slice(0, -'.json'.length);
-			if (!isRunId(runId)) { continue; }
+			if (!isRunId(runId)) { return undefined; }
 			try {
 				const parsed: unknown = JSON.parse((await this.fileService.readFile(file)).value.toString());
-				if (parsed && typeof parsed === 'object') { out.set(runId, parsed as IWorkflowManifest); }
-			} catch { /* an unreadable/!JSON manifest is simply not a legible mission */ }
+				return parsed && typeof parsed === 'object' ? [runId, parsed as IWorkflowManifest] : undefined;
+			} catch {
+				return undefined; // an unreadable/!JSON manifest is simply not a legible mission
+			}
+		})));
+		for (const entry of entries) {
+			if (entry) { out.set(entry[0], entry[1]); }
 		}
 		return { manifests: out, outcome: 'ok' };
 	}

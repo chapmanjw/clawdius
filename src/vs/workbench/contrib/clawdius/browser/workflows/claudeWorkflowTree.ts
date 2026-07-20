@@ -587,17 +587,78 @@ export function resolveTrackedElements(
 
 // --- accessibility + keyboard nav -------------------------------------------------------------------------
 
+/** The completeness dimension's aria phrase - `undefined` for `Complete` (the silent, expected case; nothing to
+ *  say). Exhaustive over {@link CompletenessState} so a future member fails to compile here rather than falling
+ *  through silently. */
+function describeCompletenessForAria(completeness: CompletenessState): string | undefined {
+	switch (completeness) {
+		case CompletenessState.Complete: return undefined;
+		case CompletenessState.Partial: return localize('clawdius.workflows.run.aria.partial', "partial data");
+		case CompletenessState.UnknownShape: return localize('clawdius.workflows.run.aria.unknownData', "unrecognized data");
+		case CompletenessState.Absent: return localize('clawdius.workflows.run.aria.noData', "no data yet");
+		case CompletenessState.Suppressed: return localize('clawdius.workflows.run.aria.suppressed', "history suppressed");
+	}
+}
+
+/**
+ * The RUN row's status phrase for assistive technology - every piece of status chrome the row paints VISUALLY
+ * (the status icon, the errored-count/completeness/live-badge chips) but that those chips alone never speak.
+ * Empty for `unknown-shape`: its primary label already reads "Shape not recognized" (see `describeRunRow`), and an
+ * unrecognized run carries no errored tally, no badge, and a completeness that says the same thing again - nothing
+ * further to add. PURE off the model plus the optional live badge signal, so a unit test drives it without a DOM;
+ * reuses the SAME localized strings the visual chips already carry (`erroredCount`, `badge.needsInput`,
+ * `badge.completion`) rather than duplicating near-identical text under a second key.
+ */
+export function describeRunStatusForAria(run: WorkflowRun, badge: BadgeSignal | undefined): string {
+	const parts: string[] = [];
+	if (run.kind === 'terminal') {
+		parts.push(run.status === 'failed'
+			? localize('clawdius.workflows.run.aria.failed', "failed")
+			: localize('clawdius.workflows.run.aria.completed', "completed"));
+		const errored = erroredAgentCount(run);
+		if (errored !== undefined && errored > 0) {
+			parts.push(localize('clawdius.workflows.run.erroredCount', "{0} errored", errored));
+		}
+	} else if (run.kind === 'live') {
+		parts.push(localize('clawdius.workflows.run.aria.live', "in progress"));
+	}
+	if (run.kind !== 'unknown-shape') {
+		const completenessPhrase = describeCompletenessForAria(run.completeness);
+		if (completenessPhrase) {
+			parts.push(completenessPhrase);
+		}
+	}
+	if (badge) {
+		parts.push(badge.kind === 'needs-input'
+			? localize('clawdius.workflows.badge.needsInput', "needs input")
+			: localize('clawdius.workflows.badge.completion', "completed"));
+	}
+	return parts.join(', ');
+}
+
 export class WorkflowTreeAccessibilityProvider implements IListAccessibilityProvider<WorkflowTreeElement> {
+	/** `context` resolves a RUN node's CURRENT data by identity (`context.runOf`) and its live badge
+	 *  (`context.badgeOf`) - the same indirection `WorkflowRunRowRenderer` reads for the exact same reason (see
+	 *  `IWorkflowRenderContext.runOf`'s doc comment): a graduation or a rewritten-manifest re-render keeps the
+	 *  top-level 'run' tree node's OWN element reference unchanged, so reading `element.run` directly here would
+	 *  announce and label the PRE-graduation state to assistive technology even after the row's visible icon/chips
+	 *  had already moved on. Only the 'run' kind needs this - a 'story'/'liveProgress'/'phase'/'agent' node's own
+	 *  element is rebuilt fresh on every reconcile (see `reconcileWorkflowTree`), never stale. */
+	constructor(private readonly context: IWorkflowRenderContext) { }
+
 	getWidgetAriaLabel(): string {
 		return localize('clawdius.workflows.tree.aria', "Claude Code Ultracode Workflows");
 	}
 	getAriaLabel(element: WorkflowTreeElement): string {
 		switch (element.kind) {
 			case 'run': {
-				const content = describeRunRow(element.run);
-				return content.secondaryParts.length > 0
+				const run = this.context.runOf(element.run.identity) ?? element.run;
+				const content = describeRunRow(run);
+				const base = content.secondaryParts.length > 0
 					? localize('clawdius.workflows.run.aria', "{0}, {1}", content.primary, content.secondaryParts.join(', '))
 					: content.primary;
+				const status = describeRunStatusForAria(run, this.context.badgeOf(run.runId));
+				return status.length > 0 ? localize('clawdius.workflows.run.aria.withStatus', "{0}. {1}.", base, status) : base;
 			}
 			case 'story':
 				return localize('clawdius.workflows.story.aria', "Summary and result for {0}", describeRunRow(element.run).primary);
@@ -605,8 +666,12 @@ export class WorkflowTreeAccessibilityProvider implements IListAccessibilityProv
 				const content = describeLiveProgress(element.run);
 				return localize('clawdius.workflows.liveProgress.aria', "{0}. {1}", content.ratioCaption, content.activityCaption);
 			}
-			case 'phase':
-				return localize('clawdius.workflows.phase.aria', "Phase {0}: {1}", element.phase.index + 1, element.phase.title);
+			case 'phase': {
+				const content = describePhase(element.phase);
+				return content.errorsLabel
+					? localize('clawdius.workflows.phase.aria.withErrors', "Phase {0}: {1}, {2}", element.phase.index + 1, element.phase.title, content.errorsLabel)
+					: localize('clawdius.workflows.phase.aria', "Phase {0}: {1}", element.phase.index + 1, element.phase.title);
+			}
 			case 'agent':
 				return localize('clawdius.workflows.agent.aria', "Agent {0}, {1}", element.agent.label, element.agent.state);
 		}

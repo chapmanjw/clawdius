@@ -407,7 +407,7 @@ export class ClawdiusWorkflowsView extends ViewPane {
 			[runRenderer, this.storyRenderer, this.liveProgressRenderer, phaseRenderer, agentRenderer],
 			{
 				identityProvider: new WorkflowTreeIdentityProvider(),
-				accessibilityProvider: new WorkflowTreeAccessibilityProvider(),
+				accessibilityProvider: new WorkflowTreeAccessibilityProvider(this.renderContext),
 				keyboardNavigationLabelProvider: new WorkflowTreeKeyboardNavigationLabelProvider(),
 				multipleSelectionSupport: false,
 				horizontalScrolling: false,

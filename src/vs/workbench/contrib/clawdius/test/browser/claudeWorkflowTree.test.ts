@@ -5,8 +5,9 @@
 
 // CLAWDIUS-BEGIN Claude Code Ultracode Workflows - tree model + renderer tests
 // The WorkbenchObjectTree replacement for the manual-DOM row list: the discriminated tree-element union, the
-// 0/1/>1 phase-grouping rule, the measured-height story leaf, the ownership-chrome split, and the three
-// distinct empty/read-error/no-match states. Renderer tests assert through the DOM the renderer actually produces
+// 0/1/>1 phase-grouping rule, the fixed-height compact rows (no inline story/live-progress leaf - see
+// claudeWorkflowTree.ts's file header comment), the ownership-chrome split, and the three distinct
+// empty/read-error/no-match states. Renderer tests assert through the DOM the renderer actually produces
 // (querySelector), not through exported-for-test-only template internals - the same posture
 // `claudeWorkflowTranscriptEditor.test.ts` takes with its pure `renderTranscriptSlice` helper.
 
@@ -24,12 +25,12 @@ import {
 import { BadgeSignal } from '../../browser/workflows/claudeWorkflowBadges.js';
 import {
 	buildRunElement, buildTerminalRunChildren, buildWorkflowTreeChildren, computeUniformlyForeign, describeAgent,
-	describeLiveProgress, describePhase, describeRunRow, describeRunStatusForAria, describeStoryCostParts, describeStoryError,
-	describeStoryResultText, describeStorySummaryText, erroredAgentCount, errorSummary, IWorkflowRenderContext,
+	describeCompletenessLabel, describeCoverageLabel, describeFreshnessLabel, describeOwnershipLabel,
+	describePhase, describeRunMetaParts, describeRunRow, describeRunStatusForAria, erroredAgentCount, IWorkflowRenderContext,
 	renderWorkflowsStateMessage, resolveWorkflowsDisplayState, runStatusClass, WorkflowAgentRowRenderer,
-	WorkflowLiveProgressRenderer, WorkflowPhaseRowRenderer, WorkflowRunRowRenderer, WorkflowsDisplayState,
-	WorkflowStoryHeightCache, WorkflowStoryLeafRenderer, WorkflowTreeAccessibilityProvider, WorkflowTreeElement,
-	WorkflowTreeIdentityProvider, WorkflowTreeVirtualDelegate, workflowTreeElementId, STORY_MIN_HEIGHT,
+	WorkflowPhaseRowRenderer, WorkflowRunRowRenderer, WorkflowsDisplayState,
+	WorkflowTreeAccessibilityProvider, WorkflowTreeElement,
+	WorkflowTreeIdentityProvider, WorkflowTreeVirtualDelegate, workflowTreeElementId,
 } from '../../browser/workflows/claudeWorkflowTree.js';
 import {
 	matchesWorkflowFilter, matchesWorkflowStatusFilter, sortWorkflowRuns, WorkflowSortMode, WorkflowStatusFilter,
@@ -122,11 +123,10 @@ suite('Clawdius Claude Code Ultracode Workflows - tree identity', () => {
 		const run = terminalRun();
 		assert.deepStrictEqual([
 			workflowTreeElementId({ kind: 'run', run }),
-			workflowTreeElementId({ kind: 'story', run }),
 			workflowTreeElementId({ kind: 'phase', run, phase: phase({ index: 2 }) }),
 			workflowTreeElementId({ kind: 'agent', run, agent: agent({ agentId: 'a9' }) }),
 		], [
-			`run:${run.identity}`, `story:${run.identity}`, `phase:${run.identity}:2`, `agent:${run.identity}:a9`,
+			`run:${run.identity}`, `phase:${run.identity}:2`, `agent:${run.identity}:a9`,
 		]);
 	});
 
@@ -184,85 +184,25 @@ suite('Clawdius Claude Code Ultracode Workflows - run row content', () => {
 	});
 });
 
-suite('Clawdius Claude Code Ultracode Workflows - story leaf content', () => {
+suite('Clawdius Claude Code Ultracode Workflows - run row meta line (compact, line 2)', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
-	test('every missing cost number is the dash literal - never a fabricated 0', () => {
-		const run = terminalRun({ durationMs: undefined, totalTokens: undefined, totalToolCalls: undefined, defaultModel: undefined, agentCount: undefined });
-		assert.deepStrictEqual(describeStoryCostParts(run), ['—', '—', '—', '—', '—']);
+	test('a terminal run: model, tokens, duration, agent count, in that order - every missing number is the dash literal, never a fabricated 0', () => {
+		const missing = terminalRun({ durationMs: undefined, totalTokens: undefined, defaultModel: undefined, agentCount: undefined });
+		assert.deepStrictEqual(describeRunMetaParts(missing), ['—', '—', '—', '—']);
+
+		const present = terminalRun({ durationMs: 605_027, totalTokens: 781_753, defaultModel: 'claude-opus-4-8[1m]', agentCount: 2 });
+		assert.deepStrictEqual(describeRunMetaParts(present), ['claude-opus-4-8[1m]', '782K tokens', '10m', '2 agents']);
 	});
 
-	test('a present cost number is formatted, not the dash - the two branches are each other\'s guard', () => {
-		const run = terminalRun({ durationMs: 605_027, totalTokens: 781_753, totalToolCalls: 191, defaultModel: 'claude-opus-4-8[1m]', agentCount: 2 });
-		assert.deepStrictEqual(describeStoryCostParts(run), ['10m', '782K tokens', '191 tool calls', 'claude-opus-4-8[1m]', '2 agents']);
+	test('a live/unknown-shape run carries none of the terminal-only fields, so its meta line falls back to describeRunRow\'s own secondary parts', () => {
+		const live = liveRun({ runId: 'wf_live' });
+		assert.deepStrictEqual(describeRunMetaParts(live), describeRunRow(live).secondaryParts);
 	});
 
-	test('resultPreview present -> shown; absent -> the literal "No result recorded", never a blank leaf', () => {
-		assert.deepStrictEqual([
-			describeStoryResultText(terminalRun({ resultPreview: 'Found 3 issues.' })),
-			describeStoryResultText(terminalRun({ resultPreview: undefined })),
-		], ['Found 3 issues.', 'No result recorded']);
-	});
-
-	test('summary present -> shown; absent -> an honest "no summary" label, never a blank leaf', () => {
-		assert.deepStrictEqual([
-			describeStorySummaryText(terminalRun({ summary: 'Audited the fleet module.' })),
-			describeStorySummaryText(terminalRun({ summary: undefined })),
-		], ['Audited the fleet module.', 'No summary recorded']);
-	});
-
-	test('a run-level error is clamped to its first line with the full text kept for the tooltip; absent -> undefined', () => {
-		const stack = 'TelemetrySafeError: retry cap exceeded\n    at frame (file.js:1:1)';
-		assert.deepStrictEqual(describeStoryError(terminalRun({ error: stack })), { summary: 'TelemetrySafeError: retry cap exceeded', full: stack });
-		assert.strictEqual(describeStoryError(terminalRun({ error: undefined })), undefined);
-	});
-
-	test('errorSummary keeps the fault line and collapses the frames; a blank-led error never yields a blank line', () => {
-		assert.deepStrictEqual([
-			errorSummary('Error: CLAUDE_PLUGIN_ROOT is not defined\n    at <anonymous> (workflow.js:245:225)'),
-			errorSummary('\n\n   Error:   spaced   out   \n    at frame'),
-			errorSummary(''),
-		], ['Error: CLAUDE_PLUGIN_ROOT is not defined', 'Error: spaced out', '']);
-	});
-});
-
-suite('Clawdius Claude Code Ultracode Workflows - live-progress content: the seenCount honesty rule', () => {
-	ensureNoDisposablesAreLeakedInTestSuite();
-
-	test('seenCount (not startedCount) is the ratio denominator - a result whose started record never survived still counts as "seen", so the ratio never inverts', () => {
-		// A journal that lost its `started` record for one agent (a torn line) but still landed that agent's
-		// `result`: resultCount(2) > startedCount(1), the exact shape that used to paint "2 of 1 agents seen so far".
-		const run = liveRun({ startedCount: 1, resultCount: 2, seenCount: 2 });
-		const content = describeLiveProgress(run, ms => `t${ms}`);
-		assert.deepStrictEqual(
-			{ ratioCaption: content.ratioCaption, resultCount: content.resultCount, seenCount: content.seenCount, resultAboveSeen: content.resultCount > content.seenCount },
-			{ ratioCaption: '2 of 2 agents seen so far have a result', resultCount: 2, seenCount: 2, resultAboveSeen: false },
-		);
-	});
-
-	test('seenCount === 0 still reads "No agents observed yet", even though startedCount alone used to gate that caption', () => {
-		const run = liveRun({ startedCount: 0, resultCount: 0, seenCount: 0 });
-		assert.strictEqual(describeLiveProgress(run).ratioCaption, 'No agents observed yet');
-	});
-
-	test('the 2-started/2-result case (seenCount equal to both) reads exactly as before: "2 of 2 agents seen so far have a result"', () => {
-		const run = liveRun({ startedCount: 2, resultCount: 2, seenCount: 2 });
-		assert.strictEqual(describeLiveProgress(run).ratioCaption, '2 of 2 agents seen so far have a result');
-	});
-
-	test('the rendered ProgressBar never carries aria-valuenow above aria-valuemax, even when resultCount > startedCount', () => {
-		const heights = new WorkflowStoryHeightCache();
-		const renderer = new WorkflowLiveProgressRenderer(heights);
-		const container = $('div');
-		const template = renderer.renderTemplate(container);
-		const run = liveRun({ startedCount: 1, resultCount: 2, seenCount: 2 });
-		renderer.renderElement(fakeNode({ kind: 'liveProgress', run }), 0, template);
-		const bar = container.querySelector<HTMLElement>('.monaco-progress-container')!;
-		assert.deepStrictEqual(
-			{ valueMax: bar.getAttribute('aria-valuemax'), valueNow: bar.getAttribute('aria-valuenow') },
-			{ valueMax: '2', valueNow: '2' },
-		);
-		renderer.disposeTemplate(template);
-		renderer.dispose();
+	test('never inlines the run\'s summary, result, or error text', () => {
+		const run = terminalRun({ summary: 'Audited the fleet module.', resultPreview: 'Found 3 issues.', error: 'boom' });
+		const meta = describeRunMetaParts(run).join(' ');
+		assert.ok(!meta.includes('Audited') && !meta.includes('Found 3 issues') && !meta.includes('boom'), `meta line leaked inline text: "${meta}"`);
 	});
 });
 
@@ -284,16 +224,16 @@ suite('Clawdius Claude Code Ultracode Workflows - phase + agent content', () => 
 
 suite('Clawdius Claude Code Ultracode Workflows - the 0/1/>1 phase-grouping rule', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
-	test('0 phases: agents hang directly under the run, no phase node', () => {
+	test('0 phases: agents hang directly under the run, no phase node - and no inline leaf of any kind', () => {
 		const run = terminalRun({ phases: [], agents: [agent({ agentId: 'a1' }), agent({ agentId: 'a2' })] });
 		const children = buildTerminalRunChildren(run);
-		assert.deepStrictEqual(children.map(c => c.element.kind), ['story', 'agent', 'agent']);
+		assert.deepStrictEqual(children.map(c => c.element.kind), ['agent', 'agent']);
 	});
 
 	test('1 phase: agents STILL hang directly under the run, no phase node - the rule is > 1, not >= 1', () => {
 		const run = terminalRun({ phases: [phase({ title: 'Only phase' })], agents: [agent({ agentId: 'a1', phaseIndex: 0 })] });
 		const children = buildTerminalRunChildren(run);
-		assert.deepStrictEqual(children.map(c => c.element.kind), ['story', 'agent']);
+		assert.deepStrictEqual(children.map(c => c.element.kind), ['agent']);
 	});
 
 	test('>1 phases: agents are grouped under phase nodes, matched by phaseIndex', () => {
@@ -302,9 +242,9 @@ suite('Clawdius Claude Code Ultracode Workflows - the 0/1/>1 phase-grouping rule
 			agents: [agent({ agentId: 'a1', phaseIndex: 0 }), agent({ agentId: 'a2', phaseIndex: 1 }), agent({ agentId: 'a3', phaseIndex: 0 })],
 		});
 		const children = buildTerminalRunChildren(run);
-		assert.strictEqual(children.length, 3); // story + 2 phase nodes, no top-level agent leaves
-		assert.deepStrictEqual(children.map(c => c.element.kind), ['story', 'phase', 'phase']);
-		const [, analyze, synthesize] = children;
+		assert.strictEqual(children.length, 2); // 2 phase nodes, no top-level agent leaves
+		assert.deepStrictEqual(children.map(c => c.element.kind), ['phase', 'phase']);
+		const [analyze, synthesize] = children;
 		assert.deepStrictEqual([...(analyze.children ?? [])].map(c => (c.element as { agent: TerminalWorkflowAgent }).agent.agentId), ['a1', 'a3']);
 		assert.deepStrictEqual([...(synthesize.children ?? [])].map(c => (c.element as { agent: TerminalWorkflowAgent }).agent.agentId), ['a2']);
 	});
@@ -314,7 +254,7 @@ suite('Clawdius Claude Code Ultracode Workflows - the 0/1/>1 phase-grouping rule
 			phases: [phase({ index: 0, title: 'Analyze' }), phase({ index: 1, title: 'Synthesize' })],
 			agents: [agent({ agentId: 'a1', phaseIndex: undefined, phaseTitle: 'Synthesize' })],
 		});
-		const [, analyze, synthesize] = buildTerminalRunChildren(run);
+		const [analyze, synthesize] = buildTerminalRunChildren(run);
 		assert.deepStrictEqual([...(analyze.children ?? [])], []);
 		assert.strictEqual([...(synthesize.children ?? [])].length, 1);
 	});
@@ -327,7 +267,7 @@ suite('Clawdius Claude Code Ultracode Workflows - the 0/1/>1 phase-grouping rule
 			phases: [phase({ index: 0, title: 'Analyze' }), phase({ index: 1, title: 'Synthesize' })],
 			agents: [agent({ agentId: 'a1', phaseIndex: 0, phaseTitle: 'Synthesize' })],
 		});
-		const [, analyze, synthesize] = buildTerminalRunChildren(run);
+		const [analyze, synthesize] = buildTerminalRunChildren(run);
 		assert.deepStrictEqual({
 			analyze: [...(analyze.children ?? [])].map(c => (c.element as { agent: TerminalWorkflowAgent }).agent.agentId),
 			synthesize: [...(synthesize.children ?? [])].map(c => (c.element as { agent: TerminalWorkflowAgent }).agent.agentId),
@@ -342,7 +282,7 @@ suite('Clawdius Claude Code Ultracode Workflows - the 0/1/>1 phase-grouping rule
 			phases: [phase({ index: 0, title: 'Build' }), phase({ index: 1, title: 'Build' })],
 			agents: [agent({ agentId: 'a1', phaseIndex: undefined, phaseTitle: 'Build' })],
 		});
-		const [, firstBuild, secondBuild] = buildTerminalRunChildren(run);
+		const [firstBuild, secondBuild] = buildTerminalRunChildren(run);
 		assert.deepStrictEqual({
 			first: [...(firstBuild.children ?? [])].map(c => (c.element as { agent: TerminalWorkflowAgent }).agent.agentId),
 			second: [...(secondBuild.children ?? [])].map(c => (c.element as { agent: TerminalWorkflowAgent }).agent.agentId),
@@ -355,30 +295,23 @@ suite('Clawdius Claude Code Ultracode Workflows - the 0/1/>1 phase-grouping rule
 			agents: [agent({ agentId: 'a1', phaseIndex: 0 }), agent({ agentId: 'orphan', phaseIndex: undefined, phaseTitle: undefined })],
 		});
 		const children = buildTerminalRunChildren(run);
-		assert.deepStrictEqual(children.map(c => c.element.kind), ['story', 'phase', 'phase', 'agent']);
-		assert.strictEqual((children[3].element as { agent: TerminalWorkflowAgent }).agent.agentId, 'orphan');
+		assert.deepStrictEqual(children.map(c => c.element.kind), ['phase', 'phase', 'agent']);
+		assert.strictEqual((children[2].element as { agent: TerminalWorkflowAgent }).agent.agentId, 'orphan');
 	});
 
-	test('a live run has ONE child - its own measured live-progress leaf; an unknown-shape run has none', () => {
-		const liveChildren = [...buildRunElement(liveRun()).children ?? []];
-		assert.deepStrictEqual(liveChildren.map(c => ({ kind: c.element.kind, collapsible: c.collapsible })), [{ kind: 'liveProgress', collapsible: false }]);
+	test('a live run has NO children (no structured agent/phase list to expand into) - same as an unknown-shape run', () => {
+		assert.strictEqual(buildRunElement(liveRun()).children, undefined);
 		assert.strictEqual(buildRunElement(unknownRun()).children, undefined);
 	});
 
-	test('the story leaf is always first and never collapsible', () => {
-		const run = terminalRun({ agents: [agent()] });
-		const [story] = buildTerminalRunChildren(run);
-		assert.deepStrictEqual({ kind: story.element.kind, collapsible: story.collapsible }, { kind: 'story', collapsible: false });
-	});
-
-	test('a zero-agent terminal run renders as itself: only the story leaf, no phantom agent/phase rows', () => {
-		// A run that genuinely ran no agents (agents: [], phases: []) - the run row/story leaf still render, there
-		// is simply nothing beneath them. Distinct from a partial read that happens to have produced no readable
-		// agents: that distinction lives in `run.completeness` (proved at the reader level), not in the tree shape,
-		// which is identical either way - this test pins the SHAPE half of that honesty contract.
+	test('a zero-agent terminal run renders no children - no phantom agent/phase rows, no inline leaf', () => {
+		// A run that genuinely ran no agents (agents: [], phases: []) - the run row still renders, there is simply
+		// nothing beneath it. Distinct from a partial read that happens to have produced no readable agents: that
+		// distinction lives in `run.completeness` (proved at the reader level), not in the tree shape, which is
+		// identical either way - this test pins the SHAPE half of that honesty contract.
 		const run = terminalRun({ agents: [], phases: [] });
 		const children = buildTerminalRunChildren(run);
-		assert.deepStrictEqual(children.map(c => c.element.kind), ['story']);
+		assert.deepStrictEqual(children, []);
 	});
 
 	test('buildWorkflowTreeChildren preserves the seam\'s own enumeration order (never re-sorted)', () => {
@@ -407,7 +340,7 @@ suite('Clawdius Claude Code Ultracode Workflows - failure surfacing', () => {
 		const run = terminalRun({
 			agents: [agent({ agentId: 'd1', state: 'done' }), agent({ agentId: 'e1', state: 'error' }), agent({ agentId: 'd2', state: 'done' }), agent({ agentId: 'e2', state: 'error' })],
 		});
-		const [, ...agents] = buildTerminalRunChildren(run);
+		const agents = buildTerminalRunChildren(run);
 		assert.deepStrictEqual(agentIds(agents), ['e1', 'e2', 'd1', 'd2']);
 	});
 
@@ -423,7 +356,7 @@ suite('Clawdius Claude Code Ultracode Workflows - failure surfacing', () => {
 				agent({ agentId: 'orphan-err', state: 'error' }),
 			],
 		});
-		const [, analyze, synthesize, ...unassigned] = buildTerminalRunChildren(run);
+		const [analyze, synthesize, ...unassigned] = buildTerminalRunChildren(run);
 		assert.deepStrictEqual({
 			analyze: agentIds([...(analyze.children ?? [])]),
 			synthesize: agentIds([...(synthesize.children ?? [])]),
@@ -440,7 +373,7 @@ suite('Clawdius Claude Code Ultracode Workflows - failure surfacing', () => {
 			],
 			agents: [],
 		});
-		const [, analyze, synthesize, report] = buildTerminalRunChildren(run);
+		const [analyze, synthesize, report] = buildTerminalRunChildren(run);
 		assert.deepStrictEqual(
 			{ analyze: analyze.collapsed, synthesize: synthesize.collapsed, report: report.collapsed },
 			{ analyze: undefined, synthesize: false, report: undefined });
@@ -451,7 +384,7 @@ suite('Clawdius Claude Code Ultracode Workflows - failure surfacing', () => {
 			phases: [phase({ index: 0, title: 'Analyze', errorCount: 0 }), phase({ index: 1, title: 'Synthesize', errorCount: 0 })],
 			agents: [],
 		});
-		const [, analyze, synthesize] = buildTerminalRunChildren(run);
+		const [analyze, synthesize] = buildTerminalRunChildren(run);
 		assert.deepStrictEqual([analyze.collapsed, synthesize.collapsed], [undefined, undefined]);
 	});
 
@@ -474,6 +407,40 @@ suite('Clawdius Claude Code Ultracode Workflows - failure surfacing', () => {
 			two: { display: '', text: '2 errored' },
 			live: 'none',
 		});
+	});
+});
+
+suite('Clawdius Claude Code Ultracode Workflows - honesty-label display text', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('describeOwnershipLabel: plain English for both FleetOwnership values, never the raw jargon', () => {
+		assert.deepStrictEqual(
+			[describeOwnershipLabel('owned'), describeOwnershipLabel('foreign')],
+			['Started here', 'Observed']);
+	});
+
+	test('describeCoverageLabel: plain English for all three CoverageLabel values', () => {
+		assert.deepStrictEqual(
+			[describeCoverageLabel(CoverageLabel.InScope), describeCoverageLabel(CoverageLabel.Foreign), describeCoverageLabel(CoverageLabel.OutOfScope)],
+			['This workspace', 'Another workspace', 'Outside workspace']);
+	});
+
+	test('describeFreshnessLabel: plain English for all three FreshnessLabel values', () => {
+		assert.deepStrictEqual(
+			[describeFreshnessLabel(FreshnessLabel.Live), describeFreshnessLabel(FreshnessLabel.Polled), describeFreshnessLabel(FreshnessLabel.Stale)],
+			['Live', 'From disk', 'Possibly outdated']);
+	});
+
+	test('describeCompletenessLabel: undefined (exception-only) for Complete, plain English for every other member', () => {
+		assert.deepStrictEqual(
+			[
+				describeCompletenessLabel(CompletenessState.Complete),
+				describeCompletenessLabel(CompletenessState.Partial),
+				describeCompletenessLabel(CompletenessState.Absent),
+				describeCompletenessLabel(CompletenessState.Suppressed),
+				describeCompletenessLabel(CompletenessState.UnknownShape),
+			],
+			[undefined, 'Partial read', 'No data yet', 'History suppressed', 'Unrecognized data']);
 	});
 });
 
@@ -502,8 +469,13 @@ suite('Clawdius Claude Code Ultracode Workflows - ownership-chrome rule', () => 
 		};
 		const foreignContainer = renderRunRow(context, terminalRun({ sessionId: 'foreign-session' }));
 		const ownedContainer = renderRunRow(context, terminalRun({ sessionId: 'owned-session' }));
+		// The chip's own displayed TEXT is the plain-English mapping (describeOwnershipLabel); the raw 'foreign'/
+		// 'owned' value still drives the CSS class + data-ownership-shown attribute, asserted separately below.
 		assert.deepStrictEqual(
 			[foreignContainer.querySelector('.ownership-chip')?.textContent, ownedContainer.querySelector('.ownership-chip')?.textContent],
+			['Observed', 'Started here']);
+		assert.deepStrictEqual(
+			[foreignContainer.getAttribute('data-ownership-shown'), ownedContainer.getAttribute('data-ownership-shown')],
 			['foreign', 'owned']);
 	});
 
@@ -517,8 +489,11 @@ suite('Clawdius Claude Code Ultracode Workflows - ownership-chrome rule', () => 
 			runOf: () => undefined, justGraduated: () => false,
 		};
 		const partialRun = terminalRun({ completeness: CompletenessState.Partial });
-		assert.strictEqual(renderRunRow(uniform, partialRun).querySelector<HTMLElement>('.completeness-chip')!.style.display, '');
-		assert.strictEqual(renderRunRow(mixed, partialRun).querySelector<HTMLElement>('.completeness-chip')!.style.display, '');
+		const uniformChip = renderRunRow(uniform, partialRun).querySelector<HTMLElement>('.completeness-chip')!;
+		const mixedChip = renderRunRow(mixed, partialRun).querySelector<HTMLElement>('.completeness-chip')!;
+		assert.deepStrictEqual(
+			{ uniform: { display: uniformChip.style.display, text: uniformChip.textContent }, mixed: { display: mixedChip.style.display, text: mixedChip.textContent } },
+			{ uniform: { display: '', text: 'Partial read' }, mixed: { display: '', text: 'Partial read' } });
 	});
 
 	test('a complete run shows NO completeness chip - the chip is exception-only', () => {
@@ -539,13 +514,11 @@ suite('Clawdius Claude Code Ultracode Workflows - accessibility', () => {
 		const run = terminalRun({ agents: [agent({ agentId: 'a1', label: 'audit:fleet', state: 'error' })], phases: [phase({ index: 0, title: 'Analyze' })] });
 		assert.deepStrictEqual([
 			a11y.getAriaLabel({ kind: 'run', run }),
-			a11y.getAriaLabel({ kind: 'story', run }),
 			a11y.getAriaLabel({ kind: 'phase', run, phase: phase({ index: 0, title: 'Analyze', errorCount: 0 }) }),
 			a11y.getAriaLabel({ kind: 'phase', run, phase: phase({ index: 1, title: 'Report', errorCount: 2 }) }),
 			a11y.getAriaLabel({ kind: 'agent', run, agent: agent({ agentId: 'a1', label: 'audit:fleet', state: 'error' }) }),
 		], [
 			`${describeRunRow(run).primary}. completed, 1 errored.`,
-			'Summary and result for ' + describeRunRow(run).primary,
 			`Phase ${0 + 1}: Analyze`,
 			`Phase ${1 + 1}: Report, 2 errors`,
 			'Agent audit:fleet, error',
@@ -589,86 +562,14 @@ suite('Clawdius Claude Code Ultracode Workflows - accessibility', () => {
 
 suite('Clawdius Claude Code Ultracode Workflows - virtual delegate', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
-	test('run/phase/agent rows are a fixed height; the story leaf reads the height cache', () => {
-		const heights = new WorkflowStoryHeightCache();
-		const delegate = new WorkflowTreeVirtualDelegate(heights);
+	test('every row kind is a FIXED height - no measured, variable-height leaf exists in this tree', () => {
+		const delegate = new WorkflowTreeVirtualDelegate();
 		const run = terminalRun();
-		assert.strictEqual(delegate.getHeight({ kind: 'run', run }), 22);
-		assert.strictEqual(delegate.getHeight({ kind: 'phase', run, phase: phase() }), 22);
-		assert.strictEqual(delegate.getHeight({ kind: 'agent', run, agent: agent() }), 22);
-		// Unmeasured yet -> the minimum; measured -> the cached value.
-		assert.strictEqual(delegate.getHeight({ kind: 'story', run }), STORY_MIN_HEIGHT);
-		heights.set(run.identity, 140);
-		assert.strictEqual(delegate.getHeight({ kind: 'story', run }), 140);
-	});
-});
-
-suite('Clawdius Claude Code Ultracode Workflows - the story leaf\'s measured height', () => {
-	const store = ensureNoDisposablesAreLeakedInTestSuite();
-
-	function withScrollHeight(el: HTMLElement, height: number): void {
-		Object.defineProperty(el, 'scrollHeight', { value: height, configurable: true });
-	}
-
-	test('an integer height CHANGE fires onDidChangeItemHeight and updates the cache; an UNCHANGED re-render does not', () => {
-		const heights = new WorkflowStoryHeightCache();
-		const renderer = store.add(new WorkflowStoryLeafRenderer(heights));
-		const container = $('div');
-		const template = renderer.renderTemplate(container);
-		withScrollHeight(container, 140);
-
-		const run = terminalRun({ resultPreview: 'x'.repeat(400) });
-		let fireCount = 0;
-		let lastHeight = -1;
-		store.add(renderer.onDidChangeItemHeight(change => { fireCount++; lastHeight = change.height; }));
-
-		renderer.renderElement(fakeNode({ kind: 'story', run }), 0, template);
-		assert.deepStrictEqual({ fireCount, lastHeight, cached: heights.get(run.identity) }, { fireCount: 1, lastHeight: 140, cached: 140 });
-
-		// Re-render with the SAME scrollHeight: the guard is `cached === measured` - inverting it (always firing)
-		// would make this assertion fail.
-		renderer.renderElement(fakeNode({ kind: 'story', run }), 0, template);
-		assert.strictEqual(fireCount, 1);
-
-		// A real content change (e.g. the run grew a longer result) that changes the measured height fires again.
-		withScrollHeight(container, 180);
-		renderer.renderElement(fakeNode({ kind: 'story', run }), 0, template);
-		assert.deepStrictEqual({ fireCount, lastHeight }, { fireCount: 2, lastHeight: 180 });
-	});
-
-	test('a measured height below the minimum is clamped up to STORY_MIN_HEIGHT, never shrunk under it', () => {
-		const heights = new WorkflowStoryHeightCache();
-		const renderer = store.add(new WorkflowStoryLeafRenderer(heights));
-		const container = $('div');
-		const template = renderer.renderTemplate(container);
-		withScrollHeight(container, 10);
-		const run = terminalRun();
-		renderer.renderElement(fakeNode({ kind: 'story', run }), 0, template);
-		assert.strictEqual(heights.get(run.identity), STORY_MIN_HEIGHT);
-	});
-
-	test('remeasureAll re-measures every currently-rendered leaf, and disposeElement stops tracking a recycled one', () => {
-		const heights = new WorkflowStoryHeightCache();
-		const renderer = store.add(new WorkflowStoryLeafRenderer(heights));
-		const container = $('div');
-		const template = renderer.renderTemplate(container);
-		withScrollHeight(container, 140);
-		const run = terminalRun();
-		let fireCount = 0;
-		store.add(renderer.onDidChangeItemHeight(() => fireCount++));
-		renderer.renderElement(fakeNode({ kind: 'story', run }), 0, template);
-		assert.strictEqual(fireCount, 1);
-
-		// A width change grows the wrap height; remeasureAll must pick it up without a fresh renderElement call.
-		withScrollHeight(container, 200);
-		renderer.remeasureAll();
-		assert.deepStrictEqual({ fireCount, cached: heights.get(run.identity) }, { fireCount: 2, cached: 200 });
-
-		// Once the template is recycled away from this element, remeasureAll must no longer touch it.
-		renderer.disposeElement(fakeNode({ kind: 'story', run }), 0, template);
-		withScrollHeight(container, 999);
-		renderer.remeasureAll();
-		assert.strictEqual(fireCount, 2);
+		assert.deepStrictEqual({
+			phase: delegate.getHeight({ kind: 'phase', run, phase: phase() }),
+			agent: delegate.getHeight({ kind: 'agent', run, agent: agent() }),
+			run: delegate.getHeight({ kind: 'run', run }),
+		}, { phase: 22, agent: 22, run: 40 }); // the run row is two lines (name + meta), taller than a single-line row
 	});
 });
 

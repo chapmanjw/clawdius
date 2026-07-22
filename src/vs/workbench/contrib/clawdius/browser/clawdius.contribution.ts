@@ -34,6 +34,7 @@ import { EditorExtensions, IEditorFactoryRegistry, IEditorSerializer } from '../
 import { EditorInput } from '../../../common/editor/editorInput.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { Action2, MenuId, registerAction2 } from '../../../../platform/actions/common/actions.js';
+import { ContextKeyExpr } from '../../../../platform/contextkey/common/contextkey.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { IOpenerService } from '../../../../platform/opener/common/opener.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -185,6 +186,29 @@ class SponsorClawdiusAction extends Action2 {
 	}
 }
 
+// "Refresh" - the Workflows view's title-bar action: a RE-READ of the same seam enumeration
+// (`observationService.readAgain()`), never a run control (see claudeWorkflowsView.ts's own "READ-ONLY BY
+// CONSTRUCTION" note). Registered as a view/title action (icon-only, shown in the view's title bar and its
+// overflow "..." menu) rather than a method on the view itself, so it works the standard ViewPane way.
+class RefreshWorkflowsAction extends Action2 {
+	constructor() {
+		super({
+			id: 'clawdius.workflows.refresh',
+			title: localize2('clawdius.workflows.refresh', "Refresh"),
+			icon: Codicon.refresh,
+			menu: [{
+				id: MenuId.ViewTitle,
+				when: ContextKeyExpr.equals('view', WORKFLOWS_VIEW_ID),
+				group: 'navigation',
+				order: 1,
+			}],
+		});
+	}
+	override run(accessor: ServicesAccessor): void {
+		accessor.get(IClaudeWorkflowObservationService).readAgain();
+	}
+}
+
 if (!product.defaultChatAgent?.entitlementUrl) {
 
 	// The shared config service: ONE scan + watcher set produces the typed snapshot the Control Center reads
@@ -320,6 +344,7 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 		canMoveView: true,
 	}];
 	Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews(workflowsViews, workflowsContainer);
+	registerAction2(RefreshWorkflowsAction);
 
 	// The transcript drill-in: an editor-area EditorPane that opens a subagent's real on-disk transcript through
 	// the seam, honestly completeness-labeled (a missing out-of-band tool-result ref -> partial, not complete).
@@ -334,9 +359,9 @@ if (!product.defaultChatAgent?.entitlementUrl) {
 
 	// The detail drill-in: a discriminated editor-area EditorPane opening a completed run's FULL result or one
 	// agent's cost/error/preview detail, rendered from a snapshot the tree already holds (no seam read on open -
-	// see claudeWorkflowDetailInput.ts). Opened from the Workflows view's `onDidOpen` (a story leaf -> result, an
-	// agent row -> agent detail); the transcript stays reachable from the agent-detail pane's "Open Transcript"
-	// action.
+	// see claudeWorkflowDetailInput.ts). Opened from the Workflows view's `onDidOpen` (activating a terminal run
+	// row -> result, an agent row -> agent detail); the transcript stays reachable from the agent-detail pane's
+	// "Open Transcript" action.
 	Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
 		EditorPaneDescriptor.create(ClaudeWorkflowDetailEditor, ClaudeWorkflowDetailEditor.ID, localize('clawdius.workflows.detailPane', "Claude Code Workflow Detail")),
 		[new SyncDescriptor(ClaudeWorkflowDetailInput)],

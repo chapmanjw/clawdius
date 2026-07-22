@@ -93,6 +93,7 @@
 		"--vscode-checkbox-foreground",
 		"--vscode-checkbox-selectBackground",
 		"--vscode-checkbox-selectBorder",
+		"--vscode-clawdius-sponsorHeart",
 		"--vscode-clawdius-usageBarFill",
 		"--vscode-clawdius-usageBarTrack",
 		"--vscode-commandCenter-activeBackground",

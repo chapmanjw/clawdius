@@ -103,7 +103,7 @@ suite('Clawdius Claude Code Ultracode Workflows - transcript drill-in', () => {
 		const slice = await svc.readSubagentTranscript(sub);
 
 		const container = $('div');
-		renderTranscriptSlice(container, slice);
+		store.add(renderTranscriptSlice(container, slice));
 
 		assert.deepStrictEqual({
 			subagent: container.getAttribute('data-clawdius-transcript-subagent'),
@@ -111,13 +111,29 @@ suite('Clawdius Claude Code Ultracode Workflows - transcript drill-in', () => {
 			coverage: container.getAttribute('data-clawdius-transcript-coverage'),
 			freshness: container.getAttribute('data-clawdius-transcript-freshness'),
 			records: container.getAttribute('data-clawdius-transcript-records'),
+			// The badge's own displayed text is the plain-English mapping (never the raw jargon value); the raw
+			// value still drives the `.completeness-partial` CSS class + the `data-*` hook asserted above.
 			partialBadge: container.querySelectorAll('.clawdius-transcript-label.completeness-partial').length,
+			partialBadgeText: container.querySelector('.clawdius-transcript-label.completeness-partial')?.textContent,
+			coverageBadgeText: container.querySelector('.clawdius-transcript-label.coverage-in-scope')?.textContent,
+			freshnessBadgeText: container.querySelector('.clawdius-transcript-label.freshness-polled')?.textContent,
 			sidechainRows: container.querySelectorAll('.clawdius-transcript-record.sidechain').length,
 			recordRows: container.querySelectorAll('.clawdius-transcript-record').length,
 		}, {
 			subagent: 'sub-c-01', completeness: 'partial', coverage: 'in-scope', freshness: 'polled',
-			records: '4', partialBadge: 1, sidechainRows: 2, recordRows: 4,
+			records: '4', partialBadge: 1, partialBadgeText: 'Partial read', coverageBadgeText: 'This workspace',
+			freshnessBadgeText: 'From disk', sidechainRows: 2, recordRows: 4,
 		});
+	});
+
+	test('a COMPLETE slice omits the completeness badge - exception-only, like the run row chip', () => {
+		const slice: FleetTranscriptSlice = {
+			subagentId: 'sub-complete', records: [], coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled,
+			completeness: CompletenessState.Complete, adapterVersion: { format: 'transcript-jsonl', versionKey: 'v1' },
+		};
+		const container = $('div');
+		store.add(renderTranscriptSlice(container, slice));
+		assert.strictEqual(container.querySelectorAll('.clawdius-transcript-label.completeness-complete').length, 0);
 	});
 
 	test('an empty/degraded slice renders an honest empty state, never a crash', () => {
@@ -126,11 +142,50 @@ suite('Clawdius Claude Code Ultracode Workflows - transcript drill-in', () => {
 			completeness: CompletenessState.Absent, adapterVersion: { format: 'transcript-jsonl', versionKey: 'v1' },
 		};
 		const container = $('div');
-		renderTranscriptSlice(container, slice);
+		store.add(renderTranscriptSlice(container, slice));
 		assert.strictEqual(container.getAttribute('data-clawdius-transcript-records'), '0');
 		assert.strictEqual(container.getAttribute('data-clawdius-transcript-completeness'), 'absent');
 		assert.strictEqual(container.querySelectorAll('[data-clawdius-transcript-empty]').length, 1);
 		assert.strictEqual(container.querySelectorAll('.clawdius-transcript-record').length, 0);
+	});
+
+	// The headline case for this pane: the record body - real transcript content - actually renders, as sanitized
+	// Markdown (never raw innerHTML, never a literal unrendered `**`/`##` blob) inside the shared bordered
+	// `.clawdius-workflow-artifact` container, and a record whose projected body is empty paints no
+	// `.clawdius-transcript-record-body` node at all - instead an explicit, muted placeholder (never a bare head
+	// with nothing beneath it, which is what made two such records back-to-back read as one duplicated header).
+	test('renderTranscriptSlice paints each non-empty record body as sanitized Markdown inside an artifact container, and a muted placeholder for an empty one', () => {
+		const slice: FleetTranscriptSlice = {
+			subagentId: 'sub-body',
+			records: [
+				{ type: 'user', isSidechain: false, body: 'plain text body' },
+				{ type: 'assistant', isSidechain: false, body: '' },
+				{ type: 'assistant', isSidechain: true, body: '**bold** text, not literal asterisks' },
+			],
+			coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.Complete,
+			adapterVersion: { format: 'transcript-jsonl', versionKey: 'v1' },
+		};
+		const container = $('div');
+		store.add(renderTranscriptSlice(container, slice));
+		const bodyEls = Array.from(container.querySelectorAll('.clawdius-transcript-record-body'));
+		const placeholders = Array.from(container.querySelectorAll('.clawdius-transcript-record-body-empty'));
+		// Exactly two REAL bodies painted (the empty-bodied assistant row painted a placeholder instead), each real
+		// body wrapped in the shared artifact container, and the second record's Markdown actually PARSED (a real
+		// <strong> element, never the literal `**` syntax). The empty-bodied row gets exactly one placeholder, and
+		// every row - including the placeholder one - still has its own head (never a bare duplicate-looking head).
+		assert.deepStrictEqual({
+			count: bodyEls.length,
+			allArtifacts: bodyEls.every(el => el.classList.contains('clawdius-workflow-artifact')),
+			firstText: bodyEls[0]?.textContent?.trim(),
+			secondBold: bodyEls[1]?.querySelector('strong')?.textContent,
+			secondHasNoLiteralAsterisks: bodyEls[1]?.textContent?.includes('**'),
+			placeholderCount: placeholders.length,
+			placeholderHasText: (placeholders[0]?.textContent?.length ?? 0) > 0,
+			headCount: container.querySelectorAll('.clawdius-transcript-record-head').length,
+		}, {
+			count: 2, allArtifacts: true, firstText: 'plain text body', secondBold: 'bold', secondHasNoLiteralAsterisks: false,
+			placeholderCount: 1, placeholderHasText: true, headCount: 3,
+		});
 	});
 
 	// Backward-compat persistence keys: these string values are what VS Code actually writes to disk (the

@@ -60,6 +60,17 @@ export function utilStateOf(util: number): 'warn' | 'crit' | undefined {
 	return undefined;
 }
 
+/** The limit bar's fill width, as a `0-100` CSS percentage. Genuinely zero usage renders `width: 0` - an empty
+ *  fill, no leading-edge rounded corner to show as a stray nub - while any TRUE non-zero usage is floored at 1 so
+ *  it stays visible even when it would otherwise round down to an invisible sub-pixel sliver (item 26: the prior
+ *  fix rounded only the fill's leading edge, which stopped the "floating blob" look for a wide fill but still
+ *  painted a small rounded cap at exactly 0%, since `Math.max(1, ...)` gave even zero usage a 1% fill). Clamped to
+ *  `[0, 100]` first so an out-of-range or non-finite `util` can never yield a negative or NaN width. */
+export function limitFillWidthPercent(util: number): number {
+	const clamped = Math.max(0, Math.min(100, util));
+	return clamped > 0 ? Math.max(1, clamped) : 0;
+}
+
 /** Read `cleanupPeriodDays` from a parsed settings object; default + validate (integer >= 1). */
 export function effectiveCleanupPeriodDays(settings: Record<string, unknown>): number {
 	const v = settings['cleanupPeriodDays'];
@@ -494,7 +505,7 @@ export class ClaudeUsageDashboardView extends Disposable {
 			// Solid bar that flex-fills the row (fill = utilization %).
 			const bar = append(row, h('.clawdius-usage-limit-bar'));
 			const fill = append(bar, h('.clawdius-usage-limit-fill'));
-			fill.style.width = `${Math.max(1, Math.min(100, w.util))}%`;
+			fill.style.width = `${limitFillWidthPercent(w.util)}%`;
 			if (state) { fill.classList.add(state); }
 			const pct = append(row, h('span.clawdius-usage-limit-pct'));
 			pct.textContent = localize('clawdius.usage.pctUsed', "{0}% used", Math.round(w.util));

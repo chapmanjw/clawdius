@@ -198,6 +198,38 @@ suite('Clawdius reader seam - transcript adapter', () => {
 		});
 	});
 
+	test('message.content projects to a readable plain-text body: string content, and text/tool_use/tool_result blocks', () => {
+		const stringContent = JSON.stringify({ type: 'user', message: { role: 'user', content: 'plain string body' } });
+		const textBlocks = JSON.stringify({
+			type: 'assistant',
+			message: { role: 'assistant', content: [{ type: 'text', text: 'first' }, { type: 'text', text: 'second' }] },
+		});
+		const toolUse = JSON.stringify({
+			type: 'assistant',
+			message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Read', input: { file: 'x.ts' } }] },
+		});
+		const toolResult = JSON.stringify({
+			type: 'user',
+			message: { role: 'user', content: [{ type: 'tool_result', content: [{ type: 'text', text: 'file contents' }] }] },
+		});
+		const noMessage = JSON.stringify({ type: 'summary', summary: 'no message field at all' });
+		const parsed = parseTranscriptRecords([stringContent, textBlocks, toolUse, toolResult, noMessage].join('\n') + '\n');
+		assert.deepStrictEqual(parsed.records.map(r => r.body), [
+			'plain string body',
+			'first\nsecond',
+			'[tool_use: Read]',
+			'[tool_result] file contents',
+			'',
+		]);
+	});
+
+	test('a malformed message.content shape (neither string nor array) projects to an empty body, never throws', () => {
+		const numericContent = JSON.stringify({ type: 'user', message: { role: 'user', content: 42 } });
+		const nullContent = JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: null } });
+		const parsed = parseTranscriptRecords([numericContent, nullContent].join('\n') + '\n');
+		assert.deepStrictEqual(parsed.records.map(r => r.body), ['', '']);
+	});
+
 	test('an unterminated final line is the live tail, not a torn record (a growing file stays complete)', () => {
 		// The distinction the flag must not blur: a transcript being appended to right now always ends mid-record.
 		// That trailing fragment is skipped as the live tail (`unterminatedTail`) BEFORE any parse is attempted, so

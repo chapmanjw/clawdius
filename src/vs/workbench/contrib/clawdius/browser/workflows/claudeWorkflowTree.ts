@@ -6,10 +6,15 @@
 // CLAWDIUS-BEGIN Claude Code Ultracode Workflows - WorkbenchObjectTree model + renderers
 // Replaces the Workflows view's hand-rolled manual-DOM row list with a real `WorkbenchObjectTree` bound
 // directly to the discriminated `WorkflowRun` union (`common/claudeWorkflowModel.ts`) - no more flattening the
-// validated model back into the legacy `MissionRun` shape. A run is the tree's top-level row; a TERMINAL run
-// expands to a variable-height "story" leaf (summary + cost + result) and its phases/agents (the 0/1/>1
-// phase-grouping rule below); a LIVE run expands to its own variable-height "live-progress" leaf (the live
-// analogue of the story leaf); an unknown-shape run is a leaf row with no children.
+// validated model back into the legacy `MissionRun` shape. A run is the tree's top-level row, rendered COMPACT
+// (a status glyph + ellipsized name + an exception-only chip row on line one, a muted cost line on line two -
+// never the summary/result/error text inline, see `WorkflowRunRowRenderer`). A TERMINAL run expands (native
+// twistie / single click) to ONLY its phase/agent rows (the 0/1/>1 phase-grouping rule below) - no inline leaf of
+// any kind; a LIVE or unknown-shape run has no children at all. Every row is a FIXED height (see
+// `WorkflowTreeVirtualDelegate`) - there is no measured, variable-height leaf anywhere in this tree. Activating a
+// terminal `run` row (Enter / double-click, never the twistie / single click that toggles expansion) opens the
+// run's FULL result in the detail editor; activating an `agent` row opens that agent's detail; a `phase` row and
+// a non-terminal `run` row open nothing.
 //
 // The ownership-chrome rule lives in two places by design: `computeUniformlyForeign` is the pure
 // predicate the VIEW evaluates once per refresh (never per-row - it must never re-read disk from inside a
@@ -30,11 +35,9 @@ import { IHoverDelegate } from '../../../../../base/browser/ui/hover/hoverDelega
 import { IconLabel } from '../../../../../base/browser/ui/iconLabel/iconLabel.js';
 import { IIdentityProvider, IKeyboardNavigationLabelProvider, IListVirtualDelegate } from '../../../../../base/browser/ui/list/list.js';
 import { IListAccessibilityProvider } from '../../../../../base/browser/ui/list/listWidget.js';
-import { ProgressBar } from '../../../../../base/browser/ui/progressbar/progressbar.js';
 import { ObjectTree } from '../../../../../base/browser/ui/tree/objectTree.js';
 import { IObjectTreeElement, ITreeElement, ITreeNode, ITreeRenderer, ObjectTreeElementCollapseState } from '../../../../../base/browser/ui/tree/tree.js';
 import { fromNow } from '../../../../../base/common/date.js';
-import { Emitter, Event } from '../../../../../base/common/event.js';
 import { FuzzyScore } from '../../../../../base/common/filters.js';
 import { hash } from '../../../../../base/common/hash.js';
 import { Disposable, DisposableStore, IDisposable } from '../../../../../base/common/lifecycle.js';
@@ -42,11 +45,11 @@ import { formatTokenCount } from '../../../../../base/common/numbers.js';
 import { Codicon } from '../../../../../base/common/codicons.js';
 import { ThemeIcon } from '../../../../../base/common/themables.js';
 import { localize } from '../../../../../nls.js';
-import { defaultButtonStyles, defaultProgressBarStyles } from '../../../../../platform/theme/browser/defaultStyles.js';
+import { defaultButtonStyles } from '../../../../../platform/theme/browser/defaultStyles.js';
 import { FleetOwnership } from '../../common/claudeFleetModel.js';
-import { CompletenessState } from '../../common/claudeReaderSeam.js';
+import { CompletenessState, CoverageLabel, FreshnessLabel } from '../../common/claudeReaderSeam.js';
 import {
-	assignAgentsToPhases, LiveWorkflowResult, LiveWorkflowRun, TerminalWorkflowAgent, TerminalWorkflowRun, UnrecognizedWorkflowRun,
+	assignAgentsToPhases, TerminalWorkflowAgent, TerminalWorkflowRun, UnrecognizedWorkflowRun,
 	WorkflowPhase, WorkflowRun, WorkflowRunListResult,
 } from '../../common/claudeWorkflowModel.js';
 import { formatDuration } from '../usage/claudeUsageData.js';
@@ -60,42 +63,22 @@ export const DASH = '—';
 
 // --- the tree element union -----------------------------------------------------------------------------------
 
-/** The tree's own discriminated element union - one node kind per row shape. A `story`/`phase`/`agent` node always
+/** The tree's own discriminated element union - one node kind per row shape. A `phase`/`agent` node always
  *  carries its owning `run` (narrowed to `TerminalWorkflowRun`, the only kind with a manifest to describe) so a
  *  renderer never needs a separate parent lookup. */
 export type WorkflowTreeElement =
 	| { readonly kind: 'run'; readonly run: WorkflowRun }
-	| { readonly kind: 'story'; readonly run: TerminalWorkflowRun }
-	| { readonly kind: 'liveProgress'; readonly run: LiveWorkflowRun }
 	| { readonly kind: 'phase'; readonly run: TerminalWorkflowRun; readonly phase: WorkflowPhase }
 	| { readonly kind: 'agent'; readonly run: TerminalWorkflowRun; readonly agent: TerminalWorkflowAgent };
 
-function isStoryElement(element: WorkflowTreeElement): element is Extract<WorkflowTreeElement, { kind: 'story' }> {
-	return element.kind === 'story';
-}
-
-function isLiveProgressElement(element: WorkflowTreeElement): element is Extract<WorkflowTreeElement, { kind: 'liveProgress' }> {
-	return element.kind === 'liveProgress';
-}
-
-/** Either of the two measured, non-twistie leaves: the terminal story leaf and the live-progress leaf both hold
- *  variable-height, multi-line content (a summary/cost/result block; a progress bar plus landed-result previews),
- *  so both share the same "no fixed row height" treatment, keyed by the owning run's identity, instead of the
- *  fixed-height rows every other kind of tree row uses. */
-function isMeasuredLeafElement(element: WorkflowTreeElement): element is Extract<WorkflowTreeElement, { kind: 'story' | 'liveProgress' }> {
-	return element.kind === 'story' || element.kind === 'liveProgress';
-}
-
 // --- identity ----------------------------------------------------------------------------------------------
 
-/** The tree's stable per-element key: `run:<identity>` / `story:<identity>` / `phase:<identity>:<index>` /
- *  `agent:<identity>:<agentId>`, always built off the model's own composite `identity` (never a bare `runId`,
- *  which can collide across sessions). */
+/** The tree's stable per-element key: `run:<identity>` / `phase:<identity>:<index>` / `agent:<identity>:<agentId>`,
+ *  always built off the model's own composite `identity` (never a bare `runId`, which can collide across
+ *  sessions). */
 export function workflowTreeElementId(element: WorkflowTreeElement): string {
 	switch (element.kind) {
 		case 'run': return `run:${element.run.identity}`;
-		case 'story': return `story:${element.run.identity}`;
-		case 'liveProgress': return `liveProgress:${element.run.identity}`;
 		case 'phase': return `phase:${element.run.identity}:${element.phase.index}`;
 		case 'agent': return `agent:${element.run.identity}:${element.agent.agentId}`;
 	}
@@ -108,16 +91,6 @@ export class WorkflowTreeIdentityProvider implements IIdentityProvider<WorkflowT
 }
 
 // --- pure content/formatting helpers (unit-testable without a DOM) -------------------------------------------
-
-/**
- * The one-line summary of a workflow run's error: its first non-empty line, whitespace-collapsed. A workflow
- * failure arrives as a multi-line stack trace, and only its leading line names the actual fault. PURE, so the
- * clamp is unit-testable without a DOM; the full text stays on the element's tooltip.
- */
-export function errorSummary(error: string): string {
-	const first = error.split('\n').find(line => line.trim().length > 0) ?? '';
-	return first.trim().replace(/\s+/g, ' ');
-}
 
 /** EXPORTED alongside {@link DASH} for the same reuse reason - the detail drill-in editor's cost rows follow the
  *  identical "dash when absent, formatted when present" rule the tree's own row content already established. */
@@ -149,8 +122,8 @@ export function describeRunRow(run: WorkflowRun, relativeTimeOf: (ms: number) =>
 		}
 		case 'live':
 			// Honest minimal: NO name/summary exists for a live run (see claudeWorkflowModel.ts), so the ROW stays
-			// runId + last-write time. The rich live progress (started/result counts, landed-result previews) is
-			// rendered by the live-progress leaf beneath the row (see buildLiveProgressChildren), never fabricated here.
+			// runId + last-write time - the only fields a live run's compact row ever shows (see the file header
+			// comment: a live run has no children and no expanded detail to show its started/result counts in).
 			return { primary: run.runId, secondaryParts: [relativeTimeOf(run.journalLastWriteTime)] };
 		case 'unknown-shape':
 			return { primary: localize('clawdius.workflows.unknownShape', "Shape not recognized"), secondaryParts: [run.runId] };
@@ -182,84 +155,21 @@ export function erroredAgentCount(run: WorkflowRun): number | undefined {
 	return run.kind === 'terminal' ? run.agents.filter(agent => agent.state === 'error').length : undefined;
 }
 
-/** The story leaf's wrapped-summary text; falls back to an honest "no summary" label rather than an empty node
- *  (a terminal run's `summary` is optional on-disk). */
-export function describeStorySummaryText(run: TerminalWorkflowRun): string {
-	return run.summary ?? localize('clawdius.workflows.story.noSummary', "No summary recorded");
-}
-
-/** The story leaf's cost line, as independent already-localized parts (never string-concatenated into one
- *  translatable string) - the renderer joins them with its own separator DOM nodes. Every missing number is the
- *  literal dash, never a fabricated 0. */
-export function describeStoryCostParts(run: TerminalWorkflowRun): readonly string[] {
+/** The run row's compact SECOND line (see the file header comment) - "model · tokens · duration · N agents" for a
+ *  terminal run, the same dash-when-absent convention every cost line in this file uses (never a fabricated 0). A
+ *  live/unknown-shape run carries none of these fields, so it falls back to {@link describeRunRow}'s own
+ *  `secondaryParts` (the only honest content available for it) rather than a row of dashes. Deliberately never
+ *  includes the run's summary/result/error text - those are reachable only by opening the run's detail. */
+export function describeRunMetaParts(run: WorkflowRun): readonly string[] {
+	if (run.kind !== 'terminal') {
+		return describeRunRow(run).secondaryParts;
+	}
 	return [
-		orDash(run.durationMs, formatDuration),
-		orDash(run.totalTokens, n => localize('clawdius.workflows.story.tokens', "{0} tokens", formatTokenCount(n))),
-		orDash(run.totalToolCalls, n => localize('clawdius.workflows.story.toolCalls', "{0} tool calls", n)),
 		run.defaultModel ?? DASH,
-		orDash(run.agentCount, n => localize('clawdius.workflows.story.agentCount', "{0} agents", n)),
+		orDash(run.totalTokens, n => localize('clawdius.workflows.run.tokens', "{0} tokens", formatTokenCount(n))),
+		orDash(run.durationMs, formatDuration),
+		orDash(run.agentCount, n => localize('clawdius.workflows.run.agentCount', "{0} agents", n)),
 	];
-}
-
-export function describeStoryResultText(run: TerminalWorkflowRun): string {
-	return run.resultPreview ?? localize('clawdius.workflows.story.noResult', "No result recorded");
-}
-
-/** The run-level failure text (distinct from any per-agent error), clamped to one line with the full text kept
- *  for the tooltip - `undefined` when the run recorded none (most `completed` runs, and even some `failed` ones -
- *  see `TerminalWorkflowRun.error`). */
-export function describeStoryError(run: TerminalWorkflowRun): { readonly summary: string; readonly full: string } | undefined {
-	return run.error ? { summary: errorSummary(run.error), full: run.error } : undefined;
-}
-
-/** The bound on how many landed-result previews the live-progress leaf shows directly - a RENDER bound, not a data
- *  one: {@link LiveProgressContent.landedCountCaption} always states the true total, so a workflow with many agents
- *  never reads as having fewer results than it does, it just stops listing them past this count. */
-export const LIVE_PROGRESS_MAX_LANDED_PREVIEWS = 5;
-
-/** The live-progress leaf's content, computed PURELY off the model - unit-testable without a DOM. Honesty rules
- *  `startedCount`/`resultCount` are never clamped against each other, so the ratio can legitimately
- *  move BACKWARD between renders (a newly-started agent raises `startedCount` before it raises `resultCount`); the
- *  caption is phrased "among agents seen so far" because a live run has no known total - a percentage-of-total
- *  would fabricate a denominator that does not exist yet. `activityCaption` reports only the journal's own
- *  last-write time - never an inferred "paused" state, which the journal cannot support. */
-export interface LiveProgressContent {
-	readonly startedCount: number;
-	readonly resultCount: number;
-	/** The honest "agents seen so far" denominator - see {@link LiveWorkflowRun.seenCount}. Always >= `resultCount`,
-	 *  even when a `started` record was torn or otherwise dropped, so a progress bar built from this and
-	 *  `resultCount` can never be handed a `worked` value above its own `total`. */
-	readonly seenCount: number;
-	/** `max(0, started - result)` - a COUNT, so unlike the ratio caption this is never negative. */
-	readonly runningCount: number;
-	readonly ratioCaption: string;
-	readonly activityCaption: string;
-	readonly landedCountCaption: string | undefined;
-	readonly landedPreviews: readonly LiveWorkflowResult[];
-	/** True when {@link LiveWorkflowResult}s exist beyond what {@link landedPreviews} lists. */
-	readonly hasMoreLanded: boolean;
-	readonly degradedCaption: string | undefined;
-}
-
-export function describeLiveProgress(run: LiveWorkflowRun, relativeTimeOf: (ms: number) => string = ms => fromNow(ms, true)): LiveProgressContent {
-	const runningCount = Math.max(0, run.startedCount - run.resultCount);
-	const ratioCaption = run.seenCount > 0
-		? localize('clawdius.workflows.live.ratio', "{0} of {1} agents seen so far have a result", run.resultCount, run.seenCount)
-		: localize('clawdius.workflows.live.noneStarted', "No agents observed yet");
-	const activityCaption = localize('clawdius.workflows.live.lastWrite', "Journal last wrote {0}", relativeTimeOf(run.journalLastWriteTime));
-	const landedCountCaption = run.landedResults.length > 0
-		? localize('clawdius.workflows.live.landedCount', "{0} results landed", run.landedResults.length)
-		: undefined;
-	const degradedCaption = run.degradation === 'partial'
-		? localize('clawdius.workflows.live.degradedPartial', "The journal has an unreadable entry; this may undercount.")
-		: run.degradation === 'unknown-shape'
-			? localize('clawdius.workflows.live.degradedUnknown', "The journal's shape was not recognized.")
-			: undefined;
-	return {
-		startedCount: run.startedCount, resultCount: run.resultCount, seenCount: run.seenCount, runningCount, ratioCaption, activityCaption,
-		landedCountCaption, landedPreviews: run.landedResults.slice(0, LIVE_PROGRESS_MAX_LANDED_PREVIEWS),
-		hasMoreLanded: run.landedResults.length > LIVE_PROGRESS_MAX_LANDED_PREVIEWS, degradedCaption,
-	};
 }
 
 export function describePhase(phase: WorkflowPhase): { readonly title: string; readonly detail: string | undefined; readonly agentsLabel: string; readonly errorsLabel: string | undefined } {
@@ -281,6 +191,57 @@ export function describeAgent(agent: TerminalWorkflowAgent): { readonly label: s
 		],
 		icon: agent.state === 'error' ? Codicon.error : Codicon.check,
 	};
+}
+
+// --- plain-English display text for the honesty labels ---------------------------------------------------------
+//
+// The reader seam's own vocabulary (`owned`/`foreign`, `in-scope`/`out-of-scope`, `polled`/`live`,
+// `partial`/`absent`/`suppressed`/`unknown-shape`) is precise but reads as internal jargon to a user. These
+// functions are the ONE place that maps each raw value to plain English for DISPLAY - the raw value itself still
+// drives every `data-*` hook and per-state CSS class (untouched, since tests and the e2e harness key off them),
+// only the text a user actually reads changes. Reused by the run row's ownership/completeness chips
+// (`WorkflowRunRowRenderer`, below) and the transcript header's coverage/completeness/freshness badges
+// (`claudeWorkflowTranscriptEditor.ts`).
+
+/** Plain-English display text for a run's OWNERSHIP. The raw `FleetOwnership` value still drives the `data-*`
+ *  hook and the `ownership-${value}` CSS class - only this text changes. */
+export function describeOwnershipLabel(ownership: FleetOwnership): string {
+	switch (ownership) {
+		case 'owned': return localize('clawdius.workflows.ownership.owned', "Started here");
+		case 'foreign': return localize('clawdius.workflows.ownership.foreign', "Observed");
+	}
+}
+
+/** Plain-English display text for the {@link CoverageLabel} honesty dimension - how much of a run/transcript is
+ *  in view. Exhaustive so a future member fails to compile here rather than falling through silently. */
+export function describeCoverageLabel(coverage: CoverageLabel): string {
+	switch (coverage) {
+		case CoverageLabel.InScope: return localize('clawdius.workflows.coverage.inScope', "This workspace");
+		case CoverageLabel.Foreign: return localize('clawdius.workflows.coverage.foreign', "Another workspace");
+		case CoverageLabel.OutOfScope: return localize('clawdius.workflows.coverage.outOfScope', "Outside workspace");
+	}
+}
+
+/** Plain-English display text for the {@link FreshnessLabel} honesty dimension - how current a read is. */
+export function describeFreshnessLabel(freshness: FreshnessLabel): string {
+	switch (freshness) {
+		case FreshnessLabel.Live: return localize('clawdius.workflows.freshness.live', "Live");
+		case FreshnessLabel.Polled: return localize('clawdius.workflows.freshness.polled', "From disk");
+		case FreshnessLabel.Stale: return localize('clawdius.workflows.freshness.stale', "Possibly outdated");
+	}
+}
+
+/** Plain-English display text for the {@link CompletenessState} honesty dimension, EXCEPTION-ONLY: `undefined`
+ *  for `Complete` (the silent, expected case - every caller must gate on this rather than render an empty chip),
+ *  mirroring {@link describeCompletenessForAria}'s own exhaustive-switch shape below. */
+export function describeCompletenessLabel(completeness: CompletenessState): string | undefined {
+	switch (completeness) {
+		case CompletenessState.Complete: return undefined;
+		case CompletenessState.Partial: return localize('clawdius.workflows.completeness.partial', "Partial read");
+		case CompletenessState.Absent: return localize('clawdius.workflows.completeness.absent', "No data yet");
+		case CompletenessState.Suppressed: return localize('clawdius.workflows.completeness.suppressed', "History suppressed");
+		case CompletenessState.UnknownShape: return localize('clawdius.workflows.completeness.unknownShape', "Unrecognized data");
+	}
 }
 
 // --- ownership-chrome rule -------------------------------------------------------------------------------------
@@ -347,10 +308,11 @@ function phaseNode(run: TerminalWorkflowRun, phase: WorkflowPhase, agents: reado
 }
 
 /**
- * A terminal run's children: the story leaf, always first, then its agents - grouped under phase nodes only when
- * `phases.length > 1` (the 0/1/>1 rule). An agent that matches no declared phase (a gap the seam already tolerates -
- * see `claudeWorkflowModel.ts`) is never dropped: it still hangs directly under the run, after the phase nodes,
- * rather than silently vanishing from the tree.
+ * A terminal run's children: ONLY phase/agent rows - grouped under phase nodes only when `phases.length > 1` (the
+ * 0/1/>1 rule); no inline leaf of any kind (see the file header comment - the run's summary/result/error are
+ * reachable only by opening its detail). An agent that matches no declared phase (a gap the seam already
+ * tolerates - see `claudeWorkflowModel.ts`) is never dropped: it still hangs directly under the run, after the
+ * phase nodes, rather than silently vanishing from the tree.
  *
  * Two failure-surfacing rules layer on top, applied in both the phase-grouped and the direct-under-run path:
  * agents within any one group are reordered errored-first (`erroredAgentsFirst`, stable), and when the run has
@@ -359,9 +321,8 @@ function phaseNode(run: TerminalWorkflowRun, phase: WorkflowPhase, agents: reado
  * untouched, and a run with no errored phase auto-expands nothing.
  */
 export function buildTerminalRunChildren(run: TerminalWorkflowRun): ITreeElement<WorkflowTreeElement>[] {
-	const story: ITreeElement<WorkflowTreeElement> = { element: { kind: 'story', run }, collapsible: false };
 	if (run.phases.length <= 1) {
-		return [story, ...erroredAgentsFirst(run.agents).map(agent => agentLeaf(run, agent))];
+		return erroredAgentsFirst(run.agents).map(agent => agentLeaf(run, agent));
 	}
 	// The SAME first-match assignment the reader uses to derive `phase.agentCount`, so a phase row's count can never
 	// contradict the agent rows nested beneath it AND an agent whose title-only membership matches DUPLICATE phase
@@ -373,25 +334,16 @@ export function buildTerminalRunChildren(run: TerminalWorkflowRun): ITreeElement
 		const collapsed = phase.index === firstErrorPhaseIndex ? false : undefined;
 		return phaseNode(run, phase, erroredAgentsFirst(agentsInPhase), collapsed);
 	});
-	return [story, ...phaseNodes, ...erroredAgentsFirst(unassigned).map(agent => agentLeaf(run, agent))];
+	return [...phaseNodes, ...erroredAgentsFirst(unassigned).map(agent => agentLeaf(run, agent))];
 }
 
-/** A live run's single child: the measured, non-twistie live-progress leaf (the live analogue of the terminal
- *  story leaf - same variable-height treatment, for the same reason: its progress bar plus landed-result previews
- *  do not fit a fixed row height). Exported so the view can rebuild ONLY this child when a still-live run's counts
- *  advance, without touching the run's own top-level node. */
-export function buildLiveProgressChildren(run: LiveWorkflowRun): ITreeElement<WorkflowTreeElement>[] {
-	return [{ element: { kind: 'liveProgress', run }, collapsible: false }];
-}
-
-/** One run's full tree element: a terminal run's children per {@link buildTerminalRunChildren}, a live run's
- *  single live-progress leaf per {@link buildLiveProgressChildren}, empty for an unrecognized-shape run. */
+/** One run's full tree element: a terminal run's children per {@link buildTerminalRunChildren}; a live or
+ *  unrecognized-shape run has NO children - a live run carries no structured agent/phase list to expand into (see
+ *  `LiveWorkflowRun`), and the measured live-progress leaf that used to stand in for one is gone (the file header
+ *  comment; every row is now fixed-height). */
 export function buildRunElement(run: WorkflowRun): ITreeElement<WorkflowTreeElement> {
 	if (run.kind === 'terminal') {
 		return { element: { kind: 'run', run }, children: buildTerminalRunChildren(run) };
-	}
-	if (run.kind === 'live') {
-		return { element: { kind: 'run', run }, children: buildLiveProgressChildren(run) };
 	}
 	return { element: { kind: 'run', run } };
 }
@@ -428,7 +380,7 @@ export interface WorkflowTreeReconcileResult extends WorkflowTreeReconcileState 
 }
 
 /** A stable content signature for one run - changes whenever any field the tree renders for that run (its row,
- *  its story leaf, its phase nodes, or its agent rows) differs. Used only to detect a REWRITTEN terminal/unknown-
+ *  its phase nodes, or its agent rows) differs. Used only to detect a REWRITTEN terminal/unknown-
  *  shape manifest (e.g. `completed` corrected to `failed`, a changed summary/result, or an agent whose label or
  *  state moved without the tally moving) after that run was already rendered once; see
  *  {@link WorkflowTreeReconcileState.renderedSignatureByRunId}. It hashes the WHOLE render-relevant projection - not
@@ -464,14 +416,14 @@ function computeRunSignature(run: WorkflowRun): string {
  * underlying data differs (`objectTree.ts`'s `setChildren` doc comment; traced against `objectTreeModel.ts`'s
  * `spliceSmart`, which never calls `createTreeNode` for an id the LCS diff finds unchanged). Since a run's identity
  * is the SAME whether it is live or terminal, that one call alone would silently keep painting a graduated run as
- * live forever, and would never advance a still-live run's progress leaf either.
+ * live forever, and would never repaint a still-live run's own row (last-write time, badges) either.
  *
  * So every run whose identity persists across the reconcile gets a SECOND, TARGETED pass, using the reference the
  * tree ALREADY tracks for it (never a freshly-built duplicate - `setChildren`/`rerender` scoped to an untracked
- * reference throw): a still-live run's single progress-leaf child is replaced fresh and its row is `rerender()`ed
- * every time (cheap - live data changes on every poll); a run that just graduated gets its children replaced with
- * its real story/phase/agent rows (or none, for an unrecognized shape) and its row `rerender()`ed once. A run that
- * was already terminal/unknown-shape and stays so is compared against its last RENDERED content signature
+ * reference throw): a still-live run has no children to touch (see `buildRunElement`) so only its row is
+ * `rerender()`ed, every time (cheap - live data changes on every poll); a run that just graduated gets its children
+ * replaced with its real phase/agent rows (or none, for an unrecognized shape) and its row `rerender()`ed once. A
+ * run that was already terminal/unknown-shape and stays so is compared against its last RENDERED content signature
  * ({@link computeRunSignature}): unchanged, it is left untouched (preserving the user's expansion state); changed
  * - the observation service re-reads on every manifest write, so a terminal manifest CAN legitimately be rewritten
  * after the fact (e.g. a corrected status or tally) - its children are replaced and its row `rerender()`ed exactly
@@ -491,8 +443,16 @@ export function reconcileWorkflowTree(
 	runs: readonly WorkflowRun[],
 	previous: WorkflowTreeReconcileState,
 ): WorkflowTreeReconcileResult {
+	// Only a run that actually HAS children gets the preserve-or-collapse treatment: `ObjectTreeModel.preserveCollapseState`
+	// (objectTreeModel.ts) turns `PreserveOrCollapsed` into a literal `collapsed: true` on a brand-new node, which
+	// alone is enough to make `indexTreeModel.ts` compute `collapsible: true` for it (`typeof collapsed !== 'undefined'`)
+	// - EVEN with zero actual children - painting a twistie that toggles nothing. A live/unknown-shape run (no
+	// `children` at all) or a zero-agent terminal run (`children: []`) must therefore be left with NO `collapsed`
+	// field, so it stays genuinely non-collapsible (no twistie) instead of gaining an inert one.
 	const children: IObjectTreeElement<WorkflowTreeElement>[] = buildWorkflowTreeChildren(runs).map(child =>
-		child.element.kind === 'run' ? { ...child, collapsed: ObjectTreeElementCollapseState.PreserveOrCollapsed } : child);
+		child.element.kind === 'run' && Array.isArray(child.children) && child.children.length > 0
+			? { ...child, collapsed: ObjectTreeElementCollapseState.PreserveOrCollapsed }
+			: child);
 	const builtElementByIdentity = new Map<string, WorkflowTreeElement>();
 	for (const child of children) {
 		if (child.element.kind === 'run') { builtElementByIdentity.set(child.element.run.identity, child.element); }
@@ -536,14 +496,20 @@ export function reconcileWorkflowTree(
 
 		if (run.kind === 'live') {
 			liveIdentities.add(run.identity);
-			const liveChildren = buildLiveProgressChildren(run);
-			tree.setChildren(tracked, liveChildren);
+			// No children to (re)build for a live run (see `buildRunElement`) - just repaint its own row so its
+			// last-write time / live badge stay current on every poll.
 			tree.rerender(tracked);
-			for (const c of liveChildren) { idToElement.set(workflowTreeElementId(c.element), c.element); }
 		} else if (previous.liveIdentities.has(run.identity)) {
 			graduated.push(run);
 			const newChildren = run.kind === 'terminal' ? buildTerminalRunChildren(run) : [];
 			tree.setChildren(tracked, newChildren);
+			// `setChildren` scoped to an EXISTING node never retroactively recomputes that node's OWN `collapsible`
+			// flag (it was fixed at creation time - see the top-level `children.map(...)` fix above for why a
+			// childless run must start `collapsible: false`) - a run graduating INTO real children (or, symmetrically,
+			// a rewrite that empties them out) needs this explicit call, the same one `AsyncDataTree` uses for the
+			// identical reason (abstractTree.ts's `setCollapsible`), or the twistie would stay stuck at whatever it
+			// was when this row was first created.
+			tree.setCollapsible(tracked, newChildren.length > 0);
 			tree.rerender(tracked);
 			for (const c of newChildren) { idToElement.set(workflowTreeElementId(c.element), c.element); }
 		} else if (previous.renderedSignatureByRunId.has(run.runId) && newSignature !== previous.renderedSignatureByRunId.get(run.runId)) {
@@ -553,6 +519,7 @@ export function reconcileWorkflowTree(
 			// manifest (see the function doc comment), not a fresh graduation.
 			const newChildren = run.kind === 'terminal' ? buildTerminalRunChildren(run) : [];
 			tree.setChildren(tracked, newChildren);
+			tree.setCollapsible(tracked, newChildren.length > 0); // see the graduation branch's comment above
 			tree.rerender(tracked);
 			for (const c of newChildren) { idToElement.set(workflowTreeElementId(c.element), c.element); }
 		}
@@ -642,8 +609,8 @@ export class WorkflowTreeAccessibilityProvider implements IListAccessibilityProv
 	 *  `IWorkflowRenderContext.runOf`'s doc comment): a graduation or a rewritten-manifest re-render keeps the
 	 *  top-level 'run' tree node's OWN element reference unchanged, so reading `element.run` directly here would
 	 *  announce and label the PRE-graduation state to assistive technology even after the row's visible icon/chips
-	 *  had already moved on. Only the 'run' kind needs this - a 'story'/'liveProgress'/'phase'/'agent' node's own
-	 *  element is rebuilt fresh on every reconcile (see `reconcileWorkflowTree`), never stale. */
+	 *  had already moved on. Only the 'run' kind needs this - a 'phase'/'agent' node's own element is rebuilt fresh
+	 *  on every reconcile (see `reconcileWorkflowTree`), never stale. */
 	constructor(private readonly context: IWorkflowRenderContext) { }
 
 	getWidgetAriaLabel(): string {
@@ -659,12 +626,6 @@ export class WorkflowTreeAccessibilityProvider implements IListAccessibilityProv
 					: content.primary;
 				const status = describeRunStatusForAria(run, this.context.badgeOf(run.runId));
 				return status.length > 0 ? localize('clawdius.workflows.run.aria.withStatus', "{0}. {1}.", base, status) : base;
-			}
-			case 'story':
-				return localize('clawdius.workflows.story.aria', "Summary and result for {0}", describeRunRow(element.run).primary);
-			case 'liveProgress': {
-				const content = describeLiveProgress(element.run);
-				return localize('clawdius.workflows.liveProgress.aria', "{0}. {1}", content.ratioCaption, content.activityCaption);
 			}
 			case 'phase': {
 				const content = describePhase(element.phase);
@@ -682,59 +643,33 @@ export class WorkflowTreeKeyboardNavigationLabelProvider implements IKeyboardNav
 	getKeyboardNavigationLabel(element: WorkflowTreeElement): string {
 		switch (element.kind) {
 			case 'run': return describeRunRow(element.run).primary;
-			case 'story': return describeStorySummaryText(element.run);
-			case 'liveProgress': return describeLiveProgress(element.run).ratioCaption;
 			case 'phase': return element.phase.title;
 			case 'agent': return element.agent.label;
 		}
 	}
 }
 
-// --- virtual delegate + the story leaf's measured-height cache -----------------------------------------------
+// --- virtual delegate: every row is a FIXED height - there is no measured, variable-height leaf in this tree ----
 
 const FIXED_ROW_HEIGHT = 22;
-/** The minimum story-leaf height, covering its three required lines (summary / cost / result). */
-export const STORY_MIN_HEIGHT = 60;
-
-/** Per-run measured story-leaf heights, keyed by the run's composite `identity`. Owned by the view, shared
- *  between the virtual delegate (which reads it for `getHeight`) and the story renderer (which writes it after
- *  measuring the rendered DOM). */
-export class WorkflowStoryHeightCache {
-	private readonly heights = new Map<string, number>();
-	get(identity: string): number | undefined {
-		return this.heights.get(identity);
-	}
-	set(identity: string, height: number): void {
-		this.heights.set(identity, height);
-	}
-	clear(): void {
-		this.heights.clear();
-	}
-}
+/** The run row is two lines (name + the compact meta line - see `WorkflowRunRowRenderer`), so it gets its own,
+ *  taller fixed height instead of the single-line rows every other kind uses. */
+const RUN_ROW_HEIGHT = 40;
 
 export const enum WorkflowTreeTemplateId {
 	Run = 'clawdius-workflow-run',
-	Story = 'clawdius-workflow-story',
-	LiveProgress = 'clawdius-workflow-live-progress',
 	Phase = 'clawdius-workflow-phase',
 	Agent = 'clawdius-workflow-agent',
 }
 
 export class WorkflowTreeVirtualDelegate implements IListVirtualDelegate<WorkflowTreeElement> {
-	constructor(private readonly storyHeights: WorkflowStoryHeightCache) { }
-
 	getHeight(element: WorkflowTreeElement): number {
-		if (isMeasuredLeafElement(element)) {
-			return this.storyHeights.get(element.run.identity) ?? STORY_MIN_HEIGHT;
-		}
-		return FIXED_ROW_HEIGHT;
+		return element.kind === 'run' ? RUN_ROW_HEIGHT : FIXED_ROW_HEIGHT;
 	}
 
 	getTemplateId(element: WorkflowTreeElement): string {
 		switch (element.kind) {
 			case 'run': return WorkflowTreeTemplateId.Run;
-			case 'story': return WorkflowTreeTemplateId.Story;
-			case 'liveProgress': return WorkflowTreeTemplateId.LiveProgress;
 			case 'phase': return WorkflowTreeTemplateId.Phase;
 			case 'agent': return WorkflowTreeTemplateId.Agent;
 		}
@@ -747,6 +682,7 @@ interface IWorkflowRunTemplate {
 	readonly container: HTMLElement;
 	readonly icon: HTMLElement;
 	readonly iconLabel: IconLabel;
+	readonly meta: HTMLElement;
 	readonly badge: HTMLElement;
 	readonly erroredChip: HTMLElement;
 	readonly completenessChip: HTMLElement;
@@ -754,15 +690,18 @@ interface IWorkflowRunTemplate {
 }
 
 /**
- * The run row: a status codicon + an `IconLabel` whose primary text is the run's summary (terminal) / runId
- * (live/unknown-shape) and whose description is `workflowName, relative-time`. the ownership rule's exception-only right edge
- * lives here: the completeness chip is exception-only (shown whenever the run did not read whole, independent of
- * ownership); the ownership chip is exception-only in the OTHER direction (shown only when ownership can differ
- * across the view, i.e. NOT `context.uniformlyForeign` - the common uniformly-foreign case paints no per-run
- * ownership chrome at all, deferring to the view's single surface label). The errored-agent chip is exception-only
- * the same way the completeness chip is: shown only when {@link erroredAgentCount} is defined AND greater than 0
- * (a `completed` run, or a `failed` run whose agents all happened to end `done`, paints no such chip - it is never
- * fabricated for a run with no agent tally, i.e. live/unknown-shape).
+ * The run row: compact, TWO lines (see the file header comment) - a status codicon +
+ * line 1 (an `IconLabel` carrying only the run's summary/runId as its name, ellipsized, plus the exception-only
+ * chip row) and line 2 (`meta`, muted, single line - {@link describeRunMetaParts}). Never the run's summary/
+ * result/error TEXT beyond the ellipsized name; that is reachable only by opening the run's detail (see
+ * `claudeWorkflowsView.ts`'s `onDidOpen`). The ownership rule's exception-only right edge lives in the chip row:
+ * the completeness chip is exception-only (shown whenever the run did not read whole, independent of ownership);
+ * the ownership chip is exception-only in the OTHER direction (shown only when ownership can differ across the
+ * view, i.e. NOT `context.uniformlyForeign` - the common uniformly-foreign case paints no per-run ownership chrome
+ * at all, deferring to the view's single surface label). The errored-agent chip is exception-only the same way the
+ * completeness chip is: shown only when {@link erroredAgentCount} is defined AND greater than 0 (a `completed`
+ * run, or a `failed` run whose agents all happened to end `done`, paints no such chip - it is never fabricated for
+ * a run with no agent tally, i.e. live/unknown-shape).
  */
 export class WorkflowRunRowRenderer extends Disposable implements ITreeRenderer<WorkflowTreeElement, FuzzyScore, IWorkflowRunTemplate> {
 	readonly templateId = WorkflowTreeTemplateId.Run;
@@ -777,13 +716,16 @@ export class WorkflowRunRowRenderer extends Disposable implements ITreeRenderer<
 	renderTemplate(container: HTMLElement): IWorkflowRunTemplate {
 		container.classList.add('clawdius-workflow-run-row');
 		const icon = append(container, $('.clawdius-workflow-status-icon'));
-		const iconLabel = new IconLabel(container, { hoverDelegate: this.hoverDelegate });
-		const chips = append(iconLabel.element, $('.clawdius-workflow-chips'));
+		const lines = append(container, $('.clawdius-workflow-run-lines'));
+		const titleRow = append(lines, $('.clawdius-workflow-run-title-row'));
+		const iconLabel = new IconLabel(titleRow, { hoverDelegate: this.hoverDelegate });
+		const chips = append(titleRow, $('.clawdius-workflow-chips'));
 		const badge = append(chips, $('.clawdius-workflow-chip.clawdius-workflow-badge'));
 		const erroredChip = append(chips, $('.clawdius-workflow-chip.errored-chip'));
 		const completenessChip = append(chips, $('.clawdius-workflow-chip.completeness-chip'));
 		const ownershipChip = append(chips, $('.clawdius-workflow-chip.ownership-chip'));
-		return { container, icon, iconLabel, badge, erroredChip, completenessChip, ownershipChip };
+		const meta = append(lines, $('.clawdius-workflow-run-meta'));
+		return { container, icon, iconLabel, meta, badge, erroredChip, completenessChip, ownershipChip };
 	}
 
 	renderElement(node: ITreeNode<WorkflowTreeElement, FuzzyScore>, _index: number, template: IWorkflowRunTemplate): void {
@@ -793,7 +735,7 @@ export class WorkflowRunRowRenderer extends Disposable implements ITreeRenderer<
 		}
 		// Read the CURRENT data through the context, not the element's own (possibly stale) `run` field - see
 		// `IWorkflowRenderContext.runOf`'s doc comment for why a same-identity node's element can go stale (a
-		// graduation, or an ordinary live-progress tick) without the tree ever swapping it out.
+		// graduation, or an ordinary live-poll tick) without the tree ever swapping it out.
 		const run = this.context.runOf(element.run.identity) ?? element.run;
 		template.container.classList.toggle('clawdius-workflow-graduated', this.context.justGraduated(run.identity));
 		template.container.setAttribute('data-run-id', run.runId);
@@ -807,7 +749,8 @@ export class WorkflowRunRowRenderer extends Disposable implements ITreeRenderer<
 		template.icon.className = `clawdius-workflow-status-icon ${ThemeIcon.asClassName(runStatusIcon(run))} ${runStatusClass(run)}`;
 
 		const content = describeRunRow(run);
-		template.iconLabel.setLabel(content.primary, content.secondaryParts.join('  ·  '), { title: content.primary });
+		template.iconLabel.setLabel(content.primary, undefined, { title: content.primary });
+		template.meta.textContent = describeRunMetaParts(run).join('  ·  ');
 
 		const badgeSignal = this.context.badgeOf(run.runId);
 		clearNode(template.badge);
@@ -834,19 +777,23 @@ export class WorkflowRunRowRenderer extends Disposable implements ITreeRenderer<
 			template.erroredChip.style.display = 'none';
 		}
 
-		// Exception-only: shown whenever the run did NOT read whole, independent of ownership.
-		if (run.completeness !== CompletenessState.Complete) {
-			template.completenessChip.textContent = run.completeness;
+		// Exception-only: shown whenever the run did NOT read whole, independent of ownership. The mapping function
+		// itself decides "exception-only" (undefined for Complete) - see describeCompletenessLabel's doc comment.
+		const completenessLabel = describeCompletenessLabel(run.completeness);
+		if (completenessLabel !== undefined) {
+			template.completenessChip.textContent = completenessLabel;
 			template.completenessChip.className = `clawdius-workflow-chip completeness-chip completeness-${run.completeness}`;
 			template.completenessChip.style.display = '';
 		} else {
 			template.completenessChip.style.display = 'none';
 		}
 
-		// Exception-only in the other direction: shown only when ownership can differ across the view.
+		// Exception-only in the other direction: shown only when ownership can differ across the view. The raw
+		// value still drives the CSS class + `data-ownership-shown` (tests key off it); only the chip's own text
+		// goes through the plain-English mapping.
 		if (!this.context.uniformlyForeign) {
 			const ownership: FleetOwnership = resolveOwnership(run, this.context.ownedSessionIds);
-			template.ownershipChip.textContent = ownership;
+			template.ownershipChip.textContent = describeOwnershipLabel(ownership);
 			template.ownershipChip.className = `clawdius-workflow-chip ownership-chip ownership-${ownership}`;
 			template.ownershipChip.style.display = '';
 			template.container.setAttribute('data-ownership-shown', ownership);
@@ -858,245 +805,6 @@ export class WorkflowRunRowRenderer extends Disposable implements ITreeRenderer<
 
 	disposeTemplate(template: IWorkflowRunTemplate): void {
 		template.iconLabel.dispose();
-	}
-}
-
-// --- terminal story-leaf renderer (measured, variable height) ------------------------------------------
-
-interface IWorkflowStoryTemplate {
-	readonly container: HTMLElement;
-	readonly summary: HTMLElement;
-	readonly cost: HTMLElement;
-	readonly result: HTMLElement;
-	readonly error: HTMLElement;
-	element: Extract<WorkflowTreeElement, { kind: 'story' }> | undefined;
-}
-
-export interface IWorkflowStoryHeightChange {
-	readonly element: WorkflowTreeElement;
-	readonly height: number;
-}
-
-/**
- * The story leaf: `collapsible:false`, no children (see `buildTerminalRunChildren`) - a true keyboard-focusable
- * leaf with no twistie. After every render it measures its OWN rendered content height and, when the integer
- * height changed, caches it and fires {@link onDidChangeItemHeight} so the owning view can call
- * `tree.updateElementHeight` (guarded there by `tree.hasElement`). `remeasureAll` re-measures every currently
- * RENDERED (visible) leaf - a virtualized-out leaf has no live DOM to remeasure; it gets a fresh measurement the
- * next time it scrolls into view and `renderElement` runs again, which is why the view only needs to call this on
- * a width change (see `claudeWorkflowsView.ts`'s layoutBody), never for the full known run list.
- */
-export class WorkflowStoryLeafRenderer extends Disposable implements ITreeRenderer<WorkflowTreeElement, FuzzyScore, IWorkflowStoryTemplate> {
-	readonly templateId = WorkflowTreeTemplateId.Story;
-
-	private readonly _onDidChangeItemHeight = this._register(new Emitter<IWorkflowStoryHeightChange>());
-	readonly onDidChangeItemHeight: Event<IWorkflowStoryHeightChange> = this._onDidChangeItemHeight.event;
-
-	private readonly liveTemplates = new Set<IWorkflowStoryTemplate>();
-
-	constructor(private readonly heights: WorkflowStoryHeightCache) {
-		super();
-	}
-
-	renderTemplate(container: HTMLElement): IWorkflowStoryTemplate {
-		container.classList.add('clawdius-workflow-story');
-		const summary = append(container, $('.clawdius-workflow-story-summary'));
-		const cost = append(container, $('.clawdius-workflow-story-cost'));
-		const result = append(container, $('.clawdius-workflow-story-result'));
-		const error = append(container, $('.clawdius-workflow-story-error'));
-		return { container, summary, cost, result, error, element: undefined };
-	}
-
-	renderElement(node: ITreeNode<WorkflowTreeElement, FuzzyScore>, _index: number, template: IWorkflowStoryTemplate): void {
-		const element = node.element;
-		if (!isStoryElement(element)) {
-			return;
-		}
-		template.element = element;
-		const run = element.run;
-		template.summary.textContent = describeStorySummaryText(run);
-
-		clearNode(template.cost);
-		for (const part of describeStoryCostParts(run)) {
-			if (template.cost.childElementCount > 0) {
-				append(template.cost, $('span.clawdius-workflow-story-sep', undefined, '·'));
-			}
-			append(template.cost, $('span', undefined, part));
-		}
-
-		template.result.textContent = describeStoryResultText(run);
-
-		const errorInfo = describeStoryError(run);
-		if (errorInfo) {
-			template.error.textContent = errorInfo.summary;
-			template.error.title = errorInfo.full;
-			template.error.style.display = '';
-		} else {
-			template.error.textContent = '';
-			template.error.removeAttribute('title');
-			template.error.style.display = 'none';
-		}
-
-		this.liveTemplates.add(template);
-		this.measure(template);
-	}
-
-	disposeElement(_node: ITreeNode<WorkflowTreeElement, FuzzyScore>, _index: number, template: IWorkflowStoryTemplate): void {
-		this.liveTemplates.delete(template);
-		template.element = undefined;
-	}
-
-	disposeTemplate(_template: IWorkflowStoryTemplate): void { }
-
-	/** Re-measure every currently-rendered story leaf (see the class doc for why this covers exactly what a width
-	 *  change needs to invalidate). */
-	remeasureAll(): void {
-		for (const template of this.liveTemplates) {
-			this.measure(template);
-		}
-	}
-
-	private measure(template: IWorkflowStoryTemplate): void {
-		const element = template.element;
-		if (!element) {
-			return;
-		}
-		const measured = Math.max(STORY_MIN_HEIGHT, Math.round(template.container.scrollHeight));
-		const identity = element.run.identity;
-		if (this.heights.get(identity) === measured) {
-			return;
-		}
-		this.heights.set(identity, measured);
-		this._onDidChangeItemHeight.fire({ element, height: measured });
-	}
-}
-
-// --- live-progress leaf renderer (measured, variable height) --------------------------------------------------
-
-interface IWorkflowLiveProgressTemplate {
-	readonly container: HTMLElement;
-	readonly progressBar: ProgressBar;
-	readonly ratio: HTMLElement;
-	readonly running: HTMLElement;
-	readonly activity: HTMLElement;
-	readonly degraded: HTMLElement;
-	readonly landedCount: HTMLElement;
-	readonly landedList: HTMLElement;
-	element: Extract<WorkflowTreeElement, { kind: 'liveProgress' }> | undefined;
-}
-
-/**
- * The live-progress leaf: the live analogue of {@link WorkflowStoryLeafRenderer} - `collapsible: false`, no
- * children, measured after every render exactly the same way (see that class's doc for why this is a true leaf
- * rather than a nested-scroll region). Shows a `ProgressBar` against agents SEEN so far ({@link LiveWorkflowRun.seenCount},
- * never a fixed total a live run does not have - `seenCount` is itself observed, not declared), the running count,
- * the journal's own last-write activity text, and up to
- * {@link LIVE_PROGRESS_MAX_LANDED_PREVIEWS} landed-result previews. The `ProgressBar` is created once per
- * template (reused across row recycles, exactly like the run/agent rows' `IconLabel`) and disposed in
- * `disposeTemplate` - never leaked, never recreated per render.
- */
-export class WorkflowLiveProgressRenderer extends Disposable implements ITreeRenderer<WorkflowTreeElement, FuzzyScore, IWorkflowLiveProgressTemplate> {
-	readonly templateId = WorkflowTreeTemplateId.LiveProgress;
-
-	private readonly _onDidChangeItemHeight = this._register(new Emitter<IWorkflowStoryHeightChange>());
-	readonly onDidChangeItemHeight: Event<IWorkflowStoryHeightChange> = this._onDidChangeItemHeight.event;
-
-	private readonly liveTemplates = new Set<IWorkflowLiveProgressTemplate>();
-
-	constructor(private readonly heights: WorkflowStoryHeightCache) {
-		super();
-	}
-
-	renderTemplate(container: HTMLElement): IWorkflowLiveProgressTemplate {
-		container.classList.add('clawdius-workflow-live-progress');
-		const progressBar = new ProgressBar(container, defaultProgressBarStyles);
-		const ratio = append(container, $('.clawdius-workflow-live-ratio'));
-		const running = append(container, $('.clawdius-workflow-live-running'));
-		const activity = append(container, $('.clawdius-workflow-live-activity'));
-		const degraded = append(container, $('.clawdius-workflow-live-degraded'));
-		const landedCount = append(container, $('.clawdius-workflow-live-landed-count'));
-		const landedList = append(container, $('.clawdius-workflow-live-landed-list'));
-		return { container, progressBar, ratio, running, activity, degraded, landedCount, landedList, element: undefined };
-	}
-
-	renderElement(node: ITreeNode<WorkflowTreeElement, FuzzyScore>, _index: number, template: IWorkflowLiveProgressTemplate): void {
-		const element = node.element;
-		if (!isLiveProgressElement(element)) {
-			return;
-		}
-		template.element = element;
-		const content = describeLiveProgress(element.run);
-
-		if (content.seenCount > 0) {
-			// `seenCount` (the union of started/result agent ids - never just `startedCount`) is the total: using
-			// `startedCount` here could paint `worked` (resultCount) ABOVE `total` whenever a result's own `started`
-			// record was torn or otherwise dropped, an invalid `aria-valuenow` > `aria-valuemax` state.
-			template.progressBar.total(content.seenCount);
-			// `ProgressBar.setWorked` floors its argument to a minimum of 1 (base/browser/ui/progressbar), so calling
-			// it with a genuine 0 would misleadingly paint ONE unit of progress before anything has landed - leave the
-			// bar at its freshly-`total()`-reset zero state instead of coercing an honest zero into a fabricated one.
-			if (content.resultCount > 0) {
-				template.progressBar.setWorked(content.resultCount);
-			}
-		} else {
-			template.progressBar.infinite();
-		}
-
-		template.ratio.textContent = content.ratioCaption;
-		template.running.textContent = content.runningCount > 0
-			? localize('clawdius.workflows.live.running', "{0} still running", content.runningCount)
-			: '';
-		template.running.style.display = content.runningCount > 0 ? '' : 'none';
-		template.activity.textContent = content.activityCaption;
-
-		template.degraded.textContent = content.degradedCaption ?? '';
-		template.degraded.style.display = content.degradedCaption ? '' : 'none';
-
-		template.landedCount.textContent = content.landedCountCaption ?? '';
-		template.landedCount.style.display = content.landedCountCaption ? '' : 'none';
-
-		clearNode(template.landedList);
-		for (const landed of content.landedPreviews) {
-			append(template.landedList, $('.clawdius-workflow-live-landed-item', undefined, landed.preview));
-		}
-		if (content.hasMoreLanded) {
-			append(template.landedList, $('.clawdius-workflow-live-landed-more', undefined,
-				localize('clawdius.workflows.live.moreLanded', "More results have landed than shown here.")));
-		}
-
-		this.liveTemplates.add(template);
-		this.measure(template);
-	}
-
-	disposeElement(_node: ITreeNode<WorkflowTreeElement, FuzzyScore>, _index: number, template: IWorkflowLiveProgressTemplate): void {
-		this.liveTemplates.delete(template);
-		template.element = undefined;
-	}
-
-	disposeTemplate(template: IWorkflowLiveProgressTemplate): void {
-		template.progressBar.dispose();
-	}
-
-	/** Re-measure every currently-rendered live-progress leaf - the same width-change hook `WorkflowStoryLeafRenderer`
-	 *  exposes, called from the view's `layoutBody` alongside it. */
-	remeasureAll(): void {
-		for (const template of this.liveTemplates) {
-			this.measure(template);
-		}
-	}
-
-	private measure(template: IWorkflowLiveProgressTemplate): void {
-		const element = template.element;
-		if (!element) {
-			return;
-		}
-		const measured = Math.max(STORY_MIN_HEIGHT, Math.round(template.container.scrollHeight));
-		const identity = element.run.identity;
-		if (this.heights.get(identity) === measured) {
-			return;
-		}
-		this.heights.set(identity, measured);
-		this._onDidChangeItemHeight.fire({ element, height: measured });
 	}
 }
 

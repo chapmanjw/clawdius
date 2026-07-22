@@ -7,16 +7,18 @@
 // A native `WorkbenchObjectTree` ViewPane listing the ultracode WORKFLOWS the reader seam enumerates - workflow
 // runs, not chat sessions. The top-level list is sourced through the validated root envelope `listWorkflows` (the
 // discriminated live/terminal/unknown-shape model + the honest ok/partial/read-error envelope, `common/
-// claudeWorkflowModel.ts`) and rendered DIRECTLY through the tree - no bridge back to a legacy row shape. A
-// TERMINAL run expands (native tree expansion, collapsed by default) to its story leaf (summary + cost + result,
-// variable-height and measured) and its phases/agents (grouped under phase nodes only when the run declared more
-// than one - see `claudeWorkflowTree.ts`'s `buildTerminalRunChildren`). Drill-in editors open on `onDidOpen`
-// (Enter or mouse activation): the story leaf opens the run's FULL result, an agent row opens its DETAIL - both
-// the discriminated `ClaudeWorkflowDetailInput`/`Editor` (`claudeWorkflowDetailInput.ts` /
+// claudeWorkflowModel.ts`) and rendered DIRECTLY through the tree - no bridge back to a legacy row shape, and
+// COMPACT: every row is fixed-height, and a run's own summary/result/error text is never inlined into the tree
+// (see `claudeWorkflowTree.ts`'s file header comment). A TERMINAL run expands (native tree expansion, collapsed by
+// default) to ONLY its phases/agents (grouped under phase nodes only when the run declared more than one - see
+// `claudeWorkflowTree.ts`'s `buildTerminalRunChildren`); a live or unknown-shape run has no children. Drill-in
+// editors open on `onDidOpen` (Enter or mouse activation, never the twistie/single-click that merely toggles
+// expansion): activating a TERMINAL `run` row opens its FULL result, an `agent` row opens its DETAIL - both the
+// discriminated `ClaudeWorkflowDetailInput`/`Editor` (`claudeWorkflowDetailInput.ts` /
 // `claudeWorkflowDetailEditor.ts`), rendered from the SAME in-memory `TerminalWorkflowRun`/`TerminalWorkflowAgent`
 // the tree already holds - no second seam read. An agent's raw transcript is reachable FROM its detail pane (an
-// "Open Transcript" action, withheld unless `agent.transcriptRef` is present); `run` (toggles expansion) and
-// `phase` (a grouping node) never open an editor.
+// "Open Transcript" action, withheld unless `agent.transcriptRef` is present); a non-terminal `run` and a `phase`
+// (a grouping node) never open an editor.
 //
 // The ownership-chrome rule is split across this file and `claudeWorkflowTree.ts`: `refreshDisplay()` below
 // computes `uniformlyForeign` ONCE per re-render (never per-row, off the DISPLAYED runs after the status/text
@@ -37,9 +39,10 @@
 // enumeration (`observationService.readAgain()`), never a run control.
 
 import './media/claudeWorkflows.css';
-import { $, append, getWindow, scheduleAtNextAnimationFrame } from '../../../../../base/browser/dom.js';
+import { $, append } from '../../../../../base/browser/dom.js';
 import { InputBox } from '../../../../../base/browser/ui/inputbox/inputBox.js';
 import { ISelectOptionItem, SelectBox } from '../../../../../base/browser/ui/selectBox/selectBox.js';
+import { RenderIndentGuides } from '../../../../../base/browser/ui/tree/abstractTree.js';
 import { disposableTimeout, RunOnceScheduler } from '../../../../../base/common/async.js';
 import { FuzzyScore } from '../../../../../base/common/filters.js';
 import { DisposableStore, MutableDisposable } from '../../../../../base/common/lifecycle.js';
@@ -68,8 +71,8 @@ import { IClaudeWorkflowObservationService, WORKFLOWS_VIEW_CONTAINER_ID, Workflo
 import { ownedSessionIdsFromHost } from './claudeWorkflowOwnership.js';
 import {
 	computeUniformlyForeign, IWorkflowRenderContext, reconcileWorkflowTree, renderWorkflowsStateMessage,
-	resolveTrackedElements, resolveWorkflowsDisplayState, WorkflowAgentRowRenderer, WorkflowLiveProgressRenderer,
-	WorkflowPhaseRowRenderer, WorkflowRunRowRenderer, WorkflowStoryHeightCache, WorkflowStoryLeafRenderer,
+	resolveTrackedElements, resolveWorkflowsDisplayState, WorkflowAgentRowRenderer,
+	WorkflowPhaseRowRenderer, WorkflowRunRowRenderer,
 	WorkflowTreeAccessibilityProvider, WorkflowTreeElement, WorkflowTreeIdentityProvider,
 	WorkflowTreeKeyboardNavigationLabelProvider, WorkflowTreeVirtualDelegate, workflowTreeElementId,
 } from './claudeWorkflowTree.js';
@@ -287,9 +290,6 @@ export class ClawdiusWorkflowsView extends ViewPane {
 	 *  to gate the surface label on what is actually visible, not on the full unfiltered snapshot. */
 	private currentDisplayedRuns: readonly WorkflowRun[] = [];
 
-	/** Per-run measured story-leaf / live-progress-leaf heights, shared between the virtual delegate and the two
-	 *  measured-leaf renderers. */
-	private readonly storyHeights = new WorkflowStoryHeightCache();
 	/** The mutable, view-owned ownership signal every row renderer reads at render time (never recomputed by a
 	 *  renderer, never a second disk read). Mutated in place on every applied snapshot. */
 	private readonly renderContext: IWorkflowRenderContext;
@@ -314,7 +314,6 @@ export class ClawdiusWorkflowsView extends ViewPane {
 	 *  snapshot from the reconcile's own result, exactly like `runElementsByRunId`/`liveIdentities`. */
 	private readonly renderedSignatureByRunId = new Map<string, string>();
 	private readonly stateMessageStore = this._register(new MutableDisposable());
-	private readonly storyRemeasureSchedule = this._register(new MutableDisposable());
 	/** Clears a graduated run's transient highlight after `GRADUATION_HIGHLIGHT_MS`. Passed as `disposableTimeout`'s
 	 *  own `store` argument (below) rather than `.add()`-ed after the fact, so a FIRED timer is automatically
 	 *  evicted from this store the moment it runs - never held for the rest of the view's life, which an unbounded
@@ -325,16 +324,14 @@ export class ClawdiusWorkflowsView extends ViewPane {
 	 *  keystrokes into exactly one re-render. */
 	private readonly filterDebounceScheduler = this._register(new RunOnceScheduler(() => this.refreshDisplay(), FILTER_DEBOUNCE_MS));
 
+	private purposeLabelEl!: HTMLElement;
 	private surfaceLabelEl!: HTMLElement;
 	private stateContainer!: HTMLElement;
 	private treeContainer!: HTMLElement;
 	private tree!: WorkbenchObjectTree<WorkflowTreeElement, FuzzyScore>;
-	private storyRenderer!: WorkflowStoryLeafRenderer;
-	private liveProgressRenderer!: WorkflowLiveProgressRenderer;
 	private filterInput!: InputBox;
 	private statusFilterSelect!: SelectBox;
 	private sortModeSelect!: SelectBox;
-	private lastWidth: number | undefined;
 
 	constructor(
 		options: IViewPaneOptions,
@@ -365,10 +362,16 @@ export class ClawdiusWorkflowsView extends ViewPane {
 		super.renderBody(container);
 		container.classList.add('clawdius-workflows');
 
+		// A short, always-shown purpose line, above the exception-only foreign-ownership caveat below. Hidden the
+		// instant the surface label shows (see `updateSurfaceOwnershipLabel`) - the two lines otherwise say the same
+		// "read-only, observed from Claude Code on disk" thing back-to-back (item 19).
+		this.purposeLabelEl = append(container, $('.clawdius-workflows-purpose-label'));
+		this.purposeLabelEl.textContent = localize('clawdius.workflows.purpose', "Ultracode workflow runs observed from Claude Code, read-only.");
+
 		// The single surface ownership label: shown only while every currently-enumerated run is foreign (see
 		// `updateSurfaceOwnershipLabel`), dropped the instant ownership can differ.
 		this.surfaceLabelEl = append(container, $('.clawdius-workflows-surface-label'));
-		this.surfaceLabelEl.textContent = localize('clawdius.workflows.surfaceForeign', "All runs shown are foreign - observed on disk, not owned by this workbench.");
+		this.surfaceLabelEl.textContent = localize('clawdius.workflows.surfaceForeign', "These runs are read-only — Clawdius is observing them from Claude Code on disk.");
 		this.surfaceLabelEl.style.display = 'none';
 
 		// The persistent filter/status-filter/sort toolbar, mounted ABOVE the tree/state pair (never inside it),
@@ -383,18 +386,6 @@ export class ClawdiusWorkflowsView extends ViewPane {
 
 		const hoverDelegate = this._register(this.instantiationService.createInstance(WorkbenchHoverDelegate, 'element', undefined, {}));
 
-		this.storyRenderer = this._register(new WorkflowStoryLeafRenderer(this.storyHeights));
-		this._register(this.storyRenderer.onDidChangeItemHeight(({ element, height }) => {
-			if (this.tree.hasElement(element)) {
-				this.tree.updateElementHeight(element, height);
-			}
-		}));
-		this.liveProgressRenderer = this._register(new WorkflowLiveProgressRenderer(this.storyHeights));
-		this._register(this.liveProgressRenderer.onDidChangeItemHeight(({ element, height }) => {
-			if (this.tree.hasElement(element)) {
-				this.tree.updateElementHeight(element, height);
-			}
-		}));
 		const runRenderer = this._register(new WorkflowRunRowRenderer(this.renderContext, hoverDelegate));
 		const phaseRenderer = new WorkflowPhaseRowRenderer();
 		const agentRenderer = this._register(new WorkflowAgentRowRenderer(hoverDelegate));
@@ -403,8 +394,8 @@ export class ClawdiusWorkflowsView extends ViewPane {
 			WorkbenchObjectTree<WorkflowTreeElement, FuzzyScore>,
 			'ClawdiusWorkflowsTree',
 			this.treeContainer,
-			new WorkflowTreeVirtualDelegate(this.storyHeights),
-			[runRenderer, this.storyRenderer, this.liveProgressRenderer, phaseRenderer, agentRenderer],
+			new WorkflowTreeVirtualDelegate(),
+			[runRenderer, phaseRenderer, agentRenderer],
 			{
 				identityProvider: new WorkflowTreeIdentityProvider(),
 				accessibilityProvider: new WorkflowTreeAccessibilityProvider(this.renderContext),
@@ -412,17 +403,22 @@ export class ClawdiusWorkflowsView extends ViewPane {
 				multipleSelectionSupport: false,
 				horizontalScrolling: false,
 				collapseByDefault: true,
+				// Item 17: a phase/agent row's parentage under its run is otherwise legible only from indentation
+				// alone - an on-hover indent guide makes that nesting unambiguous without adding permanent visual
+				// noise to every row.
+				renderIndentGuides: RenderIndentGuides.OnHover,
 				overrideStyles: this.getLocationBasedColors().listOverrideStyles,
 			},
 		));
 
-		// Drill-in activation: `onDidOpen` fires for BOTH Enter and mouse activation. A `story` element opens the
-		// run's full RESULT detail; an `agent` element opens that agent's DETAIL. `run` (a collapsible row) and
-		// `phase` (a grouping node) open no editor - the tree's own native expand/collapse handles `run`.
+		// Drill-in activation: `onDidOpen` fires for BOTH Enter and mouse activation, never the twistie/single-click
+		// that merely toggles expansion. A TERMINAL `run` element opens the run's full RESULT detail (a live run has
+		// no terminal result to show, so it opens nothing); an `agent` element opens that agent's DETAIL. `phase` (a
+		// grouping node) never opens an editor.
 		this._register(this.tree.onDidOpen(e => {
 			const element = e.element;
 			if (!element) { return; }
-			if (element.kind === 'story') {
+			if (element.kind === 'run' && element.run.kind === 'terminal') {
 				void this.openResultDetail(element.run);
 			} else if (element.kind === 'agent') {
 				void this.openAgentDetail(element.run, element.agent);
@@ -474,7 +470,10 @@ export class ClawdiusWorkflowsView extends ViewPane {
 
 		const filterContainer = append(toolbar, $('.clawdius-workflows-filter'));
 		this.filterInput = this._register(new InputBox(filterContainer, this.contextViewService, {
-			placeholder: localize('clawdius.workflows.filter.placeholder', "Filter by name, summary, agent, or error"),
+			// Item 16: kept SHORT (never the full "name, summary, agent, or error" corpus this filter actually
+			// searches - see matchesWorkflowFilter/the ariaLabel below) so it never clips mid-word at the sidebar's
+			// narrower widths.
+			placeholder: localize('clawdius.workflows.filter.placeholder', "Filter by name, agent, or error"),
 			ariaLabel: localize('clawdius.workflows.filter.ariaLabel', "Filter Claude Code workflow runs by name, summary, run ID, agent, or error"),
 			inputBoxStyles: defaultInputBoxStyles,
 		}));
@@ -525,18 +524,11 @@ export class ClawdiusWorkflowsView extends ViewPane {
 
 	protected override layoutBody(height: number, width: number): void {
 		super.layoutBody(height, width);
-		const widthChanged = this.lastWidth !== undefined && this.lastWidth !== width;
-		this.lastWidth = width;
 		const boundedHeight = Math.max(0, height);
 		this.stateContainer.style.height = `${boundedHeight}px`;
 		this.treeContainer.style.height = `${boundedHeight}px`;
 		this.treeContainer.style.width = `${width}px`;
 		this.tree.layout(height, width);
-		if (widthChanged) {
-			// A width change invalidates the cached story heights' correctness (the same text now wraps to a
-			// different number of lines); batch a burst of resize events (a sidebar drag) into ONE remeasure pass.
-			this.storyRemeasureSchedule.value = scheduleAtNextAnimationFrame(getWindow(this.treeContainer), () => this.storyRenderer.remeasureAll());
-		}
 	}
 
 	/**
@@ -619,6 +611,9 @@ export class ClawdiusWorkflowsView extends ViewPane {
 			// it in lockstep with the emptied bookkeeping, so the next reconcile starts from a genuinely clean slate.
 			this.tree.setChildren(null, []);
 			this.surfaceLabelEl.style.display = 'none';
+			// Restore the purpose line too: a PRIOR tree render may have hidden it in favor of the surface label
+			// (item 19's dedupe), and a non-tree state has no tree left for that label to describe.
+			this.purposeLabelEl.style.display = '';
 			this.treeContainer.style.display = 'none';
 			this.stateContainer.style.display = '';
 			this.stateMessageStore.value = renderWorkflowsStateMessage(this.stateContainer, state, () => this.observationService.readAgain());
@@ -711,9 +706,13 @@ export class ClawdiusWorkflowsView extends ViewPane {
 		const show = this.currentDisplayedRuns.length > 0 && this.renderContext.uniformlyForeign;
 		this.surfaceLabelEl.style.display = show ? '' : 'none';
 		this.surfaceLabelEl.setAttribute('data-clawdius-workflows-surface-ownership', String(show));
+		// Item 19: the two caption lines say the same "read-only, observed from Claude Code on disk" thing - hide
+		// the always-on purpose line the instant the more specific surface label takes over, rather than stacking
+		// two near-duplicate sentences.
+		this.purposeLabelEl.style.display = show ? 'none' : '';
 	}
 
-	/** Open the RESULT detail editor for a terminal run's story leaf - a SNAPSHOT off the same in-memory
+	/** Open the RESULT detail editor for a terminal run row's activation - a SNAPSHOT off the same in-memory
 	 *  `TerminalWorkflowRun` the tree already holds (no second seam read; see claudeWorkflowDetailInput.ts). */
 	private async openResultDetail(run: TerminalWorkflowRun): Promise<void> {
 		const payload: ClaudeWorkflowResultDetailPayload = {

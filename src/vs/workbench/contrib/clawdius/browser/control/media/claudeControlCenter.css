@@ -58,34 +58,50 @@ rounded "card" chrome. Semantic tones (allow/warn/deny) map to the editor's own 
 .clawdius-control-hero-title { font-size: 19px; font-weight: 600; color: var(--vscode-settings-headerForeground, var(--vscode-foreground)); }
 .clawdius-control-hero-sub { font-size: 13px; color: var(--vscode-descriptionForeground); max-width: 720px; }
 
-/* tab strip: panel-style underline tabs (the ONE brand accent lives here, on .active) */
-.clawdius-control-tabs-row { display: flex; align-items: flex-end; border-bottom: 1px solid var(--vscode-panel-border); }
-.clawdius-control-tabs { display: flex; gap: 2px; }
-/* Star + Sponsor actions: real buttons, keyboard-focusable, sitting beside (not inside) the tablist. */
+/* tab strip: panel-style underline tabs (the ONE brand accent lives here, on .active). Item 2 (BLOCKER): Star + Sponsor used to sit INSIDE the same horizontally-scrolling row as the tabs, pushed right via `margin-left: auto` - once the tabs overflowed, that push target itself scrolled out of view and clipped ("Sponso…"/"Sponsor C…"). `.clawdius-control-tabsbar` is now the non-scrolling outer flex row (carries the underline border); only `.clawdius-control-tabs-row` inside it scrolls, and `.clawdius-control-tabs-actions` is a separate, never-scrolling sibling pinned to the right by ordinary flex layout - Star/Sponsor can now never clip. */
+.clawdius-control-tabsbar {
+	display: flex; align-items: flex-end; border-bottom: 1px solid var(--vscode-panel-border);
+}
+.clawdius-control-tabs-row {
+	display: flex; align-items: flex-end; flex: 1 1 auto; min-width: 0;
+	overflow-x: auto; overflow-y: hidden;
+}
+.clawdius-control-tabs-row::-webkit-scrollbar { height: 8px; }
+.clawdius-control-tabs-row::-webkit-scrollbar-track { background: transparent; }
+.clawdius-control-tabs-row::-webkit-scrollbar-thumb {
+	background-color: var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.4));
+	border: 3px solid transparent;
+	background-clip: content-box;
+}
+.clawdius-control-tabs-row::-webkit-scrollbar-thumb:hover { background-color: var(--vscode-scrollbarSlider-hoverBackground, rgba(100, 100, 100, 0.7)); }
+.clawdius-control-tabs-row::-webkit-scrollbar-button { display: none; }
+.clawdius-control-tabs { display: flex; flex: none; gap: 2px; }
+/* Star + Sponsor actions: real buttons, keyboard-focusable, sitting in their own non-scrolling container beside (not inside) the tablist's scroll area. */
+.clawdius-control-tabs-actions { display: inline-flex; flex: none; align-items: flex-end; gap: 2px; }
 .clawdius-control-star, .clawdius-control-sponsor {
-	margin-bottom: 3px; display: inline-flex; align-items: center; gap: 5px;
+	margin-bottom: 3px; display: inline-flex; flex: none; align-items: center; gap: 5px; white-space: nowrap;
 	background: none; border: none; color: inherit; font: inherit; font-size: 12px; cursor: pointer;
 	opacity: 0.7; padding: 3px 6px; border-radius: 2px;
 }
-/* The first action (Star) carries margin-left:auto so the Star+Sponsor group is pushed to the right of the tabs. */
-.clawdius-control-star { margin-left: auto; }
 .clawdius-control-star:hover, .clawdius-control-sponsor:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground)); }
 .clawdius-control-star:focus-visible, .clawdius-control-sponsor:focus-visible { opacity: 1; outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
-.clawdius-control-sponsor-heart { color: #db61a2; }
+/* Item 25: a registered Clawdius color (clawdiusPermissionModeStatusEntry.ts-style self-contained registration, see claudeControlCenterEditor.ts) instead of a hardcoded hex, so the heart is themeable (including HC) while keeping the same pink by default. */
+.clawdius-control-sponsor-heart { color: var(--vscode-clawdius-sponsorHeart, #db61a2); }
 /* Live star-count pill (fail-silent: hidden until a count arrives). Neutral, matches the native chrome. */
 .clawdius-control-star-count {
 	font-variant-numeric: tabular-nums; font-size: 11px; line-height: 15px; padding: 0 5px;
 	border: 1px solid var(--vscode-panel-border); border-radius: 999px; color: var(--vscode-descriptionForeground);
 }
 .clawdius-control-tab {
-	background: none; border: none; border-bottom: 1px solid transparent; margin-bottom: -1px;
+	background: none; border: none; border-bottom: 1px solid transparent; margin-bottom: -1px; flex: none;
 	color: var(--vscode-tab-inactiveForeground, var(--vscode-descriptionForeground)); font: inherit;
-	cursor: pointer; padding: 5px 11px;
+	cursor: pointer; padding: 5px 9px; white-space: nowrap;
 }
 .clawdius-control-tab:hover { color: var(--vscode-tab-activeForeground, var(--vscode-foreground)); }
 .clawdius-control-tab.active {
 	color: var(--vscode-tab-activeForeground, var(--vscode-foreground)); font-weight: 600;
-	border-bottom-color: #d97757;
+	/* Item 25: keep the brand-orange underline everywhere it already resolves (the fallback), but let High Contrast's own active-border token win when the theme defines one - `--vscode-contrastActiveBorder` is only ever emitted for HC themes, so this is a no-op everywhere else. */
+	border-bottom-color: var(--vscode-contrastActiveBorder, #d97757);
 }
 .clawdius-control-tab.soon { opacity: 0.4; cursor: default; }
 .clawdius-control-soon {
@@ -161,9 +177,10 @@ rounded "card" chrome. Semantic tones (allow/warn/deny) map to the editor's own 
 .clawdius-control-rule:first-of-type { border-top: none; }
 .clawdius-control-rule:hover { background: var(--vscode-list-hoverBackground); }
 .clawdius-control-rule-label { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* Item 5: a solid `badge-background` fill paired with `badge-foreground` white text clears only the 3:1 large-text AA bar on this theme's orange badge token (~3.6:1), not the 4.5:1 normal-text bar this chip's small text needs - the same tinted-fill pattern `.clawdius-control-chip.mcp` already uses (pale token-tinted background, saturated token color as the text) instead, which clears AA on any theme since the text always reads against a near-neutral background rather than a solid saturated one. */
 .clawdius-control-chip {
 	font-size: 11px; padding: 1px 7px; border-radius: 2px; white-space: nowrap;
-	background: var(--vscode-badge-background); color: var(--vscode-badge-foreground);
+	background: color-mix(in srgb, var(--vscode-badge-background) 18%, transparent); color: var(--vscode-badge-background);
 }
 .clawdius-control-chip.mcp { background: color-mix(in srgb, var(--vscode-charts-blue) 18%, transparent); color: var(--vscode-charts-blue); }
 .clawdius-control-rule-detail { font-size: 12px; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; }
@@ -197,10 +214,12 @@ rounded "card" chrome. Semantic tones (allow/warn/deny) map to the editor's own 
 .clawdius-control-eff-shadow { display: flex; align-items: center; gap: 8px; padding-left: 16px; opacity: 0.75; }
 .clawdius-control-eff-shadowval { font-family: var(--monaco-monospace-font, monospace); font-size: 12px; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
 
-/* Sandbox preflight verdict badges. */
-.clawdius-control-eff-tier.sbx-allowed { background: var(--vscode-testing-iconPassed, #388a34); color: var(--vscode-badge-foreground, #ffffff); }
-.clawdius-control-eff-tier.sbx-denied { background: var(--vscode-errorForeground, #c72e2e); color: var(--vscode-badge-foreground, #ffffff); }
-.clawdius-control-eff-tier.sbx-prompt { background: var(--vscode-editorWarning-foreground, #9a6700); color: var(--vscode-badge-foreground, #ffffff); }
+/* Sandbox preflight verdict badges - tinted fills (item 5), matching `.clawdius-control-chip.mcp`'s own pattern, instead of a solid `*-foreground`-as-background fill (which fails AA for its paired light text on several themes). */
+.clawdius-control-eff-tier.sbx-allowed { background: color-mix(in srgb, var(--vscode-testing-iconPassed, #388a34) 18%, transparent); color: var(--vscode-testing-iconPassed, #388a34); }
+.clawdius-control-eff-tier.sbx-denied { background: color-mix(in srgb, var(--vscode-errorForeground) 18%, transparent); color: var(--vscode-errorForeground); }
+.clawdius-control-eff-tier.sbx-prompt { background: color-mix(in srgb, var(--vscode-editorWarning-foreground) 18%, transparent); color: var(--vscode-editorWarning-foreground); }
+/* Item 10: at rest (no input yet) the verdict pill carries no text and no tone class - collapse it instead of showing a stray, contentless solid-badge-colored rectangle at the end of the row (this theme's badge.background is the brand orange, which otherwise reads as an odd "lone orange dash"). */
+.clawdius-control-eff-tier:empty { display: none; }
 
 /* Effective-config source-precedence legend */
 .clawdius-control-legend-group { display: flex; flex-direction: column; gap: 4px; }
@@ -255,19 +274,20 @@ rounded "card" chrome. Semantic tones (allow/warn/deny) map to the editor's own 
 
 /* capability rows (Skills / Plugins / Hooks): name + description on the left, a control on the right */
 .clawdius-control-caprow {
-	display: flex; align-items: center; gap: 16px; padding: 9px 12px;
+	display: flex; align-items: flex-start; gap: 16px; padding: 9px 12px;
 	border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 2px;
 	background: var(--vscode-editorWidget-background, transparent);
 }
 .clawdius-control-cap-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .clawdius-control-cap-name { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; }
+/* Item 5: same tinted-fill fix as `.clawdius-control-chip` above - the solid badge-background/foreground pair fails the 4.5:1 normal-text AA bar for this chip's small text. */
 .clawdius-control-cap-origin {
 	display: inline-flex; align-items: center; height: 16px; box-sizing: border-box; padding: 0 6px;
 	font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600;
-	background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); border-radius: 2px;
+	background: color-mix(in srgb, var(--vscode-badge-background) 18%, transparent); color: var(--vscode-badge-background); border-radius: 2px;
 }
 .clawdius-control-cap-origin.muted { background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); }
-.clawdius-control-cap-desc { font-size: 11.5px; color: var(--vscode-descriptionForeground); max-width: 620px; }
+.clawdius-control-cap-desc { font-size: 11.5px; color: var(--vscode-descriptionForeground); max-width: 620px; overflow-wrap: anywhere; word-break: break-word; }
 .clawdius-control-cap-acts { display: inline-flex; gap: 4px; margin-left: 8px; }
 
 /* small segmented control (per-skill 4-state) - a denser variant of the default-mode segment */
@@ -296,6 +316,8 @@ rounded "card" chrome. Semantic tones (allow/warn/deny) map to the editor's own 
 .clawdius-control-skill-chevron { padding: 2px 4px; }
 .clawdius-control-skill-chevron-spacer { width: 26px; flex: none; }
 .clawdius-control-skill-group .clawdius-control-cap-name > span:first-child { font-weight: 600; }
+/* Item 20: a long/CJK description wraps to multiple lines - center alignment then floats the segmented control mid-card against the wrapped text; top-align both instead. */
+.clawdius-control-caprow.clawdius-control-skill-group { align-items: flex-start; }
 .clawdius-control-skill-group-body { margin-left: 12px; border-left: 1px solid var(--vscode-panel-border); padding-left: 6px; }
 
 .clawdius-control-skill-badge {
@@ -303,7 +325,8 @@ rounded "card" chrome. Semantic tones (allow/warn/deny) map to the editor's own 
 	font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; border-radius: 2px; padding: 0 6px;
 }
 .clawdius-control-skill-badge-ico { font-size: 10px; }
-.clawdius-control-skill-badge.checking { background: var(--vscode-badge-background); color: var(--vscode-descriptionForeground); }
+/* Item 5: the solid badge-background/foreground pair (a brand-colored fill, e.g. Clawdius' orange, with white text) clears only the 3:1 large-text AA bar, not the 4.5:1 this small "checking"/"configured" text needs - the same tinted fill as the `.ok`/`.warn`/`.err` siblings below, matching `.clawdius-control-chip.mcp`'s pattern. */
+.clawdius-control-skill-badge.checking { background: color-mix(in srgb, var(--vscode-badge-background) 18%, transparent); color: var(--vscode-badge-background); }
 .clawdius-control-skill-badge.ok { background: color-mix(in srgb, var(--vscode-charts-green) 14%, transparent); color: var(--vscode-charts-green); }
 .clawdius-control-skill-badge.warn { background: color-mix(in srgb, var(--vscode-charts-yellow) 14%, transparent); color: var(--vscode-charts-yellow); }
 .clawdius-control-skill-badge.err { background: color-mix(in srgb, var(--vscode-errorForeground) 14%, transparent); color: var(--vscode-errorForeground); }

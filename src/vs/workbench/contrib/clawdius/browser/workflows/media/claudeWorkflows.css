@@ -11,12 +11,20 @@
 	user-select: text;
 }
 
+/* The always-shown purpose line, above the exception-only foreign-ownership caveat. */
+.clawdius-workflows-purpose-label {
+	flex: 0 0 auto;
+	padding: 6px 12px 0;
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+}
+
 /* The single surface ownership label - shown only while every enumerated run is foreign. */
 .clawdius-workflows-surface-label {
 	flex: 0 0 auto;
 	padding: 4px 12px;
 	font-size: 11px;
-	opacity: 0.8;
+	color: var(--vscode-descriptionForeground);
 	border-bottom: 1px solid var(--vscode-panel-border);
 }
 
@@ -27,7 +35,7 @@
 	flex-wrap: wrap;
 	align-items: center;
 	gap: 6px;
-	padding: 6px 8px;
+	padding: 6px 12px;
 	border-bottom: 1px solid var(--vscode-panel-border);
 }
 
@@ -64,7 +72,7 @@
 }
 
 .clawdius-workflows-state-text {
-	opacity: 0.8;
+	color: var(--vscode-descriptionForeground);
 	font-style: italic;
 	max-width: 320px;
 }
@@ -73,14 +81,74 @@
 	margin-top: 4px;
 }
 
-/* The tree itself is the ONLY scroller in this view; its size is set explicitly in layoutBody. */
 .clawdius-workflows-tree {
 	flex: 1 1 auto;
 	min-height: 0;
 	position: relative;
 }
 
-/* --- run row --- */
+/* Item 11: a light theme's `list.*SelectionBackground` can read as nearly invisible against the row's own background - an explicit focus outline keeps the SELECTED row visible independent of the theme's selection tint (a no-op visually on a theme that already contrasts well). */
+.clawdius-workflows-tree .monaco-list-row.focused .clawdius-workflow-run-row {
+	outline: 1px solid var(--vscode-list-focusOutline);
+	outline-offset: -1px;
+}
+
+/* Every scrollable Clawdius surface shares ONE themed scrollbar (not the OS-default white-on-dark) - matches the `--vscode-scrollbarSlider-*` pattern the other Clawdius surfaces already use (claudeUsage.css, clawdiusContextBudget.css), defensively, in case an overlay scrollbar ever falls back to the native one instead of a themed slider. A single shared comma-separated selector avoids repeating these four rules per surface. */
+.clawdius-workflows-tree::-webkit-scrollbar,
+.clawdius-workflow-detail::-webkit-scrollbar,
+.clawdius-workflow-detail-result::-webkit-scrollbar,
+.clawdius-workflow-detail-json::-webkit-scrollbar,
+.clawdius-workflow-artifact::-webkit-scrollbar,
+.clawdius-transcript::-webkit-scrollbar,
+.clawdius-transcript-records::-webkit-scrollbar {
+	width: 14px;
+	height: 14px;
+}
+
+.clawdius-workflows-tree::-webkit-scrollbar-track,
+.clawdius-workflow-detail::-webkit-scrollbar-track,
+.clawdius-workflow-detail-result::-webkit-scrollbar-track,
+.clawdius-workflow-detail-json::-webkit-scrollbar-track,
+.clawdius-workflow-artifact::-webkit-scrollbar-track,
+.clawdius-transcript::-webkit-scrollbar-track,
+.clawdius-transcript-records::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+.clawdius-workflows-tree::-webkit-scrollbar-thumb,
+.clawdius-workflow-detail::-webkit-scrollbar-thumb,
+.clawdius-workflow-detail-result::-webkit-scrollbar-thumb,
+.clawdius-workflow-detail-json::-webkit-scrollbar-thumb,
+.clawdius-workflow-artifact::-webkit-scrollbar-thumb,
+.clawdius-transcript::-webkit-scrollbar-thumb,
+.clawdius-transcript-records::-webkit-scrollbar-thumb {
+	background-color: var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.4));
+	border: 3px solid transparent;
+	background-clip: content-box;
+}
+
+.clawdius-workflows-tree::-webkit-scrollbar-thumb:hover,
+.clawdius-workflow-detail::-webkit-scrollbar-thumb:hover,
+.clawdius-workflow-detail-result::-webkit-scrollbar-thumb:hover,
+.clawdius-workflow-detail-json::-webkit-scrollbar-thumb:hover,
+.clawdius-workflow-artifact::-webkit-scrollbar-thumb:hover,
+.clawdius-transcript::-webkit-scrollbar-thumb:hover,
+.clawdius-transcript-records::-webkit-scrollbar-thumb:hover {
+	background-color: var(--vscode-scrollbarSlider-hoverBackground, rgba(100, 100, 100, 0.7));
+}
+
+/* Item 22: the :active state was missing its own token (only :hover had one) - a WebKit scrollbar's own :active pseudo-class fires while the thumb is being dragged, mirroring Monaco's own overlay scrollbar's three-state (idle/hover/active) theming. */
+.clawdius-workflows-tree::-webkit-scrollbar-thumb:active,
+.clawdius-workflow-detail::-webkit-scrollbar-thumb:active,
+.clawdius-workflow-detail-result::-webkit-scrollbar-thumb:active,
+.clawdius-workflow-detail-json::-webkit-scrollbar-thumb:active,
+.clawdius-workflow-artifact::-webkit-scrollbar-thumb:active,
+.clawdius-transcript::-webkit-scrollbar-thumb:active,
+.clawdius-transcript-records::-webkit-scrollbar-thumb:active {
+	background-color: var(--vscode-scrollbarSlider-activeBackground, rgba(191, 191, 191, 0.4));
+}
+
+/* --- run row: compact, two lines (status icon + name/chips on line 1, a muted cost line on line 2) --- */
 
 .clawdius-workflow-run-row {
 	display: flex;
@@ -90,13 +158,42 @@
 	padding-right: 8px;
 }
 
-.clawdius-workflow-run-row .monaco-icon-label {
+.clawdius-workflow-status-icon {
+	flex: 0 0 auto;
+}
+
+.clawdius-workflow-run-lines {
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	gap: 1px;
 	flex: 1 1 auto;
+	min-width: 0;
+	/* The list sets `line-height` to the row height (40px) for single-line centering; reset it so this row's TWO stacked lines each take their natural height instead of an inherited 40px line-box, which would make the column ~81px tall and overflow into the neighboring rows (unreadable). */
+	line-height: normal;
+}
+
+.clawdius-workflow-run-title-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
 	min-width: 0;
 }
 
-.clawdius-workflow-status-icon {
+.clawdius-workflow-run-title-row .monaco-icon-label {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.clawdius-workflow-run-meta {
 	flex: 0 0 auto;
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 
 .clawdius-workflow-status-icon.status-completed {
@@ -115,10 +212,11 @@
 	color: var(--vscode-editorWarning-foreground);
 }
 
+/* Vertically centered within the (single-line) title row and never shrinking, so the chip row can never be pushed off the row's right edge or clip against the name - the name (flex: 1 1 auto, min-width: 0, ellipsized) is what gives way first when both cannot fit. */
 .clawdius-workflow-chips {
 	display: flex;
+	align-items: center;
 	flex: 0 0 auto;
-	flex-wrap: wrap;
 	gap: 4px;
 	margin-left: auto;
 }
@@ -127,24 +225,26 @@
 	font-size: 10px;
 	line-height: 15px;
 	padding: 0 5px;
-	border-radius: 3px;
+	border-radius: 2px;
 	white-space: nowrap;
 	background: var(--vscode-badge-background);
 	color: var(--vscode-badge-foreground);
+	border: 1px solid var(--vscode-contrastBorder, transparent);
 }
 
+/* Tinted fills (never a solid `*-foreground`-as-background hack, which fails AA for its paired editor-background text on several themes) - the same pattern claudeControlCenter.css's skill badges already use, so the chip's own text stays legible on any theme while still reading as a warning tone. */
 .clawdius-workflow-chip.completeness-chip.completeness-unknown-shape,
 .clawdius-workflow-chip.completeness-chip.completeness-suppressed,
 .clawdius-workflow-chip.completeness-chip.completeness-partial,
 .clawdius-workflow-chip.ownership-chip.ownership-foreign {
-	background: var(--vscode-editorWarning-foreground);
-	color: var(--vscode-editor-background);
+	background: color-mix(in srgb, var(--vscode-editorWarning-foreground) 14%, transparent);
+	color: var(--vscode-editorWarning-foreground);
 }
 
 /* The run row's errored-agent-count chip - exception-only (see WorkflowRunRowRenderer), shown only for a failed run with one or more errored agents. */
 .clawdius-workflow-chip.errored-chip {
-	background: var(--vscode-errorForeground);
-	color: var(--vscode-editor-background);
+	background: color-mix(in srgb, var(--vscode-errorForeground) 14%, transparent);
+	color: var(--vscode-errorForeground);
 }
 
 /* The LIVE needs-input/completion badge (owned run, real event), distinct from the seam's honesty chips. An empty badge chip (no live signal) collapses to nothing via :empty rather than reserving visible space. */
@@ -177,102 +277,6 @@
 	100% { background-color: transparent; }
 }
 
-/* --- terminal story leaf: variable-height, measured --- */
-
-.clawdius-workflow-story {
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-	padding: 4px 12px 8px 8px;
-	line-height: 18px;
-}
-
-.clawdius-workflow-story-summary {
-	white-space: normal;
-	word-break: break-word;
-}
-
-.clawdius-workflow-story-cost {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 4px;
-	font-size: 11px;
-	opacity: 0.8;
-}
-
-.clawdius-workflow-story-sep {
-	opacity: 0.6;
-}
-
-.clawdius-workflow-story-result {
-	white-space: normal;
-	word-break: break-word;
-	opacity: 0.85;
-}
-
-.clawdius-workflow-story-error {
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	color: var(--vscode-errorForeground);
-}
-
-/* --- live-progress leaf: variable-height, measured (the live analogue of the story leaf) --- */
-
-.clawdius-workflow-live-progress {
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-	padding: 4px 12px 8px 8px;
-	line-height: 18px;
-}
-
-.clawdius-workflow-live-ratio {
-	white-space: normal;
-	word-break: break-word;
-}
-
-.clawdius-workflow-live-running {
-	font-size: 11px;
-	opacity: 0.8;
-}
-
-.clawdius-workflow-live-activity {
-	font-size: 11px;
-	opacity: 0.7;
-	font-style: italic;
-}
-
-.clawdius-workflow-live-degraded {
-	font-size: 11px;
-	color: var(--vscode-editorWarning-foreground);
-}
-
-.clawdius-workflow-live-landed-count {
-	font-size: 11px;
-	opacity: 0.8;
-	margin-top: 2px;
-}
-
-.clawdius-workflow-live-landed-list {
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-}
-
-.clawdius-workflow-live-landed-item {
-	font-size: 11px;
-	opacity: 0.85;
-	white-space: normal;
-	word-break: break-word;
-}
-
-.clawdius-workflow-live-landed-more {
-	font-size: 11px;
-	opacity: 0.6;
-	font-style: italic;
-}
-
 /* --- phase row --- */
 
 .clawdius-workflow-phase-row {
@@ -291,7 +295,7 @@
 }
 
 .clawdius-workflow-phase-detail {
-	opacity: 0.7;
+	color: var(--vscode-descriptionForeground);
 	font-style: italic;
 	white-space: nowrap;
 	overflow: hidden;
@@ -303,13 +307,12 @@
 	gap: 8px;
 	margin-left: auto;
 	font-size: 11px;
-	opacity: 0.8;
+	color: var(--vscode-descriptionForeground);
 	white-space: nowrap;
 }
 
 .clawdius-workflow-phase-errors {
 	color: var(--vscode-errorForeground);
-	opacity: 1;
 }
 
 /* --- agent row --- */
@@ -339,7 +342,7 @@
 
 .clawdius-transcript-inner {
 	padding: 12px 16px;
-	font-family: var(--monaco-monospace-font);
+	/* No blanket monospace here: record bodies now render Markdown PROSE (see `.clawdius-workflow-artifact`), which must use the proportional editor font. Code spans / fenced blocks inside rendered Markdown keep monospace via `.clawdius-workflow-artifact code/pre` below. */
 }
 
 .clawdius-transcript-header {
@@ -367,36 +370,55 @@
 	font-size: 10px;
 	line-height: 15px;
 	padding: 0 5px;
-	border-radius: 3px;
+	border-radius: 2px;
 	white-space: nowrap;
 	background: var(--vscode-badge-background);
 	color: var(--vscode-badge-foreground);
+	border: 1px solid var(--vscode-contrastBorder, transparent);
 }
 
 .clawdius-transcript-label.completeness-unknown-shape,
 .clawdius-transcript-label.completeness-suppressed,
 .clawdius-transcript-label.completeness-partial,
 .clawdius-transcript-label.coverage-foreign {
-	background: var(--vscode-editorWarning-foreground);
-	color: var(--vscode-editor-background);
+	background: color-mix(in srgb, var(--vscode-editorWarning-foreground) 14%, transparent);
+	color: var(--vscode-editorWarning-foreground);
+}
+
+/* The neutral freshness/origin label ("From disk") is informational, not a warning - an OUTLINE variant instead of the shared solid badge fill (which reads as a brand-colored alarm in this theme, since badge.background is the brand orange) keeps it visually distinct from the genuine warning-toned chips above. */
+.clawdius-transcript-label.freshness-polled {
+	background: transparent;
+	color: var(--vscode-descriptionForeground);
+	border-color: var(--vscode-widget-border, var(--vscode-panel-border));
 }
 
 .clawdius-transcript-empty {
-	opacity: 0.7;
+	color: var(--vscode-descriptionForeground);
 	font-style: italic;
 }
 
 .clawdius-transcript-record {
 	display: flex;
-	align-items: center;
-	gap: 8px;
-	padding: 2px 0;
-	line-height: 20px;
+	flex-direction: column;
+	gap: 4px;
+	padding: 6px 0;
+	border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.clawdius-transcript-record:last-child {
+	border-bottom: none;
 }
 
 .clawdius-transcript-record.sidechain {
 	padding-left: 16px;
 	border-left: 2px solid var(--vscode-textLink-foreground);
+}
+
+.clawdius-transcript-record-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	line-height: 20px;
 }
 
 .clawdius-transcript-record-type {
@@ -407,9 +429,27 @@
 	font-size: 10px;
 	line-height: 15px;
 	padding: 0 5px;
-	border-radius: 3px;
+	border-radius: 2px;
 	background: var(--vscode-badge-background);
 	color: var(--vscode-badge-foreground);
+	border: 1px solid var(--vscode-contrastBorder, transparent);
+}
+
+/* The record's message body: real transcript content, rendered as sanitized Markdown (never innerHTML - see
+ * renderTranscriptSlice) inside the shared `.clawdius-workflow-artifact` container (combined on this same
+ * element, not nested) so it reads as the run's own document, not Clawdius's UI chrome. `breaks: true` (threaded
+ * through renderMarkdown) is what preserves the author's own line breaks without an ancestor `white-space:
+ * pre-wrap`, which would double up on Markdown's own paragraph spacing. `word-break` still guards against a long
+ * unbroken token (e.g. a URL) overflowing the pane. */
+.clawdius-transcript-record-body {
+	word-break: break-word;
+	color: var(--vscode-foreground);
+}
+
+/* A record whose projected body is empty (no readable message content) still gets an explicit, muted placeholder row instead of a bare head with nothing beneath it - otherwise two such records back-to-back read as one duplicated, empty header (see renderTranscriptSlice in claudeWorkflowTranscriptEditor.ts). */
+.clawdius-transcript-record-body-empty {
+	color: var(--vscode-descriptionForeground);
+	font-style: italic;
 }
 
 /* Detail drill-in editor pane: the run RESULT variant and the agent DETAIL variant share one shell. */
@@ -438,21 +478,29 @@
 }
 
 .clawdius-workflow-detail-status-badge {
-	font-size: 10px;
+	font-size: 11px;
+	font-weight: 600;
 	line-height: 15px;
 	padding: 0 5px;
-	border-radius: 3px;
+	border-radius: 2px;
 	white-space: nowrap;
 	text-transform: uppercase;
 	letter-spacing: 0.02em;
 	background: var(--vscode-badge-background);
 	color: var(--vscode-badge-foreground);
+	border: 1px solid var(--vscode-contrastBorder, transparent);
 	margin-left: auto;
 }
 
 .clawdius-workflow-detail-status-badge.status-failed,
 .clawdius-workflow-detail-status-badge.status-error {
-	background: var(--vscode-errorForeground);
+	background: color-mix(in srgb, var(--vscode-errorForeground) 14%, transparent);
+	color: var(--vscode-errorForeground);
+}
+
+.clawdius-workflow-detail-status-badge.status-completed,
+.clawdius-workflow-detail-status-badge.status-done {
+	background: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
 	color: var(--vscode-editor-background);
 }
 
@@ -461,12 +509,12 @@
 	flex-wrap: wrap;
 	gap: 4px;
 	font-size: 11px;
-	opacity: 0.8;
+	color: var(--vscode-descriptionForeground);
 	margin-bottom: 12px;
 }
 
 .clawdius-workflow-detail-sep {
-	opacity: 0.6;
+	color: var(--vscode-descriptionForeground);
 }
 
 .clawdius-workflow-detail-field {
@@ -476,7 +524,7 @@
 .clawdius-workflow-detail-field-label {
 	font-weight: 600;
 	font-size: 11px;
-	opacity: 0.8;
+	color: var(--vscode-descriptionForeground);
 	margin-bottom: 2px;
 }
 
@@ -486,11 +534,116 @@
 	word-break: break-word;
 }
 
-.clawdius-workflow-detail-field-error .clawdius-workflow-detail-field-value {
+/* Scoped to a field that is actually PRESENT (`data-clawdius-detail-field-present="true"`, set by appendDetailField): the shared DASH literal shown when a field is absent must never itself paint as an error - belt-and-suspenders alongside the TS-side guard that now withholds the whole Error row when absent (see claudeWorkflowDetailEditor.ts's renderAgentDetail). */
+.clawdius-workflow-detail-field-error[data-clawdius-detail-field-present="true"] .clawdius-workflow-detail-field-value {
 	color: var(--vscode-errorForeground);
 }
 
 .clawdius-workflow-detail-actions {
+	display: flex;
 	margin-top: 8px;
+}
+
+/* Item 8: the "Open Transcript" action must size to its own label, not stretch to the full editor width. */
+.clawdius-workflow-detail-actions .monaco-button {
+	width: auto;
+	align-self: flex-start;
+	padding-inline: 14px;
+}
+
+/* Rich rendering for the run RESULT body and the agent Result/Prompt fields (claudeWorkflowDetailEditor.ts): pretty-printed JSON in a monospace block, or sanitized Markdown - see renderResultDetail/renderAgentDetail. */
+.clawdius-workflow-detail-json {
+	margin: 0;
+	padding: 8px 10px;
+	border-radius: 2px;
+	overflow: auto;
+	background: var(--vscode-textCodeBlock-background, var(--vscode-editorWidget-background));
+	font-family: var(--monaco-monospace-font);
+	font-size: 12px;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.clawdius-workflow-detail-markdown :first-child {
+	margin-top: 0;
+}
+
+.clawdius-workflow-detail-markdown :last-child {
+	margin-bottom: 0;
+}
+
+/* Item 13: rendered-markdown headings default to the editor's own (generous) heading margins, which read as oversized/uneven vertical gaps inside a compact artifact card - cap them; an empty paragraph (a blank Markdown line with nothing in it) paints no visible gap of its own. Applies inside the artifact container too (item 23 - the artifact card itself stays, only its inner heading rhythm tightens). */
+.clawdius-workflow-detail-markdown h1,
+.clawdius-workflow-detail-markdown h2,
+.clawdius-workflow-detail-markdown h3,
+.clawdius-workflow-detail-markdown h4,
+.clawdius-workflow-detail-markdown h5,
+.clawdius-workflow-detail-markdown h6 {
+	margin: 16px 0 6px;
+}
+
+.clawdius-workflow-detail-markdown p:empty {
+	display: none;
+}
+
+/* The shared bordered "artifact" container: wraps rendered result content and transcript message bodies so it is
+ * visually obvious the content is the RUN's own document, not Clawdius's UI (claudeWorkflowDetailEditor.ts's
+ * `renderResultDetail`, claudeWorkflowTranscriptEditor.ts's `renderTranscriptSlice`). Also gets the shared themed
+ * scrollbar (see the block near `.clawdius-workflows-tree`, above).
+ */
+.clawdius-workflow-artifact {
+	border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+	border-radius: 2px;
+	background: var(--vscode-textCodeBlock-background, var(--vscode-editorWidget-background));
+	padding: 10px 12px;
+	overflow: auto;
+}
+
+/* Code spans / fenced blocks inside a rendered-Markdown artifact stay monospace; the surrounding prose inherits the proportional editor font (the transcript pane no longer forces monospace - see `.clawdius-transcript-inner`). */
+.clawdius-workflow-artifact code,
+.clawdius-workflow-artifact pre {
+	font-family: var(--monaco-monospace-font, monospace);
+}
+
+/* A sectioned-document artifact's per-key label (claudeWorkflowDetailEditor.ts's `renderRichText`) - muted, above
+ * the key's own Markdown-rendered value. */
+.clawdius-workflow-artifact-section-key {
+	font-size: 11px;
+	font-weight: 600;
+	color: var(--vscode-descriptionForeground);
+	margin: 8px 0 2px;
+}
+
+.clawdius-workflow-artifact-section-key:first-child {
+	margin-top: 0;
+}
+
+/* Item 22: scoped to `pre` - the one concrete scrollable descendant this pane actually produces (a rendered-markdown fenced code block wide enough to scroll horizontally) - rather than a bare `::-webkit-scrollbar` descendant selector matching ANY nested scrollable element, which was broader than anything this pane renders. */
+.clawdius-workflow-detail pre::-webkit-scrollbar,
+.clawdius-transcript pre::-webkit-scrollbar {
+	width: 14px;
+	height: 14px;
+}
+
+.clawdius-workflow-detail pre::-webkit-scrollbar-track,
+.clawdius-transcript pre::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+.clawdius-workflow-detail pre::-webkit-scrollbar-thumb,
+.clawdius-transcript pre::-webkit-scrollbar-thumb {
+	background-color: var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.4));
+	border: 3px solid transparent;
+	background-clip: content-box;
+}
+
+.clawdius-workflow-detail pre::-webkit-scrollbar-thumb:hover,
+.clawdius-transcript pre::-webkit-scrollbar-thumb:hover {
+	background-color: var(--vscode-scrollbarSlider-hoverBackground, rgba(100, 100, 100, 0.7));
+}
+
+.clawdius-workflow-detail pre::-webkit-scrollbar-thumb:active,
+.clawdius-transcript pre::-webkit-scrollbar-thumb:active {
+	background-color: var(--vscode-scrollbarSlider-activeBackground, rgba(191, 191, 191, 0.4));
 }
 /* CLAWDIUS-END */

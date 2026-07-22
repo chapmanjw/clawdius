@@ -6,7 +6,7 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import {
-	buildHeatmapModel, buildModelSeries, dateKey, effectiveCleanupPeriodDays, roundedStepPath,
+	buildHeatmapModel, buildModelSeries, dateKey, effectiveCleanupPeriodDays, limitFillWidthPercent, roundedStepPath,
 	utilStateOf, windowStartKey,
 } from '../../browser/usage/claudeUsageDashboardView.js';
 
@@ -120,6 +120,19 @@ suite('claudeUsageDashboardView', () => {
 		assert.deepStrictEqual(
 			[utilStateOf(0), utilStateOf(69), utilStateOf(70), utilStateOf(89), utilStateOf(90), utilStateOf(100)],
 			[undefined, undefined, 'warn', 'warn', 'crit', 'crit'],
+		);
+	});
+
+	// --- limitFillWidthPercent --------------------------------------------------------------------------------
+
+	test('limitFillWidthPercent: zero is 0 (no rounded-cap sliver), any true non-zero floors at 1, clamped to 100', () => {
+		assert.deepStrictEqual(
+			[
+				limitFillWidthPercent(0), limitFillWidthPercent(0.4), limitFillWidthPercent(1),
+				limitFillWidthPercent(50), limitFillWidthPercent(100), limitFillWidthPercent(150),
+				limitFillWidthPercent(-5), limitFillWidthPercent(NaN),
+			],
+			[0, 1, 1, 50, 100, 100, 0, 0],
 		);
 	});
 

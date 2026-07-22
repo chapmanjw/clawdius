@@ -40,7 +40,7 @@ import {
 	ClaudeWorkflowObservationService, IClaudeWorkflowObservationService, WorkflowSnapshot,
 } from '../../browser/workflows/claudeWorkflowObservationService.js';
 import {
-	describeLiveProgress, reconcileWorkflowTree, resolveTrackedElements, WorkflowStoryHeightCache, WorkflowTreeElement,
+	reconcileWorkflowTree, resolveTrackedElements, WorkflowTreeElement,
 	WorkflowTreeIdentityProvider, WorkflowTreeReconcileState, WorkflowTreeTemplateId, WorkflowTreeVirtualDelegate,
 	workflowTreeElementId,
 } from '../../browser/workflows/claudeWorkflowTree.js';
@@ -66,7 +66,7 @@ function terminalAgent(agentId: string): TerminalWorkflowAgent {
 	return { agentId, label: agentId, state: 'done' };
 }
 
-/** A minimally-labeled terminal run carrying one agent, so its story + agent children are non-empty. */
+/** A minimally-labeled terminal run carrying one agent, so its (agent) children are non-empty. */
 function terminalRun(sessionId: string, runId: string, overrides: Partial<TerminalWorkflowRun> = {}): TerminalWorkflowRun {
 	return {
 		kind: 'terminal', sessionId, runId, identity: workflowRunIdentity(sessionId, runId),
@@ -229,15 +229,13 @@ class NoopRenderer implements ITreeRenderer<WorkflowTreeElement, FuzzyScore, HTM
 }
 
 function makeTree(store: Pick<DisposableStore, 'add'>): ObjectTree<WorkflowTreeElement, FuzzyScore> {
-	const heights = new WorkflowStoryHeightCache();
 	const container = document.createElement('div');
 	return store.add(new ObjectTree<WorkflowTreeElement, FuzzyScore>(
 		'test-clawdius-workflow-tree',
 		container,
-		new WorkflowTreeVirtualDelegate(heights),
+		new WorkflowTreeVirtualDelegate(),
 		[
-			new NoopRenderer(WorkflowTreeTemplateId.Run), new NoopRenderer(WorkflowTreeTemplateId.Story),
-			new NoopRenderer(WorkflowTreeTemplateId.LiveProgress), new NoopRenderer(WorkflowTreeTemplateId.Phase),
+			new NoopRenderer(WorkflowTreeTemplateId.Run), new NoopRenderer(WorkflowTreeTemplateId.Phase),
 			new NoopRenderer(WorkflowTreeTemplateId.Agent),
 		],
 		{ identityProvider: new WorkflowTreeIdentityProvider() },
@@ -264,9 +262,18 @@ suite('Clawdius Claude Code Ultracode Workflows - graduation reconciliation', ()
 		const live = liveRun(sessionId, runId);
 
 		const r1 = reconcileWorkflowTree(tree, [live], EMPTY_RECONCILE_STATE);
+		const liveTracked = r1.elementByRunId.get(runId)!;
 		assert.deepStrictEqual(
-			{ topLevelCount: tree.getNode(null).children.length, graduated: r1.graduated.length, liveChildren: tree.getNode(r1.elementByRunId.get(runId)!).children.length },
-			{ topLevelCount: 1, graduated: 0, liveChildren: 1 }, // the one live-progress leaf
+			{
+				topLevelCount: tree.getNode(null).children.length, graduated: r1.graduated.length,
+				liveChildren: tree.getNode(liveTracked).children.length,
+				// A live run has NO children (see buildRunElement) and must render NO twistie either - never an
+				// inert one that toggles nothing (the bug: `reconcileWorkflowTree` used to spread
+				// `collapsed: PreserveOrCollapsed` onto EVERY run element regardless of whether it had children,
+				// which alone makes the tree compute `collapsible: true`, per ObjectTreeModel/indexTreeModel).
+				liveCollapsible: tree.getNode(liveTracked).collapsible,
+			},
+			{ topLevelCount: 1, graduated: 0, liveChildren: 0, liveCollapsible: false },
 		);
 
 		const terminal = terminalRun(sessionId, runId);
@@ -278,10 +285,22 @@ suite('Clawdius Claude Code Ultracode Workflows - graduation reconciliation', ()
 				topLevelCount: tree.getNode(null).children.length, // still exactly one row - never two
 				graduatedRunIds: r2.graduated.map(g => g.runId),
 				samePreservedReference: trackedAfter === r1.elementByRunId.get(runId), // genuinely the same row, not a delete+recreate
-				childrenNowPresent: tree.getNode(trackedAfter!).children.length > 0, // story + agent replaced the live-progress leaf
+				childrenNowPresent: tree.getNode(trackedAfter!).children.length > 0, // its agent row replaced the (empty) live children
+				collapsibleNowTrue: tree.getNode(trackedAfter!).collapsible, // a REAL child means a REAL twistie now
 				stillLive: r2.liveIdentities.has(live.identity),
 			},
-			{ topLevelCount: 1, graduatedRunIds: [runId], samePreservedReference: true, childrenNowPresent: true, stillLive: false },
+			{ topLevelCount: 1, graduatedRunIds: [runId], samePreservedReference: true, childrenNowPresent: true, collapsibleNowTrue: true, stillLive: false },
+		);
+	});
+
+	test('a genuinely childless run (zero-agent terminal, or unknown-shape) is never collapsible - no inert twistie', () => {
+		const tree = makeTree(store);
+		const zeroAgent = terminalRun('sess-zero', 'wf_00000000-zzz', { agents: [] });
+		const r1 = reconcileWorkflowTree(tree, [zeroAgent], EMPTY_RECONCILE_STATE);
+		const tracked = r1.elementByRunId.get('wf_00000000-zzz')!;
+		assert.deepStrictEqual(
+			{ children: tree.getNode(tracked).children.length, collapsible: tree.getNode(tracked).collapsible },
+			{ children: 0, collapsible: false },
 		);
 	});
 
@@ -371,14 +390,14 @@ suite('Clawdius Claude Code Ultracode Workflows - graduation reconciliation', ()
 			{ elementByRunId: r1.elementByRunId, liveIdentities: r1.liveIdentities, renderedSignatureByRunId: r1.renderedSignatureByRunId });
 
 		const tracked = r2.elementByRunId.get(runId)!;
-		const storyElement = tree.getNode(tracked).children[0].element as Extract<WorkflowTreeElement, { kind: 'story' }>;
+		const agentElement = tree.getNode(tracked).children[0].element as Extract<WorkflowTreeElement, { kind: 'agent' }>;
 		assert.deepStrictEqual(
 			{
 				sameTrackedReference: tracked === r1.elementByRunId.get(runId), // still the same row, not a delete+recreate
 				notReportedAsGraduated: r2.graduated,
-				storyRunStatus: storyElement.run.status, // the rebuilt story leaf reflects the REWRITTEN data
+				rebuiltChildRunStatus: agentElement.run.status, // the rebuilt agent row reflects the REWRITTEN run data
 			},
-			{ sameTrackedReference: true, notReportedAsGraduated: [], storyRunStatus: 'failed' },
+			{ sameTrackedReference: true, notReportedAsGraduated: [], rebuiltChildRunStatus: 'failed' },
 		);
 	});
 
@@ -395,10 +414,10 @@ suite('Clawdius Claude Code Ultracode Workflows - graduation reconciliation', ()
 			{ elementByRunId: r1.elementByRunId, liveIdentities: r1.liveIdentities, renderedSignatureByRunId: r1.renderedSignatureByRunId });
 
 		const tracked = r2.elementByRunId.get(runId)!;
-		const storyElement = tree.getNode(tracked).children[0].element as Extract<WorkflowTreeElement, { kind: 'story' }>;
+		const agentElement = tree.getNode(tracked).children[0].element as Extract<WorkflowTreeElement, { kind: 'agent' }>;
 		assert.deepStrictEqual(
-			{ sameTrackedReference: tracked === r1.elementByRunId.get(runId), storySummary: storyElement.run.summary, notReportedAsGraduated: r2.graduated },
-			{ sameTrackedReference: true, storySummary: 'second summary', notReportedAsGraduated: [] },
+			{ sameTrackedReference: tracked === r1.elementByRunId.get(runId), rebuiltChildSummary: agentElement.run.summary, notReportedAsGraduated: r2.graduated },
+			{ sameTrackedReference: true, rebuiltChildSummary: 'second summary', notReportedAsGraduated: [] },
 		);
 	});
 
@@ -407,17 +426,17 @@ suite('Clawdius Claude Code Ultracode Workflows - graduation reconciliation', ()
 		const sessionId = 'sess-9', runId = 'wf_99999999-jjj';
 		const r1 = reconcileWorkflowTree(tree, [terminalRun(sessionId, runId)], EMPTY_RECONCILE_STATE);
 		const tracked = r1.elementByRunId.get(runId)!;
-		const storyElementBefore = tree.getNode(tracked).children[0].element;
+		const childElementBefore = tree.getNode(tracked).children[0].element;
 
 		// A SECOND, distinct-but-equal run object (same data, not the same reference) - the signature must compare
 		// CONTENT, not object identity, so this still counts as "unchanged".
 		const r2 = reconcileWorkflowTree(tree, [terminalRun(sessionId, runId)],
 			{ elementByRunId: r1.elementByRunId, liveIdentities: r1.liveIdentities, renderedSignatureByRunId: r1.renderedSignatureByRunId });
-		const storyElementAfter = tree.getNode(r2.elementByRunId.get(runId)!).children[0].element;
+		const childElementAfter = tree.getNode(r2.elementByRunId.get(runId)!).children[0].element;
 
 		assert.deepStrictEqual(
-			{ sameStoryElementReference: storyElementAfter === storyElementBefore, notReportedAsGraduated: r2.graduated },
-			{ sameStoryElementReference: true, notReportedAsGraduated: [] },
+			{ sameChildElementReference: childElementAfter === childElementBefore, notReportedAsGraduated: r2.graduated },
+			{ sameChildElementReference: true, notReportedAsGraduated: [] },
 		);
 	});
 
@@ -449,32 +468,6 @@ suite('Clawdius Claude Code Ultracode Workflows - graduation reconciliation', ()
 			{ topLevelCount: tree.getNode(null).children.length, tracked: trackedAfter !== undefined && tree.hasElement(trackedAfter), stillLive: r2 ? [...r2.liveIdentities] : [] },
 			{ topLevelCount: 1, tracked: true, stillLive: [workflowRunIdentity(sessionId, runId)] },
 		);
-	});
-});
-
-// --- live-progress content: the ratio-moves-backward honesty rule ------------------------------------------------
-
-suite('Clawdius Claude Code Ultracode Workflows - live-progress honesty', () => {
-	ensureNoDisposablesAreLeakedInTestSuite();
-	test('the started/result ratio can move BACKWARD between renders - never clamped or smoothed', () => {
-		const before = describeLiveProgress(liveRun('sess', 'wf_aaaaaaaa-bbb', { startedCount: 2, resultCount: 2, seenCount: 2 }));
-		// A new agent starts before any new result lands: resultCount stays put, startedCount (and so seenCount,
-		// the union) rises, so the SAME run's ratio genuinely gets worse from one render to the next.
-		const after = describeLiveProgress(liveRun('sess', 'wf_aaaaaaaa-bbb', { startedCount: 3, resultCount: 2, seenCount: 3 }));
-
-		assert.deepStrictEqual(
-			{
-				before: { started: before.startedCount, result: before.resultCount, running: before.runningCount },
-				after: { started: after.startedCount, result: after.resultCount, running: after.runningCount },
-				ratioChanged: before.ratioCaption !== after.ratioCaption,
-			},
-			{ before: { started: 2, result: 2, running: 0 }, after: { started: 3, result: 2, running: 1 }, ratioChanged: true },
-		);
-	});
-
-	test('the running count is never negative even if a read momentarily has more results than starts', () => {
-		const content = describeLiveProgress(liveRun('sess', 'wf_aaaaaaaa-bbb', { startedCount: 1, resultCount: 3, seenCount: 3 }));
-		assert.strictEqual(content.runningCount, 0);
 	});
 });
 // CLAWDIUS-END

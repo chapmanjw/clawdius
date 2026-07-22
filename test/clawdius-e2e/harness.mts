@@ -237,38 +237,63 @@ async function focusWorkflowsView() {
 	// scenario may have paged/scrolled it, leaving a stale off-screen handle that then times out on click).
 	const firstRow = await win.$('.clawdius-workflow-run-row');
 	if (firstRow) {
-		await firstRow.click().catch(() => { });
+		await clickRowToFocusOnly(firstRow).catch(() => { });
 		await win.keyboard.press('Home');
 		await win.waitForTimeout(250);
 	}
 }
 
-// Expand ONE terminal run's row (click, then ArrowRight, then a twistie-click fallback - the exact sequence
-// `ultracode-workflows-expand` already exercises) and, when it declares MORE THAN ONE phase (the 0/1/>1
-// phase-grouping rule in `buildTerminalRunChildren`), also expand every `.clawdius-workflow-phase-row` that
-// appears so any agent rows nested under a phase become visible too - otherwise a multi-phase run would falsely
-// look agent-less. Returns the story leaf handle (undefined if the run never revealed one) and whatever
-// `.clawdius-workflow-agent-row`s are now in the DOM - scoped correctly as long as the caller keeps only ONE run
-// expanded at a time.
+// A row's twistie is NOT a descendant of the renderer's own container (`.clawdius-workflow-run-row` etc.) - the
+// tree's `TreeRenderer.renderTemplate` (abstractTree.ts) builds `.monaco-tl-row > [.monaco-tl-indent,
+// .monaco-tl-twistie, .monaco-tl-contents]` and hands OUR renderer `.monaco-tl-contents` itself as `container`
+// (our own class is added directly onto that element, never a new wrapper inside it) - so the twistie is a
+// SIBLING of our container, one level up. A plain `rowHandle.$('.monaco-tl-twistie')` (a descendant-scoped query)
+// can therefore never find it; this walks up to the shared `.monaco-tl-row` ancestor first. EVERY row - even a
+// non-collapsible one (a live/unknown-shape run, a zero-agent terminal run) - gets a `.monaco-tl-twistie`
+// element unconditionally (`renderTemplate` always creates one); what distinguishes an ACTUAL, clickable twistie
+// is the `collapsible` CSS class, which `renderTreeElement` (abstractTree.ts) adds only when `node.collapsible`
+// is true and strips otherwise - so this only returns the element when that class is present, meaning "no
+// twistie" (`null`) correctly reads as "this row has no children" everywhere it is checked.
+async function twistieFor(rowHandle) {
+	const handle = await rowHandle.evaluateHandle(el => {
+		const treeRow = el.closest('.monaco-tl-row');
+		const twistie = treeRow ? treeRow.querySelector('.monaco-tl-twistie') : null;
+		return twistie && twistie.classList.contains('collapsible') ? twistie : null;
+	});
+	const element = handle.asElement();
+	if (!element) {
+		await handle.dispose();
+		return null;
+	}
+	return element;
+}
+
+// Expand ONE terminal run's row via its TWISTIE (never a plain click on the row body: this build's defaults are
+// `workbench.tree.expandMode: singleClick` AND `workbench.list.openMode: singleClick`, so a body click on a
+// collapsible row BOTH toggles it AND fires `onDidOpen` - which now opens the RESULT detail editor for a terminal
+// `run`, claudeWorkflowsView.ts. A twistie click, by contrast, ALWAYS toggles collapse state and NEVER reaches the
+// open path (`AbstractTree`'s pointer controller returns early once it handles a twistie click), so it is the only
+// side-effect-free way to expand here) and, when the run declares MORE THAN ONE phase (the 0/1/>1 phase-grouping
+// rule in `buildTerminalRunChildren`), also expand every `.clawdius-workflow-phase-row` that appears (a `phase`
+// row never opens an editor, so a plain click is safe there) so any agent rows nested under a phase become
+// visible too - otherwise a multi-phase run would falsely look agent-less. IDEMPOTENT: only clicks the twistie
+// when the row is not ALREADY expanded (`.monaco-tl-twistie.collapsed`), so calling this on a row some earlier
+// activation already expanded (as a side effect of a body click elsewhere) never accidentally re-collapses it.
+// Returns whatever `.clawdius-workflow-agent-row`s are now in the DOM - scoped correctly as long as the caller
+// keeps only ONE run expanded at a time. A run with no twistie (no children - see `buildRunElement`: a zero-agent
+// terminal run, or any live/unknown-shape run) yields no agent rows.
 async function expandRunAndGatherAgents(target) {
 	await target.scrollIntoViewIfNeeded();
-	await target.click();
-	await win.waitForTimeout(150);
-	await win.keyboard.press('ArrowRight');
-	await win.waitForTimeout(400);
-	let storyHandles = await win.$$('.clawdius-workflow-story');
-	if (storyHandles.length === 0) {
-		const twistie = await target.$('.monaco-tl-twistie');
-		if (twistie) {
-			await twistie.click();
-			await win.waitForTimeout(400);
-			storyHandles = await win.$$('.clawdius-workflow-story');
-		}
-	}
-	if (storyHandles.length === 0) {
-		// Keep the shape identical on both paths. A caller that checks `phaseErrors` would otherwise crash here
+	const twistie = await twistieFor(target);
+	if (!twistie) {
+		// Keep the shape identical on every path. A caller that checks `phaseErrors` would otherwise crash here
 		// with an opaque TypeError instead of reporting what actually went wrong.
-		return { story: undefined, agentRows: [], phaseErrors: [] };
+		return { agentRows: [], phaseErrors: [] };
+	}
+	const isCollapsed = await twistie.evaluate(el => el.classList.contains('collapsed'));
+	if (isCollapsed) {
+		await twistie.click();
+		await win.waitForTimeout(400);
 	}
 	const phaseRows = await win.$$('.clawdius-workflow-phase-row');
 	// Record rather than swallow. A phase that fails to expand hides the agents beneath it, so treating that as
@@ -277,23 +302,31 @@ async function expandRunAndGatherAgents(target) {
 	const phaseErrors = [];
 	for (const phaseRow of phaseRows) {
 		try {
-			await phaseRow.click();
-			await win.waitForTimeout(100);
-			await win.keyboard.press('ArrowRight');
+			const phaseTwistie = await twistieFor(phaseRow);
+			if (phaseTwistie) {
+				// Idempotent, same reasoning as the run's own twistie above - a caller that re-expands the same
+				// run (e.g. after closing a drill-in tab) must never re-collapse an already-expanded phase.
+				if (await phaseTwistie.evaluate(el => el.classList.contains('collapsed'))) {
+					await phaseTwistie.click();
+				}
+			} else {
+				await phaseRow.click();
+				await win.keyboard.press('ArrowRight');
+			}
 			await win.waitForTimeout(250);
 		} catch (err) {
 			phaseErrors.push(String((err && err.message) || err));
 		}
 	}
 	const agentRows = await win.$$('.clawdius-workflow-agent-row');
-	return { story: storyHandles[0], agentRows, phaseErrors };
+	return { agentRows, phaseErrors };
 }
 
-// Activate a leaf (story or agent row) and wait for its drill-in pane to attach in the editor area. Click first
-// (this build's default `workbench.list.openMode` is `singleClick`, so `onDidOpen` should fire directly); fall
-// back to select+Enter if the pane never attached - `onDidOpen` fires on either per claudeWorkflowsView.ts.
-// Returns the attached pane's ElementHandle, or null if NEITHER activation opened it - a real defect the caller
-// should assert (and fail loudly) on, never silently swallow.
+// Activate a row (a terminal `run` or an `agent`) and wait for its drill-in pane to attach in the editor area.
+// Click first (this build's default `workbench.list.openMode` is `singleClick`, so `onDidOpen` should fire
+// directly); fall back to select+Enter if the pane never attached - `onDidOpen` fires on either per
+// claudeWorkflowsView.ts. Returns the attached pane's ElementHandle, or null if NEITHER activation opened it - a
+// real defect the caller should assert (and fail loudly) on, never silently swallow.
 async function activateAndWaitForDetail(rowHandle, kind) {
 	const selector = `.clawdius-workflow-detail[data-clawdius-detail-kind="${kind}"]`;
 	await rowHandle.scrollIntoViewIfNeeded();
@@ -317,6 +350,43 @@ async function closeActiveEditorTab() {
 		await win.keyboard.press('Control+w');
 		await win.waitForTimeout(300);
 	} catch { /* best effort */ }
+}
+
+// Click a run row PURELY to give the tree keyboard focus (for a following Home/ArrowUp/ArrowDown/ArrowLeft/
+// PageDown/End navigation) - never to open its detail. A terminal `run` row now opens its result on activation
+// (claudeWorkflowsView.ts's `onDidOpen`), and this build's default `workbench.list.openMode` is `singleClick`, so
+// a plain focus-establishing click on one fires that open as a side effect - and `IEditorService.openEditor`
+// defaults to STEALING keyboard focus into the new editor group. Closing that tab (`closeActiveEditorTab`) does
+// NOT hand focus back to the tree (VS Code moves it to whatever tab/group becomes active next), so a caller's
+// following keyboard input would silently go nowhere useful - exactly what broke the full-list sweep and the
+// scale-fixture keyboard-End proof before this existed. Only a TERMINAL row can open anything (`onDidOpen` is a
+// no-op for live/unknown-shape - see claudeWorkflowsView.ts), so `data-run-kind` is read FIRST (synchronous, no
+// wait) and the wait-for-pane/close/re-focus recovery only runs for that case - a live/unknown-shape row (the
+// common case: live runs sort first) pays no extra cost at all.
+//
+// The recovery step deliberately does NOT re-run the "Focus on View" command. `ClawdiusWorkflowsView` never
+// overrides `focus()` (viewPane.ts's base default: `this.element.focus()`), so `openView(id, true)` - which is
+// all that command drives (viewsService.ts's `FocusViewAction.run`) - focuses the ViewPane's own outer container
+// element, NOT the tree inside it. That container is not wired into the List/Tree keybinding context
+// (WorkbenchListFocusContextKey etc.), so Home/PageDown/End sent afterward go nowhere - the original bug this
+// helper exists to prevent, reintroduced via its own recovery path. Root-caused by reading `List.domFocus()`
+// itself (listWidget.ts): it just calls `this.view.domNode.focus()`, and that DOM node is the `.monaco-list`
+// element `listView.ts` creates inside whatever container the tree was given - `.clawdius-workflows-tree` here
+// (claudeWorkflowsView.ts's `renderBody`). Focusing that node directly (a native DOM focus, not a click, so it
+// cannot re-trigger `onDidOpen`) reproduces exactly what `domFocus()` does, without going through a command whose
+// only visible effect here is focusing the wrong element.
+async function clickRowToFocusOnly(rowHandle) {
+	const runKind = await rowHandle.getAttribute('data-run-kind');
+	await rowHandle.click();
+	if (runKind !== 'terminal') {
+		return;
+	}
+	const openedPane = await win.waitForSelector('.clawdius-workflow-detail', { state: 'attached', timeout: 3000 }).catch(() => null);
+	if (openedPane) {
+		await closeActiveEditorTab();
+		const listNode = await win.$('.clawdius-workflows-tree .monaco-list');
+		if (listNode) { await listNode.focus(); }
+	}
 }
 
 // Inspect an already-open AGENT detail pane: its honest state (`data-clawdius-detail-state`, set by
@@ -349,7 +419,7 @@ async function findErroredChipRun() {
 	// handle is one currently in the DOM, so the caller can expand it immediately.
 	const first = await win.$('.clawdius-workflow-run-row');
 	if (first) {
-		await first.click();
+		await clickRowToFocusOnly(first);
 		await win.keyboard.press('Home');
 		await win.waitForTimeout(200);
 	}
@@ -555,21 +625,19 @@ function parseJournalRecords(text) {
 }
 
 /** Bound `text` to at most `max` characters, matching `boundedPreview` in claudeReaderSeamService.ts exactly -
- *  the RESULT_PREVIEW_MAX_CHARS the live-progress leaf's landed-result previews are bounded to. */
+ *  the RESULT_PREVIEW_MAX_CHARS the seam bounds a landed result's own preview to (a model-level bound, independent
+ *  of whether any UI surface currently renders `landedResults` at all). */
 function boundedPreview(text, max) {
 	return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
-/** Mirrors `LIVE_PROGRESS_MAX_LANDED_PREVIEWS` (claudeWorkflowTree.ts): the render bound on how many
- *  landed-result previews the live-progress leaf shows directly, independent of how many actually landed. */
-const LIVE_PROGRESS_MAX_LANDED_PREVIEWS = 5;
-
 /** The exact `{startedCount, resultCount, seenCount, landedResults}` shape `workflowFromJournal` computes off a
- *  journal's raw text (claudeReaderSeamService.ts) - reproduced here so this harness asserts the live-progress leaf
- *  against the SAME algorithm the app itself runs, not a re-approximation that could quietly drift from it.
- *  `seenCount` is the UNION of the started/result agent-id sets (never just `startedCount`) - the honest "agents
- *  seen so far" denominator the ratio caption and the ProgressBar's total are both built from, so a result whose
- *  own `started` record was torn or otherwise dropped still counts as "seen" instead of inverting the ratio. */
+ *  journal's raw text (claudeReaderSeamService.ts) - reproduced here so a donor is picked against the SAME
+ *  algorithm the app itself runs (a genuine in-progress run with >=1 started and >=1 result record), not a
+ *  re-approximation that could quietly drift from it. No UI surface currently renders this shape (the
+ *  live-progress leaf that used to is gone - see claudeWorkflowTree.ts's file header comment), so this is now
+ *  donor-selection plumbing only. `seenCount` is the UNION of the started/result agent-id sets (never just
+ *  `startedCount`) - a result whose own `started` record was torn or otherwise dropped still counts as "seen". */
 function computeLiveProgress(journalText) {
 	const isAgentId = v => typeof v === 'string' && /^[A-Za-z0-9_-]+$/.test(v);
 	const records = parseJournalRecords(journalText);
@@ -674,26 +742,6 @@ function findFailedWorkflowDonor() {
 	return undefined;
 }
 
-/** Expand a live run's row (click, ArrowRight, twistie fallback - the same sequence {@link expandRunAndGatherAgents}
- *  uses for a terminal run's story leaf) and return its `.clawdius-workflow-live-progress` leaf handle, or
- *  undefined if expansion never revealed one. */
-async function expandLiveRunProgress(target) {
-	await target.scrollIntoViewIfNeeded();
-	await target.click();
-	await win.waitForTimeout(150);
-	await win.keyboard.press('ArrowRight');
-	await win.waitForTimeout(400);
-	let progressHandles = await win.$$('.clawdius-workflow-live-progress');
-	if (progressHandles.length === 0) {
-		const twistie = await target.$('.monaco-tl-twistie');
-		if (twistie) {
-			await twistie.click();
-			await win.waitForTimeout(400);
-			progressHandles = await win.$$('.clawdius-workflow-live-progress');
-		}
-	}
-	return progressHandles[0];
-}
 
 // --- egress recording driving (network egress guard) ---------------------------------------------------------
 //
@@ -858,8 +906,8 @@ async function workflowsPaneRoot() {
  *  Paging alone is not proof of coverage: a fixed number of PageDowns can leave an unvisited band in the middle
  *  of a long list, and the caller would still report "the whole list". So this carries its own COMPLETENESS
  *  ORACLE, taken from the list rather than from this harness: a run row's `aria-setsize` is the number of
- *  children the tree's ROOT is showing, i.e. the total run count. Every run row is a root child (agents and
- *  story leaves are deeper, and are not run rows), so all run rows report the same setsize. Paging continues
+ *  children the tree's ROOT is showing, i.e. the total run count. Every run row is a root child (phases and
+ *  agents are deeper, and are not run rows), so all run rows report the same setsize. Paging continues
  *  until the number of DISTINCT run ids collected equals that declared total, and the function THROWS if it
  *  stalls or hits its iteration ceiling first. Seeing N distinct ids out of a declared N is exactly the claim
  *  "every run in the list was inspected" - a caller can never mistake a partial sweep for a full one.
@@ -875,7 +923,7 @@ async function collectAllWorkflowRunIds() {
 		for (const row of await win.$$('.clawdius-workflows .monaco-list-row')) {
 			const runRow = await row.$('.clawdius-workflow-run-row[data-run-id]');
 			if (!runRow) {
-				continue; // an agent row or a story leaf - a child node, not one of the root's runs
+				continue; // a phase or agent row - a child node, not one of the root's runs
 			}
 			const size = Number(await row.getAttribute('aria-setsize'));
 			assert(Number.isInteger(size) && size > 0,
@@ -886,7 +934,7 @@ async function collectAllWorkflowRunIds() {
 		}
 	};
 	const first = await win.$('.clawdius-workflow-run-row');
-	if (first) { await first.click(); }
+	if (first) { await clickRowToFocusOnly(first); }
 	await win.keyboard.press('Home');
 	await win.waitForTimeout(250);
 	await collectVisible();
@@ -1065,17 +1113,19 @@ try {
 
 		// No FORK-AUTHORED "Mission(s)" text may remain after the rename. Scan the workbench for the whole
 		// word "mission" but skip only the USER-DATA leaves the reader surfaces verbatim - the run row
-		// (.clawdius-workflow-run-row, whose label is the run's own summary/workflowName/runId), the story
-		// leaf's summary/result/error text, and expanded agent rows (.clawdius-workflow-agent-row) - since a
-		// run a user named "build-mission-rail" (or one whose own description happens to discuss "missions")
-		// is legitimate user content, not a rename regression. Everything else stays in scope, INCLUDING the
-		// fork's own chrome (chips, state messages, the surface label, and the tree's own widget aria-label),
-		// so a label that regressed to "Mission" is still caught. For the title/aria case the exclusion ALSO
-		// covers the native `.monaco-list-row` wrapper: the tree paints a row's aria-label on that wrapper, one
-		// level ABOVE the renderer's own `.clawdius-workflow-run-row`/story/agent element, so it inherits the
-		// exact same user data - but ONLY that wrapper is skipped, not every container above it, so a
-		// fork-chrome aria-label on the list, tree container, or pane is still scanned.
-		const userDataSel = '.clawdius-workflow-run-row, .clawdius-workflow-story-summary, .clawdius-workflow-story-result, .clawdius-workflow-story-error, .clawdius-workflow-agent-row';
+		// (.clawdius-workflow-run-row, whose label is the run's own summary/workflowName/runId) and expanded
+		// agent rows (.clawdius-workflow-agent-row) - since a run a user named "build-mission-rail" (or one
+		// whose own description happens to discuss "missions") is legitimate user content, not a rename
+		// regression. (The tree no longer inlines a run's summary/result/error text anywhere else - see
+		// claudeWorkflowTree.ts's file header comment - so there is no separate leaf's user text to exclude.)
+		// Everything else stays in scope, INCLUDING the fork's own chrome (chips, state messages, the surface
+		// label, and the tree's own widget aria-label), so a label that regressed to "Mission" is still caught.
+		// For the title/aria case the exclusion ALSO covers the native `.monaco-list-row` wrapper: the tree
+		// paints a row's aria-label on that wrapper, one level ABOVE the renderer's own
+		// `.clawdius-workflow-run-row`/agent element, so it inherits the exact same user data - but ONLY that
+		// wrapper is skipped, not every container above it, so a fork-chrome aria-label on the list, tree
+		// container, or pane is still scanned.
+		const userDataSel = '.clawdius-workflow-run-row, .clawdius-workflow-agent-row';
 		const missionChromeHits = await win.$$eval('.monaco-workbench *', (els, userSel) => {
 			const rx = /\bmissions?\b/i;
 			const out = [];
@@ -1129,13 +1179,45 @@ try {
 		const completeness = Object.keys(completenessCounts);
 		assert(!(completeness.length === 1 && completeness[0] === 'partial'),
 			`every workflow run reads completeness=partial (the ladder collapsed): ${rows.length} rows, run-kinds=${JSON.stringify(runKindCounts)}, completeness=${JSON.stringify(completenessCounts)}`);
-		return `${rows.length} workflow runs; run-kinds=${JSON.stringify(runKindCounts)}; completeness=${JSON.stringify(completenessCounts)}; e.g. "${rows[0].runId}"; no Missions text; icon painted`;
+
+		// Pixel-geometry regression guard: `.clawdius-workflow-run-lines` used to inherit the list row's
+		// `line-height: 40px` (set for single-line row centering), which stretched BOTH stacked lines' line-boxes
+		// to 40px each - the name and meta line overlapped into unreadable mush and the two-line block overflowed
+		// ~81px into the neighboring rows. Every check above only reads textContent/attributes, so that fully
+		// unreadable pane still passed 27/27 scenarios - this is the layout check that would have caught it. Sample
+		// (rather than scan every row, which can number in the thousands on a real config root) since the bug was
+		// pane-wide, not row-specific: any regressed row proves the regression.
+		const layoutViolations = await win.$$eval('.clawdius-workflow-run-row', rowEls => {
+			const out = [];
+			for (const row of rowEls.slice(0, 10)) {
+				const nameEl = row.querySelector('.label-name');
+				const metaEl = row.querySelector('.clawdius-workflow-run-meta');
+				const linesEl = row.querySelector('.clawdius-workflow-run-lines');
+				const listRow = row.closest('.monaco-list-row');
+				if (!nameEl || !metaEl || !linesEl || !listRow) { continue; }
+				const runId = row.getAttribute('data-run-id');
+				const nameBottom = nameEl.getBoundingClientRect().bottom;
+				const metaTop = metaEl.getBoundingClientRect().top;
+				if (metaTop < nameBottom - 1) {
+					out.push(`run "${runId}": meta line (top=${metaTop.toFixed(1)}) overlaps the name line (bottom=${nameBottom.toFixed(1)})`);
+				}
+				const linesHeight = linesEl.getBoundingClientRect().height;
+				const listRowHeight = listRow.getBoundingClientRect().height;
+				if (linesHeight > listRowHeight + 2) {
+					out.push(`run "${runId}": two-line block (height=${linesHeight.toFixed(1)}) overflows its row (height=${listRowHeight.toFixed(1)})`);
+				}
+			}
+			return out;
+		});
+		assert(layoutViolations.length === 0, `run row two-line layout regression - name/meta overlap or row overflow: ${JSON.stringify(layoutViolations)}`);
+
+		return `${rows.length} workflow runs; run-kinds=${JSON.stringify(runKindCounts)}; completeness=${JSON.stringify(completenessCounts)}; e.g. "${rows[0].runId}"; no Missions text; icon painted; layout OK on ${Math.min(rows.length, 10)} sampled row(s)`;
 	});
 
-	// 4c. Native tree expansion: a TERMINAL run expands (WorkbenchObjectTree's own collapse/expand, not a
-	// bespoke click handler) to its story leaf (summary + cost, always present per `buildTerminalRunChildren`)
-	// and, only when the run legitimately declares them, its phase/agent rows. This is drill-in-adjacent but
-	// NOT drill-in: no editor opens here (see claudeWorkflowsView.ts's task banner - drill-in is a later change).
+	// 4c. Native tree expansion: a TERMINAL run expands (WorkbenchObjectTree's own collapse/expand, via its
+	// twistie) to ONLY its phase/agent rows - never an inline leaf (no summary/cost/result/error blob - see
+	// claudeWorkflowTree.ts's file header comment). This is drill-in-adjacent but NOT drill-in: expanding via the
+	// twistie never opens an editor (see claudeWorkflowsView.ts's `onDidOpen`) - drill-in is the scenario below.
 	await scenario('ultracode-workflows-expand', true, async () => {
 		await runCommand('Focus on Claude Code Ultracode Workflows View');
 		await win.waitForSelector('.clawdius-workflows-tree', { state: 'attached', timeout: 15000 });
@@ -1145,64 +1227,61 @@ try {
 		);
 		await win.waitForTimeout(300);
 
+		// Scan for a terminal run that actually HAS children (a twistie) - a zero-agent terminal run legitimately
+		// renders none (buildTerminalRunChildren) and would falsely look like a broken expand otherwise.
 		const rowHandles = await win.$$('.clawdius-workflow-run-row');
 		let target;
+		let runId;
 		for (const handle of rowHandles) {
-			if ((await handle.getAttribute('data-run-kind')) === 'terminal') { target = handle; break; }
+			if ((await handle.getAttribute('data-run-kind')) !== 'terminal') { continue; }
+			if (await twistieFor(handle)) { target = handle; runId = await handle.getAttribute('data-run-id'); break; }
 		}
 		if (!target) {
-			return 'SKIPPED (no terminal runs on this config root)';
+			return `SKIPPED (no terminal run with children among ${rowHandles.length} visible run row(s))`;
 		}
-		const runId = await target.getAttribute('data-run-id');
 
-		await target.scrollIntoViewIfNeeded();
-		await target.click();
-		await win.waitForTimeout(200);
-		await win.keyboard.press('ArrowRight');
-		await win.waitForTimeout(600);
+		// Expand via the TWISTIE only - a plain click on the row body also fires `onDidOpen` (this build's
+		// `workbench.list.openMode` is singleClick) and would open the result editor as a side effect, which is
+		// exactly what `ultracode-workflows-drill-in` below tests; this scenario proves native tree EXPANSION only.
+		const { agentRows, phaseRows } = await (async () => {
+			await target.scrollIntoViewIfNeeded();
+			const twistie = await twistieFor(target);
+			await twistie.click();
+			await win.waitForTimeout(600);
+			return { agentRows: await win.$$('.clawdius-workflow-agent-row'), phaseRows: await win.$$('.clawdius-workflow-phase-row') };
+		})();
 
-		let storyHandles = await win.$$('.clawdius-workflow-story');
-		if (storyHandles.length === 0) {
-			// Fall back to the twistie directly, in case the click above didn't land keyboard focus on the row.
-			const twistie = await target.$('.monaco-tl-twistie');
-			if (twistie) {
-				await twistie.click();
-				await win.waitForTimeout(600);
-				storyHandles = await win.$$('.clawdius-workflow-story');
-			}
-		}
-		assert(storyHandles.length > 0, `expanding terminal run "${runId}" did not reveal a .clawdius-workflow-story leaf`);
-
-		const story = storyHandles[0];
-		const summary = await story.$('.clawdius-workflow-story-summary');
-		const cost = await story.$('.clawdius-workflow-story-cost');
-		assert(summary, 'story leaf missing .clawdius-workflow-story-summary');
-		assert(cost, 'story leaf missing .clawdius-workflow-story-cost');
-
-		// Guarded on actual presence, never a forced minimum: a run with <=1 declared phase legitimately
-		// renders NO `.clawdius-workflow-phase-row` (the 0/1/>1 phase-grouping rule, buildTerminalRunChildren).
-		// When rows ARE present, verify what's there is well-formed rather than asserting a blind existence
-		// this scenario has no independent way to expect.
-		const agentRows = await win.$$('.clawdius-workflow-agent-row');
+		// Expanding a terminal run reveals ONLY phase/agent rows - never an inline leaf (no summary/result/error
+		// blob - see claudeWorkflowTree.ts's file header comment). A run with <=1 declared phase legitimately
+		// renders NO `.clawdius-workflow-phase-row` (the 0/1/>1 phase-grouping rule); a twistie means at least one
+		// of the two kinds is present.
+		assert(agentRows.length > 0 || phaseRows.length > 0, `expanding terminal run "${runId}" (twistie present) revealed neither an agent row nor a phase row`);
 		if (agentRows.length > 0) {
 			const states = await Promise.all(agentRows.map(r => r.getAttribute('data-agent-state')));
 			assert(states.every(s => s === 'done' || s === 'error'), `agent row(s) with an unrecognized data-agent-state: ${JSON.stringify(states)}`);
 		}
-		const phaseRows = await win.$$('.clawdius-workflow-phase-row');
 		if (phaseRows.length > 0) {
 			const titles = await Promise.all(phaseRows.map(r => r.$eval('.clawdius-workflow-phase-title', el => (el.textContent || '').trim())));
 			assert(titles.every(t => t.length > 0), `phase row(s) with an empty title: ${JSON.stringify(titles)}`);
 		}
+		// The twistie-only expand must never have opened the result editor as a side effect.
+		const detailPaneAfterExpand = await win.$('.clawdius-workflow-detail');
+		assert(!detailPaneAfterExpand, `expanding terminal run "${runId}" via its twistie unexpectedly opened a .clawdius-workflow-detail pane`);
 
-		return `expanded terminal run "${runId}": story leaf present (summary+cost ok); ${agentRows.length} agent rows; ${phaseRows.length} phase rows`;
+		// Collapse back before returning - leaving this run expanded would bury every OTHER top-level run beneath
+		// its (potentially many) phase/agent rows, degrading a LATER scenario's own top-of-list scan.
+		const cleanupTwistie = await twistieFor(target);
+		if (cleanupTwistie) { await cleanupTwistie.click(); }
+
+		return `expanded terminal run "${runId}": ${agentRows.length} agent rows; ${phaseRows.length} phase rows; no editor opened`;
 	});
 
 	// 4d. Drill-in: open a completed run's FULL result, an agent's DETAIL, and (when the identity join gave it a
 	// transcriptRef) that agent's raw TRANSCRIPT - all from the workflows tree, as real EDITOR TABS
 	// (IEditorService.openEditor, per claudeWorkflowsView.ts's `openResultDetail`/`openAgentDetail`), not sidebar
 	// DOM. This is the one thing `ultracode-workflows-expand` above does NOT cover: that scenario only proves
-	// native tree EXPANSION; nothing there opens an editor. `onDidOpen` fires on click OR Enter for a
-	// `story`/`agent` leaf - `activateAndWaitForDetail` tries click first, falling back to Enter.
+	// native tree EXPANSION; nothing there opens an editor. `onDidOpen` fires on click OR Enter for a terminal
+	// `run`/`agent` row - `activateAndWaitForDetail` tries click first, falling back to Enter.
 	await scenario('ultracode-workflows-drill-in', true, async () => {
 		await focusWorkflowsView();
 
@@ -1215,14 +1294,13 @@ try {
 			return 'SKIPPED (no terminal runs on this config root)';
 		}
 
-		// --- 1. Full result, off the first terminal run (the same pick `ultracode-workflows-expand` makes). ---
+		// --- 1. Full result, off the first terminal run (the same pick `ultracode-workflows-expand` makes) -
+		// activating the RUN ROW ITSELF opens its result (no expansion needed for this step). ---
 		const firstTarget = terminalHandles[0];
 		const firstRunId = await firstTarget.getAttribute('data-run-id');
-		let expanded = await expandRunAndGatherAgents(firstTarget);
-		assert(expanded.story, `expanding terminal run "${firstRunId}" did not reveal a .clawdius-workflow-story leaf`);
 
-		const resultPane = await activateAndWaitForDetail(expanded.story, 'result');
-		assert(resultPane, `activating the story leaf for run "${firstRunId}" (click, then select+Enter) never attached a .clawdius-workflow-detail[data-clawdius-detail-kind="result"] pane`);
+		const resultPane = await activateAndWaitForDetail(firstTarget, 'result');
+		assert(resultPane, `activating the run row for "${firstRunId}" (click, then select+Enter) never attached a .clawdius-workflow-detail[data-clawdius-detail-kind="result"] pane`);
 		const resultTextHandle = await resultPane.$('.clawdius-workflow-detail-result');
 		assert(resultTextHandle, 'result detail pane missing .clawdius-workflow-detail-result node');
 		const resultText = ((await resultTextHandle.innerText()) || '').trim();
@@ -1240,9 +1318,11 @@ try {
 		// renders visible rows, so gathering agent handles from one already-expanded run and probing them without
 		// re-scrolling keeps the handles attached). Probe up to 8 agent rows for the FIRST whose identity join gave it
 		// a transcriptRef; keep the FIRST agent-detail opened as the fallback report even if none carries a transcript.
-		expanded = await expandRunAndGatherAgents(firstTarget);
+		const expanded = await expandRunAndGatherAgents(firstTarget);
 		const scanTargets = expanded.agentRows;
 		if (scanTargets.length === 0) {
+			const emptyTwistie = await twistieFor(firstTarget);
+			if (emptyTwistie) { await emptyTwistie.click(); } // collapse back - see the cleanup note below
 			return `result: run "${firstRunId}" -> ${isNoResult ? '"No result recorded"' : `real result text (${resultText.length} chars)`}; `
 				+ `SKIPPED (agent+transcript: run "${firstRunId}" exposed no .clawdius-workflow-agent-row)`;
 		}
@@ -1280,13 +1360,32 @@ try {
 			}, undefined, { timeout: 10000 }).catch(() => { });
 			const recordHandles = await transcriptPane.$$('.clawdius-transcript-record');
 			const emptyMarker = await transcriptPane.$('.clawdius-transcript-empty');
-			transcriptDetail = recordHandles.length > 0
-				? `transcript pane opened with ${recordHandles.length} .clawdius-transcript-record row(s)`
-				: emptyMarker
+			if (recordHandles.length > 0) {
+				// The point of this whole follow-up: the pane must render REAL message content, not just the
+				// record-type index it used to. Not every record necessarily has a non-empty projected body (e.g. a
+				// bare `summary` line), so this counts how many of the real rows carry one rather than requiring
+				// every row to - but with real records present, at least one row showing content is the bar.
+				const bodyHandles = await transcriptPane.$$('.clawdius-transcript-record-body');
+				let nonEmptyBodies = 0;
+				for (const b of bodyHandles) {
+					if (((await b.innerText()) || '').trim().length > 0) { nonEmptyBodies++; }
+				}
+				assert(nonEmptyBodies > 0,
+					`transcript pane for agent "${reportProbe.agentId}" rendered ${recordHandles.length} record row(s) but zero carried non-empty .clawdius-transcript-record-body text - the pane is still index-only`);
+				transcriptDetail = `transcript pane opened with ${recordHandles.length} .clawdius-transcript-record row(s), ${nonEmptyBodies} with real body text`;
+			} else {
+				transcriptDetail = emptyMarker
 					? 'transcript pane opened (honest empty state)'
 					: 'transcript pane opened (no records, no empty marker)';
+			}
 			await closeActiveEditorTab();
 		}
+
+		// Collapse the run back before returning - leaving it expanded would bury every OTHER top-level run
+		// beneath this one's (potentially many) phase/agent rows, degrading a later scenario's own top-of-list
+		// scan (e.g. `findErroredChipRun`'s PageDown sweep) to just this one row.
+		const drillInTwistie = await twistieFor(firstTarget);
+		if (drillInTwistie) { await drillInTwistie.click(); }
 
 		return `result: run "${firstRunId}" -> ${isNoResult ? '"No result recorded"' : `real result text (${resultText.length} chars)`}; `
 			+ `agent: "${reportProbe.agentId}" state="${reportProbe.state}" fields ${reportProbe.present} present / ${reportProbe.absent} absent (of ${reportProbe.total}); `
@@ -1311,35 +1410,30 @@ try {
 		const target = found.target;
 		const runId = found.runId;
 
-		// Expand the RUN only (click + ArrowRight, no phase clicks yet) so any agent rows that show up next are
-		// there SOLELY because of the tree's own auto-expand - never because this harness clicked a phase row.
+		// Expand the RUN only (its twistie, no phase clicks yet) so any agent rows that show up next are there
+		// SOLELY because of the tree's own auto-expand - never because this harness clicked a phase row. A body
+		// click is never used here: this build's defaults are `workbench.tree.expandMode: singleClick` AND
+		// `workbench.list.openMode: singleClick`, so a body click on this collapsible row would BOTH toggle it
+		// AND fire `onDidOpen` (opening the result editor, since this is a terminal run) as a side effect - the
+		// twistie click alone toggles without ever reaching the open path.
 		// Scroll the run to the TOP of the (virtualized) tree first: the WorkbenchObjectTree only renders visible
 		// rows, so a run found lower in the list would expand its children BELOW the viewport fold and they would
 		// virtualize out of the DOM - putting the run at the top gives its children room to render in view.
 		await target.evaluate((el: HTMLElement) => el.scrollIntoView({ block: 'start' }));
 		await win.waitForTimeout(300);
-		await target.click();
-		await win.waitForTimeout(150);
-		await win.keyboard.press('ArrowRight');
+		const twistie = await twistieFor(target);
+		assert(twistie, `run "${runId}" carries a positive errored-chip ("${found.chipText}") but renders no twistie (no children) - an errored run must have at least one errored agent`);
+		await twistie.click();
 		await win.waitForTimeout(400);
-		let storyHandles = await win.$$('.clawdius-workflow-story');
-		if (storyHandles.length === 0) {
-			const twistie = await target.$('.monaco-tl-twistie');
-			if (twistie) {
-				await twistie.click();
-				await win.waitForTimeout(400);
-				storyHandles = await win.$$('.clawdius-workflow-story');
-			}
-		}
-		assert(storyHandles.length > 0, `expanding run "${runId}" did not reveal a .clawdius-workflow-story leaf`);
 
 		// The tree is a VIRTUALIZED WorkbenchObjectTree: a run found lower in the list renders its expanded children
 		// BELOW the viewport fold, so they virtualize OUT of the DOM (a DOM-level scrollIntoView does not move the
 		// tree's own transform-based scroll). Walk the children with the KEYBOARD - the tree auto-scrolls to keep the
-		// focused row visible, rendering each row as focus lands. ArrowDown from the (focused) run walks story ->
-		// agents; a COLLAPSED phase's children are skipped, so any errored agent the walk surfaces proves the error
-		// phase auto-expanded (or is a direct child of a <=1-phase run) - never a manual expand. Collect agent rows in
-		// first-seen DOM order (dedup by id) since only a window is in the DOM at any moment.
+		// focused row visible, rendering each row as focus lands. ArrowDown from the (focused, twistie-expanded) run
+		// walks directly to its phase/agent rows; a COLLAPSED phase's children are skipped, so any errored agent the
+		// walk surfaces proves the error phase auto-expanded (or is a direct child of a <=1-phase run) - never a
+		// manual expand. Collect agent rows in first-seen DOM order (dedup by id) since only a window is in the DOM
+		// at any moment.
 		const orderedAgents: { id: string; state: string }[] = [];
 		const seenAgentIds = new Set<string>();
 		let stepsSinceNew = 0;
@@ -1409,8 +1503,11 @@ try {
 		await focusWorkflowsView();
 		const found = await findErroredChipRun();
 		if (!found.target) { await setThemeVerified('Clawdius Dark'); return `SKIPPED (no errored-chip run found across ${found.scanned} run(s))`; }
-		await found.target.click();
-		await win.keyboard.press('ArrowRight');
+		// Expand via the TWISTIE only - a body click on this terminal run would ALSO fire `onDidOpen` (opening its
+		// RESULT pane) as a side effect under this build's default `workbench.list.openMode: singleClick`, and
+		// this scenario wants only the AGENT'S detail pane open, never an extra unclosed result tab.
+		const failureThemeTwistie = await twistieFor(found.target);
+		if (failureThemeTwistie) { await failureThemeTwistie.click(); }
 		await win.waitForTimeout(400);
 		// Walk (keyboard) to the first errored agent - errored-first, so it is near the top of the children.
 		let erroredId: string | null = null;
@@ -1591,10 +1688,8 @@ try {
 				continue;
 			}
 
-			const expanded = await expandRunAndGatherAgents(target);
-			assert(expanded.story, `[${theme}] expanding a terminal run did not reveal a story leaf`);
-			const pane = await activateAndWaitForDetail(expanded.story, 'result');
-			assert(pane, `[${theme}] activating the story leaf never attached a result detail pane`);
+			const pane = await activateAndWaitForDetail(target, 'result');
+			assert(pane, `[${theme}] activating the terminal run row never attached a result detail pane`);
 
 			const actualType = await themeTypeClass();
 			await shot(`drill-in-${slug(theme)}`);
@@ -1674,39 +1769,23 @@ try {
 			const liveIconClass = await liveRow.$eval('.clawdius-workflow-status-icon', el => el.className);
 			assert(/\bstatus-live\b/.test(liveIconClass), `live run's status icon carries no "status-live" class: "${liveIconClass}"`);
 
-			const progress = await expandLiveRunProgress(liveRow);
-			assert(progress, `expanding live run "${donor.runId}" did not reveal a .clawdius-workflow-live-progress leaf`);
-			const progressBar = await progress.$('.monaco-progress-container');
-			assert(progressBar, 'live-progress leaf missing a .monaco-progress-container progress bar');
-
-			const ratioText = ((await progress.$eval('.clawdius-workflow-live-ratio', el => el.textContent || '')) || '').trim();
-			const expectedRatio = donor.liveProgress.seenCount > 0
-				? `${donor.liveProgress.resultCount} of ${donor.liveProgress.seenCount} agents seen so far have a result`
-				: 'No agents observed yet';
-			assert(ratioText === expectedRatio, `live ratio caption read "${ratioText}", expected "${expectedRatio}"`);
-
-			const landedHandles = await progress.$$('.clawdius-workflow-live-landed-item');
-			const expectedLandedShown = Math.min(donor.liveProgress.landedResults.length, LIVE_PROGRESS_MAX_LANDED_PREVIEWS);
-			assert(landedHandles.length === expectedLandedShown, `live-progress leaf showed ${landedHandles.length} landed-result preview(s), expected ${expectedLandedShown}`);
-			const landedTexts = [];
-			for (const h of landedHandles) { landedTexts.push(((await h.textContent()) || '').trim()); }
-			for (let i = 0; i < landedTexts.length; i++) {
-				assert(landedTexts[i] === donor.liveProgress.landedResults[i].preview,
-					`landed-result preview #${i} read "${landedTexts[i].slice(0, 60)}", expected "${donor.liveProgress.landedResults[i].preview.slice(0, 60)}"`);
-			}
+			// A live run has NO children (no twistie) - the live-progress leaf (progress bar, ratio caption,
+			// landed-result previews) that used to render its started/result counts is gone entirely (see
+			// claudeWorkflowTree.ts's buildRunElement / the file header comment); the row itself is the only
+			// surface left, and it deliberately shows none of those counts (describeRunMetaParts falls back to
+			// just the journal's last-write time for a live run) - never a fabricated ratio/percentage/"paused".
+			assert(!(await twistieFor(liveRow)), `live run "${donor.runId}" unexpectedly rendered a twistie - a live run has no children`);
 
 			// `textContent` (not `innerText`) deliberately - this must catch a fabrication even if some future
 			// change rendered it into a hidden node, not just what happens to be visible right now.
 			const rowText = await liveRow.evaluate(el => el.textContent || '');
-			const progressText = await progress.evaluate(el => el.textContent || '');
-			const combined = `${rowText}\n${progressText}`;
-			assert(!/\d+\s*%/.test(combined), `live row/progress text fabricated a percentage: ${JSON.stringify(combined.slice(0, 300))}`);
-			assert(!/\d+\s*\/\s*\d+/.test(combined), `live row/progress text fabricated a "N/total" fraction: ${JSON.stringify(combined.slice(0, 300))}`);
-			assert(!/\bpaused\b/i.test(combined), `live row/progress text fabricated a "paused" state: ${JSON.stringify(combined.slice(0, 300))}`);
+			assert(!/\d+\s*%/.test(rowText), `live row text fabricated a percentage: ${JSON.stringify(rowText.slice(0, 300))}`);
+			assert(!/\d+\s*\/\s*\d+/.test(rowText), `live row text fabricated a "N/total" fraction: ${JSON.stringify(rowText.slice(0, 300))}`);
+			assert(!/\bpaused\b/i.test(rowText), `live row text fabricated a "paused" state: ${JSON.stringify(rowText.slice(0, 300))}`);
 
-			const liveDetail = `live: data-run-kind="live", icon has "status-live"; progress bar present; ratio="${ratioText}"; `
-				+ `${landedHandles.length} landed preview(s) shown of ${donor.liveProgress.landedResults.length} total; `
-				+ `no %, no "N/total", no "paused"; exactly 1 row for the identity`;
+			const liveDetail = `live: data-run-kind="live", icon has "status-live"; no twistie (no children); `
+				+ `no %, no "N/total", no "paused"; exactly 1 row for the identity `
+				+ `(journal: ${donor.liveProgress.startedCount} started / ${donor.liveProgress.resultCount} result / ${donor.liveProgress.landedResults.length} landed, per the seam's own algorithm)`;
 
 			// --- GRADUATION: write the manifest, poll past the 250ms coalesce, then re-check the SAME identity ---
 			writeFileSync(manifestDestFile, donor.manifestBytes);
@@ -2001,11 +2080,14 @@ try {
 			assert(!errorOverlay, 'the workflows list rendered a read-error overlay instead of the degenerate runs');
 			await win.waitForSelector('.clawdius-workflow-run-row[data-run-id="wf_healthy"]', { state: 'attached', timeout: 20000 });
 
-			// Expand-then-collapse ONE row at a time: the story/live-progress leaf carries no data-run-id of its own
-			// (it is a SEPARATE tree row below the run, not a nested child), so only ONE such leaf may be expanded
-			// at a time for `expandRunAndGatherAgents`/`expandLiveRunProgress`'s global `.clawdius-workflow-story` /
-			// `.clawdius-workflow-live-progress` lookups to unambiguously belong to the run under test.
-			const collapse = async (row) => { await row.click(); await win.keyboard.press('ArrowLeft'); await win.waitForTimeout(200); };
+			// Expand-then-collapse ONE row at a time via its TWISTIE (never a body click - a terminal `run` element
+			// opens its result on activation and this build's default `workbench.list.openMode` is singleClick, so
+			// a body click would leak an open editor tab as a side effect on every collapse call).
+			const collapse = async (row) => {
+				const twistie = await twistieFor(row);
+				if (twistie) { await twistie.click(); } else { await row.click(); await win.keyboard.press('ArrowLeft'); }
+				await win.waitForTimeout(200);
+			};
 
 			const results = {};
 
@@ -2019,14 +2101,14 @@ try {
 			assert(unknownText.includes('Shape not recognized'), `unknown-shape row text missing "Shape not recognized": ${JSON.stringify(unknownText)}`);
 			results.unknownShape = `data-run-kind="unknown-shape"; row text includes "Shape not recognized"`;
 
-			// --- 2. missing numbers --------------------------------------------------------------------------------
+			// --- 2. missing numbers - the compact run row's OWN meta line (model/tokens/duration/agentCount, no
+			// story leaf exists anymore - see claudeWorkflowTree.ts's describeRunMetaParts) carries the dashes. ---
 			const missingRow = await win.waitForSelector('.clawdius-workflow-run-row[data-run-id="wf_missingnums"]', { state: 'attached', timeout: 10000 });
+			const missingMetaText = (await missingRow.$eval('.clawdius-workflow-run-meta', el => el.textContent || '')) || '';
+			const missingDashCount = (missingMetaText.match(/—/g) || []).length;
+			assert(missingDashCount === 4, `expected exactly 4 dash placeholders (model/tokens/duration/agentCount) in the missing-numbers run row's meta line, found ${missingDashCount}: ${JSON.stringify(missingMetaText)}`);
+			assert(!/\b0 tokens\b/.test(missingMetaText), `missing-numbers run row meta line fabricated a zero: ${JSON.stringify(missingMetaText)}`);
 			const missingExpand = await expandRunAndGatherAgents(missingRow);
-			assert(missingExpand.story, 'missing-numbers run did not reveal its story leaf');
-			const storyText = (await missingExpand.story.textContent()) || '';
-			const storyDashCount = (storyText.match(/—/g) || []).length;
-			assert(storyDashCount === 5, `expected exactly 5 dash placeholders (duration/tokens/toolCalls/model/agentCount) in the missing-numbers story leaf, found ${storyDashCount}: ${JSON.stringify(storyText)}`);
-			assert(!/\b0 tokens\b|\b0 tool calls\b/.test(storyText), `missing-numbers story leaf fabricated a zero: ${JSON.stringify(storyText)}`);
 			let agentDashCount = -1;
 			if (missingExpand.agentRows.length > 0) {
 				const agentText = (await missingExpand.agentRows[0].textContent()) || '';
@@ -2035,31 +2117,26 @@ try {
 				assert(!/\b0 tokens\b|\b0 calls\b/.test(agentText), `missing-numbers agent row fabricated a zero: ${JSON.stringify(agentText)}`);
 			}
 			await collapse(missingRow);
-			results.missingNumbers = `story leaf dash count=${storyDashCount}, agent row dash count=${agentDashCount}, no fabricated zero`;
+			results.missingNumbers = `run row meta dash count=${missingDashCount}, agent row dash count=${agentDashCount}, no fabricated zero`;
 
-			// --- 3. result-before-start --------------------------------------------------------------------------
+			// --- 3. result-before-start - the live-progress leaf that used to show its ratio/degraded caption is
+			// gone (a live run now has no children at all - see claudeWorkflowTree.ts's buildRunElement); the
+			// row's own data-completeness attribute is unaffected and still the honest signal to check. ---
 			const rbsRow = await win.waitForSelector('.clawdius-workflow-run-row[data-run-id="wf_resultbeforestart"]', { state: 'attached', timeout: 10000 });
 			const rbsCompleteness = await rbsRow.getAttribute('data-completeness');
-			const rbsProgress = await expandLiveRunProgress(rbsRow);
-			assert(rbsProgress, 'result-before-start run did not reveal its live-progress leaf');
-			const rbsRatio = ((await rbsProgress.$eval('.clawdius-workflow-live-ratio', el => el.textContent || '')) || '').trim();
-			assert(rbsRatio === '1 of 1 agents seen so far have a result', `result-before-start ratio read "${rbsRatio}", expected "1 of 1 agents seen so far have a result" (the union, never inverted)`);
+			const rbsKind = await rbsRow.getAttribute('data-run-kind');
+			assert(rbsKind === 'live', `result-before-start expected data-run-kind="live", read "${rbsKind}"`);
 			assert(rbsCompleteness === 'complete', `result-before-start alone (no torn line) must stay complete, read data-completeness="${rbsCompleteness}"`);
-			await collapse(rbsRow);
-			results.resultBeforeStart = `ratio="${rbsRatio}"; data-completeness="${rbsCompleteness}"`;
+			assert(!(await twistieFor(rbsRow)), 'result-before-start (a live run) unexpectedly rendered a twistie - a live run has no children');
+			results.resultBeforeStart = `data-run-kind="live"; data-completeness="${rbsCompleteness}"; no twistie (no children)`;
 
-			// --- 4. torn tail --------------------------------------------------------------------------------------
+			// --- 4. torn tail - same honesty check via data-completeness; the degraded caption was exclusively the
+			// (now-removed) live-progress leaf's job. ---
 			const tornRow = await win.waitForSelector('.clawdius-workflow-run-row[data-run-id="wf_torntail"]', { state: 'attached', timeout: 10000 });
 			const tornCompleteness = await tornRow.getAttribute('data-completeness');
-			const tornProgress = await expandLiveRunProgress(tornRow);
-			assert(tornProgress, 'torn-tail run did not reveal its live-progress leaf');
-			const tornDegradedText = ((await tornProgress.$eval('.clawdius-workflow-live-degraded', el => el.textContent || '')) || '').trim();
-			assert(tornDegradedText.length > 0, 'torn-tail live-progress leaf shows no degraded caption');
-			const tornRatio = ((await tornProgress.$eval('.clawdius-workflow-live-ratio', el => el.textContent || '')) || '').trim();
-			assert(tornRatio === '1 of 1 agents seen so far have a result', `torn-tail ratio read "${tornRatio}" - the readable started+result records must still render`);
 			assert(tornCompleteness === 'partial', `a torn journal line must degrade the run to partial, read data-completeness="${tornCompleteness}"`);
-			await collapse(tornRow);
-			results.tornTail = `degraded caption="${tornDegradedText}"; ratio="${tornRatio}" (readable records still render); data-completeness="${tornCompleteness}"`;
+			assert(!(await twistieFor(tornRow)), 'torn-tail (a live run) unexpectedly rendered a twistie - a live run has no children');
+			results.tornTail = `data-completeness="${tornCompleteness}"; no twistie (no children)`;
 
 			// --- 5. duplicate agent id ------------------------------------------------------------------------------
 			const dupAgentRow = await win.waitForSelector('.clawdius-workflow-run-row[data-run-id="wf_dupagent"]', { state: 'attached', timeout: 10000 });
@@ -2148,9 +2225,10 @@ try {
 	}
 
 	/** The ~1000-agent manifest for the expand/scroll fixture: `agentCount` is set EXPLICITLY
-	 *  (the reader never derives it from the agent list - see claudeReaderSeamService.ts) so the story leaf's
-	 *  rendered count is a direct, checkable proof the row came from the manifest. Every `workflow_agent` entry
-	 *  carries real cost numbers so an agent row never falls back to a dash. */
+	 *  (the reader never derives it from the agent list - see claudeReaderSeamService.ts) so the run row's own
+	 *  rendered count (its compact meta line - describeRunMetaParts) is a direct, checkable proof the row came
+	 *  from the manifest. Every `workflow_agent` entry carries real cost numbers so an agent row never falls back
+	 *  to a dash. */
 	function buildScaleExpandManifest() {
 		const workflowProgress = [];
 		for (let i = 0; i < SCALE_EXPAND_AGENT_COUNT; i++) {
@@ -2298,7 +2376,7 @@ try {
 			// the top row first to establish DOM/keyboard focus ON THE TREE (the "Focus on View" command that just
 			// triggered the timed paint focuses the VIEW pane, not necessarily a specific row yet).
 			const topRow = await win.$('.clawdius-workflow-run-row');
-			if (topRow) { await topRow.click(); }
+			if (topRow) { await clickRowToFocusOnly(topRow); }
 			await win.waitForTimeout(150);
 			await win.keyboard.press('End');
 			const oldestRow = await win.waitForSelector(`.clawdius-workflow-run-row[data-run-id="${scaleListRunId(0)}"]`, { state: 'attached', timeout: 15000 }).catch(() => null);
@@ -2421,26 +2499,24 @@ try {
 			assert(runKind === 'terminal', `synthetic 1000-agent run rendered data-run-kind="${runKind}" (expected "terminal")`);
 			assert(completeness === 'complete', `expected data-completeness="complete" with every transcript sidecar absent (see this scenario's doc comment for exactly what that does and does not establish), read "${completeness}"`);
 
-			// --- expand: click + ArrowRight to the story leaf attaching - the <=500ms budget -------------------------
+			// --- expand: TWISTIE click (never a body click - it would open the result editor as a side effect,
+			// this build's default `workbench.list.openMode` is singleClick) to the first agent row attaching -
+			// the <=500ms budget -------------------------
 			const expandStart = Date.now();
 			await row.scrollIntoViewIfNeeded();
-			await row.click();
-			await win.waitForTimeout(50);
-			await win.keyboard.press('ArrowRight');
-			let storyHandle = await win.waitForSelector('.clawdius-workflow-story', { state: 'attached', timeout: 5000 }).catch(() => null);
-			if (!storyHandle) {
-				const twistie = await row.$('.monaco-tl-twistie');
-				if (twistie) {
-					await twistie.click();
-					storyHandle = await win.waitForSelector('.clawdius-workflow-story', { state: 'attached', timeout: 5000 }).catch(() => null);
-				}
-			}
+			const scaleTwistie = await twistieFor(row);
+			assert(scaleTwistie, 'the synthetic 1000-agent run rendered no twistie (no children)');
+			await scaleTwistie.click();
+			const firstAgentHandle = await win.waitForSelector('.clawdius-workflow-agent-row', { state: 'attached', timeout: 5000 }).catch(() => null);
 			const expandMs = Date.now() - expandStart;
-			assert(storyHandle, 'expanding the synthetic 1000-agent run never revealed a .clawdius-workflow-story leaf');
+			assert(firstAgentHandle, 'expanding the synthetic 1000-agent run never revealed a .clawdius-workflow-agent-row');
 			assert(expandMs <= 500, `expanding the 1000-agent run took ${expandMs}ms, budget is <=500ms`);
 
-			const costText = (await storyHandle.$eval('.clawdius-workflow-story-cost', el => el.textContent || '')) || '';
-			assert(costText.includes(`${SCALE_EXPAND_AGENT_COUNT} agents`), `story leaf cost line did not report "${SCALE_EXPAND_AGENT_COUNT} agents" (sourced straight from the manifest's own agentCount field): "${costText}"`);
+			const metaText = (await row.$eval('.clawdius-workflow-run-meta', el => el.textContent || '')) || '';
+			assert(metaText.includes(`${SCALE_EXPAND_AGENT_COUNT} agents`), `run row's meta line did not report "${SCALE_EXPAND_AGENT_COUNT} agents" (sourced straight from the manifest's own agentCount field): "${metaText}"`);
+
+			const detailPaneAfterExpand = await win.$('.clawdius-workflow-detail');
+			assert(!detailPaneAfterExpand, 'expanding the 1000-agent run via its twistie unexpectedly opened a .clawdius-workflow-detail pane');
 
 			const transcriptPanesAfterExpand = await win.$$('.clawdius-transcript');
 			assert(transcriptPanesAfterExpand.length === 0, 'a .clawdius-transcript editor pane exists after expand alone - transcripts open only on an explicit drill-in');
@@ -2602,9 +2678,9 @@ try {
 		return recordedAlertTexts();
 	}
 
-	// ACCESSIBILITY: aria-label content per element kind (run status/errored-count, story, phase error-count, agent
-	// state, live-progress ratio/activity), full keyboard-only operability (expand + drill-in, no mouse), aria
-	// persisting under High Contrast, and - across a real live-to-terminal graduation - the row's aria-label
+	// ACCESSIBILITY: aria-label content per element kind (run status/errored-count, phase error-count, agent
+	// state, a live run's "in progress" status), full keyboard-only operability (expand + drill-in, no mouse),
+	// aria persisting under High Contrast, and - across a real live-to-terminal graduation - the row's aria-label
 	// switching to the FRESH graduated state, focus staying on the same row, and the accessibility-service
 	// announcement firing.
 	await scenario('ultracode-workflows-accessibility', true, async () => {
@@ -2641,28 +2717,30 @@ try {
 			await win.waitForTimeout(6000);
 			await focusWorkflowsView();
 			// `focusWorkflowsView`'s own "reset scroll to top" step clicks the FIRST row to establish a
-			// deterministic focus point - for a collapsible row that ALSO expands it here (this tree does not gate
-			// expand-on-click to the twistie alone). The default newest-first sort pins live runs first by
-			// identity, so that first row is `wf_a11ygrad` - collapse it immediately so exactly one row is expanded
-			// at a time from here on, the same discipline the honest-edges scenario's own `collapse` helper
-			// documents as required for the SHARED `expandRunAndGatherAgents`/`expandLiveRunProgress` helpers'
-			// global `.clawdius-workflow-story` / `.clawdius-workflow-live-progress` lookups to stay unambiguous.
-			const collapse = async row => { await row.click(); await win.keyboard.press('ArrowLeft'); await win.waitForTimeout(200); };
+			// deterministic focus point - for a collapsible row that ALSO toggles its expand state here (this
+			// build's `workbench.tree.expandMode` default is `singleClick`, so a body click is not gated to the
+			// twistie alone) and, for a TERMINAL run, ALSO fires `onDidOpen` (this build's default
+			// `workbench.list.openMode` is likewise `singleClick`) - `clickRowToFocusOnly` already closes
+			// whatever that opens. The default newest-first sort pins live runs first by identity, so that first
+			// row is `wf_a11ygrad` - collapse it immediately (via its twistie, never a body click, to avoid ANOTHER
+			// open) so exactly one row is expanded at a time from here on.
+			const collapse = async row => {
+				const twistie = await twistieFor(row);
+				if (twistie) { await twistie.click(); } else { await row.click(); await win.keyboard.press('ArrowLeft'); }
+				await win.waitForTimeout(200);
+			};
 			const gradRowInitial = await win.$('.clawdius-workflow-run-row[data-run-id="wf_a11ygrad"]');
 			if (gradRowInitial) { await collapse(gradRowInitial); }
 
 			const results = {};
 
-			// --- 1. aria labels: run status/errored-count, story, phase error-count, agent state ----------------------
+			// --- 1. aria labels: run status/errored-count, phase error-count, agent state ----------------------
 			const failedRow = await win.waitForSelector('.clawdius-workflow-run-row[data-run-id="wf_a11yfailed"]', { state: 'attached', timeout: 15000 });
 			const failedRunAria = await ariaLabelOf(failedRow);
 			assert(/failed/.test(failedRunAria) && /1 errored/.test(failedRunAria),
 				`failed run's aria-label missing status/errored-count: "${failedRunAria}"`);
 
 			const failedExpand = await expandRunAndGatherAgents(failedRow);
-			assert(failedExpand.story, 'wf_a11yfailed did not reveal its story leaf');
-			const storyAria = await ariaLabelOf(failedExpand.story);
-			assert(storyAria.startsWith('Summary and result for'), `story leaf aria-label missing the expected prefix: "${storyAria}"`);
 
 			const phaseRows = await win.$$('.clawdius-workflow-phase-row');
 			assert(phaseRows.length === 2, `expected 2 phase rows for wf_a11yfailed, found ${phaseRows.length}`);
@@ -2681,10 +2759,12 @@ try {
 			}
 			assert(/error/.test(agentAriaById['a1'] || ''), `errored agent a1's aria-label did not mention its state: "${agentAriaById['a1']}"`);
 			assert(/done/.test(agentAriaById['a2'] || ''), `done agent a2's aria-label did not mention its state: "${agentAriaById['a2']}"`);
-			results.ariaLabels = `run: "${failedRunAria}"; story: "${storyAria}"; phases: ${JSON.stringify(phaseArias)}; agents: ${JSON.stringify(agentAriaById)}`;
+			results.ariaLabels = `run: "${failedRunAria}"; phases: ${JSON.stringify(phaseArias)}; agents: ${JSON.stringify(agentAriaById)}`;
 			await collapse(failedRow);
 
-			// --- 2. live progress aria: ratio + activity captions ------------------------------------------------------
+			// --- 2. live run aria: the "in progress" status - the live-progress leaf's own ratio/activity captions
+			// are gone (a live run has no children at all now - see claudeWorkflowTree.ts's buildRunElement); the
+			// row's own aria-label (describeRunStatusForAria) is the only honest live-status signal left. ---------
 			// Reset to a deterministic top-of-list scroll position and re-query the row FRESH immediately before
 			// interacting with it - the SAME defensive pattern the failure-surfacing scenario above uses when several
 			// rows sit adjacent to each other in the virtualized tree, so a stale handle can never be clicked.
@@ -2692,17 +2772,13 @@ try {
 			await win.waitForTimeout(200);
 			const liveRow = await win.$('.clawdius-workflow-run-row[data-run-id="wf_a11ylive"]');
 			assert(liveRow, 'wf_a11ylive run row not found at the top-of-list scroll position');
-			const liveRowId = await liveRow.getAttribute('data-run-id');
-			assert(liveRowId === 'wf_a11ylive', `resolved the wrong row before expanding: data-run-id="${liveRowId}"`);
-			const liveProgress = await expandLiveRunProgress(liveRow);
-			assert(liveProgress, 'wf_a11ylive did not reveal its live-progress leaf');
-			const liveAria = await ariaLabelOf(liveProgress);
-			assert(liveAria.includes('1 of 2 agents seen so far have a result') && liveAria.includes('Journal last wrote'),
-				`live-progress aria-label missing the ratio/activity captions: "${liveAria}"`);
-			results.liveProgressAria = liveAria;
-			await collapse(liveRow);
+			const liveAria = await ariaLabelOf(liveRow);
+			assert(liveAria.includes('in progress'), `live run's aria-label missing the "in progress" status: "${liveAria}"`);
+			assert(!(await twistieFor(liveRow)), 'wf_a11ylive unexpectedly rendered a twistie - a live run has no children');
+			results.liveAria = liveAria;
 
-			// --- 3. keyboard-only operability: Home, walk to the failed run, expand, drill in - no mouse used ----------
+			// --- 3. keyboard-only operability: Home, walk to the failed run, expand (verify children), drill in
+			// (Enter on the RUN itself opens its result - no child leaf to navigate onto anymore) - no mouse used. ---
 			await win.keyboard.press('Home');
 			await win.waitForTimeout(150);
 			let onTarget = false;
@@ -2715,13 +2791,13 @@ try {
 			assert(onTarget, 'keyboard-only ArrowDown walk from Home never reached the wf_a11yfailed run row');
 			await win.keyboard.press('ArrowRight'); // expand
 			await win.waitForTimeout(300);
-			await win.keyboard.press('ArrowDown'); // move focus onto the story leaf, the run's first child
-			await win.waitForTimeout(150);
-			await win.keyboard.press('Enter'); // drill in
+			const keyboardExpandedAgents = await win.$$('.clawdius-workflow-agent-row');
+			assert(keyboardExpandedAgents.length > 0, 'keyboard ArrowRight on wf_a11yfailed never revealed its agent rows');
+			await win.keyboard.press('Enter'); // drill in - focus is still on the run row itself
 			const detailPane = await win.waitForSelector('.clawdius-workflow-detail[data-clawdius-detail-kind="result"]', { state: 'attached', timeout: 8000 }).catch(() => null);
-			assert(detailPane, 'keyboard-only navigation (Home, ArrowDown*, ArrowRight, ArrowDown, Enter) never opened the result detail pane');
+			assert(detailPane, 'keyboard-only navigation (Home, ArrowDown*, ArrowRight, Enter) never opened the result detail pane');
 			await closeActiveEditorTab();
-			results.keyboardOnly = 'Home -> ArrowDown* -> ArrowRight (expand) -> ArrowDown -> Enter opened the result detail pane, no mouse used';
+			results.keyboardOnly = 'Home -> ArrowDown* -> ArrowRight (expand, agent rows appeared) -> Enter (on the run itself) opened the result detail pane, no mouse used';
 
 			// --- 4. High Contrast: the same aria-label content survives a theme change -----------------------------------
 			await setThemeVerified('Clawdius High Contrast');
@@ -2910,7 +2986,7 @@ try {
 			restoredIds = await win.$$eval('.clawdius-workflow-run-row', els => els.map(el => el.getAttribute('data-run-id')));
 		}
 		const firstRestoredRow = await win.$('.clawdius-workflow-run-row');
-		if (firstRestoredRow) { await firstRestoredRow.click(); await win.keyboard.press('Home'); await win.waitForTimeout(200); }
+		if (firstRestoredRow) { await clickRowToFocusOnly(firstRestoredRow); await win.keyboard.press('Home'); await win.waitForTimeout(200); }
 		const beforeSortIds = await win.$$eval('.clawdius-workflow-run-row', els => els.map(el => el.getAttribute('data-run-id')));
 
 		// --- sort: switch to "status" (failed before completed, live always first) and prove a REAL reorder --------
@@ -2974,10 +3050,11 @@ try {
 	// posting run contents to a loopback port would not be caught here - the claim is off-machine egress, not
 	// silence. Installs the request recorder (see startEgressRecorder's own doc comment for
 	// exactly what it can and cannot see) BEFORE the surface is touched, then drives it end to end: open the
-	// view, expand a terminal run, open its result pane and (when the run declares any) an agent's detail, close
-	// the tab, filter, sort, and switch a theme. The view, filter, sort and the result pane must all open or the
-	// scenario FAILS - a terminal run always has a story leaf, so a missing one is a surface that would not open,
-	// never legitimate absence. A config root with no terminal run at all SKIPS rather than passes, since the
+	// view, open a terminal run's result pane (activating the run row itself - no expansion needed for that) and
+	// (when the run declares any) an agent's detail, close the tab, filter, sort, and switch a theme. The view,
+	// filter, sort and the result pane must all open or the scenario FAILS - a terminal run always opens its
+	// result on activation, so a pane that never attaches is a surface that would not open, never legitimate
+	// absence. A config root with no terminal run at all SKIPS rather than passes, since the
 	// detail panes would go unexercised. Only "this run declares no agents" is a real absence, and a phase row
 	// that fails to expand is reported as a failure rather than counted as having no agents.
 	// Asserts the recorded requests carry ZERO external urls (see isExternalEgressUrl for the exact
@@ -3017,26 +3094,22 @@ try {
 				return 'SKIPPED (no terminal run on this config root, so neither detail pane could be exercised)';
 			}
 			const runId = await target.getAttribute('data-run-id');
-			const expanded = await expandRunAndGatherAgents(target);
-			// A terminal run ALWAYS has a story leaf - `buildTerminalRunChildren` puts it first unconditionally -
-			// so a missing story row is never "this run has no story", it is expansion having failed. Assert it
-			// rather than reporting a legitimate-sounding absence for something that cannot legitimately be absent.
-			assert(expanded.story, `terminal run "${runId}" rendered no story row after expanding - every terminal run has one, so the row did not expand and neither detail pane was exercised`);
-			const resultPane = await activateAndWaitForDetail(expanded.story, 'result');
-			assert(resultPane, `run "${runId}" has a story row but its result pane did not open - the drill this scenario claims to have performed did not happen`);
+			// Activating the RUN ROW ITSELF opens its result - no expansion needed for this half of the drill.
+			const resultPane = await activateAndWaitForDetail(target, 'result');
+			assert(resultPane, `run "${runId}" - activating its row did not open the result pane - the drill this scenario claims to have performed did not happen`);
 			await closeActiveEditorTab();
 
-			const reExpanded = await expandRunAndGatherAgents(target);
-			// Hold the SECOND expansion to the same standard as the first: a story row that vanished means this
-			// re-expansion failed, and any agent count taken from it would be meaningless.
-			assert(reExpanded.story, `terminal run "${runId}" did not re-expand after the result tab was closed, so its agent rows could not be reached`);
+			// Expand (idempotent - the activation above may already have toggled this row's twistie as a side
+			// effect of the body click under this build's default `workbench.tree.expandMode: singleClick`) to
+			// reach the agent rows for the second half of the drill.
+			const expanded = await expandRunAndGatherAgents(target);
 			// A run legitimately may have no agents; a phase that FAILED to expand is a different thing entirely
 			// and would hide real agents beneath it, so refuse to call that absence.
-			assert(reExpanded.phaseErrors.length === 0,
-				`run "${runId}" had ${reExpanded.phaseErrors.length} phase row(s) fail to expand, so any agents beneath them are hidden and "no agent rows" would be a false reading: ${JSON.stringify(reExpanded.phaseErrors.slice(0, 3))}`);
+			assert(expanded.phaseErrors.length === 0,
+				`run "${runId}" had ${expanded.phaseErrors.length} phase row(s) fail to expand, so any agents beneath them are hidden and "no agent rows" would be a false reading: ${JSON.stringify(expanded.phaseErrors.slice(0, 3))}`);
 			let agentState = 'absent (this run declares no agents)';
-			if (reExpanded.agentRows.length > 0) {
-				const agentPane = await activateAndWaitForDetail(reExpanded.agentRows[0], 'agent');
+			if (expanded.agentRows.length > 0) {
+				const agentPane = await activateAndWaitForDetail(expanded.agentRows[0], 'agent');
 				assert(agentPane, `run "${runId}" has an agent row but its agent pane did not open - the drill this scenario claims to have performed did not happen`);
 				agentState = 'opened';
 				await closeActiveEditorTab();
@@ -3132,29 +3205,26 @@ try {
 		assert(paneRoot, 'could not locate the workflows view\'s .pane ancestor to scan');
 		// The scan has to skip text the USER supplied - a run legitimately named "Stop the deploy" is not a control -
 		// while still covering every element the FORK renders. So the exclusion names the user-data LEAVES only: the
-		// label's name and description elements inside a row, and the story panes. It must NOT name the row
-		// containers themselves: `closest()` matches ancestors, so excluding a row would skip that row's entire
-		// subtree, and a control added inside a row - exactly where a run control would go - would go unseen.
-		// Everything else in a row (its container, status icon, chips, agent icon, and any element a future change
-		// adds) stays in scope. The residual blind spot: a name/description leaf is an ELEMENT (IconLabel builds the name as
-		// an anchor and the description as a span), not a bare text node, so `closest()` excludes its whole subtree - a control nested inside one
-		// would be skipped. That is accepted because those leaves hold the user's own words and nothing else today,
-		// not because they are incapable of holding anything.
+		// label's name element inside a run row (its IconLabel carries no description anymore - see
+		// claudeWorkflowTree.ts's WorkflowRunRowRenderer, the compact meta line is fork-computed, not user text)
+		// and an agent row's name/description. It must NOT name the row containers themselves: `closest()` matches
+		// ancestors, so excluding a row would skip that row's entire subtree, and a control added inside a row -
+		// exactly where a run control would go - would go unseen. Everything else in a row (its container, status
+		// icon, chips, the run's own meta line, agent icon, and any element a future change adds) stays in scope.
+		// The residual blind spot: a name/description leaf is an ELEMENT (IconLabel builds the name as an anchor
+		// and the description as a span), not a bare text node, so `closest()` excludes its whole subtree - a
+		// control nested inside one would be skipped. That is accepted because those leaves hold the user's own
+		// words and nothing else today, not because they are incapable of holding anything.
 		const userDataSel = [
 			'.clawdius-workflow-run-row .label-name',
-			'.clawdius-workflow-run-row .label-description',
 			'.clawdius-workflow-agent-row .label-name',
 			'.clawdius-workflow-agent-row .label-description',
-			'.clawdius-workflow-story-summary',
-			'.clawdius-workflow-story-result',
-			'.clawdius-workflow-story-error',
 			// A phase's title and detail are the workflow author's own words (rendered verbatim from the run's
-			// declared phases), and a landed item is the agent's own result text - user data exactly like a run
-			// name, so a phase called "Launch" must not read as a control. Their sibling counts ("N agents",
-			// "N errored") and the "+N more" affordance are fork chrome and deliberately stay in scope.
+			// declared phases) - user data exactly like a run name, so a phase called "Launch" must not read as a
+			// control. Their sibling counts ("N agents", "N errored") are fork chrome and deliberately stay in
+			// scope.
 			'.clawdius-workflow-phase-title',
 			'.clawdius-workflow-phase-detail',
-			'.clawdius-workflow-live-landed-item'
 		].join(', ');
 		// Self-check the exclusion still resolves. If a future DOM change renamed these leaves the selector would
 		// silently exclude nothing; that direction is safe (the scan only gets stricter) but it would quietly stop
@@ -3280,7 +3350,7 @@ try {
 			+ `reconciling against the list's own count, not assumed from a page count; `
 			+ `(b) scanned the view's .pane subtree (header/title/toolbar action items + .clawdius-workflows body: filter/sort toolbar, tree rows; the state overlay is NOT reachable here - it renders only in the empty/no-match/read-error states and this scenario runs only when rows are present) `
 			+ `for ${WORKFLOW_CONTROL_VERBS.length} control verb(s) as whole words - none found. Text is scanned per element, skipping the ${userDataLeafCount} `
-			+ `user-data leaf element(s) (label name/description within a row, story summary/result/error, phase title/detail, landed result preview) but NOT the rows `
+			+ `user-data leaf element(s) (a run/agent row's label name/description, phase title/detail) but NOT the rows `
 			+ `themselves, so a control placed inside a row is caught; title/aria-label is scanned WITHOUT editing it, reporting any verb occurrence that does not sit `
 			+ `wholly inside one of the user's own words, so a verb the fork wrote surfaces even where it adjoins or is spelled across user text; `
 			+ `(c) no "Read Again" control present in the healthy state`;

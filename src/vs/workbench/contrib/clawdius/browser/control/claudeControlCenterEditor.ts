@@ -86,6 +86,16 @@ import {
 import { basename, isEqual, isEqualOrParent } from '../../../../../base/common/resources.js';
 import { parse as parseJsonc } from '../../../../../base/common/jsonc.js';
 import { IDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
+import { registerColor } from '../../../../../platform/theme/common/colorRegistry.js';
+
+// Item 25: the Sponsor action's heart glyph was a hardcoded `#db61a2` - unthemeable, and with no HC-specific value.
+// A self-contained registered color (the same pattern claudeUsageStatusEntry.ts's usageBarFill/usageBarTrack and
+// clawdiusPermissionModeStatusEntry.ts's permission-tone colors already use) emits `--vscode-clawdius-sponsorHeart`
+// for claudeControlCenter.css to consume, keeping the same pink by default while giving every theme kind - HC
+// included - a real override point. There is no built-in `charts.pink` token to defer to instead.
+registerColor('clawdius.sponsorHeart', {
+	dark: '#db61a2', light: '#c04a89', hcDark: '#ff8fc7', hcLight: '#8a1f5c'
+}, localize('clawdius.control.sponsorHeart', "Color of the Control Center's Sponsor action heart glyph."));
 
 type Snapshot =
 	| { readonly kind: 'ok'; readonly uri: URI; readonly settings: Record<string, unknown> }
@@ -260,8 +270,9 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	// Skills tab package state (keyed by the skill folder fsPath). Caches are cleared on a config change; the
 	// generation counter bumps on every clear so a slower in-flight read never writes a stale result back.
 	private expandedSkill: string | undefined;
-	/** Plugin names whose skill group is collapsed on the Skills tab (default: expanded). */
-	private readonly collapsedSkillPlugins = new Set<string>();
+	/** Plugin names whose skill group is EXPANDED on the Skills tab (default: collapsed - a plugin can bundle many
+	 *  skills, and an expanded-by-default group read as a wall of rows on first open). */
+	private readonly expandedSkillPlugins = new Set<string>();
 	private cacheGeneration = 0;
 	private isPaneDisposed = false;
 	private readonly skillValidations = new Map<string, ISkillValidation>();
@@ -622,9 +633,13 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	}
 
 	private renderTabs(parent: HTMLElement): void {
-		// The tablist strip and the Sponsor action share one row, but the sponsor sits OUTSIDE the tablist (a11y:
-		// a tablist must contain only tabs). The row carries the underline border so it spans the full width.
-		const row = append(parent, h('.clawdius-control-tabs-row'));
+		// The tablist strip and the Star/Sponsor actions share one row, but the actions sit OUTSIDE the tablist
+		// (a11y: a tablist must contain only tabs). Item 2 (BLOCKER): Star/Sponsor are lifted OUT of the
+		// horizontally-scrolling tab strip into `.clawdius-control-tabs-actions`, a separate never-scrolling
+		// sibling within the non-scrolling `.clawdius-control-tabsbar` outer row - once the tab strip alone
+		// overflows and scrolls, the actions can no longer scroll out of view with it.
+		const bar = append(parent, h('.clawdius-control-tabsbar'));
+		const row = append(bar, h('.clawdius-control-tabs-row'));
 		const strip = append(row, h('.clawdius-control-tabs'));
 		strip.setAttribute('role', 'tablist');
 		const tabs: { readonly tab: ControlTab; readonly label: string; readonly ready: boolean }[] = [
@@ -659,11 +674,15 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			}));
 		}
 
+		// The right-pinned, non-scrolling actions container (item 2) - Star + Sponsor both land here, never inside
+		// `.clawdius-control-tabs-row`'s scroll area.
+		const actions = append(bar, h('.clawdius-control-tabs-actions'));
+
 		// CLAWDIUS-BEGIN "Star on GitHub" action (#star): a real <button> beside Sponsor that opens the repo so the
 		// user stars it themselves (GitHub has no way to star without their auth token - see the star research). A
 		// count pill is filled from the star-count service: synchronously from cache, else via ONE unauthenticated,
 		// fail-silent GitHub request kicked off by this (user-initiated) Control Center open. Offline -> no pill.
-		const star = append(row, h('button.clawdius-control-star')) as HTMLButtonElement;
+		const star = append(actions, h('button.clawdius-control-star')) as HTMLButtonElement;
 		star.title = localize('clawdius.control.starTip', "Star Clawdius on GitHub (opens in browser)");
 		append(star, h('span.codicon.codicon-star-empty.clawdius-control-star-glyph')).setAttribute('aria-hidden', 'true');
 		append(star, h('span')).textContent = localize('clawdius.control.star', "Star on GitHub");
@@ -678,7 +697,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 
 		// CLAWDIUS: a right-justified "Sponsor Clawdius" action - a real <button> (keyboard-focusable, Enter/Space
 		// activate) OUTSIDE the tablist. Styles live in claudeControlCenter.css.
-		const sponsor = append(row, h('button.clawdius-control-sponsor')) as HTMLButtonElement;
+		const sponsor = append(actions, h('button.clawdius-control-sponsor')) as HTMLButtonElement;
 		sponsor.title = localize('clawdius.control.sponsorTip', "Sponsor Clawdius (opens in browser)");
 		append(sponsor, h('span.codicon.codicon-heart.clawdius-control-sponsor-heart')).setAttribute('aria-hidden', 'true');
 		append(sponsor, h('span')).textContent = localize('clawdius.control.sponsor', "Sponsor Clawdius");
@@ -1607,7 +1626,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		}
 		for (const plugin of [...byPlugin.keys()].sort((a, b) => a.localeCompare(b))) {
 			const group = byPlugin.get(plugin)!;
-			const collapsed = this.collapsedSkillPlugins.has(plugin);
+			const collapsed = !this.expandedSkillPlugins.has(plugin);
 			const header = append(block, h('.clawdius-control-caprow.clawdius-control-skill-group'));
 			const chevron = this.iconButton(header,
 				collapsed ? Codicon.chevronRight : Codicon.chevronDown,
@@ -1773,8 +1792,8 @@ export class ClaudeControlCenterEditor extends EditorPane {
 
 	/** Collapse or expand a plugin's skill group on the Skills tab. */
 	private toggleSkillPluginCollapse(plugin: string): void {
-		if (this.collapsedSkillPlugins.has(plugin)) { this.collapsedSkillPlugins.delete(plugin); }
-		else { this.collapsedSkillPlugins.add(plugin); }
+		if (this.expandedSkillPlugins.has(plugin)) { this.expandedSkillPlugins.delete(plugin); }
+		else { this.expandedSkillPlugins.add(plugin); }
 		this.render();
 	}
 

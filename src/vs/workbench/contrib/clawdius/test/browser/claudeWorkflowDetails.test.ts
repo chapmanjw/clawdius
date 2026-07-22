@@ -6,11 +6,21 @@
 // CLAWDIUS-BEGIN Claude Code Ultracode Workflows - drill-in editor tests
 // Unit coverage for the three read-only drill-in editors an expanded completed run opens: the discriminated
 // ClaudeWorkflowDetailInput/Editor (the RESULT variant renders a run's full resultText; the AGENT variant renders
-// one agent's honest cost/error/preview fields, dash-when-absent, never fabricated) and the transcript editor's
+// one agent's honest cost/error/preview fields - Prompt/Result are dash-when-absent, but Error is withheld
+// ENTIRELY when absent, never a dash, since a passing agent has no failure text to show) and the transcript editor's
 // migration to the identity model (WorkflowTranscriptRef instead of the legacy FleetSubagent - a stored path/URI
 // is never round-tripped, the seam re-derives it from bare identities on every read). The headline backward-compat
 // case: a tab persisted BEFORE the identity migration serialized a legacy FleetSubagent payload, and the
 // deserializer must still open it into an honest absent read, never a crash.
+//
+// The RESULT body and the agent Prompt/Result fields render RICHLY (`renderRichText` in claudeWorkflowDetailEditor.ts),
+// in priority order: a JSON OBJECT whose values are ALL strings (the common report shape, e.g.
+// `{"synthesis":"# ...","note":"..."}`) renders as a SECTIONED document (a muted key label + that key's own
+// Markdown-rendered value); any OTHER JSON object/array pretty-prints in a monospace block; otherwise sanitized
+// Markdown - never the literal `{"a":1}` / `## heading` blob a plain `textContent` assignment used to show. The
+// RESULT body is additionally wrapped in the shared bordered `.clawdius-workflow-artifact` container. Both
+// `renderResultDetail` and `renderAgentDetail` now return an `IDisposable` (the markdown renderer's, when that
+// branch is taken), so every call in this suite is threaded through the test's own disposables store.
 
 import assert from 'assert';
 import { $ } from '../../../../../base/browser/dom.js';
@@ -36,24 +46,52 @@ function agentPayload(overrides: Partial<ClaudeWorkflowAgentDetailPayload> = {})
 }
 
 suite('Clawdius Claude Code Ultracode Workflows - result detail render', () => {
-	ensureNoDisposablesAreLeakedInTestSuite();
+	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('renders the full resultText via textContent, and the run title + status honestly', () => {
+	test('a JSON object/array resultText renders pretty-printed in a monospace block, never a raw blob', () => {
 		const container = $('div');
-		renderResultDetail(container, resultPayload({ resultText: 'line one\nline two', workflowName: 'audit-fleet' }));
-		assert.deepStrictEqual({
-			status: container.getAttribute('data-clawdius-detail-status'),
-			title: container.querySelector('.clawdius-workflow-detail-title')?.textContent,
-			resultPresent: container.querySelector('.clawdius-workflow-detail-result')?.getAttribute('data-clawdius-detail-result'),
-			resultText: container.querySelector('.clawdius-workflow-detail-result')?.textContent,
-		}, {
-			status: 'completed', title: 'audit-fleet', resultPresent: 'present', resultText: 'line one\nline two',
-		});
+		const text = '{"issues":3,"files":["a.ts","b.ts"]}';
+		store.add(renderResultDetail(container, resultPayload({ resultText: text, workflowName: 'audit-fleet' })));
+		const pre = container.querySelector('.clawdius-workflow-detail-result pre.clawdius-workflow-detail-json');
+		assert.deepStrictEqual(
+			{ title: container.querySelector('.clawdius-workflow-detail-title')?.textContent, prettyPrinted: pre?.textContent },
+			{ title: 'audit-fleet', prettyPrinted: JSON.stringify(JSON.parse(text), null, 2) },
+		);
+	});
+
+	test('a JSON object whose values are ALL strings renders as a SECTIONED document, never one escaped JSON blob', () => {
+		const container = $('div');
+		const text = JSON.stringify({ synthesis: '# Summary\n\nAll clear.', note: 'plain note' });
+		store.add(renderResultDetail(container, resultPayload({ resultText: text })));
+		const result = container.querySelector('.clawdius-workflow-detail-result')!;
+		const artifact = result.querySelector('.clawdius-workflow-artifact')!;
+		const keys = Array.from(artifact.querySelectorAll('.clawdius-workflow-artifact-section-key')).map(el => el.textContent);
+		assert.deepStrictEqual(
+			{ keys, heading: artifact.querySelector('h1')?.textContent, rawJsonBlobPresent: result.textContent?.includes('"synthesis"') },
+			{ keys: ['synthesis', 'note'], heading: 'Summary', rawJsonBlobPresent: false },
+		);
+	});
+
+	test('the run RESULT body is wrapped in the shared bordered .clawdius-workflow-artifact container', () => {
+		const container = $('div');
+		store.add(renderResultDetail(container, resultPayload({ resultText: 'plain result text' })));
+		const result = container.querySelector('.clawdius-workflow-detail-result')!;
+		assert.strictEqual(result.querySelectorAll(':scope > .clawdius-workflow-artifact').length, 1);
+	});
+
+	test('a Markdown resultText renders parsed (e.g. a heading), never the literal "## " syntax', () => {
+		const container = $('div');
+		store.add(renderResultDetail(container, resultPayload({ resultText: '## Summary\n\nFound 3 issues.' })));
+		const result = container.querySelector('.clawdius-workflow-detail-result')!;
+		assert.deepStrictEqual(
+			{ heading: result.querySelector('h2')?.textContent, literalHashes: result.textContent?.includes('##') },
+			{ heading: 'Summary', literalHashes: false },
+		);
 	});
 
 	test('an absent result renders the literal "No result recorded" fallback, never a blank body', () => {
 		const container = $('div');
-		renderResultDetail(container, resultPayload({ resultText: undefined }));
+		store.add(renderResultDetail(container, resultPayload({ resultText: undefined })));
 		const result = container.querySelector('.clawdius-workflow-detail-result')!;
 		assert.deepStrictEqual(
 			{ present: result.getAttribute('data-clawdius-detail-result'), text: result.textContent },
@@ -62,16 +100,16 @@ suite('Clawdius Claude Code Ultracode Workflows - result detail render', () => {
 
 	test('every missing cost number is the dash literal, never a fabricated 0', () => {
 		const container = $('div');
-		renderResultDetail(container, resultPayload({
+		store.add(renderResultDetail(container, resultPayload({
 			durationMs: undefined, totalTokens: undefined, totalToolCalls: undefined, defaultModel: undefined, agentCount: undefined,
-		}));
+		})));
 		const parts = Array.from(container.querySelectorAll('.clawdius-workflow-detail-cost span:not(.clawdius-workflow-detail-sep)')).map(el => el.textContent);
 		assert.deepStrictEqual(parts, ['—', '—', '—', '—', '—']);
 	});
 
 	test('a failed run is labeled honestly, not painted over as completed', () => {
 		const container = $('div');
-		renderResultDetail(container, resultPayload({ status: 'failed' }));
+		store.add(renderResultDetail(container, resultPayload({ status: 'failed' })));
 		assert.strictEqual(container.getAttribute('data-clawdius-detail-status'), 'failed');
 	});
 });
@@ -79,7 +117,7 @@ suite('Clawdius Claude Code Ultracode Workflows - result detail render', () => {
 suite('Clawdius Claude Code Ultracode Workflows - agent detail render', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('present fields render via textContent; absent fields render the dash literal, never fabricated', () => {
+	test('present fields render via textContent; absent Prompt/Result fields render the dash literal, never fabricated', () => {
 		const container = $('div');
 		store.add(renderAgentDetail(container, agentPayload({
 			model: 'opus', tokens: 100, toolCalls: 2, durationMs: 5000,
@@ -88,8 +126,11 @@ suite('Clawdius Claude Code Ultracode Workflows - agent detail render', () => {
 		const field = (key: string) => container.querySelector(`[data-clawdius-detail-field="${key}"] .clawdius-workflow-detail-field-value`)?.textContent;
 		assert.deepStrictEqual({
 			state: container.getAttribute('data-clawdius-detail-state'),
-			prompt: field('prompt'), result: field('result'), error: field('error'),
-		}, { state: 'done', prompt: 'do the thing', result: '—', error: '—' });
+			prompt: field('prompt'), result: field('result'),
+			// Error is the ONE exception to "dash when absent": a passing agent's absent error is withheld ENTIRELY
+			// (no row at all), never a dash next to a DONE status.
+			errorRowPresent: container.querySelector('[data-clawdius-detail-field="error"]') !== null,
+		}, { state: 'done', prompt: 'do the thing', result: '—', errorRowPresent: false });
 	});
 
 	test('an errored agent shows its authoritative error text honestly, never suppressed', () => {
@@ -126,6 +167,33 @@ suite('Clawdius Claude Code Ultracode Workflows - agent detail render', () => {
 			without: { flag: 'absent', buttons: 0 },
 			with: { flag: 'present', buttons: 1 },
 		});
+	});
+
+	test('the Result field renders a JSON resultPreview pretty-printed, and the Error field stays PLAIN (never JSON/Markdown-parsed)', () => {
+		const container = $('div');
+		const json = '[1,2,3]';
+		store.add(renderAgentDetail(container, agentPayload({ state: 'error', error: '## not markdown', resultPreview: json }), () => { }));
+		const resultPre = container.querySelector('[data-clawdius-detail-field="result"] pre.clawdius-workflow-detail-json');
+		const errorValue = container.querySelector('[data-clawdius-detail-field="error"] .clawdius-workflow-detail-field-value');
+		assert.deepStrictEqual(
+			{ resultPrettyPrinted: resultPre?.textContent, errorRenderedPlain: errorValue?.textContent, errorHasNoHeading: errorValue?.querySelector('h2') === null },
+			{ resultPrettyPrinted: JSON.stringify(JSON.parse(json), null, 2), errorRenderedPlain: '## not markdown', errorHasNoHeading: true },
+		);
+	});
+
+	test('a JSON-shaped preview truncated mid-structure still renders in the monospace JSON block, never as Markdown prose', () => {
+		const container = $('div');
+		// A PREVIEW cut off before its closing brace/quote - invalid JSON (JSON.parse throws), but still clearly
+		// JSON-shaped; it must never fall through to the Markdown renderer, which would paint the raw `{`/`"` noise
+		// in the proportional editor font as if it were prose.
+		const truncated = '{"synthesis":"# Summary\\n\\nEverything looks fi';
+		store.add(renderAgentDetail(container, agentPayload({ resultPreview: truncated }), () => { }));
+		const pre = container.querySelector('[data-clawdius-detail-field="result"] pre.clawdius-workflow-detail-json');
+		const markdown = container.querySelector('[data-clawdius-detail-field="result"] .clawdius-workflow-detail-markdown');
+		assert.deepStrictEqual(
+			{ jsonBlockText: pre?.textContent, markdownRendered: markdown !== null },
+			{ jsonBlockText: truncated, markdownRendered: false },
+		);
 	});
 });
 
@@ -251,26 +319,34 @@ suite('Clawdius Claude Code Ultracode Workflows - transcript identity migration 
 });
 
 suite('Clawdius Claude Code Ultracode Workflows - transcript record-kind index (pure render)', () => {
-	ensureNoDisposablesAreLeakedInTestSuite();
+	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('renderTranscriptSlice paints the record-kind index + sidechain markers, never a message body', () => {
+	test('renderTranscriptSlice paints the record type + sidechain markers + message body as sanitized Markdown', () => {
 		const slice: FleetTranscriptSlice = {
 			subagentId: 'agent-1',
 			records: [
-				{ type: 'user', isSidechain: false },
-				{ type: 'assistant', isSidechain: false },
-				{ type: 'assistant', isSidechain: true },
+				{ type: 'user', isSidechain: false, body: 'hello there' },
+				{ type: 'assistant', isSidechain: false, body: '' },
+				{ type: 'assistant', isSidechain: true, body: '[tool_use: Read]' },
 			],
 			coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.Complete,
 			adapterVersion: { format: 'transcript-jsonl', versionKey: 'v1' },
 		};
 		const container = $('div');
-		renderTranscriptSlice(container, slice);
+		store.add(renderTranscriptSlice(container, slice));
 		assert.deepStrictEqual({
 			recordCount: container.getAttribute('data-clawdius-transcript-records'),
 			types: Array.from(container.querySelectorAll('.clawdius-transcript-record-type')).map(el => el.textContent),
 			sidechainRows: container.querySelectorAll('.clawdius-transcript-record.sidechain').length,
-		}, { recordCount: '3', types: ['user', 'assistant', 'assistant'], sidechainRows: 1 });
+			// The empty-bodied `assistant` row must not paint a `.clawdius-transcript-record-body` node at all - an
+			// empty projection is a real absence of content, not an empty string to render. Each real body is
+			// wrapped in the shared bordered `.clawdius-workflow-artifact` container (see PROBLEM 2/4).
+			bodies: Array.from(container.querySelectorAll('.clawdius-transcript-record-body')).map(el => el.textContent?.trim()),
+			bodiesAreArtifacts: Array.from(container.querySelectorAll('.clawdius-transcript-record-body')).every(el => el.classList.contains('clawdius-workflow-artifact')),
+		}, {
+			recordCount: '3', types: ['user', 'assistant', 'assistant'], sidechainRows: 1,
+			bodies: ['hello there', '[tool_use: Read]'], bodiesAreArtifacts: true,
+		});
 	});
 });
 // CLAWDIUS-END

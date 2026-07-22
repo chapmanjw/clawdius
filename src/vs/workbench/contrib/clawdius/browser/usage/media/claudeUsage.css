@@ -331,10 +331,11 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 	overflow: hidden;
 }
 
+/* Item 26: rounded on the LEADING edge only, never the trailing one - a fill this narrow (near 0%) with BOTH corners rounded (the track's own overflow:hidden clips a 100%-wide fill's trailing corner for free, but does nothing for a near-empty one) renders as a floating rounded blob/"cap" instead of a flat, flush bar start. This alone still left a small rounded nub at GENUINELY 0% usage, because the width itself was floored at 1% even when zero - see `limitFillWidthPercent` in claudeUsageDashboardView.ts, which now renders `width: 0` (no fill element to round) at exactly 0%, and floors at 1% only for TRUE non-zero usage. */
 .clawdius-usage-limit-fill {
 	height: 100%;
-	border-radius: 3px;
-	background: #a78bfa;
+	border-radius: 3px 0 0 3px;
+	background: var(--vscode-charts-purple, #a78bfa);
 	transition: width 140ms ease-out;
 }
 

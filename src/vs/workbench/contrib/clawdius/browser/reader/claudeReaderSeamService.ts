@@ -184,8 +184,11 @@ function statusRank(status: MissionStatus): number {
 /** The version key stamped on a canary-tripped (unrecognized-shape) read - same format, an explicit key. */
 const UNKNOWN_SHAPE_KEY = 'unknown-shape';
 
-/** A single parsed transcript record, reduced to the index-only fields the seam needs (never the message body).
- *  `byteOffset` locates the record's line within the read window. */
+/** A single parsed transcript record, reduced to the fields the seam needs: the index fields plus a readable
+ *  plain-text projection of the message body ({@link ITranscriptRecord.body}). `byteOffset` locates the record's
+ *  line within the read window. The body is read fresh off local disk on every parse - still never an
+ *  authoritative copy of Claude's transcript state, just a point-in-time local read surfaced via `textContent`
+ *  only downstream. */
 interface ITranscriptRecord {
 	readonly type: string;
 	readonly sessionId?: string;
@@ -201,6 +204,10 @@ interface ITranscriptRecord {
 	readonly inputTokens?: number;
 	/** Authoritative output token count for this record (from `message.usage.output_tokens`), when present. */
 	readonly outputTokens?: number;
+	/** A readable plain-text projection of `message.content` ({@link projectMessageContent}) - text blocks
+	 *  concatenated, `tool_use` / `tool_result` blocks rendered as a short bracketed marker. Empty when the
+	 *  record carried no readable content (e.g. no `message` at all). Never HTML/Markdown. */
+	readonly body: string;
 	readonly byteOffset: number;
 }
 
@@ -273,6 +280,36 @@ function isObject(v: unknown): v is Record<string, unknown> {
 	return !!v && typeof v === 'object' && !Array.isArray(v);
 }
 
+/**
+ * Reduce a transcript record's `message.content` to a readable PLAIN-TEXT projection - never HTML/Markdown, since
+ * the transcript editor renders it via `textContent` only. `content` is either a plain string (most `user` turns)
+ * or an array of content blocks (`assistant` turns, and tool-carrying `user` turns): a `text` block contributes
+ * its text directly; `tool_use` / `tool_result` blocks carry no prose of their own, so they contribute a short
+ * bracketed marker instead (`[tool_use: <name>]`, `[tool_result]`) - `tool_result` additionally nests any text its
+ * own `content` carries, recursing through this same projection. Defensive over the untyped JSON shape on
+ * purpose: a value that is neither a string nor an array, a malformed block, or an unrecognized block `type`
+ * contributes nothing rather than guessing or throwing. Pure.
+ */
+function projectMessageContent(content: unknown): string {
+	if (typeof content === 'string') { return content; }
+	if (!Array.isArray(content)) { return ''; }
+	const parts: string[] = [];
+	for (const block of content) {
+		if (!isObject(block)) { continue; }
+		const type = block['type'];
+		if (type === 'text') {
+			const text = readString(block, 'text');
+			if (text) { parts.push(text); }
+		} else if (type === 'tool_use') {
+			parts.push(`[tool_use: ${readString(block, 'name') ?? ''}]`);
+		} else if (type === 'tool_result') {
+			const inner = projectMessageContent(block['content']);
+			parts.push(inner ? `[tool_result] ${inner}` : '[tool_result]');
+		}
+	}
+	return parts.join('\n');
+}
+
 /** Reduce a parsed JSON line to a recognized transcript record, or undefined when the shape is not recognized. */
 function toRecord(parsed: unknown, byteOffset: number): ITranscriptRecord | undefined {
 	if (!isObject(parsed)) { return undefined; }
@@ -294,6 +331,7 @@ function toRecord(parsed: unknown, byteOffset: number): ITranscriptRecord | unde
 		model: isObject(message) ? readString(message, 'model') : undefined,
 		inputTokens: isObject(usage) ? readNumber(usage, 'input_tokens') : undefined,
 		outputTokens: isObject(usage) ? readNumber(usage, 'output_tokens') : undefined,
+		body: isObject(message) ? projectMessageContent(message['content']) : '',
 		byteOffset,
 	};
 }
@@ -1416,9 +1454,12 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 	 * Read a subagent's on-disk transcript by its opaque `transcriptRef` (the file identity handed out at
 	 * enumeration) as a labeled {@link FleetTranscriptSlice} - the per-subagent drill-in read. Unlike the
 	 * coarse enumeration completeness, this runs the out-of-band tool-result probe, so a transcript referencing a
-	 * missing out-of-band file degrades to `partial`, not `complete`. The records are INDEX-ONLY (type +
-	 * sidechain flag; never the message body). Never throws: a missing/empty file is `absent`, an unrecognized
-	 * shape is `unknown-shape`. Read-only - reads only the seam's own indexed file, never writes.
+	 * missing out-of-band file degrades to `partial`, not `complete` - and that probe is never widened into
+	 * fabricating body content FOR that missing file: a record's `body` is always its own `message.content`
+	 * projection, never something read from the out-of-band ref. Each record carries its type, its sidechain
+	 * flag, and a readable plain-text projection of its message body. Never throws: a missing/empty file is
+	 * `absent`, an unrecognized shape is `unknown-shape`. Read-only - reads only the seam's own indexed file,
+	 * never writes.
 	 */
 	async readTranscriptSlice(subagent: FleetSubagent, folders: readonly URI[]): Promise<FleetTranscriptSlice> {
 		const ref = subagent.transcriptRef;
@@ -1456,7 +1497,7 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 			: await this.completenessOf(parsed.records, file);
 		return {
 			subagentId,
-			records: parsed.records.map(r => ({ type: r.type, isSidechain: r.isSidechain })),
+			records: parsed.records.map(r => ({ type: r.type, isSidechain: r.isSidechain, body: r.body })),
 			coverage: coverageForEnum(parsed.records, folders),
 			freshness: FreshnessLabel.Polled,
 			completeness,

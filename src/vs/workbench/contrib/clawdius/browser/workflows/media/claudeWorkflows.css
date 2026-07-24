@@ -605,17 +605,40 @@
 	font-family: var(--monaco-monospace-font, monospace);
 }
 
-/* A sectioned-document artifact's per-key label (claudeWorkflowDetailEditor.ts's `renderRichText`) - muted, above
- * the key's own Markdown-rendered value. */
+/* A sectioned-document artifact (claudeWorkflowDetailEditor.ts's renderStructuredValue): each object field is a section - a muted key label above that field's own rendered value; array elements render as items. Nested object fields indent; array items indent with a group edge - so structured data reads as a document, never one raw JSON blob. */
+.clawdius-workflow-artifact-section {
+	margin-top: 10px;
+}
+
+.clawdius-workflow-artifact-section:first-child {
+	margin-top: 0;
+}
+
 .clawdius-workflow-artifact-section-key {
 	font-size: 11px;
 	font-weight: 600;
 	color: var(--vscode-descriptionForeground);
-	margin: 8px 0 2px;
+	margin: 0 0 2px;
 }
 
-.clawdius-workflow-artifact-section-key:first-child {
+.clawdius-workflow-artifact-section .clawdius-workflow-artifact-section {
+	padding-left: 12px;
+}
+
+/* An array element (a record) reads as MORE separated than the fields inside it (section margin, 10px), so a list of records never blurs into one run of fields. */
+.clawdius-workflow-artifact-item {
+	padding-left: 12px;
+	border-left: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+	margin-top: 16px;
+}
+
+.clawdius-workflow-artifact-item:first-child {
 	margin-top: 0;
+}
+
+.clawdius-workflow-artifact-scalar {
+	white-space: pre-wrap;
+	word-break: break-word;
 }
 
 /* Item 22: scoped to `pre` - the one concrete scrollable descendant this pane actually produces (a rendered-markdown fenced code block wide enough to scroll horizontally) - rather than a bare `::-webkit-scrollbar` descendant selector matching ANY nested scrollable element, which was broader than anything this pane renders. */

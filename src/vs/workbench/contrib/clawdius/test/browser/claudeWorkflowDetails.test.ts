@@ -13,12 +13,13 @@
 // case: a tab persisted BEFORE the identity migration serialized a legacy FleetSubagent payload, and the
 // deserializer must still open it into an honest absent read, never a crash.
 //
-// The RESULT body and the agent Prompt/Result fields render RICHLY (`renderRichText` in claudeWorkflowDetailEditor.ts),
-// in priority order: a JSON OBJECT whose values are ALL strings (the common report shape, e.g.
-// `{"synthesis":"# ...","note":"..."}`) renders as a SECTIONED document (a muted key label + that key's own
-// Markdown-rendered value); any OTHER JSON object/array pretty-prints in a monospace block; otherwise sanitized
-// Markdown - never the literal `{"a":1}` / `## heading` blob a plain `textContent` assignment used to show. The
-// RESULT body is additionally wrapped in the shared bordered `.clawdius-workflow-artifact` container. Both
+// The RESULT body and the agent Prompt/Result fields render RICHLY (`renderRichText` in claudeWorkflowDetailEditor.ts):
+// a value that parses as a JSON object/array renders as a SECTIONED document (`renderStructuredValue`) - object
+// fields become muted key labels above their own values, arrays list their elements, string leaves render as
+// sanitized Markdown, scalars as plain text, with a compact JSON block only as a depth/empty fallback; a JSON-shaped
+// but truncated preview renders in one monospace block; otherwise sanitized Markdown - never the literal `{"a":1}` /
+// `## heading` blob a plain `textContent` assignment used to show. The RESULT body is additionally wrapped in the
+// shared bordered `.clawdius-workflow-artifact` container. Both
 // `renderResultDetail` and `renderAgentDetail` now return an `IDisposable` (the markdown renderer's, when that
 // branch is taken), so every call in this suite is threaded through the test's own disposables store.
 
@@ -48,14 +49,20 @@ function agentPayload(overrides: Partial<ClaudeWorkflowAgentDetailPayload> = {})
 suite('Clawdius Claude Code Ultracode Workflows - result detail render', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('a JSON object/array resultText renders pretty-printed in a monospace block, never a raw blob', () => {
+	test('a mixed JSON object (scalar + array values) renders as sectioned content, never one raw JSON blob', () => {
 		const container = $('div');
 		const text = '{"issues":3,"files":["a.ts","b.ts"]}';
 		store.add(renderResultDetail(container, resultPayload({ resultText: text, workflowName: 'audit-fleet' })));
-		const pre = container.querySelector('.clawdius-workflow-detail-result pre.clawdius-workflow-detail-json');
+		const artifact = container.querySelector('.clawdius-workflow-detail-result .clawdius-workflow-artifact')!;
+		const keys = Array.from(artifact.querySelectorAll('.clawdius-workflow-artifact-section-key')).map(el => el.textContent);
 		assert.deepStrictEqual(
-			{ title: container.querySelector('.clawdius-workflow-detail-title')?.textContent, prettyPrinted: pre?.textContent },
-			{ title: 'audit-fleet', prettyPrinted: JSON.stringify(JSON.parse(text), null, 2) },
+			{
+				title: container.querySelector('.clawdius-workflow-detail-title')?.textContent,
+				keys,
+				fileItems: artifact.querySelectorAll('.clawdius-workflow-artifact-item').length,
+				rawJsonBlobPresent: artifact.textContent?.includes('"files"'),
+			},
+			{ title: 'audit-fleet', keys: ['issues', 'files'], fileItems: 2, rawJsonBlobPresent: false },
 		);
 	});
 
@@ -169,15 +176,20 @@ suite('Clawdius Claude Code Ultracode Workflows - agent detail render', () => {
 		});
 	});
 
-	test('the Result field renders a JSON resultPreview pretty-printed, and the Error field stays PLAIN (never JSON/Markdown-parsed)', () => {
+	test('the Result field renders a JSON resultPreview as sectioned items (never a raw blob), and the Error field stays PLAIN', () => {
 		const container = $('div');
 		const json = '[1,2,3]';
 		store.add(renderAgentDetail(container, agentPayload({ state: 'error', error: '## not markdown', resultPreview: json }), () => { }));
-		const resultPre = container.querySelector('[data-clawdius-detail-field="result"] pre.clawdius-workflow-detail-json');
+		const resultField = container.querySelector('[data-clawdius-detail-field="result"]')!;
 		const errorValue = container.querySelector('[data-clawdius-detail-field="error"] .clawdius-workflow-detail-field-value');
 		assert.deepStrictEqual(
-			{ resultPrettyPrinted: resultPre?.textContent, errorRenderedPlain: errorValue?.textContent, errorHasNoHeading: errorValue?.querySelector('h2') === null },
-			{ resultPrettyPrinted: JSON.stringify(JSON.parse(json), null, 2), errorRenderedPlain: '## not markdown', errorHasNoHeading: true },
+			{
+				resultItems: resultField.querySelectorAll('.clawdius-workflow-artifact-item').length,
+				rawJsonBlobPresent: resultField.textContent?.includes('[1,2,3]'),
+				errorRenderedPlain: errorValue?.textContent,
+				errorHasNoHeading: errorValue?.querySelector('h2') === null,
+			},
+			{ resultItems: 3, rawJsonBlobPresent: false, errorRenderedPlain: '## not markdown', errorHasNoHeading: true },
 		);
 	});
 

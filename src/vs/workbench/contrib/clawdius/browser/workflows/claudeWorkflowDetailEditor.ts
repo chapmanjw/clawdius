@@ -9,13 +9,13 @@
 // transcript pane this does NO seam read on `setInput` - the payload is already a complete, immutable snapshot
 // (see claudeWorkflowDetailInput.ts) - so `setInput` is synchronous rendering only. Every visible field is safe:
 // a plain field (title, status, cost line, Error) goes through `textContent`; the RESULT body and the agent
-// Result/Prompt fields go through `renderRichText` (below), in priority order: a JSON OBJECT whose values are ALL
-// strings (the common report shape a workflow result carries, e.g. `{"synthesis":"# ...markdown...","note":"..."}`)
-// renders as a SECTIONED DOCUMENT - a muted key label per field, its value rendered as sanitized Markdown - so a
-// report never degrades to one unreadable escaped-string JSON blob; any OTHER JSON object/array pretty-prints
-// (`JSON.stringify(..., null, 2)` in a `<pre>`, still `textContent`); anything else renders as sanitized Markdown
-// via the base `renderMarkdown` helper (safe DOM, never raw innerHTML) - never the literal `## heading` / `{"a":1}`
-// blob the field carried on disk. The RESULT body is additionally wrapped in a bordered `.clawdius-workflow-artifact`
+// Result/Prompt fields go through `renderRichText` (below): a value that parses as a JSON object/array renders as a
+// SECTIONED DOCUMENT (see `renderStructuredValue`) - each object field is a muted key label above its own value,
+// arrays list their elements, string leaves render as sanitized Markdown (so `\n`/`#`/`*` become real prose, not a
+// literal escaped-JSON blob), scalars as plain text, nesting indented, with a compact JSON block only as a
+// depth/empty fallback; a JSON-SHAPED but truncated preview (invalid to parse) renders as one monospace JSON block;
+// anything else renders as sanitized Markdown via the base `renderMarkdown` helper (safe DOM, never raw innerHTML) -
+// never the literal `## heading` / `{"a":1}` blob the field carried on disk. The RESULT body is additionally wrapped in a bordered `.clawdius-workflow-artifact`
 // container (see claudeWorkflows.css) so it reads as the RUN's own document, not Clawdius's own UI chrome. The two
 // render functions are exported PURE (container + payload in, DOM + disposables out) so they are unit-testable
 // without standing up the pane; the pane itself only wires the interactive "Open Transcript" action, which needs
@@ -90,16 +90,48 @@ function looksLikeJsonStructure(text: string): boolean {
 	return trimmed.startsWith('{') || trimmed.startsWith('[');
 }
 
-/** Whether `value` is a JSON OBJECT (never an array) whose OWN values are all strings - the common "report" shape
- *  a workflow result carries (`{"synthesis":"# ...markdown...","note":"..."}`, `{"T004_scrub":"...", ...}`).
- *  Narrowed so {@link renderRichText} renders it as a sectioned document instead of pretty-printing the whole
- *  thing into one unreadable escaped-string JSON blob. An empty object trivially qualifies (vacuously true) and
- *  renders zero sections - harmless, since a real result never carries one. */
-function isRecordOfStrings(value: unknown): value is Record<string, string> {
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-		return false;
+/** The deepest the sectioned renderer descends before falling back to one compact JSON block, so a pathologically
+ *  nested payload cannot produce an unbounded tower of indented sections. Set generously: real report payloads nest
+ *  several levels (e.g. `{synthesis, verifications:[{area, verifications:[{item, status, note}]}]}`), and every level
+ *  that falls back to compact JSON would re-introduce the raw escaped-`\n` blob this renderer exists to avoid. The
+ *  persisted resultText is length-capped upstream (DETAIL_RESULT_MAX_CHARS), so total DOM stays bounded regardless. */
+const MAX_STRUCTURE_DEPTH = 12;
+
+/** Render a parsed JSON `value` as a readable SECTIONED document rather than a raw pretty-printed blob: a string
+ *  renders as sanitized Markdown (so `\n` and `#`/`*` markup become real prose, never literal escapes); a scalar
+ *  (number/boolean/null) renders as plain text; an array lists each element in an indented item; an object renders a
+ *  muted key label per field above that field's own recursively rendered value. Past {@link MAX_STRUCTURE_DEPTH}, or
+ *  for an empty array/object, it falls back to one compact monospace JSON block (via `textContent`, safe). Every
+ *  markdown renderer's disposable lands in `store`, owned by the caller. */
+function renderStructuredValue(container: HTMLElement, value: unknown, store: DisposableStore, depth: number): void {
+	if (typeof value === 'string') {
+		renderMarkdownBlock(container, store, value);
+		return;
 	}
-	return Object.values(value).every(entry => typeof entry === 'string');
+	if (value === null || typeof value === 'number' || typeof value === 'boolean') {
+		append(container, $('.clawdius-workflow-artifact-scalar')).textContent = String(value);
+		return;
+	}
+	if (Array.isArray(value)) {
+		if (value.length === 0 || depth >= MAX_STRUCTURE_DEPTH) {
+			append(container, $('pre.clawdius-workflow-detail-json')).textContent = JSON.stringify(value, null, 2);
+			return;
+		}
+		for (const element of value) {
+			renderStructuredValue(append(container, $('.clawdius-workflow-artifact-item')), element, store, depth + 1);
+		}
+		return;
+	}
+	const entries = Object.entries(value as Record<string, unknown>);
+	if (entries.length === 0 || depth >= MAX_STRUCTURE_DEPTH) {
+		append(container, $('pre.clawdius-workflow-detail-json')).textContent = JSON.stringify(value, null, 2);
+		return;
+	}
+	for (const [key, entry] of entries) {
+		const section = append(container, $('.clawdius-workflow-artifact-section'));
+		append(section, $('.clawdius-workflow-artifact-section-key')).textContent = key;
+		renderStructuredValue(section, entry, store, depth + 1);
+	}
 }
 
 /** Render `text` as sanitized Markdown into `container` (`breaks: true` so a plain-text value - a stack trace, a
@@ -114,36 +146,29 @@ function renderMarkdownBlock(container: HTMLElement, store: DisposableStore, tex
 }
 
 /**
- * Render `text` richly into `container`, in priority order:
- *  1. A JSON OBJECT whose values are ALL strings (never an array, see {@link isRecordOfStrings}) - renders as a
- *     SECTIONED DOCUMENT: for each `[key, value]`, a muted `.clawdius-workflow-artifact-section-key` element
- *     (textContent = the key) followed by that key's own value rendered as sanitized Markdown. This is the common
- *     report-style result and must read as prose, never as JSON.
- *  2. Any OTHER JSON object/array (values not all strings, or an array) - pretty-printed
- *     (`JSON.stringify(parsed, null, 2)` in a monospace `<pre>`, still via `textContent` - safe).
+ * Render `text` richly into `container`:
+ *  1. A value that parses as a JSON object or array (see {@link parseJsonStructure}) renders as a SECTIONED
+ *     document via {@link renderStructuredValue} - object fields become muted key labels above their own values,
+ *     arrays list their elements, string leaves render as sanitized Markdown, scalars as plain text - so a
+ *     report-shaped result never degrades to one unreadable escaped-string JSON blob.
+ *  2. A JSON-SHAPED but truncated preview (starts with `{`/`[` yet fails to parse - see {@link looksLikeJsonStructure})
+ *     renders as one monospace `<pre>` (still via `textContent` - safe), never mistaken for Markdown prose.
  *  3. Otherwise, sanitized Markdown via the base `renderMarkdown` helper (safe DOM, never innerHTML -
  *     `MarkdownString`'s default `isTrusted: false` / `supportHtml: false` keep it sanitized).
- * Returns the render's own disposables (the markdown renderer's, for branches 1 and 3) for the caller to own -
- * the pretty-printed-JSON branch (2) owns nothing.
+ * Returns the render's own disposables (the markdown renderers', for branches 1 and 3) for the caller to own -
+ * the truncated-preview branch (2) owns nothing.
  */
 function renderRichText(container: HTMLElement, text: string): IDisposable {
 	const structured = parseJsonStructure(text);
-	if (isRecordOfStrings(structured)) {
+	if (structured !== undefined) {
 		const store = new DisposableStore();
-		for (const [key, value] of Object.entries(structured)) {
-			append(container, $('.clawdius-workflow-artifact-section-key')).textContent = key;
-			renderMarkdownBlock(container, store, value);
-		}
+		renderStructuredValue(container, structured, store, 0);
 		return store;
 	}
-	if (structured !== undefined) {
-		append(container, $('pre.clawdius-workflow-detail-json')).textContent = JSON.stringify(structured, null, 2);
-		return Disposable.None;
-	}
 	if (looksLikeJsonStructure(text)) {
-		// A JSON-shaped PREVIEW that was truncated mid-structure (see looksLikeJsonStructure's doc comment) - the
-		// raw text still reads far better as monospace JSON-ish content than as Markdown prose, even though it is
-		// not valid JSON to pretty-print.
+		// A JSON-shaped PREVIEW that was truncated mid-structure (see looksLikeJsonStructure's doc comment) - the raw
+		// text still reads far better as monospace JSON-ish content than as Markdown prose, even though it is not
+		// valid JSON to parse into a sectioned document.
 		append(container, $('pre.clawdius-workflow-detail-json')).textContent = text;
 		return Disposable.None;
 	}

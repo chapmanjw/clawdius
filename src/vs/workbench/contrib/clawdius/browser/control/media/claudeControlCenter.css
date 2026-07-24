@@ -75,9 +75,22 @@ rounded "card" chrome. Semantic tones (allow/warn/deny) map to the editor's own 
 }
 .clawdius-control-tabs-row::-webkit-scrollbar-thumb:hover { background-color: var(--vscode-scrollbarSlider-hoverBackground, rgba(100, 100, 100, 0.7)); }
 .clawdius-control-tabs-row::-webkit-scrollbar-button { display: none; }
+/* When the tab strip overflows its column, a clipped tab would otherwise show as a hard half-glyph sliver at the scroll edge (reads as a rendering bug). The overflow-start/overflow-end classes (toggled by claudeControlCenterEditor.ts's updateTabOverflow from the row's real scroll position) fade whichever edge is actually mid-scroll, so a fully-visible first/last tab is never faded and the clip reads as intentional. */
+.clawdius-control-tabs-row.overflow-end {
+	-webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+	mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+}
+.clawdius-control-tabs-row.overflow-start {
+	-webkit-mask-image: linear-gradient(to right, transparent, #000 24px);
+	mask-image: linear-gradient(to right, transparent, #000 24px);
+}
+.clawdius-control-tabs-row.overflow-start.overflow-end {
+	-webkit-mask-image: linear-gradient(to right, transparent, #000 24px, #000 calc(100% - 24px), transparent);
+	mask-image: linear-gradient(to right, transparent, #000 24px, #000 calc(100% - 24px), transparent);
+}
 .clawdius-control-tabs { display: flex; flex: none; gap: 2px; }
 /* Star + Sponsor actions: real buttons, keyboard-focusable, sitting in their own non-scrolling container beside (not inside) the tablist's scroll area. */
-.clawdius-control-tabs-actions { display: inline-flex; flex: none; align-items: flex-end; gap: 2px; }
+.clawdius-control-tabs-actions { display: inline-flex; flex: none; align-items: flex-end; gap: 2px; margin-left: 8px; }
 .clawdius-control-star, .clawdius-control-sponsor {
 	margin-bottom: 3px; display: inline-flex; flex: none; align-items: center; gap: 5px; white-space: nowrap;
 	background: none; border: none; color: inherit; font: inherit; font-size: 12px; cursor: pointer;

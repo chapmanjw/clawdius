@@ -243,6 +243,9 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	private container!: HTMLElement;
 	private content: HTMLElement | undefined;
 	private readonly renderStore = this._register(new DisposableStore());
+	/** The horizontally-scrolling tab strip (`.clawdius-control-tabs-row`), tracked so `layout` can refresh the
+	 *  overflow-fade classes when the pane width changes; recreated on every `renderTabs`. */
+	private tabsRow: HTMLElement | undefined;
 	/** Active toasts, oldest first. Each is its OWN store so a rapid second action never eats a prior toast's
 	 *  Undo (the self-clobber bug); each dismisses on its own 5s timer or when its Undo is clicked. Capped so a
 	 *  burst of quick actions (commitAdd is optimised for rapid multi-add) can't pile up unbounded. */
@@ -460,6 +463,18 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		if (this.container) {
 			size(this.container, dimension.width, dimension.height);
 		}
+		this.updateTabOverflow();
+	}
+
+	/** Toggle the tab strip's edge-fade classes from its REAL scroll position, so a clipped tab fades cleanly at
+	 *  whichever edge is actually mid-scroll instead of a hard half-glyph sliver (see claudeControlCenter.css). A
+	 *  fully-visible first/last tab is never faded. Called on tab-strip scroll and on every pane `layout`. */
+	private updateTabOverflow(): void {
+		const row = this.tabsRow;
+		if (!row) { return; }
+		const maxScroll = row.scrollWidth - row.clientWidth;
+		row.classList.toggle('overflow-start', row.scrollLeft > 1);
+		row.classList.toggle('overflow-end', maxScroll > 1 && row.scrollLeft < maxScroll - 1);
 	}
 
 	override dispose(): void {
@@ -633,13 +648,15 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	}
 
 	private renderTabs(parent: HTMLElement): void {
-		// The tablist strip and the Star/Sponsor actions share one row, but the actions sit OUTSIDE the tablist
-		// (a11y: a tablist must contain only tabs). Item 2 (BLOCKER): Star/Sponsor are lifted OUT of the
-		// horizontally-scrolling tab strip into `.clawdius-control-tabs-actions`, a separate never-scrolling
-		// sibling within the non-scrolling `.clawdius-control-tabsbar` outer row - once the tab strip alone
-		// overflows and scrolls, the actions can no longer scroll out of view with it.
+		// One horizontally-scrolling strip holds the tablist AND the Star/Sponsor actions as siblings, so they flow
+		// and scroll together (the actions sit AFTER the tablist, never inside it - a tablist must contain only tabs
+		// for a11y). Rendering the actions inline rather than right-pinned keeps the tab row from being squeezed into
+		// a narrow scroll area that clipped a tab mid-glyph; when the strip overflows, the shared edge fade
+		// (`updateTabOverflow`) signals there is more to scroll to.
 		const bar = append(parent, h('.clawdius-control-tabsbar'));
 		const row = append(bar, h('.clawdius-control-tabs-row'));
+		this.tabsRow = row;
+		this.renderStore.add(addDisposableListener(row, EventType.SCROLL, () => this.updateTabOverflow()));
 		const strip = append(row, h('.clawdius-control-tabs'));
 		strip.setAttribute('role', 'tablist');
 		const tabs: { readonly tab: ControlTab; readonly label: string; readonly ready: boolean }[] = [
@@ -674,9 +691,9 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			}));
 		}
 
-		// The right-pinned, non-scrolling actions container (item 2) - Star + Sponsor both land here, never inside
-		// `.clawdius-control-tabs-row`'s scroll area.
-		const actions = append(bar, h('.clawdius-control-tabs-actions'));
+		// Star + Sponsor land in a container appended to the scrolling row AFTER the tablist (a sibling of it, so the
+		// tablist still holds only tabs), so they scroll inline with the tabs as one strip.
+		const actions = append(row, h('.clawdius-control-tabs-actions'));
 
 		// CLAWDIUS-BEGIN "Star on GitHub" action (#star): a real <button> beside Sponsor that opens the repo so the
 		// user stars it themselves (GitHub has no way to star without their auth token - see the star research). A
@@ -705,6 +722,11 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		this.renderStore.add(addDisposableListener(sponsor, EventType.CLICK, () => {
 			this.openerService.open(URI.parse('https://github.com/sponsors/chapmanjw'));
 		}));
+
+		// Set the initial edge-fade now that the strip is populated: `layout` does not re-fire when an already-open
+		// pane just re-renders (a tab switch), so relying on it alone leaves the fade stale. Reading the row's
+		// scroll metrics here forces the reflow that makes them accurate.
+		this.updateTabOverflow();
 	}
 
 	// CLAWDIUS-BEGIN "Star on GitHub" count pill (#star)

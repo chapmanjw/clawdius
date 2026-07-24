@@ -24,6 +24,7 @@ import { IDialogService, IFileDialogService } from '../../../../../../platform/d
 import { TestInstantiationService } from '../../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import { INotificationService } from '../../../../../../platform/notification/common/notification.js';
 import { InMemoryStorageService, IStorageService } from '../../../../../../platform/storage/common/storage.js';
+import { IProgressService } from '../../../../../../platform/progress/common/progress.js';
 import { IWorkspaceTrustManagementService } from '../../../../../../platform/workspace/common/workspaceTrust.js';
 import { IChatWidget, IChatWidgetService } from '../../../../../../workbench/contrib/chat/browser/chat.js';
 import { IChatService, type ChatSendResult, type IChatSendRequestOptions } from '../../../../../../workbench/contrib/chat/common/chatService/chatService.js';
@@ -219,6 +220,7 @@ function createProvider(disposables: DisposableStore, connection: MockAgentConne
 		lookupLanguageModel: () => undefined,
 	});
 	instantiationService.stub(IStorageService, overrides?.storageService ?? disposables.add(new InMemoryStorageService()));
+	instantiationService.stub(IProgressService, {});
 	instantiationService.stub(ILabelService, {
 		getUriLabel: (uri: URI) => uri.path,
 	});
@@ -229,6 +231,7 @@ function createProvider(disposables: DisposableStore, connection: MockAgentConne
 	instantiationService.stub(IPullRequestIconCache, instantiationService.createInstance(PullRequestIconCache));
 	instantiationService.stub(ISessionsService, new class extends mock<ISessionsService>() {
 		override readonly activeSession: IObservable<IActiveSession | undefined> = constObservable<IActiveSession | undefined>(undefined);
+		override readonly visibleSessions: IObservable<readonly (IActiveSession | undefined)[]> = constObservable<readonly (IActiveSession | undefined)[]>([]);
 	}());
 	instantiationService.stub(IAgentHostActiveClientService, new class extends mock<IAgentHostActiveClientService>() {
 		override getActiveClient = (_sessionType: string, clientId: string) => ({ clientId, tools: [], customizations: [] });
@@ -266,7 +269,7 @@ async function waitForSessionConfig(provider: RemoteAgentHostSessionsProvider, s
 	});
 }
 
-function fireSessionAdded(connection: MockAgentConnection, rawId: string, opts?: { provider?: string; title?: string; project?: { uri: string; displayName: string }; workingDirectory?: string }): void {
+function fireSessionAdded(connection: MockAgentConnection, rawId: string, opts?: { provider?: string; title?: string; project?: { uri: string; displayName: string }; workingDirectory?: string; createdAt?: string; modifiedAt?: string }): void {
 	const provider = opts?.provider ?? 'copilotcli';
 	const sessionUri = AgentSession.uri(provider, rawId);
 	connection.fireNotification({
@@ -277,8 +280,8 @@ function fireSessionAdded(connection: MockAgentConnection, rawId: string, opts?:
 			provider,
 			title: opts?.title ?? `Session ${rawId}`,
 			status: ProtocolSessionStatus.Idle,
-			createdAt: new Date().toISOString(),
-			modifiedAt: new Date().toISOString(),
+			createdAt: opts?.createdAt ?? new Date().toISOString(),
+			modifiedAt: opts?.modifiedAt ?? new Date().toISOString(),
 			project: opts?.project,
 			workingDirectory: opts?.workingDirectory,
 		},
@@ -370,12 +373,16 @@ suite('RemoteAgentHostSessionsProvider', () => {
 			{ provider: 'unknown-agent', displayName: 'Unknown', description: '', models: [] } as AgentInfo,
 		]);
 		const provider = createProvider(disposables, connection, { address: '10.0.0.1:8080', connectionName: 'My Host' });
+		// CLAWDIUS: `iconForAgentProvider` has no Codex/OpenAI branding case (the
+		// fork removed Copilot/Codex) — an `openai` provider falls through to the
+		// neutral base icon like any other unrecognized provider, same as
+		// `unknown-agent`.
 		assert.deepStrictEqual(
 			provider.sessionTypes.map(t => ({ id: t.id, icon: t.icon.id })),
 			[
 				{ id: CopilotCLISessionType.id, icon: 'copilot' },
 				{ id: 'claude-code', icon: 'claude' },
-				{ id: 'openai', icon: 'openai' },
+				{ id: 'openai', icon: 'remote' },
 				{ id: 'unknown-agent', icon: 'remote' },
 			],
 		);
@@ -484,8 +491,9 @@ suite('RemoteAgentHostSessionsProvider', () => {
 		const changes: ISessionChangeEvent[] = [];
 		disposables.add(provider.onDidChangeSessions((e: ISessionChangeEvent) => changes.push(e)));
 
-		fireSessionAdded(connection, 'dup-sess', { title: 'Dup' });
-		fireSessionAdded(connection, 'dup-sess', { title: 'Dup' });
+		const timestamp = new Date(0).toISOString();
+		fireSessionAdded(connection, 'dup-sess', { title: 'Dup', createdAt: timestamp, modifiedAt: timestamp });
+		fireSessionAdded(connection, 'dup-sess', { title: 'Dup', createdAt: timestamp, modifiedAt: timestamp });
 
 		assert.strictEqual(changes.length, 1);
 	});
@@ -772,6 +780,7 @@ suite('RemoteAgentHostSessionsProvider', () => {
 			action: {
 				type: ActionType.ChatTurnStarted,
 				turnId: 'turn-1',
+				startedAt: '2025-01-01T00:00:00.000Z',
 				message: { text: 'hello', origin: { kind: MessageKind.User }, model: { id: 'new-model' } },
 			},
 			serverSeq: 1,
@@ -803,6 +812,8 @@ suite('RemoteAgentHostSessionsProvider', () => {
 			channel: buildDefaultChatUri(AgentSession.uri('copilotcli', 'persist-sess').toString()),
 			action: {
 				type: ActionType.ChatTurnComplete,
+				turnId: 'turn-1',
+				duration: 1000,
 			},
 			serverSeq: 1,
 			origin: undefined,
@@ -879,6 +890,51 @@ suite('RemoteAgentHostSessionsProvider', () => {
 			provider2.getSessions().map(s => s.title.get()),
 			['Keep Me'],
 		);
+	}));
+
+	test('authoritative session update persists materialized workspace metadata', () => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {
+		const storageService = disposables.add(new InMemoryStorageService());
+		const provider = createProvider(disposables, connection, { storageService });
+		const timestamp = new Date(0).toISOString();
+		fireSessionAdded(connection, 'persist-upsert', {
+			title: 'Worktree Session',
+			project: { uri: 'file:///Users/me/project', displayName: 'project' },
+			workingDirectory: 'file:///Users/me/project',
+			createdAt: timestamp,
+			modifiedAt: timestamp,
+		});
+		fireSessionAdded(connection, 'persist-upsert', {
+			title: 'Worktree Session',
+			project: { uri: 'file:///Users/me/project', displayName: 'project' },
+			workingDirectory: 'file:///Users/me/project.worktrees/session',
+			createdAt: timestamp,
+			modifiedAt: new Date(1000).toISOString(),
+		});
+		const currentWorkspace = provider.getSessions()[0].workspace.get()!;
+
+		await storageService.flush();
+
+		const restoredProvider = createProvider(disposables, new MockAgentConnection(), { storageService, noConnection: true });
+		const restoredWorkspace = restoredProvider.getSessions()[0].workspace.get()!;
+		assert.deepStrictEqual({
+			current: {
+				root: currentWorkspace.folders[0].root.path,
+				workingDirectory: currentWorkspace.folders[0].workingDirectory.path,
+			},
+			restored: {
+				root: restoredWorkspace.folders[0].root.path,
+				workingDirectory: restoredWorkspace.folders[0].workingDirectory.path,
+			},
+		}, {
+			current: {
+				root: '/Users/me/project',
+				workingDirectory: '/Users/me/project.worktrees/session',
+			},
+			restored: {
+				root: '/Users/me/project',
+				workingDirectory: '/Users/me/project.worktrees/session',
+			},
+		});
 	}));
 
 	test('setConnection after unpublishCachedSessions restores cached sessions', () => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {
@@ -1010,6 +1066,8 @@ suite('RemoteAgentHostSessionsProvider', () => {
 			channel: buildDefaultChatUri(AgentSession.uri('copilotcli', 'turn-sess').toString()),
 			action: {
 				type: ActionType.ChatTurnComplete,
+				turnId: 'turn-1',
+				duration: 1000,
 			},
 			serverSeq: 1,
 			origin: undefined,

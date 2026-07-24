@@ -34,6 +34,10 @@ export const CLAWDIUS_HIDDEN_UPSTREAM_SETTINGS: readonly string[] = [
 	// The same toggle for the editor-window chat picker. It is only consulted for the CopilotCLI session type,
 	// which Clawdius suppresses, so it is likewise inert.
 	'chat.editor.copilotCli.hideExtensionHost',
+	// The preferCopilotHarness / defaultToCopilotHarness toggles (registered by agentHostEnablementService) only
+	// select an AgentHostCopilot session type Clawdius never surfaces; hide them from the Settings search.
+	'chat.editor.preferCopilotHarness',
+	'chat.defaultToCopilotHarness',
 ];
 
 const CLAWDIUS_HIDDEN_SETTINGS_NODE_ID = 'clawdius.hiddenUpstreamSettings';

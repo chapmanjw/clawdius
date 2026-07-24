@@ -75,10 +75,15 @@ export function assertPathIsSafe(fsPath: string, _isWindows = isWindows): void {
  * Resolves the real path of `fsPath`, walking up the parent chain when the path
  * (or its ancestors) does not yet exist on disk. This ensures a symlink at any
  * ancestor is followed even for files that are about to be created.
+ *
+ * @param realpath Override for the underlying `fs.realpath` call. Defaults to
+ * {@link Promises.realpath}; tests pass a stub to deterministically exercise
+ * error paths (e.g. `EACCES`/`EPERM`) that are hard to set up on a real
+ * filesystem across platforms.
  */
-export async function resolveRealPathForNonexistent(fsPath: string): Promise<string> {
+export async function resolveRealPathForNonexistent(fsPath: string, realpath: (fsPath: string) => Promise<string> = Promises.realpath): Promise<string> {
 	try {
-		return await Promises.realpath(fsPath);
+		return await realpath(fsPath);
 	} catch (e) {
 		if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
 			throw e;
@@ -94,7 +99,7 @@ export async function resolveRealPathForNonexistent(fsPath: string): Promise<str
 			return fsPath;
 		}
 		try {
-			const resolved = await Promises.realpath(current);
+			const resolved = await realpath(current);
 			return path.join(resolved, ...tail);
 		} catch (e) {
 			const code = (e as NodeJS.ErrnoException).code;

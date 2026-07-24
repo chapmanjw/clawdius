@@ -10,6 +10,8 @@ import { Emitter, Event } from '../../../base/common/event.js';
 import { Disposable, DisposableStore, IDisposable, MutableDisposable } from '../../../base/common/lifecycle.js';
 import { URI } from '../../../base/common/uri.js';
 import { IInstantiationService } from '../../../platform/instantiation/common/instantiation.js';
+import { ICommandService } from '../../../platform/commands/common/commands.js';
+import { localize } from '../../../nls.js';
 import { ServiceCollection } from '../../../platform/instantiation/common/serviceCollection.js';
 import { IContextKey, IContextKeyService } from '../../../platform/contextkey/common/contextkey.js';
 import { asCssVariable } from '../../../platform/theme/common/colorUtils.js';
@@ -17,13 +19,15 @@ import { IActiveSession } from '../../services/sessions/common/sessionsManagemen
 import { IChatViewFactory } from '../../services/chatView/browser/chatViewFactory.js';
 import { AbstractChatView, ChatViewKind, IChatViewOptions } from './chatView.js';
 import { ChatCompositeBar } from './chatCompositeBar.js';
+import { SessionReadOnlyBanner } from './sessionReadOnlyBanner.js';
 import { SessionHeader, SessionViewFloatingToolbar } from './sessionHeader.js';
 import { ISessionContext, SessionContext } from '../../services/sessions/browser/sessionContext.js';
 import { autorun, observableValue } from '../../../base/common/observable.js';
 import { SessionIsMaximizedContext } from '../../common/contextkeys.js';
+import { UNARCHIVE_SESSION_COMMAND_ID } from '../../common/sessionCommands.js';
 import { setActiveSessionContextKeys } from '../../services/sessions/common/sessionContextKeys.js';
 import { activeSessionViewBackground, activeSessionViewForeground, inactiveSessionViewBackground, inactiveSessionViewForeground } from '../../common/theme.js';
-import { SessionStatus } from '../../services/sessions/common/session.js';
+import { ChatInteractivity, SessionStatus } from '../../services/sessions/common/session.js';
 
 /**
  * Options passed to {@link SessionView.openSession}. Extends the chat view
@@ -61,6 +65,7 @@ export class SessionView extends Disposable implements ISerializableView {
 
 	private readonly _header: SessionHeader;
 	private readonly _compositeBar: ChatCompositeBar;
+	private readonly _readOnlyBanner: SessionReadOnlyBanner;
 	private readonly _floatingToolbar: SessionViewFloatingToolbar;
 	private readonly _centeredContentContainer: HTMLElement;
 	private readonly _contentContainer: HTMLElement;
@@ -84,6 +89,7 @@ export class SessionView extends Disposable implements ISerializableView {
 		@IChatViewFactory private readonly chatViewFactory: IChatViewFactory,
 		@IInstantiationService instantiationService: IInstantiationService,
 		@IContextKeyService contextKeyService: IContextKeyService,
+		@ICommandService private readonly commandService: ICommandService,
 	) {
 		super();
 
@@ -119,6 +125,44 @@ export class SessionView extends Disposable implements ISerializableView {
 		this._compositeBar = this._register(scopedInstantiationService.createInstance(ChatCompositeBar));
 		this._centeredContentContainer.appendChild(this._compositeBar.element);
 
+		// Read-only status banner, shown flush below the tab bar (within the same
+		// centered band) when the session's active chat is non-interactive, in
+		// place of the composer which is hidden for read-only chats.
+		this._readOnlyBanner = this._register(new SessionReadOnlyBanner());
+		this._centeredContentContainer.appendChild(this._readOnlyBanner.domNode);
+		this._register(autorun(reader => {
+			const session = this._sessionObs.read(reader);
+			const activeChat = session?.activeChat.read(reader);
+			const readOnly = !!activeChat && activeChat.interactivity.read(reader) !== ChatInteractivity.Full;
+			// Give an archived session an explanation specific to why it is
+			// read-only, plus an inline "Restore" action; other read-only chats
+			// (e.g. subagent transcripts) keep the generic message.
+			if (readOnly) {
+				const archived = !!session && session.isArchived.read(reader);
+				if (archived && session) {
+					this._readOnlyBanner.setContent({
+						message: localize('sessionReadOnlyBanner.archived', "Archived sessions are read-only."),
+						action: {
+							label: localize('sessionReadOnlyBanner.restore', "Restore"),
+							run: () => this.commandService.executeCommand(UNARCHIVE_SESSION_COMMAND_ID, session),
+						},
+					});
+				} else {
+					this._readOnlyBanner.setContent({ message: localize('sessionReadOnlyBanner.message', "This chat is read-only") });
+				}
+			}
+			// Only re-layout when the banner's visibility (and thus its
+			// contribution to `barHeight`) actually changes; toggling within the
+			// same read-only state leaves the bar height unchanged. Re-layouts
+			// needed for other reasons (e.g. the child chat view being swapped
+			// when the active chat changes) are owned by the `openSession`
+			// autorun, which calls `_layoutChildren` unconditionally.
+			if (this._readOnlyBanner.visible !== readOnly) {
+				this._readOnlyBanner.setVisible(readOnly);
+				this._layoutChildren();
+			}
+		}));
+
 		this._contentContainer = $('.session-view-content');
 		this.element.appendChild(this._contentContainer);
 
@@ -149,7 +193,7 @@ export class SessionView extends Disposable implements ISerializableView {
 			let desiredKind: ChatViewKind;
 			if (session === undefined || session.isCreated.read(reader) === false) {
 				desiredKind = 'newSession';
-			} else if (session.activeChat.read(reader).status.read(reader) === SessionStatus.Untitled) {
+			} else if (session.activeChat.read(reader).status.read(reader) === SessionStatus.Untitled && session.activeChat.read(reader).interactivity.read(reader) === ChatInteractivity.Full) {
 				desiredKind = 'newChatInSession';
 			} else {
 				desiredKind = 'chat';
@@ -207,7 +251,8 @@ export class SessionView extends Disposable implements ISerializableView {
 
 		const headerHeight = this._header.visible ? this._header.height : 0;
 		const tabsHeight = this._compositeBar.visible ? this._compositeBar.height : 0;
-		const barHeight = headerHeight + tabsHeight;
+		const bannerHeight = this._readOnlyBanner.visible ? this._readOnlyBanner.domNode.offsetHeight : 0;
+		const barHeight = headerHeight + tabsHeight + bannerHeight;
 
 		// Cap the band's height to the header + tabs (it is horizontally centered
 		// via CSS `margin: 0 auto`) so the full-width chat content sits below it.

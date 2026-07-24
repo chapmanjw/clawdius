@@ -15,6 +15,7 @@ globalThis._VSCODE_FILE_ROOT = fileURLToPath(new URL('../../../..', import.meta.
 
 import * as fs from 'fs';
 import * as os from 'os';
+import type { Event } from '../../../base/common/event.js';
 import { DisposableStore } from '../../../base/common/lifecycle.js';
 import { raceTimeout } from '../../../base/common/async.js';
 import { joinPath } from '../../../base/common/resources.js';
@@ -33,18 +34,22 @@ import { IProductService } from '../../product/common/productService.js';
 import { InstantiationService } from '../../instantiation/common/instantiationService.js';
 import { ServiceCollection } from '../../instantiation/common/serviceCollection.js';
 import { registerAgentHostNetworkServices } from './agentHostBootstrap.js';
+import { BANG_COMMAND_PREFIX } from './agentHostBangCommand.js';
+import { INetworkDiagnosticsService, NetworkDiagnosticsService } from './networkDiagnosticsService.js';
 import { ClaudeAgent } from './claude/claudeAgent.js';
 // CLAWDIUS-BEGIN cli backend resolution
 import { IClawdiusCliConfigService } from '../../clawdius/common/clawdiusCliConfig.js';
 import { ClawdiusCliConfigService } from '../../clawdius/node/clawdiusCliConfigService.js';
 // CLAWDIUS-END
 import { ClaudeAgentSdkService, ClaudeSdkPackage, IClaudeAgentSdkService } from './claude/claudeAgentSdkService.js';
-import { AgentSdkDownloader, IAgentSdkDownloader } from './agentSdkDownloader.js';
+import { AgentSdkDownloader, IAgentSdkDownloader, type IAgentSdkDownloadProgress } from './agentSdkDownloader.js';
 import { IAgentHostOTelService } from '../common/otel/agentHostOTelService.js';
 import { AgentHostOTelService } from './otel/agentHostOTelService.js';
 import { AgentService } from './agentService.js';
+import { IAgentHostStateManager } from './agentHostStateManager.js';
 import { AgentHostClaudeAgentEnabledEnvVar, AgentHostClaudeSdkRootEnvVar, IAgentService, isAgentEnabled } from '../common/agentService.js';
 import { IAgentConfigurationService } from './agentConfigurationService.js';
+import { IAgentHostGitHubEndpointService } from './agentHostGitHubEndpointService.js';
 import { IAgentHostCompletions } from './agentHostCompletions.js';
 import { IAgentHostTerminalManager } from './agentHostTerminalManager.js';
 import { WebSocketProtocolServer } from './webSocketTransport.js';
@@ -210,18 +215,17 @@ async function main(): Promise<void> {
 	// `createInstance` (it needs IFileService + INativeEnvironmentService).
 	// The git service is shared by AgentService (for diff computation +
 	// showBlob) and the production agent registration path.
-	const telemetryService = await createAgentHostTelemetryService({ environmentService, productService, fileService, loggerService, logService, disposables, disableTelemetry: options.quiet });
 	const diServices = new ServiceCollection();
 	diServices.set(IProductService, productService);
 	diServices.set(INativeEnvironmentService, environmentService);
 	diServices.set(ILogService, logService);
 	diServices.set(IFileService, fileService);
 	diServices.set(ISessionDataService, sessionDataService);
+	const networkServices = await registerAgentHostNetworkServices(diServices, fileService, environmentService, logService, disposables);
+	const proxyResolver = networkServices.proxyResolver;
+	const fetchFn = proxyResolver.fetch.bind(proxyResolver);
+	const telemetryService = await createAgentHostTelemetryService({ environmentService, productService, fileService, loggerService, logService, disposables, disableTelemetry: options.quiet, fetchFn, requestService: networkServices.requestService });
 	diServices.set(ITelemetryService, telemetryService);
-	// Wire `IPolicyService` + `IConfigurationService` + `IRequestService`
-	// — the trio that `IAgentSdkDownloader` depends on for proxy-aware
-	// downloads. Must run before any downstream service that injects them.
-	await registerAgentHostNetworkServices(diServices, fileService, environmentService, logService, disposables);
 	const instantiationService = new InstantiationService(diServices);
 	// CLAWDIUS-BEGIN cli backend resolution: resolve the Claude Code engine (bundled vs user cli.js) from clawdius.cli.* settings
 	diServices.set(IClawdiusCliConfigService, instantiationService.createInstance(ClawdiusCliConfigService));
@@ -236,11 +240,16 @@ async function main(): Promise<void> {
 	diServices.set(IAgentHostCheckpointService, checkpointService);
 
 	// Create the agent service (owns AgentHostStateManager + AgentSideEffects internally)
-	const agentService = new AgentService(logService, fileService, sessionDataService, productService, gitService, checkpointService, rootConfigResource, telemetryService, fileMonitorService);
+	const agentService = new AgentService(logService, fileService, sessionDataService, productService, gitService, checkpointService, rootConfigResource, telemetryService, fileMonitorService, fetchFn);
 	disposables.add(agentService);
 	diServices.set(IAgentService, agentService);
+	diServices.set(IAgentHostStateManager, agentService.stateManager);
+	const networkDiagnosticsService = instantiationService.createInstance(NetworkDiagnosticsService);
+	diServices.set(INetworkDiagnosticsService, networkDiagnosticsService);
+	agentService.setNetworkDiagnosticsService(networkDiagnosticsService);
 
 	// Register agents
+	let sdkDownloadProgress: Event<IAgentSdkDownloadProgress> | undefined;
 	if (!options.quiet) {
 		// Production agents (require DI)
 		const pluginManager = new AgentPluginManager(URI.file(environmentService.userDataPath), fileService, logService);
@@ -249,6 +258,7 @@ async function main(): Promise<void> {
 		diServices.set(IEditSurvivalReporterFactory, instantiationService.createInstance(EditSurvivalReporterFactory));
 		diServices.set(IAgentHostTerminalManager, agentService.terminalManager);
 		diServices.set(IAgentConfigurationService, agentService.configurationService);
+		diServices.set(IAgentHostGitHubEndpointService, agentService.gitHubEndpointService);
 		diServices.set(IAgentHostCompletions, agentService.completionsService);
 		diServices.set(IAgentHostGitService, gitService);
 		// CLI flags become env vars BEFORE the downloader is constructed so
@@ -257,13 +267,14 @@ async function main(): Promise<void> {
 			process.env[AgentHostClaudeSdkRootEnvVar] = options.claudeSdkRoot;
 		}
 		// Register the agent SDK downloader BEFORE any service that injects it.
-		const agentSdkDownloader = instantiationService.createInstance(AgentSdkDownloader);
+		const agentSdkDownloader = disposables.add(instantiationService.createInstance(AgentSdkDownloader));
 		diServices.set(IAgentSdkDownloader, agentSdkDownloader);
+		sdkDownloadProgress = agentSdkDownloader.onDidDownloadProgress;
 		const claudeAgentSdkService = instantiationService.createInstance(ClaudeAgentSdkService);
 		diServices.set(IClaudeAgentSdkService, claudeAgentSdkService);
 		// CLAWDIUS-BEGIN no agent-host OTEL exporter in clawdius (zero egress) - see agentHostMain.ts
 		if (product.defaultChatAgent?.entitlementUrl) {
-			const agentHostOTelService = disposables.add(instantiationService.createInstance(AgentHostOTelService));
+			const agentHostOTelService = disposables.add(instantiationService.createInstance(AgentHostOTelService, fetchFn));
 			diServices.set(IAgentHostOTelService, agentHostOTelService);
 		}
 		// CLAWDIUS-END
@@ -281,6 +292,22 @@ async function main(): Promise<void> {
 			agentService.registerProvider(claudeAgent);
 			log('ClaudeAgent registered');
 		}
+	}
+
+	// Surface agent-SDK download progress to clients as generic `progress`
+	// notifications. The downloader fires process-global frames keyed by package
+	// id; the agent service fans each out to the `createSession` progress tokens
+	// of the sessions waiting on that provider's SDK, routed through the state
+	// manager so both local (IPC) and remote (WebSocket) renderers receive them
+	// via the same path as session updates.
+	if (sdkDownloadProgress) {
+		disposables.add(sdkDownloadProgress(p => agentService.emitDownloadProgress(
+			p.packageId,
+			p.displayName,
+			p.receivedBytes,
+			p.totalBytes,
+			p.phase === 'completed' || p.phase === 'failed',
+		)));
 	}
 
 	if (options.enableMockAgent) {
@@ -314,6 +341,7 @@ async function main(): Promise<void> {
 		{
 			defaultDirectory: URI.file(os.homedir()).toString(),
 			completionTriggerCharacters: agentService.completionTriggerCharacters,
+			terminalCommandPrefix: BANG_COMMAND_PREFIX,
 			otlpLogEmitter,
 		},
 		clientFileSystemProvider,

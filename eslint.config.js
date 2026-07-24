@@ -1598,6 +1598,7 @@ export default defineConfig(
 						'undici',
 						'undici-types',
 						'url',
+						'module',
 						'util',
 						'vscode-regexpp',
 						'vscode-textmate',
@@ -1697,6 +1698,7 @@ export default defineConfig(
 						'@microsoft/1ds-core-js', // node module allowed even in /common/
 						'@microsoft/1ds-post-js', // node module allowed even in /common/
 						'@xterm/headless', // node module allowed even in /common/
+						'@vscode/fs-copyfile', // used by agentHost for file copying after worktree creation
 						'@vscode/tree-sitter-wasm', // used by agentHost for command auto-approval
 						'@anthropic-ai/sdk', // used by agentHost for Anthropic API requests
 						'@anthropic-ai/claude-agent-sdk', // used by agentHost for Claude Agent SDK session enumeration / queries

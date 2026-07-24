@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { Delayer } from '../../../../../../base/common/async.js';
+import { Delayer, disposableTimeout, raceCancellation } from '../../../../../../base/common/async.js';
 import { encodeBase64, VSBuffer } from '../../../../../../base/common/buffer.js';
 import { CancellationToken, CancellationTokenSource } from '../../../../../../base/common/cancellation.js';
 import { isCancellationError } from '../../../../../../base/common/errors.js';
@@ -12,56 +12,67 @@ import { MarkdownString } from '../../../../../../base/common/htmlContent.js';
 import { getChatErrorDetailsFromMeta, getCopilotPlanFromEntitlement, IChatErrorContext } from '../../../common/chatErrorMessages.js';
 import { Disposable, DisposableResourceMap, DisposableStore, IReference, MutableDisposable, toDisposable, type IDisposable } from '../../../../../../base/common/lifecycle.js';
 import { ResourceMap } from '../../../../../../base/common/map.js';
+import { Schemas } from '../../../../../../base/common/network.js';
 import { equals } from '../../../../../../base/common/objects.js';
-import { autorun, autorunPerKeyedItem, derived, IObservable, ISettableObservable, observableValue, transaction } from '../../../../../../base/common/observable.js';
+import { autorun, autorunPerKeyedItem, constObservable, derived, derivedOpts, IObservable, ISettableObservable, observableValue, transaction } from '../../../../../../base/common/observable.js';
 import { extUriBiasedIgnorePathCase, isEqual } from '../../../../../../base/common/resources.js';
+import { StopWatch } from '../../../../../../base/common/stopwatch.js';
 import { Mutable } from '../../../../../../base/common/types.js';
 import { URI } from '../../../../../../base/common/uri.js';
+import { generateUuid } from '../../../../../../base/common/uuid.js';
 import { IPosition } from '../../../../../../editor/common/core/position.js';
+import type { IRange } from '../../../../../../editor/common/core/range.js';
 import { isLocation, type Location } from '../../../../../../editor/common/languages.js';
+import type { ITextModel } from '../../../../../../editor/common/model.js';
+import { IModelService } from '../../../../../../editor/common/services/model.js';
 import { localize } from '../../../../../../nls.js';
-import { AgentProvider, AgentSession, type IAgentConnection } from '../../../../../../platform/agentHost/common/agentService.js';
+import { AgentProvider, AgentSession, CODEX_AGENT_PROVIDER_ID, type IAgentConnection } from '../../../../../../platform/agentHost/common/agentService.js';
+import { agentHostAuthority } from '../../../../../../platform/agentHost/common/agentHostUri.js';
 import { AgentFeedbackAttachmentDisplayKind, AgentFeedbackAttachmentMetadataKey } from '../../../../../../platform/agentHost/common/meta/agentFeedbackAttachments.js';
+import { BrowserViewAttachmentDisplayKind, BrowserViewAttachmentMetadataKey } from '../../../../../../platform/agentHost/common/meta/browserViewAttachments.js';
 import { readToolCallMeta } from '../../../../../../platform/agentHost/common/meta/agentToolCallMeta.js';
 import { readCompletionAttachmentMeta } from '../../../../../../platform/agentHost/common/meta/agentCompletionAttachmentMeta.js';
+import { IRemoteAgentHostService } from '../../../../../../platform/agentHost/common/remoteAgentHostService.js';
 import { SessionConfigKey } from '../../../../../../platform/agentHost/common/sessionConfigKeys.js';
 import type { ChatInputRequestWithPlanReview, IAgentHostPlanReview } from '../../../../../../platform/agentHost/common/agentHostPlanReview.js';
 import { IAgentSubscription, observableFromSubscription } from '../../../../../../platform/agentHost/common/state/agentSubscription.js';
 import { ChatTruncatedAction } from '../../../../../../platform/agentHost/common/state/protocol/actions.js';
 import { CompletionItemKind as AhpCompletionItemKind, type CompletionItem as AhpCompletionItem } from '../../../../../../platform/agentHost/common/state/protocol/commands.js';
-import { ConfirmationOptionKind, JsonPrimitive, TerminalClaimKind, ToolCallContributorKind, ToolResultContentType, type ConfirmationOption, type ProtectedResourceMetadata, type SessionActiveClient } from '../../../../../../platform/agentHost/common/state/protocol/state.js';
-import { ActionType, ChatTurnStartedAction, isChatAction, type ChatAction, type ClientChatAction, type ClientSessionAction, type ChatInputCompletedAction } from '../../../../../../platform/agentHost/common/state/sessionActions.js';
+import { ConfirmationOptionKind, CustomizationType, JsonPrimitive, McpServerAuthRequiredState, McpServerStatus, SessionInputRequestKind, TerminalClaimKind, ToolCallContributorKind, ToolResultContentType, type ConfirmationOption, type ProtectedResourceMetadata, type SessionActiveClient } from '../../../../../../platform/agentHost/common/state/protocol/state.js';
+import { ActionType, ChatTurnStartedAction, isChatAction, type ClientChatAction, type ClientSessionAction } from '../../../../../../platform/agentHost/common/state/sessionActions.js';
 import { AHP_AUTH_REQUIRED, ProtocolError } from '../../../../../../platform/agentHost/common/state/sessionProtocol.js';
-import { buildSubagentChatUri, getToolSubagentContent, MessageAttachmentKind, MessageKind, PendingMessageKind, ResponsePartKind, ChatInputAnswerState, ChatInputAnswerValueKind, ChatInputQuestionKind, ChatInputResponseKind, StateComponents, ToolCallCancellationReason, ToolCallConfirmationReason, ToolCallStatus, TurnState, parseChatUri, mergeSessionWithDefaultChat, type ChatState, type ISessionWithDefaultChat, type ClientPluginCustomization, type ICompletedToolCall, type MarkdownResponsePart, type Message, type MessageAttachment, type MessageAnnotationsAttachment, type ModelSelection, type ReasoningResponsePart, type RootState, type ChatInputAnswer, type ChatInputRequest, type SessionState, type ToolCallResponsePart, type ToolCallState, type Turn } from '../../../../../../platform/agentHost/common/state/sessionState.js';
+import { buildSubagentChatUri, getToolSubagentContent, isChatReadOnly, MessageAttachmentKind, MessageKind, PendingMessageKind, ResponsePartKind, ChatInputAnswerState, ChatInputAnswerValueKind, ChatInputQuestionKind, ChatInputResponseKind, SessionStatus, StateComponents, ToolCallCancellationReason, ToolCallConfirmationReason, ToolCallStatus, TurnState, parseChatUri, mergeSessionWithDefaultChat, readUsageInfoMeta, type ChatState, type ISessionWithDefaultChat, type ClientPluginCustomization, type ICompletedToolCall, type InputRequestResponsePart, type MarkdownResponsePart, type Message, type MessageAttachment, type MessageAnnotationsAttachment, type MessageResourceAttachment, type MessageEmbeddedResourceAttachment, type ModelSelection, type ReasoningResponsePart, type RootState, type ChatInputAnswer, type ChatInputQuestion, type ChatInputRequest, type SessionState, type ToolCallResponsePart, type ToolCallState, type Turn } from '../../../../../../platform/agentHost/common/state/sessionState.js';
 import { ExtensionIdentifier } from '../../../../../../platform/extensions/common/extensions.js';
 import { IInstantiationService } from '../../../../../../platform/instantiation/common/instantiation.js';
+import { IConfigurationService } from '../../../../../../platform/configuration/common/configuration.js';
 import { ILogService } from '../../../../../../platform/log/common/log.js';
 import { IOpenerService } from '../../../../../../platform/opener/common/opener.js';
+import { IPathService } from '../../../../../services/path/common/pathService.js';
 import { IWorkspaceContextService } from '../../../../../../platform/workspace/common/workspace.js';
 import { IWorkspaceTrustRequestService } from '../../../../../../platform/workspace/common/workspaceTrust.js';
 import { IAgentHostTerminalService } from '../../../../terminal/browser/agentHostTerminalService.js';
-import { ITerminalChatService } from '../../../../terminal/browser/terminal.js';
+import { ITerminalChatService, type ITerminalInstance } from '../../../../terminal/browser/terminal.js';
 import {
 	AgentHostCompletionReferenceKind,
 	getAgentHostCompletionReferenceKind,
 	isAgentFeedbackVariableEntry,
+	isBrowserViewVariableEntry,
 	isImageVariableEntry,
 	type IAgentFeedbackVariableEntry,
 	type IChatRequestVariableEntry,
 	type IImageVariableEntry
 } from '../../../common/attachments/chatVariableEntries.js';
 import { coerceImageBuffer } from '../../../common/chatImageExtraction.js';
-import { ChatRequestQueueKind, ConfirmedReason, ElicitationState, IChatProgress, IChatQuestion, IChatQuestionAnswers, IChatService, IChatToolInvocation, ToolConfirmKind, type IChatMultiSelectAnswer, type IChatPlanReviewResult, type IChatQuestionAnswerValue, type IChatResponseErrorDetails, type IChatSingleSelectAnswer, type IChatTerminalToolInvocationData } from '../../../common/chatService/chatService.js';
-import { IChatSession, IChatSessionContentProvider, IChatSessionHistoryItem, IChatSessionItem, IChatSessionRequestHistoryItem, type IChatInputCompletionItem, type IChatInputCompletionsParams, type IChatInputCompletionsResult, type IChatSessionServerRequest } from '../../../common/chatSessionsService.js';
+import { ChatRequestQueueKind, ConfirmedReason, ElicitationState, IChatProgress, IChatQuestionAnswers, IChatService, IChatToolInvocation, ToolConfirmKind, type IChatAutoModeResolutionPart, type IChatMcpAuthenticationRequired, type IChatMcpAuthenticationRequiredServer, type IChatMcpStartingServer, type IChatMultiSelectAnswer, type IChatPlanReviewResult, type IChatResponseErrorDetails, type IChatSingleSelectAnswer, type IChatTerminalToolInvocationData } from '../../../common/chatService/chatService.js';
+import { IChatSession, IChatSessionContentProvider, IChatSessionHistoryItem, IChatSessionItem, IChatSessionRequestHistoryItem, isTerminalCommandPrompt, SessionType, type IChatInputCompletionItem, type IChatInputCompletionsParams, type IChatInputCompletionsResult, type IChatSessionServerRequest } from '../../../common/chatSessionsService.js';
 import { IChatEntitlementService } from '../../../../../services/chat/common/chatEntitlementService.js';
+import { IWorkingCopyService } from '../../../../../services/workingCopy/common/workingCopyService.js';
 import { ChatMode } from '../../../common/chatModes.js';
-import { ChatAgentLocation, ChatModeKind } from '../../../common/constants.js';
+import { ChatAgentLocation, ChatConfiguration, ChatModeKind } from '../../../common/constants.js';
 import { IChatEditingService } from '../../../common/editing/chatEditingService.js';
 import { ILanguageModelChatMetadata, ILanguageModelsService } from '../../../common/languageModels.js';
 import { type IChatModel, type IChatModelInputState, type IChatRequestVariableData, type ISerializableChatModelInputState } from '../../../common/model/chatModel.js';
 import { ChatElicitationRequestPart } from '../../../common/model/chatProgressTypes/chatElicitationRequestPart.js';
-import { ChatPlanReviewData } from '../../../common/model/chatProgressTypes/chatPlanReviewData.js';
-import { ChatQuestionCarouselData } from '../../../common/model/chatProgressTypes/chatQuestionCarouselData.js';
 import { ChatToolInvocation } from '../../../common/model/chatProgressTypes/chatToolInvocation.js';
 import { getChatSessionType } from '../../../common/model/chatUri.js';
 import { IChatAgentData, IChatAgentImplementation, IChatAgentRequest, IChatAgentResult, IChatAgentService } from '../../../common/participants/chatAgents.js';
@@ -69,15 +80,26 @@ import { ILanguageModelToolsService, IToolInvocation, IToolResult, ToolInvocatio
 import { IChatWidgetService } from '../../chat.js';
 import { getAgentSessionProviderIcon } from '../agentSessions.js';
 import { IAgentHostActiveClientService } from './agentHostActiveClientService.js';
+import { IAgentHostCustomizationService } from './agentHostCustomizationService.js';
 import { IAgentHostSessionWorkingDirectoryResolver } from './agentHostSessionWorkingDirectoryResolver.js';
 import { IAgentHostNewSessionFolderService } from './agentHostNewSessionFolderService.js';
 import { AgentHostSnapshotController } from './agentHostSnapshotController.js';
 import { AgentHostResponseFileChangesProvider } from './agentHostResponseFileChanges.js';
 import { IChatResponseFileChangesService } from '../../chatResponseFileChangesService.js';
+import { AgentHostSessionReferenceAttachmentDisplayKind, AgentHostSessionReferenceTrajectoryAttachmentDisplayKind, toSessionReferenceAttachmentMeta, toSessionReferenceModelRepresentation } from './agentHostSessionReferenceAttachment.js';
+import { buildHostLocalEventsPath } from '../../copilotCliEventsUri.js';
 import { toolDataToDefinition } from './agentHostToolUtils.js';
 import { IAgentHostUntitledProvisionalSessionService } from './agentHostUntitledProvisionalSessionService.js';
-import { activeTurnToProgress, completedToolCallToEditParts, completedToolCallToSerialized, finalizeToolInvocation, formatTurnResponseDetails, getTerminalContentUri, isSubagentTool, makeAhpTerminalToolSessionId, messageAttachmentsToVariableData, messageToVariableData, parseAhpTerminalToolSessionId, rawMarkdownToString, stringOrMarkdownToString, toolCallStateToInvocation, turnsToHistory, updateRunningToolSpecificData, usageInfoToChatUsage, usageInfoToQuotas, type IToolCallFileEdit, type TurnModelLookup } from './stateToProgressAdapter.js';
+import { IAgentHostImportConversationStore } from './agentHostImportConversationStore.js';
+import { activeTurnToProgress, BOOLEAN_TRUE_OPTION_ID, completedToolCallToEditParts, completedToolCallToSerialized, convertProtocolAnswers, convertProtocolPlanReviewResult, createInputRequestCarousel, createInputRequestPlanReview, finalizeToolInvocation, formatTurnResponseDetails, getTerminalContentUri, getUrlInputRequestPresentation, isSubagentTool, makeAhpTerminalToolSessionId, messageAttachmentsToVariableData, messageToVariableData, parseAhpTerminalToolSessionId, rewriteAgentHostLinkTarget, stringOrMarkdownToString, systemNotificationToChatPart, toolCallAuthenticationServer, toolCallConfirmationMessages, toolCallStateToInvocation, toolCallStateToPreparedInvocation, toolCallStateToStreamingInvocation, turnsToHistory, updateRunningToolSpecificData, usageInfoToAutoModeResolution, usageInfoToChatUsage, usageInfoToQuotas, type IAgentHostToolInvocationOptions, type IToolCallFileEdit, type TurnModelLookup } from './stateToProgressAdapter.js';
+import { resolveMcpServerAuthentication, agentHostMcpServerId } from './agentHostAuth.js';
 export { toolDataToDefinition };
+
+/**
+ * Upper bound on the live editor text we inline for an unsaved document, matching the 1 MB per-file cap chat uses
+ * elsewhere (`chatRepoInfo`). Larger buffers are not inlined; a dirty saved file then falls back to its on-disk path.
+ */
+const MAX_INLINED_UNSAVED_EDITOR_BYTES = 1024 * 1024;
 
 // =============================================================================
 // AgentHostSessionHandler - renderer-side handler for a single agent host
@@ -119,6 +141,7 @@ interface IObserveTurnOptions {
 	readonly cancellationToken: CancellationToken;
 	readonly adoptInvocations?: ReadonlyMap<string, ChatToolInvocation>;
 	readonly seedEmittedLengths?: ReadonlyMap<string, number>;
+	readonly initialResponsePartCount?: number;
 	readonly onTurnEnded?: (lastTurn: Turn | undefined) => void;
 	readonly onFileEdits?: (tc: ToolCallState, fileEdits: IToolCallFileEdit[]) => void;
 	/**
@@ -132,8 +155,7 @@ interface IObserveTurnOptions {
 	 * Tool calls emitted into {@link sink} are tagged with this id so the
 	 * renderer groups them under the parent subagent widget. Markdown,
 	 * reasoning, and input requests are not forwarded (the subagent's own
-	 * session view renders those); nested subagent observation is also
-	 * suppressed to preserve legacy behavior.
+	 * session view renders those); nested subagents are observed recursively.
 	 */
 	readonly subAgentInvocationId?: string;
 	/**
@@ -164,12 +186,35 @@ interface ISubagentContext {
 
 interface IStartServerRequestOptions {
 	readonly isSystemInitiated?: boolean;
+	readonly timestamp?: number;
+	readonly isTerminalRequest?: boolean;
+}
+
+function parseTimestamp(value: string): number | undefined {
+	const timestamp = Date.parse(value);
+	return Number.isFinite(timestamp) ? timestamp : undefined;
 }
 
 function userOriginMessage(text: string, attachments: readonly MessageAttachment[] | undefined): Message {
 	return attachments?.length
 		? { text, origin: { kind: MessageKind.User }, attachments: [...attachments] }
 		: { text, origin: { kind: MessageKind.User } };
+}
+
+/**
+ * Extracts a user-facing message from a session-load failure so the actual cause
+ * (e.g. a git worktree-recreation error) is shown instead of a generic message.
+ * Strips the `Failed to restore session <uri>: ` wrapper that `AgentService`
+ * adds around restore failures. Returns `undefined` when no message is available.
+ */
+export function unwrapSessionLoadErrorMessage(err: unknown): string | undefined {
+	const message = err instanceof Error ? err.message : (typeof err === 'string' ? err : undefined);
+	if (!message) {
+		return undefined;
+	}
+	// The session URI in the prefix contains `scheme:/…` (colon-slash), never
+	// `: ` (colon-space), so the non-greedy match stops at the wrapper separator.
+	return message.replace(/^Failed to restore session .+?: /, '');
 }
 
 /**
@@ -180,6 +225,15 @@ function userOriginMessage(text: string, attachments: readonly MessageAttachment
  */
 function lastTurnModelSelection(state: ISessionWithDefaultChat | undefined): ModelSelection | undefined {
 	return lastTurnMessage(state)?.model;
+}
+
+/**
+ * Whether a progress emission counts as the turn's first visible progress
+ * for time-to-first-progress telemetry. Mirrors the agent host's own
+ * definition (text delta, response part, tool call start, or reasoning).
+ */
+function isFirstVisibleProgressPart(part: IChatProgress): boolean {
+	return part.kind === 'markdownContent' || part.kind === 'thinking' || part.kind === 'toolInvocation';
 }
 
 function lastTurnMessage(state: ISessionWithDefaultChat | undefined): Message | undefined {
@@ -225,10 +279,11 @@ function shouldAutoApproveClientToolCall(toolCall: ToolCallState): boolean {
 /**
  * Converts carousel answers (IChatQuestionAnswers) to protocol
  * ChatInputAnswer records, handling text, single-select,
- * and multi-select answer shapes.
+ * boolean, and multi-select answer shapes.
  */
-export function convertCarouselAnswers(raw: IChatQuestionAnswers): Record<string, ChatInputAnswer> {
+export function convertCarouselAnswers(raw: IChatQuestionAnswers, questions: readonly ChatInputQuestion[] = []): Record<string, ChatInputAnswer> {
 	const answers: Record<string, ChatInputAnswer> = {};
+	const questionKinds = new Map(questions.map(question => [question.id, question.kind]));
 	for (const [qId, answer] of Object.entries(raw)) {
 		if (typeof answer === 'string') {
 			answers[qId] = {
@@ -246,6 +301,14 @@ export function convertCarouselAnswers(raw: IChatQuestionAnswers): Record<string
 						kind: ChatInputAnswerValueKind.SelectedMany,
 						value: multi.selectedValues,
 						freeformValues: multi.freeformValue ? [multi.freeformValue] : undefined,
+					},
+				};
+			} else if (single.selectedValue && questionKinds.get(qId) === ChatInputQuestionKind.Boolean) {
+				answers[qId] = {
+					state: ChatInputAnswerState.Submitted,
+					value: {
+						kind: ChatInputAnswerValueKind.Boolean,
+						value: single.selectedValue === BOOLEAN_TRUE_OPTION_ID,
 					},
 				};
 			} else if (single.selectedValue) {
@@ -268,43 +331,6 @@ export function convertCarouselAnswers(raw: IChatQuestionAnswers): Record<string
 		}
 	}
 	return answers;
-}
-
-function convertProtocolAnswer(answer: ChatInputAnswer): IChatQuestionAnswerValue | undefined {
-	if (answer.state !== ChatInputAnswerState.Submitted) {
-		return undefined;
-	}
-	switch (answer.value.kind) {
-		case ChatInputAnswerValueKind.Text:
-			return answer.value.value;
-		case ChatInputAnswerValueKind.Number:
-		case ChatInputAnswerValueKind.Boolean:
-			return String(answer.value.value);
-		case ChatInputAnswerValueKind.Selected:
-			return {
-				selectedValue: answer.value.value,
-				freeformValue: answer.value.freeformValues?.[0],
-			};
-		case ChatInputAnswerValueKind.SelectedMany:
-			return {
-				selectedValues: answer.value.value,
-				freeformValue: answer.value.freeformValues?.[0],
-			};
-	}
-}
-
-function convertProtocolAnswers(raw: Record<string, ChatInputAnswer> | undefined): IChatQuestionAnswers | undefined {
-	if (!raw) {
-		return undefined;
-	}
-	const answers: IChatQuestionAnswers = {};
-	for (const [questionId, answer] of Object.entries(raw)) {
-		const converted = convertProtocolAnswer(answer);
-		if (converted !== undefined) {
-			answers[questionId] = converted;
-		}
-	}
-	return Object.keys(answers).length > 0 ? answers : undefined;
 }
 
 type PlanReviewInputCompletion = { response: ChatInputResponseKind; answers?: Record<string, ChatInputAnswer> };
@@ -371,36 +397,8 @@ function convertPlanReviewResult(planReview: IAgentHostPlanReview, result: IChat
 	};
 }
 
-function convertProtocolPlanReviewResult(planReview: IAgentHostPlanReview, response: ChatInputResponseKind, answers: Record<string, ChatInputAnswer> | undefined): IChatPlanReviewResult | undefined {
-	if (response === ChatInputResponseKind.Decline) {
-		return { rejected: true };
-	}
-	if (response !== ChatInputResponseKind.Accept) {
-		return undefined;
-	}
-
-	const answer = answers?.[planReview.answerQuestionId];
-	if (!answer || answer.state === ChatInputAnswerState.Skipped) {
-		return undefined;
-	}
-
-	const value = answer.value;
-	if (value.kind === ChatInputAnswerValueKind.Text) {
-		const feedback = value.value.trim();
-		return feedback ? { rejected: false, feedback, feedbackOverall: feedback } : undefined;
-	}
-	if (value.kind !== ChatInputAnswerValueKind.Selected) {
-		return undefined;
-	}
-
-	const action = getPlanReviewAction(planReview, value.value, undefined);
-	const feedback = value.freeformValues?.find(v => v.trim().length > 0)?.trim();
-	return {
-		rejected: false,
-		action: action?.label ?? value.value,
-		actionId: action?.id ?? value.value,
-		...(feedback ? { feedback, feedbackOverall: feedback } : {}),
-	};
+function inputRequestResponsePartKey(part: InputRequestResponsePart): string {
+	return `ir:${part.request.id}:${JSON.stringify({ ...part.request, answers: undefined })}`;
 }
 
 // =============================================================================
@@ -410,6 +408,9 @@ function convertProtocolPlanReviewResult(planReview: IAgentHostPlanReview, respo
 class AgentHostChatSession extends Disposable implements IChatSession {
 	readonly progressObs = observableValue<IChatProgress[]>('agentHostProgress', []);
 	readonly isCompleteObs = observableValue<boolean>('agentHostComplete', true);
+	readonly isReadOnly: IObservable<boolean>;
+	private readonly _sessionState = observableValue<IObservable<SessionState | undefined>>(this, constObservable(undefined));
+	private readonly _chatState = observableValue<IObservable<ChatState | undefined>>(this, constObservable(undefined));
 
 	private readonly _onWillDispose = this._register(new Emitter<void>());
 	readonly onWillDispose = this._onWillDispose.event;
@@ -426,6 +427,8 @@ class AgentHostChatSession extends Disposable implements IChatSession {
 		readonly sessionResource: URI,
 		readonly history: readonly IChatSessionHistoryItem[],
 		readonly title: string | undefined,
+		sessionSubscription: IAgentSubscription<SessionState> | undefined,
+		chatSubscription: IAgentSubscription<ChatState> | undefined,
 		private readonly _forkSession: ((request: IChatSessionRequestHistoryItem | undefined, token: CancellationToken) => Promise<IChatSessionItem>),
 		private readonly _renameSession: ((title: string, token: CancellationToken) => Promise<void>),
 		inputState: ISerializableChatModelInputState | undefined,
@@ -435,6 +438,12 @@ class AgentHostChatSession extends Disposable implements IChatSession {
 		@ILogService private readonly _logService: ILogService,
 	) {
 		super();
+
+		this.setStateSubscriptions(sessionSubscription, chatSubscription);
+		this.isReadOnly = derived(this, reader => {
+			const sessionArchived = Boolean((this._sessionState.read(reader).read(reader)?.status ?? 0) & SessionStatus.IsArchived);
+			return isChatReadOnly(this._chatState.read(reader).read(reader)?.interactivity, sessionArchived);
+		});
 
 		const hasActiveTurn = initialProgress !== undefined;
 		this.transferredState = inputState ? { editingSession: undefined, inputState } : undefined;
@@ -452,6 +461,13 @@ class AgentHostChatSession extends Disposable implements IChatSession {
 
 		this.forkSession = this._forkSession;
 		this.renameSession = this._renameSession;
+	}
+
+	setStateSubscriptions(sessionSubscription: IAgentSubscription<SessionState> | undefined, chatSubscription: IAgentSubscription<ChatState> | undefined): void {
+		transaction(tx => {
+			this._sessionState.set(sessionSubscription ? observableFromSubscription(this, sessionSubscription) : constObservable(undefined), tx);
+			this._chatState.set(chatSubscription ? observableFromSubscription(this, chatSubscription) : constObservable(undefined), tx);
+		});
 	}
 
 	override dispose(): void {
@@ -502,6 +518,8 @@ class AgentHostChatSession extends Disposable implements IChatSession {
 			prompt,
 			variableData,
 			isSystemInitiated: options?.isSystemInitiated,
+			timestamp: options?.timestamp,
+			isTerminalRequest: options?.isTerminalRequest,
 		});
 	}
 }
@@ -576,8 +594,17 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 	private readonly _serverTurnWatchers = this._register(new DisposableResourceMap());
 	/** Historical turns with file edits, pending hydration into the editing session. */
 	private readonly _pendingHistoryTurns = new ResourceMap<readonly Turn[]>();
+	/**
+	 * Per-session set of MCP server ids that already had an authentication
+	 * prompt surfaced in the current conversation. A server is removed from the
+	 * set once it reaches the running state ({@link McpServerStatus.Ready}), so
+	 * that a later auth requirement for the same server prompts again instead of
+	 * the prompt repeating on every message.
+	 */
+	private readonly _surfacedMcpAuthServers = new ResourceMap<Set<string>>();
 	/** Turn IDs dispatched by this client, used to distinguish server-originated turns. */
 	private readonly _clientDispatchedTurnIds = new Set<string>();
+	private readonly _turnStopWatches = new Map<string, StopWatch>();
 	private readonly _config: IAgentHostSessionHandlerConfig;
 
 	/** Active session subscriptions, keyed by backend session URI string. */
@@ -622,6 +649,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		@IAgentHostSessionWorkingDirectoryResolver private readonly _workingDirectoryResolver: IAgentHostSessionWorkingDirectoryResolver,
 		@IAgentHostNewSessionFolderService private readonly _newSessionFolderService: IAgentHostNewSessionFolderService,
 		@IAgentHostUntitledProvisionalSessionService private readonly _provisionalService: IAgentHostUntitledProvisionalSessionService,
+		@IAgentHostImportConversationStore private readonly _importConversationStore: IAgentHostImportConversationStore,
 		@ILanguageModelToolsService private readonly _toolsService: ILanguageModelToolsService,
 		@IChatWidgetService private readonly _chatWidgetService: IChatWidgetService,
 		@ILanguageModelsService private readonly _languageModelsService: ILanguageModelsService,
@@ -629,10 +657,21 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		@IAgentHostActiveClientService private readonly _activeClientService: IAgentHostActiveClientService,
 		@IChatEntitlementService private readonly _chatEntitlementService: IChatEntitlementService,
 		@IWorkspaceTrustRequestService private readonly _workspaceTrustRequestService: IWorkspaceTrustRequestService,
+		@IModelService private readonly _modelService: IModelService,
+		@IWorkingCopyService private readonly _workingCopyService: IWorkingCopyService,
+		@IConfigurationService private readonly _configurationService: IConfigurationService,
 		@IChatResponseFileChangesService private readonly _chatResponseFileChangesService: IChatResponseFileChangesService,
+		@IPathService private readonly _pathService: IPathService,
+		@IRemoteAgentHostService private readonly _remoteAgentHostService: IRemoteAgentHostService,
+		@IAgentHostCustomizationService private readonly _customizationService: IAgentHostCustomizationService,
 	) {
 		super();
 		this._config = config;
+
+		// Drop MCP servers from the per-session surfaced set once they reach the
+		// running state so a later auth requirement for the same server prompts
+		// again.
+		this._register(this._customizationService.onDidChangeCustomizations(() => this._reconcileSurfacedMcpAuthServers()));
 
 		this._register(autorun(reader => {
 			const defs = this._activeClientService.getClientTools(this._config.sessionType).read(reader);
@@ -826,9 +865,12 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		const isNewSession = this._isNewSessionResource(sessionResource);
 		const history: IChatSessionHistoryItem[] = [];
 		let initialProgress: IChatProgress[] | undefined;
+		let initialResponsePartCount = 0;
 		let activeTurnId: string | undefined;
 		let sessionTitle: string | undefined;
 		let draftInputState: ISerializableChatModelInputState | undefined;
+		let sessionSubscription: IAgentSubscription<SessionState> | undefined;
+		let chatSubscription: IAgentSubscription<ChatState> | undefined;
 		// Mark this session as hydrating so that a sibling chat of the same
 		// session closing while we await our subscriptions does not tear down
 		// the shared session subscription (which would strand us forever).
@@ -838,12 +880,19 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			if (!isNewSession) {
 				try {
 					const sub = this._ensureSessionSubscription(resolvedSession.toString());
+					sessionSubscription = sub;
 					// Wait for both the session summary and its default-chat
 					// conversation state to hydrate from the server. After the
 					// multi-chat protocol adoption, turns/activeTurn live on the
 					// separate chat channel, so reading them before the chat
 					// subscription lands would yield an empty history.
 					await this._whenSubscriptionHydrated(sub, token);
+					// A failed subscription surfaces as an `Error` value; rethrow it
+					// so the real reason (e.g. the working directory no longer
+					// exists) is logged and rendered instead of a generic message.
+					if (sub.value instanceof Error) {
+						throw sub.value;
+					}
 					const rawState = this._getRawSessionState(resolvedSession.toString());
 					if (!rawState) {
 						throw new Error(`Session state did not hydrate for ${resolvedSession.toString()}`);
@@ -851,6 +900,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 					chatURI = this._resolveChatUriFromState(sessionResource, rawState);
 					this._setChatURI(sessionResource, chatURI);
 					const chatSub = this._ensureChatSubscription(resolvedSession.toString(), chatURI);
+					chatSubscription = chatSub;
 					await this._whenSubscriptionHydrated(chatSub, token);
 					const sessionState = this._getSessionState(resolvedSession.toString(), chatURI);
 					if (sessionState) {
@@ -862,7 +912,15 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 						}
 						const fallbackRawModelId = lastTurnModelSelection(sessionState)?.id;
 						const lookup = this._createTurnModelLookup(sessionResource, fallbackRawModelId);
-						history.push(...turnsToHistory(resolvedSession, sessionState.turns, this._config.agentId, this._config.connectionAuthority, lookup, this._chatErrorContext()));
+						history.push(...turnsToHistory(
+							resolvedSession,
+							sessionState.turns,
+							this._config.agentId,
+							this._config.connectionAuthority,
+							lookup,
+							this._chatErrorContext(),
+							this._config.connection.initializeResult.get()?.terminalCommandPrefix,
+						));
 
 						// Enrich history with inner tool calls from subagent
 						// child sessions. Subscribes to each child session so
@@ -891,6 +949,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 								prompt: sessionState.activeTurn.message.text,
 								participant: this._config.agentId,
 								modelId: lookup.toLanguageModelId(activeRawModelId),
+								timestamp: parseTimestamp(sessionState.activeTurn.startedAt),
 								variableData: messageToVariableData(sessionState.activeTurn.message, this._config.connectionAuthority),
 								isSystemInitiated: sessionState.activeTurn.message.origin.kind === MessageKind.SystemNotification,
 							});
@@ -900,7 +959,14 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 								participant: this._config.agentId,
 								details: lookup.toResponseDetails(activeRawModelId, sessionState.activeTurn.usage),
 							});
-							initialProgress = activeTurnToProgress(resolvedSession, sessionState.activeTurn, this._config.connectionAuthority);
+							initialProgress = activeTurnToProgress(
+								resolvedSession,
+								sessionState.activeTurn,
+								this._config.connectionAuthority,
+								sessionResource.authority,
+								this._otherClientToolInvocationOptions(resolvedSession, chatURI, sessionState.activeTurn.id),
+							);
+							initialResponsePartCount = sessionState.activeTurn.responseParts.length;
 							// Enrich usage entries with the actual model so the
 							// context-usage widget resolves the right context window
 							// on reconnection (same enrichment as _observeTurn).
@@ -917,6 +983,30 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 					}
 				} catch (err) {
 					this._logService.warn(`[AgentHost] Failed to subscribe to existing session: ${resolvedSession.toString()}`, err);
+					// Surface a hard load failure as a visible chat error instead of
+					// a silently empty session. Only when nothing else rendered, so a
+					// partially-hydrated history isn't clobbered. A bare response is
+					// dropped without a preceding request, so anchor it with a
+					// system-initiated request (renders as a compact notice, not a
+					// user bubble) and attach the error to its response. Prefer the
+					// underlying error message (e.g. the git worktree-recreation
+					// failure) so the user sees the actual cause, falling back to a
+					// generic message.
+					if (history.length === 0) {
+						history.push({
+							type: 'request',
+							prompt: '',
+							participant: this._config.agentId,
+							isSystemInitiated: true,
+							systemInitiatedLabel: localize('agentHost.sessionLoadFailedLabel', "Couldn't open session"),
+						});
+						history.push({
+							type: 'response',
+							parts: [],
+							participant: this._config.agentId,
+							errorDetails: { message: unwrapSessionLoadErrorMessage(err) ?? localize('agentHost.sessionLoadFailed', "This session couldn't be loaded.") },
+						});
+					}
 				}
 			}
 		} finally {
@@ -932,6 +1022,8 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			sessionResource,
 			history,
 			sessionTitle,
+			sessionSubscription,
+			chatSubscription,
 			(request: IChatSessionRequestHistoryItem | undefined, token: CancellationToken) => {
 				if (!this._getSessionState(resolvedSession.toString())) {
 					throw new Error('Cannot fork session before the initial request');
@@ -954,6 +1046,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 				this._draftSyncSubscriptions.deleteAndDispose(sessionResource);
 				this._serverTurnWatchers.deleteAndDispose(sessionResource);
 				this._pendingHistoryTurns.delete(sessionResource);
+				this._surfacedMcpAuthServers.delete(sessionResource);
 				const chatURI = this._chatURIsBySessionResource.get(sessionResource);
 				this._chatURIsBySessionResource.delete(sessionResource);
 				if (chatURI) {
@@ -975,6 +1068,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 				this._config.connection.dispatch(chatURI, {
 					type: ActionType.ChatTurnCancelled,
 					turnId,
+					duration: this._turnDuration(chatURI, turnId),
 				});
 				return true;
 			},
@@ -1011,7 +1105,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			// If reconnecting to an active turn, wire up an ongoing state listener
 			// to stream new progress into the session's progressObs.
 			if (activeTurnId && initialProgress !== undefined) {
-				this._reconnectToActiveTurn(resolvedSession, activeTurnId, session, initialProgress);
+				this._reconnectToActiveTurn(resolvedSession, activeTurnId, session, initialProgress, initialResponsePartCount);
 			}
 
 			// For existing sessions, start watching for server-initiated turns
@@ -1071,67 +1165,130 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			return {};
 		}
 
-		const resolvedSession = this._resolveSessionUri(request.sessionResource);
-		const sessionKey = resolvedSession.toString();
+		// A "Continue in…" migration from a local chat seeds the whole imported
+		// conversation eagerly (CLI spawn, seeding turns) before any turn progress
+		// streams, leaving the widget transiently empty. Only for that migration
+		// case show a shimmering status if the turn is slow to start, cancelled as
+		// soon as real progress streams. Normal agent-host sessions — whose first
+		// turn is also slow to spawn — never flash it.
+		const preparingStatus = new MutableDisposable();
 
-		// The chat-input picker may have pre-created a provisional session
-		// against this resource (`IAgentHostUntitledProvisionalSessionService.getOrCreate`).
-		// In that case the agent already has the session + the user's chip
-		// selections in `state.config.values`; ensure we hold a refcounted
-		// subscription on it so the rest of the handler observes those.
-		const provisionalBackend = this._provisionalService.get(request.sessionResource);
-		if (provisionalBackend) {
-			this._ensureSessionSubscription(sessionKey);
-		}
+		try {
+			const resolvedSession = this._resolveSessionUri(request.sessionResource);
+			const sessionKey = resolvedSession.toString();
 
-		// The sessions provider may have eagerly created this session at
-		// folder-pick time and is holding the connection-level subscription
-		// open with hydrated state. Use the unmanaged accessor to peek
-		// without taking a fresh subscription, which would trigger a
-		// duplicate snapshot fetch and (in tests) unrelated mock behaviour.
-		const existingState = await this._readEagerlyCreatedSessionState(resolvedSession, cancellationToken);
-
-		if (!existingState) {
-			// Eager-create did not produce server-side state (e.g. no
-			// sessions provider involved, agent host not connected at
-			// folder-pick time, or this session was created via a legacy/
-			// test path). Fall back to the original create-then-subscribe
-			// flow.
-			await this._createAndSubscribe(request.sessionResource, this._createModelSelection(request.userSelectedModelId, request.modelConfiguration), undefined, request.agentHostSessionConfig);
-		} else {
-			// Eager-created session: take a refcounted subscription so the
-			// handler observes state changes for the duration of the chat
-			// session, then wire up the per-turn machinery that
-			// `_createAndSubscribe` would normally set up.
-			this._ensureSessionSubscription(sessionKey);
-			this._setChatURI(request.sessionResource, this._resolveChatUriFromState(request.sessionResource, existingState));
-			this._ensurePendingMessageSubscription(request.sessionResource, resolvedSession);
-			this._watchForServerInitiatedTurns(resolvedSession, request.sessionResource);
-
-			// In the Agents window, the sessions provider supplies per-request
-			// config via `request.agentHostSessionConfig` (e.g. the user's
-			// permission level). Push it to the agent so its provisional record
-			// materializes with those values. Workbench defaults (`isolation`,
-			// `autoApprove`) are seeded upstream at provisional `createSession`
-			// time, so we don't need to merge them here. Picker selections
-			// already live in `existingState.config?.values` and don't need to
-			// be re-dispatched.
-			if (request.agentHostSessionConfig && Object.keys(request.agentHostSessionConfig).length > 0) {
-				this._dispatchAction(resolvedSession, {
-					type: ActionType.SessionConfigChanged,
-					config: request.agentHostSessionConfig,
-				});
+			// The chat-input picker may have pre-created a provisional session
+			// against this resource (`IAgentHostUntitledProvisionalSessionService.getOrCreate`).
+			// In that case the agent already has the session + the user's chip
+			// selections in `state.config.values`; ensure we hold a refcounted
+			// subscription on it so the rest of the handler observes those.
+			await raceCancellation(this._provisionalService.waitForPending(request.sessionResource), cancellationToken);
+			if (cancellationToken.isCancellationRequested) {
+				return {};
 			}
+			const provisionalBackend = this._provisionalService.get(request.sessionResource);
+			if (provisionalBackend) {
+				this._ensureSessionSubscription(sessionKey);
+			}
+
+			// The sessions provider may have eagerly created this session at
+			// folder-pick time and is holding the connection-level subscription
+			// open with hydrated state. Use the unmanaged accessor to peek
+			// without taking a fresh subscription, which would trigger a
+			// duplicate snapshot fetch and (in tests) unrelated mock behaviour.
+			const existingState = await this._readEagerlyCreatedSessionState(resolvedSession, cancellationToken);
+			if (cancellationToken.isCancellationRequested) {
+				return {};
+			}
+
+			if (!existingState) {
+				// Eager-create did not produce server-side state (e.g. no
+				// sessions provider involved, agent host not connected at
+				// folder-pick time, or this session was created via a legacy/
+				// test path). Fall back to the original create-then-subscribe
+				// flow.
+				//
+				// If a conversation was imported ("Continue in…") into this
+				// session, seed it as real editable history at creation time.
+				const imported = this._importConversationStore.take(request.sessionResource);
+				if (imported) {
+					// Migration case: materializing the imported conversation is the
+					// slow, visually-blank phase — arm the "Preparing session…" status.
+					preparingStatus.value = disposableTimeout(() => {
+						progress([{ kind: 'progressMessage', content: new MarkdownString(localize('agentHost.preparingSession', "Preparing session…")), shimmer: true }]);
+					}, 500);
+				}
+				const model = imported?.model ?? this._createModelSelection(request.userSelectedModelId, request.modelConfiguration);
+				const initialConfig = {
+					...this._provisionalService.getInitialSessionConfig(),
+					...request.agentHostSessionConfig,
+				};
+				await this._createAndSubscribe(
+					request.sessionResource,
+					model,
+					undefined,
+					Object.keys(initialConfig).length > 0 ? initialConfig : undefined,
+					imported ? { turns: imported.turns, model: imported.model } : undefined,
+				);
+			} else {
+				await this._ensureRequiredAuthentication();
+
+				// Eager-created session: take a refcounted subscription so the
+				// handler observes state changes for the duration of the chat
+				// session, then wire up the per-turn machinery that
+				// `_createAndSubscribe` would normally set up.
+				const sessionSub = this._ensureSessionSubscription(sessionKey);
+				const chatURI = this._resolveChatUriFromState(request.sessionResource, existingState);
+				this._setChatURI(request.sessionResource, chatURI);
+				const chatSub = this._ensureChatSubscription(sessionKey, chatURI);
+				this._activeSessions.get(request.sessionResource)?.setStateSubscriptions(sessionSub, chatSub);
+				this._ensurePendingMessageSubscription(request.sessionResource, resolvedSession);
+				this._watchForServerInitiatedTurns(resolvedSession, request.sessionResource);
+
+				// In the Agents window, the sessions provider supplies per-request
+				// config via `request.agentHostSessionConfig` (e.g. the user's
+				// permission level). Push it to the agent so its provisional record
+				// materializes with those values. Workbench defaults (`isolation`,
+				// `autoApprove`) are seeded upstream at provisional `createSession`
+				// time, so we don't need to merge them here. Picker selections
+				// already live in `existingState.config?.values` and don't need to
+				// be re-dispatched.
+				if (request.agentHostSessionConfig && Object.keys(request.agentHostSessionConfig).length > 0) {
+					this._dispatchAction(resolvedSession, {
+						type: ActionType.SessionConfigChanged,
+						config: request.agentHostSessionConfig,
+					});
+				}
+			}
+
+			// Measure turn timings so the core `interactiveSessionProviderInvoked`
+			// telemetry event is populated for agent-host providers.
+			const stopWatch = StopWatch.create(false);
+			let firstProgress: number | undefined;
+			const measuredProgress = (parts: IChatProgress[]) => {
+				// Real progress has started — cancel the pending "preparing" status.
+				preparingStatus.clear();
+				if (firstProgress === undefined && parts.some(isFirstVisibleProgressPart)) {
+					firstProgress = stopWatch.elapsed();
+				}
+				progress(parts);
+			};
+
+			const completedTurn = await this._handleTurn(resolvedSession, request, measuredProgress, cancellationToken);
+			const details = this._getTurnResponseDetails(request.sessionResource, resolvedSession, completedTurn);
+			const errorDetails = this._getTurnErrorDetails(completedTurn);
+
+			return {
+				timings: { firstProgress, totalElapsed: stopWatch.elapsed() },
+				...(details ? { details } : {}),
+				...(errorDetails ? { errorDetails } : {}),
+			};
+		} finally {
+			// Always cancel the pending "preparing" status — including when an
+			// await above (state read, create/subscribe, turn handling) rejects —
+			// so a stale status can never fire after the invocation has ended.
+			preparingStatus.dispose();
 		}
-
-		const completedTurn = await this._handleTurn(resolvedSession, request, progress, cancellationToken);
-		const details = this._getTurnResponseDetails(request.sessionResource, resolvedSession, completedTurn);
-		const errorDetails = this._getTurnErrorDetails(completedTurn);
-
-		return {
-			...(details ? { details } : {}),
-			...(errorDetails ? { errorDetails } : {}),
-		};
 	}
 
 	/**
@@ -1193,18 +1350,12 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		// (which would leave `onDidChange` silent and hang the await).
 		const pinRef = this._config.connection.getSubscription(StateComponents.Session, resolvedSession, 'AgentHostSessionHandler');
 		try {
-			await new Promise<void>(resolve => {
-				const store = new DisposableStore();
-				const settle = () => {
-					store.dispose();
-					resolve();
-				};
-				store.add(pinRef.object.onDidChange(settle));
-				store.add(token.onCancellationRequested(settle));
-				if (pinRef.object.value !== undefined || token.isCancellationRequested) {
-					settle();
-				}
-			});
+			// Settle on snapshot, error, or cancellation. Listening for the
+			// error transition is essential: a failed subscribe flips the
+			// subscription via `setError`, which fires `onDidError` but NOT
+			// `onDidChange`, so an `onDidChange`-only wait would hang for the
+			// full turn timeout (issue #5242).
+			await this._whenSubscriptionHydrated(pinRef.object, token);
 			const value = pinRef.object.value;
 			this._logService.info(`[AgentHost] _readEagerlyCreatedSessionState: hydrated value=${value === undefined ? 'undefined' : value instanceof Error ? `error(${value.message})` : 'state'} cancelled=${token.isCancellationRequested} for ${resolvedSession.toString()}`);
 			return value instanceof Error ? undefined : value;
@@ -1470,6 +1621,8 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 				messageToVariableData(activeTurn.message, this._config.connectionAuthority),
 				{
 					isSystemInitiated: activeTurn.message.origin.kind === MessageKind.SystemNotification,
+					timestamp: parseTimestamp(activeTurn.startedAt),
+					isTerminalRequest: isTerminalCommandPrompt(activeTurn.message.text, this._config.connection.initializeResult.get()?.terminalCommandPrefix),
 				},
 			);
 
@@ -1507,6 +1660,29 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			cancellationToken: cts.token,
 			onTurnEnded: () => chatSession.isCompleteObs.set(true, undefined),
 		}));
+	}
+
+	private _turnStopWatchKey(chatURI: string, turnId: string): string {
+		return `${chatURI}\0${turnId}`;
+	}
+
+	private _ensureTurnStopWatch(chatURI: string, turnId: string): StopWatch {
+		const key = this._turnStopWatchKey(chatURI, turnId);
+		let stopWatch = this._turnStopWatches.get(key);
+		if (!stopWatch) {
+			stopWatch = StopWatch.create(false);
+			this._turnStopWatches.set(key, stopWatch);
+		}
+		return stopWatch;
+	}
+
+	private _turnDuration(chatURI: string, turnId: string): number {
+		const elapsed = this._turnStopWatches.get(this._turnStopWatchKey(chatURI, turnId))?.elapsed();
+		return typeof elapsed === 'number' && Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
+	}
+
+	private _clearTurnStopWatch(chatURI: string, turnId: string): void {
+		this._turnStopWatches.delete(this._turnStopWatchKey(chatURI, turnId));
 	}
 
 	// ---- Turn handling (state-driven) ---------------------------------------
@@ -1569,17 +1745,21 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			}
 		}
 
+		this._customizationService.prepareMcpServersForTurn(request.sessionResource);
+
 		// Dispatch session/turnStarted — the server will call sendMessage on
 		// the provider as a side effect.
 		const turnAction: ChatTurnStartedAction = {
 			type: ActionType.ChatTurnStarted,
 			turnId,
+			startedAt: new Date().toISOString(),
 			message: {
 				...userOriginMessage(request.message, messageAttachments),
 				...(selectedModel ? { model: selectedModel } : {}),
 				...(requestedAgentUri ? { agent: { uri: requestedAgentUri } } : {}),
 			},
 		};
+		this._ensureTurnStopWatch(turnChannel, turnId);
 		this._config.connection.dispatch(turnChannel, turnAction);
 
 		// Ensure the snapshot controller records a sentinel checkpoint for this
@@ -1601,6 +1781,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 				this._config.connection.dispatch(turnChannel, {
 					type: ActionType.ChatTurnCancelled,
 					turnId,
+					duration: this._turnDuration(turnChannel, turnId),
 				});
 			}));
 
@@ -1640,7 +1821,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		session: URI,
 		turnId: string,
 		cancellationToken: CancellationToken,
-		protocolOptions?: ConfirmationOption[],
+		getProtocolOptions: () => ConfirmationOption[] | undefined,
 		chatURI?: string,
 	): void {
 		IChatToolInvocation.awaitConfirmation(invocation, cancellationToken).then(reason => {
@@ -1648,6 +1829,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			// protocol option so we can forward `selectedOptionId` and
 			// derive approve/deny from the option's kind.
 			let selectedOption: ConfirmationOption | undefined;
+			const protocolOptions = getProtocolOptions();
 			if (reason.type === ToolConfirmKind.UserAction && reason.selectedButton && protocolOptions) {
 				selectedOption = protocolOptions.find(o => o.id === reason.selectedButton);
 			}
@@ -1702,6 +1884,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 	private _observeTurn(opts: IObserveTurnOptions): IDisposable {
 		const sessionKey = opts.backendSession.toString();
 		const store = new DisposableStore();
+		this._ensureTurnStopWatch(opts.chatURI, opts.turnId);
 		// `_ensureSessionSubscription` returns a process-shared, non-refcounted
 		// subscription owned by the chat session lifecycle. Do NOT release it
 		// from here — other callers (the server-turn watcher, reconnect, the
@@ -1714,7 +1897,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		const sessionState$ = observableFromSubscription(this, sub);
 		const chatState$ = observableFromSubscription(this, chatSub);
 		// Merge the session with this resource's chat so conversation contents
-		// (turns, active turn, input requests) are observable from one place.
+		// are observable from one place.
 		const mergedState$ = derived(reader => {
 			const session = sessionState$.read(reader);
 			if (!session) {
@@ -1732,8 +1915,51 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 				: state.turns.find(t => t.id === opts.turnId);
 		});
 		const responseParts$ = derived(reader => turn$.read(reader)?.responseParts ?? []);
-		const inputRequests$ = derived(reader => mergedState$.read(reader)?.inputRequests ?? []);
 		const usage$ = derived(reader => turn$.read(reader)?.usage);
+		store.add(autorun(reader => {
+			const state = mergedState$.read(reader);
+			if (state?.turns.some(turn => turn.id === opts.turnId)) {
+				this._clearTurnStopWatch(opts.chatURI, opts.turnId);
+			}
+		}));
+		const mcpAuthRequired$ = derivedOpts({ equalsFn: equals }, reader => {
+			const state = mergedState$.read(reader);
+			const servers = state?.customizations?.flatMap(c => c.type === CustomizationType.McpServer
+				? [c]
+				: c.children?.filter(c => c.type === CustomizationType.McpServer) ?? []) ?? [];
+			const toolAuthServerIds = new Set(state?.inputNeeded
+				?.filter(request => request.kind === SessionInputRequestKind.ToolAuthentication)
+				.map(request => request.kind === SessionInputRequestKind.ToolAuthentication
+					? request.toolCall.contributor.customizationId
+					: undefined)
+				.filter(id => id !== undefined));
+			const authRequiredServers = servers.filter(server => server.enabled && server.state.kind === McpServerStatus.AuthRequired && !toolAuthServerIds.has(server.id));
+			return authRequiredServers.map((server): IChatMcpAuthenticationRequiredServer => {
+				const state = server.state as McpServerAuthRequiredState;
+				return {
+					id: opts.sessionResource.authority + '/' + server.id,
+					name: server.name,
+					resource: state.resource.resource,
+					oauthClient: state.oauthClient,
+					authorizationServers: state.resource.authorization_servers,
+					supportedScopes: state.resource.scopes_supported,
+					requiredScopes: state.requiredScopes,
+					reason: state.reason,
+				};
+			});
+		});
+		const mcpStarting$ = derivedOpts({ equalsFn: equals }, reader => {
+			const state = mergedState$.read(reader);
+			const servers = state?.customizations?.flatMap(c => c.type === CustomizationType.McpServer
+				? [c]
+				: c.children?.filter(c => c.type === CustomizationType.McpServer) ?? []) ?? [];
+			return servers
+				.filter(server => server.enabled && server.state.kind === McpServerStatus.Starting)
+				.map((server): IChatMcpStartingServer => ({
+					id: opts.sessionResource.authority + '/' + server.id,
+					name: server.name,
+				}));
+		});
 
 		// Subagent observation context: dedups subagent tool calls so each is
 		// observed once.
@@ -1754,7 +1980,9 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 					? `md:${rp.id}`
 					: rp.kind === ResponsePartKind.Reasoning
 						? `rs:${rp.id}`
-						: `other:${responseParts$.get().indexOf(rp)}`,
+						: rp.kind === ResponsePartKind.InputRequest
+							? inputRequestResponsePartKey(rp)
+							: `other:${responseParts$.get().indexOf(rp)}`,
 			(_key, part$, partStore) => {
 				const initial = part$.get();
 				switch (initial.kind) {
@@ -1776,15 +2004,78 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 					case ResponsePartKind.ToolCall:
 						this._setupToolCallPart(part$ as IObservable<ToolCallResponsePart>, partStore, opts, subagentContext);
 						break;
+					case ResponsePartKind.InputRequest:
+						if (opts.subAgentInvocationId === undefined) {
+							this._setupInputRequestPart(part$ as IObservable<InputRequestResponsePart>, partStore, opts);
+						}
+						break;
+					case ResponsePartKind.SystemNotification:
+						// System notifications don't have an id, so we have to identify it by index
+						if (responseParts$.get().indexOf(initial) >= (opts.initialResponsePartCount ?? 0) && opts.subAgentInvocationId === undefined) {
+							const progress = systemNotificationToChatPart(initial.content, this._config.connectionAuthority);
+							if (progress) {
+								opts.sink([progress]);
+							}
+						}
+						break;
 				}
 			},
 		));
 
-		// Per input request carousel. Skipped for subagent observers — input
-		// requests on a subagent session are surfaced through that session's
-		// own view, not the parent.
+		// Per-turn adjuncts skipped for subagent observers.
 		if (opts.subAgentInvocationId === undefined) {
 			let lastUsage: ReturnType<typeof usageInfoToChatUsage>;
+			let lastAutoModeResolution: IChatAutoModeResolutionPart | undefined;
+			const modelLookup = this._createTurnModelLookup(opts.sessionResource, undefined);
+
+			this._setupMcpAuthPrompt(mcpAuthRequired$, store, opts);
+
+			store.add(autorun(reader => {
+				const resolution = modelLookup.toAutoModeResolution?.(usage$.read(reader));
+				if (!resolution || equals(lastAutoModeResolution, resolution)) {
+					return;
+				}
+				lastAutoModeResolution = resolution;
+				opts.sink([resolution]);
+			}));
+
+			// Surface a "Starting MCP servers …" progress hint when servers
+			// remain in the `Starting` state past a short grace period after the
+			// turn begins without any content arriving from the host. The part
+			// updates as servers finish and hides once every server has started,
+			// content starts being received, or the turn ends — whichever comes
+			// first. It carries no interactive affordance (no "Skip").
+			{
+				const MCP_STARTING_GRACE_MS = 5000;
+
+				let didAppend = false;
+				const hasContent$ = responseParts$.map(r => r.length > 0);
+				const hasServersStarting$ = mcpStarting$.map(s => s.length > 0);
+				const serversStartingInput = observableValue('mcpStartingServersInput', constObservable<IChatMcpStartingServer[]>([]));
+
+				store.add(autorun(reader => {
+					if (hasContent$.read(reader) || !hasServersStarting$.read(reader)) {
+						serversStartingInput.set(constObservable([]), undefined);
+						return;
+					}
+
+					reader.store.add(disposableTimeout(() => {
+						serversStartingInput.set(mcpStarting$, undefined);
+						if (!didAppend) {
+							didAppend = true;
+							opts.sink([{
+								kind: 'mcpServersStartingSlow',
+								sessionResource: opts.sessionResource,
+								servers: serversStartingInput.map((o, r) => o.read(r)),
+							}]);
+						}
+
+					}, MCP_STARTING_GRACE_MS));
+				}));
+
+				store.add(toDisposable(() => serversStartingInput.set(constObservable([]), undefined)));
+			}
+
 			store.add(autorun(reader => {
 				const rawUsage = usage$.read(reader);
 				// The parent turn's usage already aggregates the parent agent's
@@ -1840,13 +2131,6 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 				});
 			}));
 
-			store.add(autorunPerKeyedItem(
-				inputRequests$,
-				ir => ir.id,
-				(_id, ir$, irStore) => {
-					this._setupInputRequest(ir$.get(), irStore, opts);
-				},
-			));
 		}
 
 		// For subagent observers: accumulate copilot credits from child turns
@@ -1973,6 +2257,131 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		return store;
 	}
 
+	/**
+	 * Surfaces the "MCP server … requires authentication" prompt for a turn.
+	 *
+	 * Each server is prompted at most once per conversation: {@link mcpAuthRequired$}
+	 * is session-wide, so without this guard the prompt would repeat on every
+	 * message. The per-session {@link _surfacedMcpAuthServers surfaced set} tracks
+	 * which servers were already prompted; it is pruned by
+	 * {@link _reconcileSurfacedMcpAuthServers} once a server reaches the running
+	 * state, so a server that is re-required after being authenticated (e.g.
+	 * after a restart) prompts again.
+	 *
+	 * The emitted part lists only the servers it introduced and shrinks as they
+	 * authenticate.
+	 */
+	private _setupMcpAuthPrompt(
+		mcpAuthRequired$: IObservable<readonly IChatMcpAuthenticationRequiredServer[]>,
+		store: DisposableStore,
+		opts: IObserveTurnOptions,
+	): void {
+		let part: IChatMcpAuthenticationRequired & { servers: ISettableObservable<IChatMcpAuthenticationRequiredServer[]> } | undefined;
+		let ownedIds = new Set<string>();
+		let runId = 0;
+
+		store.add(autorun(reader => {
+			const pendingAuth = mcpAuthRequired$.read(reader);
+			const currentRunId = ++runId;
+			this._filterAutoGrantedMcpAuthentication(opts.sessionResource, pendingAuth).then(servers => {
+				// Ignore stale completions: a newer run has superseded this one
+				// (guards against out-of-order resolution of the async filter).
+				if (currentRunId !== runId) {
+					return;
+				}
+				const surfaced = this._getSurfacedMcpAuthServers(opts.sessionResource);
+				const newServers = servers.filter(server => !surfaced.has(server.id));
+				// Nothing new to prompt and no live prompt to update/hide.
+				if (!newServers.length && (!part || part.isUsed)) {
+					return;
+				}
+				if (!part || part.isUsed) {
+					ownedIds = new Set();
+					part = {
+						kind: 'mcpAuthenticationRequired',
+						sessionResource: opts.sessionResource.toJSON(),
+						isUsed: false,
+						servers: observableValue('mcpAuthNeededServers', []),
+					};
+					opts.sink([part]);
+				}
+				for (const server of newServers) {
+					surfaced.add(server.id);
+					ownedIds.add(server.id);
+				}
+				part.servers.set(servers.filter(server => ownedIds.has(server.id)), undefined);
+			});
+		}));
+	}
+
+	/**
+	 * Returns the mutable set of MCP server ids already surfaced for
+	 * authentication in the given session, creating it on first use.
+	 */
+	private _getSurfacedMcpAuthServers(sessionResource: URI): Set<string> {
+		let surfaced = this._surfacedMcpAuthServers.get(sessionResource);
+		if (!surfaced) {
+			surfaced = new Set<string>();
+			this._surfacedMcpAuthServers.set(sessionResource, surfaced);
+		}
+		return surfaced;
+	}
+
+	/**
+	 * Prunes servers that reached the running ({@link McpServerStatus.Ready})
+	 * state from every session's {@link _surfacedMcpAuthServers surfaced set} so
+	 * a subsequent auth requirement surfaces a fresh prompt instead of being
+	 * suppressed. Only the running state counts as actioned — a server that
+	 * merely left {@link McpServerStatus.AuthRequired} for an error/stopped
+	 * state was not authenticated and stays suppressed.
+	 */
+	private _reconcileSurfacedMcpAuthServers(): void {
+		for (const [sessionResource, surfaced] of this._surfacedMcpAuthServers) {
+			if (surfaced.size === 0) {
+				continue;
+			}
+			const ready = new Set(this._customizationService.getMcpServers(sessionResource)
+				.filter(server => server.status === McpServerStatus.Ready)
+				.map(server => server.id));
+			for (const id of surfaced) {
+				if (ready.has(id)) {
+					surfaced.delete(id);
+				}
+			}
+		}
+	}
+
+	private async _filterAutoGrantedMcpAuthentication(sessionResource: URI, servers: readonly IChatMcpAuthenticationRequiredServer[]): Promise<readonly IChatMcpAuthenticationRequiredServer[]> {
+		const remaining: IChatMcpAuthenticationRequiredServer[] = [];
+		for (const server of servers) {
+			try {
+				const authenticated = await this._instantiationService.invokeFunction(resolveMcpServerAuthentication, {
+					resource: server.resource,
+					resource_name: server.name,
+					authorization_servers: server.authorizationServers ? [...server.authorizationServers] : undefined,
+					scopes_supported: server.supportedScopes ? [...server.supportedScopes] : undefined,
+				}, {
+					allowInteraction: false,
+					logPrefix: '[AgentHost]',
+					mcpServerId: agentHostMcpServerId(sessionResource.authority, server.name, server.resource),
+					mcpServerName: server.name,
+					mcpServerUrl: server.resource,
+					oauthClient: server.oauthClient,
+					scopes: server.requiredScopes ?? [],
+					agentHost: { scheme: sessionResource.scheme, authority: sessionResource.authority },
+					authenticate: request => this._config.connection.authenticate(request),
+				});
+				if (!authenticated) {
+					remaining.push(server);
+				}
+			} catch (err) {
+				this._logService.error(`[AgentHost] Failed to auto-authenticate MCP server '${server.name}'`, err);
+				remaining.push(server);
+			}
+		}
+		return remaining;
+	}
+
 	private _setupMarkdownPart(
 		part$: IObservable<MarkdownResponsePart>,
 		store: DisposableStore,
@@ -1989,7 +2398,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			}
 			const delta = content.substring(lastEmitted);
 			lastEmitted = content.length;
-			opts.sink([{ kind: 'markdownContent', content: rawMarkdownToString(delta, this._config.connectionAuthority) }]);
+			opts.sink([{ kind: 'markdownContent', content: new MarkdownString(delta) }]);
 		}));
 	}
 
@@ -2021,9 +2430,69 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		const contributor = initial.contributor;
 		if (contributor?.kind === ToolCallContributorKind.Client && contributor.clientId === this._config.connection.clientId) {
 			this._setupClientToolCall(initial, part$, store, opts);
+		} else if (contributor?.kind === ToolCallContributorKind.Client) {
+			this._setupOtherClientToolCall(initial, part$, store, opts);
 		} else {
 			this._setupServerToolCall(initial, part$, store, opts, subagentContext);
 		}
+	}
+
+	private _setupOtherClientToolCall(
+		initial: ToolCallState,
+		part$: IObservable<ToolCallResponsePart>,
+		store: DisposableStore,
+		opts: IObserveTurnOptions,
+	): void {
+		const toolCallId = initial.toolCallId;
+		const adopted = opts.adoptInvocations?.get(toolCallId);
+		const invocation = adopted ?? toolCallStateToInvocation(
+			initial,
+			opts.subAgentInvocationId,
+			opts.backendSession,
+			this._config.connectionAuthority,
+			opts.sessionResource.authority,
+			this._otherClientToolInvocationOptions(opts.backendSession, opts.chatURI, opts.turnId),
+		);
+		if (!adopted) {
+			opts.sink([invocation]);
+		}
+
+		store.add(autorun(reader => {
+			const toolCall = part$.read(reader).toolCall;
+			if ((toolCall.status === ToolCallStatus.Completed || toolCall.status === ToolCallStatus.Cancelled) && !IChatToolInvocation.isComplete(invocation)) {
+				const fileEdits = finalizeToolInvocation(invocation, toolCall, opts.backendSession, this._config.connectionAuthority);
+				if (fileEdits.length > 0) {
+					opts.onFileEdits?.(toolCall, fileEdits);
+				}
+			}
+		}));
+
+		store.add(toDisposable(() => {
+			if (!IChatToolInvocation.isComplete(invocation)) {
+				invocation.didExecuteTool(undefined);
+			}
+		}));
+	}
+
+	private _otherClientToolInvocationOptions(backendSession: URI, chatURI: string, turnId: string): IAgentHostToolInvocationOptions {
+		return {
+			currentClientId: this._config.connection.clientId,
+			cancelOtherClientToolCall: toolCall => {
+				this._dispatchAction(backendSession, {
+					type: ActionType.ChatToolCallComplete,
+					turnId,
+					toolCallId: toolCall.toolCallId,
+					result: {
+						success: false,
+						pastTenseMessage: localize('agentHost.otherClientTool.skipped', "Skipped {0}", toolCall.displayName),
+						error: {
+							message: localize('agentHost.otherClientTool.skippedError', "{0} was skipped from another client", toolCall.displayName),
+							code: 'cancelled',
+						},
+					},
+				}, chatURI);
+			},
+		};
 	}
 
 	/**
@@ -2042,30 +2511,52 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		const toolCallId = initial.toolCallId;
 		const subAgentInvocationId = opts.subAgentInvocationId;
 		const adopted = opts.adoptInvocations?.get(toolCallId);
-		let invocation = adopted
-			?? toolCallStateToInvocation(initial, subAgentInvocationId, opts.backendSession, this._config.connectionAuthority);
-		if (!adopted) {
+		let confirmationOptions = initial.status === ToolCallStatus.PendingConfirmation ? initial.options : undefined;
+		// Tools that stream their arguments (reliably: terminal/bash commands)
+		// are first observed in `Streaming`. Represent them with a native
+		// streaming `ChatToolInvocation` and later drive it through
+		// `transitionFromStreaming` (see the autorun below), so a single card
+		// spans the whole lifecycle instead of a settled placeholder plus a
+		// separate confirmation card (#314858).
+		let invocation: ChatToolInvocation;
+		if (adopted) {
+			invocation = adopted;
+		} else if (initial.status === ToolCallStatus.Streaming) {
+			invocation = toolCallStateToStreamingInvocation(initial, subAgentInvocationId);
+			opts.sink([invocation]);
+		} else {
+			invocation = toolCallStateToInvocation(initial, subAgentInvocationId, opts.backendSession, this._config.connectionAuthority, opts.sessionResource.authority);
 			opts.sink([invocation]);
 		}
 
 		const tryObserveSubagent = (tc: ToolCallState) => {
-			// Don't recurse into nested subagents \u2014 legacy behavior was to
-			// only observe the immediate child session, not children of
-			// children.
-			if (subAgentInvocationId !== undefined) {
-				return;
-			}
 			if (subagentContext.observedToolIds.has(toolCallId)) {
 				return;
 			}
-			const subagentContent = (tc.status === ToolCallStatus.Running || tc.status === ToolCallStatus.Completed) ? getToolSubagentContent(tc) : undefined;
-			if (!subagentContent && !isSubagentTool(tc)) {
+			// Only observe a tool once it has started running (or finished).
+			if (tc.status !== ToolCallStatus.Running && tc.status !== ToolCallStatus.Completed) {
 				return;
 			}
-			if (!subagentContent) {
+			// Observe as a subagent if the tool is a known subagent-spawning
+			// tool (from `_meta.toolKind`/name) or already carries a Subagent
+			// content block (older restored snapshots). We deliberately do NOT
+			// *require* the content block: the child chat URI is derived from
+			// the tool call id alone (see `_observeSubagentSession`), so the
+			// block is not needed to subscribe. This keeps observation robust
+			// even when the discovery content block never reaches this chat —
+			// e.g. an agent host that does not route it to the immediate
+			// parent chat of a nested subagent, or a restored snapshot that
+			// predates it. Gating on the block would otherwise leave such a
+			// nested subagent — and any client tools it calls — unobserved,
+			// hanging the session.
+			if (!isSubagentTool(tc) && !getToolSubagentContent(tc)) {
 				return;
 			}
 			subagentContext.observedToolIds.add(toolCallId);
+			if (invocation.toolSpecificData?.kind === 'subagent') {
+				invocation.toolSpecificData.isActive = true;
+				invocation.notifyToolSpecificDataChanged();
+			}
 
 			// Track this subagent's own running credit (AIC) total so it can be
 			// surfaced on the subagent tool's hover and persisted via its
@@ -2092,63 +2583,79 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 				}
 			}));
 
-			this._observeSubagentSession(opts.sessionResource, opts.backendSession, toolCallId, opts.sink, store, subagentContext, perInvocationCredits, perInvocationModel);
+			// Group descendant tool calls under the root subagent so the
+			// renderer nests the whole tree under one container; for the
+			// top-level subagent the root is this tool call itself.
+			const rootInvocationId = subAgentInvocationId ?? toolCallId;
+			const childChatUri = (invocation.toolSpecificData?.kind === 'subagent' && invocation.toolSpecificData.chatResource)
+				|| buildSubagentChatUri(opts.backendSession.toString(), toolCallId);
+			this._observeSubagentSession(opts.sessionResource, opts.backendSession, toolCallId, childChatUri, rootInvocationId, invocation, opts.sink, store, subagentContext, perInvocationCredits, perInvocationModel);
 		};
 
-		// Initial confirmation hookup. The autorun below only handles
-		// *transitions* back into `PendingConfirmation` (server-driven
-		// re-confirmation), not the initial state, because
-		// `toolCallStateToInvocation` already created the invocation in
-		// `WaitingForConfirmation`. Without this explicit call, no listener
-		// would observe the user's confirmation answer.
+		// Hook up a tool first observed after it already entered confirmation.
 		if (initial.status === ToolCallStatus.PendingConfirmation && !IChatToolInvocation.isComplete(invocation)) {
-			this._awaitToolConfirmation(invocation, toolCallId, opts.backendSession, opts.turnId, opts.cancellationToken, initial.options, opts.chatURI);
+			this._awaitToolConfirmation(invocation, toolCallId, opts.backendSession, opts.turnId, opts.cancellationToken, () => confirmationOptions, opts.chatURI);
 		}
 		tryObserveSubagent(initial);
 
-		// Stream subsequent status transitions. Re-confirmation is detected
-		// from a `tc.status` transition (Running → PendingConfirmation), not
-		// from comparing against `invocation.state`: the user's local
-		// confirmation flips `invocation.state` to `Executing` before the
-		// server echoes Running, and a state-comparison check would
-		// spuriously trigger re-confirmation in that gap.
-		let previousStatus: ToolCallStatus | undefined;
+		// Reuse the invocation whenever a tool enters confirmation to avoid duplicate cards.
+		let previousStatus: ToolCallStatus | undefined = initial.status;
 		store.add(autorun(reader => {
 			const tc = part$.read(reader).toolCall;
 			const status = tc.status;
-			const isReconfirmation = previousStatus !== undefined
-				&& previousStatus !== ToolCallStatus.PendingConfirmation
-				&& status === ToolCallStatus.PendingConfirmation;
+			const priorStatus = previousStatus;
+			if (status === ToolCallStatus.PendingConfirmation) {
+				confirmationOptions = tc.options;
+			}
+			const enteringConfirmation = status === ToolCallStatus.PendingConfirmation
+				&& previousStatus !== ToolCallStatus.PendingConfirmation;
 			previousStatus = status;
 
-			if (isReconfirmation) {
-				// Server bounced the call back to PendingConfirmation
-				// (e.g. write confirmation after edit). Settle the old
-				// invocation and replace it with a fresh one carrying the
-				// new confirmation messages.
-				invocation.didExecuteTool(undefined);
-				const confirmInvocation = toolCallStateToInvocation(tc, subAgentInvocationId, opts.backendSession, this._config.connectionAuthority);
-				opts.sink([confirmInvocation]);
-				invocation = confirmInvocation;
-				this._awaitToolConfirmation(confirmInvocation, toolCallId, opts.backendSession, opts.turnId, opts.cancellationToken, tc.options, opts.chatURI);
+			if (enteringConfirmation) {
+				if (!IChatToolInvocation.isComplete(invocation)) {
+					const prepared = toolCallStateToPreparedInvocation(tc, opts.backendSession, this._config.connectionAuthority, opts.sessionResource.authority);
+					invocation.requestConfirmation(prepared);
+					this._awaitToolConfirmation(invocation, toolCallId, opts.backendSession, opts.turnId, opts.cancellationToken, () => confirmationOptions, opts.chatURI);
+				}
+			} else if (status === ToolCallStatus.PendingConfirmation) {
+				invocation.updateConfirmationMessages(toolCallConfirmationMessages(tc, this._config.connectionAuthority));
+			} else if (status === ToolCallStatus.AuthRequired) {
+				this._ensureLeftStreaming(invocation, tc, opts);
+				invocation.setAuthenticationRequired(toolCallAuthenticationServer(tc, opts.sessionResource.authority), () => {
+					this._dispatchAction(opts.backendSession, {
+						type: ActionType.ChatToolCallComplete,
+						turnId: opts.turnId,
+						toolCallId,
+						result: {
+							success: false,
+							pastTenseMessage: localize('agentHost.mcpToolAuthentication.cancelled', "Cancelled tool call"),
+							error: { message: localize('agentHost.mcpToolAuthentication.cancelledError', "MCP authentication was cancelled"), code: 'cancelled' },
+						},
+					}, opts.chatURI);
+				});
 			} else if (status === ToolCallStatus.Running || status === ToolCallStatus.PendingResultConfirmation) {
+				if (priorStatus === ToolCallStatus.AuthRequired) {
+					invocation.setAuthenticationResolved();
+				}
+				this._ensureLeftStreaming(invocation, tc, opts);
 				invocation.invocationMessage = stringOrMarkdownToString(tc.invocationMessage, this._config.connectionAuthority);
 				this._reviveTerminalIfNeeded(invocation, tc, opts.backendSession);
 				updateRunningToolSpecificData(invocation, tc, opts.backendSession, this._config.connectionAuthority);
 			}
 
+			tryObserveSubagent(tc);
+
 			if ((status === ToolCallStatus.Completed || status === ToolCallStatus.Cancelled) && !IChatToolInvocation.isComplete(invocation)) {
 				// Revive terminal before finalizing — handles the case where
 				// Running was skipped (e.g. throttling) and terminal content
 				// only appears at Completed time.
+				this._ensureLeftStreaming(invocation, tc, opts);
 				this._reviveTerminalIfNeeded(invocation, tc, opts.backendSession);
 				const fileEdits = finalizeToolInvocation(invocation, tc, opts.backendSession, this._config.connectionAuthority);
 				if (fileEdits.length > 0) {
 					opts.onFileEdits?.(tc, fileEdits);
 				}
 			}
-
-			tryObserveSubagent(tc);
 		}));
 
 		// If the turn ends with the tool still mid-flight (e.g. external
@@ -2158,6 +2665,19 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 				invocation.didExecuteTool(undefined);
 			}
 		}));
+	}
+
+	/** Transitions an invocation from streaming once its AHP tool call is ready. */
+	private _ensureLeftStreaming(
+		invocation: ChatToolInvocation,
+		tc: ToolCallState,
+		opts: IObserveTurnOptions,
+	): void {
+		if (invocation.state.read(undefined).type !== IChatToolInvocation.StateKind.Streaming) {
+			return;
+		}
+		const prepared = toolCallStateToPreparedInvocation(tc, opts.backendSession, this._config.connectionAuthority, opts.sessionResource.authority);
+		invocation.transitionFromStreaming(prepared, undefined, undefined);
 	}
 
 	/**
@@ -2204,6 +2724,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		const invocation = this._toolsService.beginToolCall({
 			toolCallId,
 			toolId: toolData.id,
+			subagentInvocationId: opts.subAgentInvocationId,
 			sessionResource: opts.sessionResource,
 			force: true,
 		}) as ChatToolInvocation | undefined;
@@ -2312,12 +2833,21 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			if (state.type === IChatToolInvocation.StateKind.WaitingForConfirmation && shouldAutoApproveClientToolCall(tc)) {
 				state.confirm({ type: ToolConfirmKind.Setting, id: SessionConfigKey.AutoApprove });
 			}
-			if (tc.status === ToolCallStatus.Cancelled) {
+			if (tc.status === ToolCallStatus.Cancelled || tc.status === ToolCallStatus.Completed) {
+				// The protocol tool call reached a terminal state. If this was
+				// driven by the server (e.g. the client-tool bridge abandoned the
+				// call because the client was considered disconnected, the turn was
+				// superseded, or a reconnect occurred) while our local `invokeTool`
+				// is still running, cancel it so the tool cleans up (e.g. dismisses a
+				// pending question carousel) instead of blocking forever on an answer
+				// nobody will consume. In the normal path we complete the call
+				// ourselves first, so `invokeTool` has already settled and this
+				// cancellation is a harmless no-op.
 				if (cts.token.isCancellationRequested) {
 					return;
 				}
 				cts.cancel();
-				if (!invoked) {
+				if (!invoked && tc.status === ToolCallStatus.Cancelled) {
 					// No `invokeTool` is listening to the CTS — transition
 					// the invocation to `Cancelled` ourselves.
 					invocation.cancelFromStreaming(ToolConfirmKind.Skipped);
@@ -2368,6 +2898,13 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 				parameters,
 				context: { sessionResource: opts.sessionResource },
 				chatStreamToolCallId: toolCallId,
+				// If the agent host already resolved auto-approval for this call,
+				// pass it through so the invocation transitions straight to
+				// executing instead of briefly flashing a confirmation prompt
+				// (which would flicker "needs input" in the sessions list).
+				preApproved: shouldAutoApproveClientToolCall(tc)
+					? { type: ToolConfirmKind.Setting, id: SessionConfigKey.AutoApprove }
+					: undefined,
 			};
 			const noOpCountTokens = async () => 0;
 			this._logService.info(`[AgentHost] Invoking client tool: ${toolName} (callId=${toolCallId})`);
@@ -2378,127 +2915,52 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		}));
 	}
 
-	private _setupInputRequest(
-		inputReq: ChatInputRequest,
+	private _setupInputRequestPart(
+		part$: IObservable<InputRequestResponsePart>,
 		store: DisposableStore,
 		opts: IObserveTurnOptions,
 	): void {
+		const inputReq = part$.get().request;
 		const planReview = (inputReq as ChatInputRequestWithPlanReview).planReview;
 		if (planReview) {
-			this._setupPlanReviewInputRequest(inputReq, planReview, store, opts);
+			this._setupPlanReviewInputRequest(part$, planReview, store, opts);
 			return;
 		}
 
 		if (inputReq.url) {
-			this._setupUrlInputRequest(inputReq, inputReq.url, store, opts);
+			this._setupUrlInputRequest(part$, inputReq.url, store, opts);
 			return;
 		}
 
-		const questions: IChatQuestion[] = (inputReq.questions ?? []).map((q): IChatQuestion => {
-			let title = q.title;
-			let message = q.message;
-			if (!title) {
-				const EOL = q.message.indexOf('\n');
-				title = EOL === -1 ? q.message : q.message.substring(0, EOL).trim();
-				message = EOL === -1 ? '' : q.message.substring(EOL + 1).trim();
-			}
-			const detailedMessage = new MarkdownString(message, { isTrusted: false });
-
-			switch (q.kind) {
-				case ChatInputQuestionKind.SingleSelect:
-					return {
-						id: q.id,
-						type: 'singleSelect',
-						title,
-						detailedMessage,
-						required: q.required,
-						allowFreeformInput: q.allowFreeformInput ?? true,
-						options: q.options.map(o => ({ id: o.id, label: o.label, value: o.id })),
-					};
-				case ChatInputQuestionKind.MultiSelect:
-					return {
-						id: q.id,
-						type: 'multiSelect',
-						title,
-						detailedMessage,
-						required: q.required,
-						allowFreeformInput: q.allowFreeformInput ?? true,
-						options: q.options.map(o => ({ id: o.id, label: o.label, value: o.id })),
-					};
-				case ChatInputQuestionKind.Text:
-					return {
-						id: q.id,
-						type: 'text',
-						title,
-						detailedMessage,
-						required: q.required,
-						defaultValue: q.defaultValue,
-					};
-				default:
-					return {
-						id: q.id,
-						type: 'text',
-						title,
-						detailedMessage,
-						required: q.required,
-					};
-			}
-		});
-
-		if (questions.length === 0) {
-			// Fallback for input requests with no structured questions —
-			// create a single text question from the message.
-			questions.push({
-				id: 'answer',
-				type: 'text',
-				title: inputReq.message ?? '',
-				required: true,
-			});
-		}
-
-		const carousel = new ChatQuestionCarouselData(
-			questions,
-			/* allowSkip */ true,
-			inputReq.id,
-			/* data */ undefined,
-			/* isUsed */ undefined,
-			/* message */ inputReq.message ? rawMarkdownToString(inputReq.message, this._config.connectionAuthority) : undefined,
-		);
+		const carousel = createInputRequestCarousel(inputReq, this._config.connectionAuthority);
 		opts.sink([carousel]);
 
-		// Track the latest server-known answers — initially what was on the
-		// request when it appeared, then overwritten by `ChatInputCompleted`
-		// when the server applies it. The disposal path uses this to settle
-		// the carousel with the server's authoritative answers.
-		let latestProtocolAnswers: Record<string, ChatInputAnswer> | undefined = inputReq.answers;
-
-		// Capture protocol answers from `ChatInputCompleted` BEFORE the
-		// reducer drops the request from state — by the time disposal runs,
-		// the action payload is no longer reachable. Also overwrite the
-		// carousel's `data` so it reflects the server's authoritative answer
-		// even if the user already locally submitted (mirrors legacy
-		// `_applyCompletedInputRequest` behavior).
-		const sub = this._ensureChatSubscription(opts.backendSession.toString(), opts.chatURI);
-		store.add(sub.onWillApplyAction(envelope => {
-			const action = envelope.action as ChatAction;
-			if (action.type !== ActionType.ChatInputCompleted || action.requestId !== inputReq.id) {
+		let completedFromServer = false;
+		store.add(autorun(reader => {
+			const part = part$.read(reader);
+			if (part.response === undefined) {
 				return;
 			}
-			latestProtocolAnswers = action.response === ChatInputResponseKind.Accept
-				? (action as ChatInputCompletedAction).answers ?? latestProtocolAnswers
+			completedFromServer = true;
+			const protocolAnswers = part.response === ChatInputResponseKind.Accept
+				? part.request.answers
 				: undefined;
-			const carouselAnswers = convertProtocolAnswers(latestProtocolAnswers);
+			const carouselAnswers = convertProtocolAnswers(protocolAnswers);
+			const wasUsed = carousel.isUsed;
 			carousel.data = carouselAnswers ?? {};
+			carousel.isUsed = true;
+			carousel.answeredExternally = part.response === ChatInputResponseKind.Accept && !carouselAnswers;
 			carousel.draftAnswers = undefined;
 			carousel.draftCurrentIndex = undefined;
 			carousel.draftCollapsed = undefined;
+			carousel.completion.complete({ answers: carouselAnswers });
+			if (!wasUsed) {
+				this._chatWidgetService.getWidgetBySessionResource(opts.sessionResource)?.input.clearQuestionCarousel(undefined, inputReq.id);
+			}
 		}));
 
-		// User-driven completion → dispatch `ChatInputCompleted`. The
-		// state echo (handled above) updates the carousel with the server's
-		// authoritative answer afterwards.
 		carousel.completion.p.then(result => {
-			if (store.isDisposed) {
+			if (store.isDisposed || completedFromServer) {
 				return;
 			}
 			if (!result.answers) {
@@ -2508,7 +2970,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 					response: ChatInputResponseKind.Cancel,
 				});
 			} else {
-				const answers = convertCarouselAnswers(result.answers);
+				const answers = convertCarouselAnswers(result.answers, inputReq.questions);
 				this._config.connection.dispatch(opts.chatURI, {
 					type: ActionType.ChatInputCompleted,
 					requestId: inputReq.id,
@@ -2527,45 +2989,28 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			carousel.completion.p.finally(() => tokenListener.dispose());
 		}
 
-		// Disposal: the request was either completed (action seen via
-		// `onWillApplyAction`) or abandoned (turn ended). Settle the
-		// carousel with whatever server answers we last captured and clear
-		// the input UI to mirror legacy `_syncInputRequests` behavior.
 		store.add(toDisposable(() => {
 			if (carousel.isUsed) {
 				return;
 			}
-			const carouselAnswers = convertProtocolAnswers(latestProtocolAnswers);
-			carousel.data = carouselAnswers ?? {};
+			carousel.data = {};
 			carousel.isUsed = true;
 			carousel.draftAnswers = undefined;
 			carousel.draftCurrentIndex = undefined;
 			carousel.draftCollapsed = undefined;
-			carousel.completion.complete({ answers: carouselAnswers });
+			carousel.completion.complete({ answers: undefined });
 			this._chatWidgetService.getWidgetBySessionResource(opts.sessionResource)?.input.clearQuestionCarousel(undefined, inputReq.id);
 		}));
 	}
 
 	private _setupPlanReviewInputRequest(
-		inputReq: ChatInputRequest,
+		part$: IObservable<InputRequestResponsePart>,
 		planReview: IAgentHostPlanReview,
 		store: DisposableStore,
 		opts: IObserveTurnOptions,
 	): void {
-		const review = new ChatPlanReviewData(
-			planReview.title,
-			planReview.content,
-			planReview.actions.map(action => ({
-				id: action.id,
-				label: action.label,
-				...(action.description ? { description: action.description } : {}),
-				...(action.default ? { default: true } : {}),
-				...(action.permissionLevel ? { permissionLevel: action.permissionLevel } : {}),
-			})),
-			planReview.canProvideFeedback,
-			planReview.planUri ? URI.parse(planReview.planUri).toJSON() : undefined,
-			inputReq.id,
-		);
+		const inputReq = part$.get().request;
+		const review = createInputRequestPlanReview(inputReq, planReview);
 		opts.sink([review]);
 
 		let inputCompleted = false;
@@ -2579,14 +3024,13 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			this._chatWidgetService.getWidgetBySessionResource(opts.sessionResource)?.input.clearPlanReview(undefined, inputReq.id);
 		};
 
-		const sub = this._ensureChatSubscription(opts.backendSession.toString(), opts.chatURI);
-		store.add(sub.onWillApplyAction(envelope => {
-			const action = envelope.action as ChatAction;
-			if (action.type !== ActionType.ChatInputCompleted || action.requestId !== inputReq.id) {
+		store.add(autorun(reader => {
+			const part = part$.read(reader);
+			if (part.response === undefined) {
 				return;
 			}
 			inputCompleted = true;
-			latestResult = convertProtocolPlanReviewResult(planReview, action.response, (action as ChatInputCompletedAction).answers);
+			latestResult = convertProtocolPlanReviewResult(planReview, part.response, part.request.answers);
 			review.data = latestResult;
 			review.isUsed = true;
 			review.draftFeedback = undefined;
@@ -2632,7 +3076,6 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		}));
 	}
 
-
 	/**
 	 * Handle a URL-style {@link ChatInputRequest} by rendering a
 	 * {@link ChatElicitationRequestPart} that prompts the user to open the
@@ -2641,17 +3084,19 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 	 * `Decline`; abandonment / cancellation dispatches `Cancel`.
 	 */
 	private _setupUrlInputRequest(
-		inputReq: ChatInputRequest,
+		responsePart$: IObservable<InputRequestResponsePart>,
 		url: string,
 		store: DisposableStore,
 		opts: IObserveTurnOptions,
 	): void {
-		let settled = false;
+		const inputReq = responsePart$.get().request;
+		let completionDispatched = false;
+		let completedFromServer = false;
 		const settle = (response: ChatInputResponseKind) => {
-			if (settled) {
+			if (completionDispatched || completedFromServer) {
 				return;
 			}
-			settled = true;
+			completionDispatched = true;
 			this._config.connection.dispatch(opts.chatURI, {
 				type: ActionType.ChatInputCompleted,
 				requestId: inputReq.id,
@@ -2659,26 +3104,13 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			});
 		};
 
-		let authority = url;
-		try {
-			authority = URI.parse(url).authority || url;
-		} catch {
-			// Fall back to the raw URL string.
-		}
-
-		const message = new MarkdownString();
-		if (inputReq.message) {
-			message.appendText(inputReq.message);
-			message.appendMarkdown('\n\n');
-		}
-		message.appendMarkdown(localize('agentHost.elicit.url.instruction', "Open this URL?"));
-		message.appendCodeblock('', url);
+		const presentation = getUrlInputRequestPresentation(inputReq, url);
 
 		const part = new ChatElicitationRequestPart(
 			localize('agentHost.elicit.url.title', "Authorization Required"),
-			message,
+			presentation.message,
 			'',
-			localize('agentHost.elicit.url.open', "Open {0}", authority),
+			localize('agentHost.elicit.url.open', "Open {0}", presentation.authority),
 			localize('agentHost.elicit.url.cancel', "Cancel"),
 			async () => {
 				try {
@@ -2702,21 +3134,14 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 
 		opts.sink([part]);
 
-		// Server-side completion (e.g. another client answered or the
-		// agent observed completion). Mark settled so disposal doesn't
-		// re-dispatch a Cancel, and hide the part from the UI.
-		const sub = this._ensureChatSubscription(opts.backendSession.toString(), opts.chatURI);
-		store.add(sub.onWillApplyAction(envelope => {
-			const action = envelope.action as ChatAction;
-			if (action.type === ActionType.ChatInputCompleted && action.requestId === inputReq.id) {
-				settled = true;
-				if (action.response === ChatInputResponseKind.Accept) {
-					part.state.set(ElicitationState.Accepted, undefined);
-				} else {
-					part.state.set(ElicitationState.Rejected, undefined);
-				}
-				part.hide();
+		store.add(autorun(reader => {
+			const response = responsePart$.read(reader).response;
+			if (response === undefined) {
+				return;
 			}
+			completedFromServer = true;
+			part.state.set(response === ChatInputResponseKind.Accept ? ElicitationState.Accepted : ElicitationState.Rejected, undefined);
+			part.hide();
 		}));
 
 		if (opts.cancellationToken.isCancellationRequested) {
@@ -2760,32 +3185,53 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		}
 		invocation.presentation = undefined;
 		const toolInput = tc.toolInput;
-		this._ensureTerminalInstance(terminalUri, backendSession).then(sessionId => {
-			const existing = invocation.toolSpecificData?.kind === 'terminal'
-				? invocation.toolSpecificData as IChatTerminalToolInvocationData
-				: undefined;
-
-			// Resolve the terminalCommandId from the AHP command source
-			let terminalCommandId = existing?.terminalCommandId;
-			if (!terminalCommandId) {
-				const source = this._terminalChatService.getAhpCommandSource(sessionId);
-				if (source) {
-					// Use the executing command or the most recent completed command
-					const cmd = source.executingCommandObject ?? source.commands[source.commands.length - 1];
-					terminalCommandId = cmd?.id;
-				}
-			}
-
+		const sessionId = makeAhpTerminalToolSessionId(terminalUri, backendSession);
+		const terminalCommandUri = URI.parse(terminalUri);
+		const terminalInstance = this._ensureTerminalInstance(terminalUri, sessionId);
+		const existing = invocation.toolSpecificData?.kind === 'terminal'
+			? invocation.toolSpecificData as IChatTerminalToolInvocationData
+			: undefined;
+		const identityChanged = !!existing && (
+			existing.commandLine.original !== toolInput
+			|| existing.terminalToolSessionId !== sessionId
+			|| existing.terminalCommandUri?.toString() !== terminalCommandUri.toString()
+		);
+		if (!existing || identityChanged) {
 			invocation.toolSpecificData = {
 				...existing,
 				kind: 'terminal',
 				commandLine: { original: toolInput },
 				language: 'shellscript',
 				terminalToolSessionId: sessionId,
-				terminalCommandUri: URI.parse(terminalUri),
-				terminalCommandId,
+				terminalCommandUri,
+				terminalCommandId: identityChanged ? undefined : existing?.terminalCommandId,
+				terminalCommandOutput: identityChanged ? undefined : existing?.terminalCommandOutput,
+				terminalCommandState: identityChanged ? undefined : existing?.terminalCommandState,
+				terminalTheme: identityChanged ? undefined : existing?.terminalTheme,
 			};
-		});
+			invocation.notifyToolSpecificDataChanged();
+		}
+		const current = invocation.toolSpecificData?.kind === 'terminal'
+			? invocation.toolSpecificData
+			: undefined;
+		if (current?.terminalCommandId) {
+			void terminalInstance.catch(error => this._logService.error(`[AgentHost] Failed to revive terminal '${terminalUri}'`, error));
+			return;
+		}
+		void terminalInstance.then(() => {
+			const current = invocation.toolSpecificData?.kind === 'terminal'
+				? invocation.toolSpecificData
+				: undefined;
+			if (!current || current.terminalToolSessionId !== sessionId || current.terminalCommandId) {
+				return;
+			}
+			const source = this._terminalChatService.getAhpCommandSource(sessionId);
+			const command = source?.executingCommandObject ?? source?.commands[source.commands.length - 1];
+			if (command?.id) {
+				invocation.toolSpecificData = { ...current, terminalCommandId: command.id };
+				invocation.notifyToolSpecificDataChanged();
+			}
+		}, error => this._logService.error(`[AgentHost] Failed to revive terminal '${terminalUri}'`, error));
 	}
 
 	// ---- Subagent child session observation ---------------------------------
@@ -2944,6 +3390,9 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		sessionResource: URI,
 		parentSession: URI,
 		parentToolCallId: string,
+		childChatUri: string,
+		rootInvocationId: string,
+		parentInvocation: ChatToolInvocation,
 		emitProgress: (parts: IChatProgress[]) => void,
 		disposables: DisposableStore,
 		subagentContext: ISubagentContext,
@@ -2951,10 +3400,15 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		perInvocationModel: ISettableObservable<string | undefined>,
 	): void {
 		const parentSessionUri = parentSession.toString();
-		const childChatUri = buildSubagentChatUri(parentSessionUri, parentToolCallId);
 
 		const cts = new CancellationTokenSource();
 		disposables.add(toDisposable(() => cts.dispose(true)));
+		disposables.add(toDisposable(() => {
+			if (parentInvocation.toolSpecificData?.kind === 'subagent' && parentInvocation.toolSpecificData.isActive) {
+				parentInvocation.toolSpecificData.isActive = false;
+				parentInvocation.notifyToolSpecificDataChanged();
+			}
+		}));
 
 		try {
 			const childSub = this._ensureSessionSubscription(parentSessionUri);
@@ -2970,6 +3424,17 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 				}
 				return mergeSessionWithDefaultChat(session, childChatState$.read(reader));
 			});
+			disposables.add(autorun(reader => {
+				const state = childState$.read(reader);
+				if (!state || (!state.activeTurn && state.turns.length === 0)) {
+					return;
+				}
+				const isActive = !!state.activeTurn;
+				if (parentInvocation.toolSpecificData?.kind === 'subagent' && parentInvocation.toolSpecificData.isActive !== isActive) {
+					parentInvocation.toolSpecificData.isActive = isActive;
+					parentInvocation.notifyToolSpecificDataChanged();
+				}
+			}));
 
 			const childTurnIds$ = derived(reader => {
 				const state = childState$.read(reader);
@@ -2995,7 +3460,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 						turnId,
 						sink: emitProgress,
 						cancellationToken: cts.token,
-						subAgentInvocationId: parentToolCallId,
+						subAgentInvocationId: rootInvocationId,
 						subAgentCreditsAccumulator: perInvocationCreditsAccumulator,
 						subAgentModelObservable: perInvocationModel,
 					}));
@@ -3021,6 +3486,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		turnId: string,
 		chatSession: AgentHostChatSession,
 		initialProgress: IChatProgress[],
+		initialResponsePartCount: number,
 	): void {
 		const sessionKey = backendSession.toString();
 		const chatURI = this._getChatURI(chatSession.sessionResource);
@@ -3059,6 +3525,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			cancellationToken: cts.token,
 			adoptInvocations,
 			seedEmittedLengths,
+			initialResponsePartCount,
 			onTurnEnded: () => {
 				chatSession.complete();
 				reconnectStore.dispose();
@@ -3136,18 +3603,14 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 	 * Attaches to an existing server-side terminal via the agent host
 	 * terminal service and registers it with the terminal chat service.
 	 *
-	 * Returns the `terminalToolSessionId` to use for the tool invocation.
+	 * Returns the terminal instance created or reused by the terminal service.
 	 */
-	private async _ensureTerminalInstance(terminalUri: string, backendSession: URI): Promise<string> {
-		const terminalToolSessionId = makeAhpTerminalToolSessionId(terminalUri, backendSession);
-		const parsedUri = URI.parse(terminalUri);
-		await this._agentHostTerminalService.reviveTerminal(
+	private _ensureTerminalInstance(terminalUri: string, terminalToolSessionId: string): Promise<ITerminalInstance> {
+		return this._agentHostTerminalService.reviveTerminal(
 			this._config.connection,
-			parsedUri,
+			URI.parse(terminalUri),
 			terminalToolSessionId
 		);
-
-		return terminalToolSessionId;
 	}
 
 	/** Maps a UI session resource to a backend provider URI. */
@@ -3225,16 +3688,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		};
 	}
 
-	/** Creates a new backend session and subscribes to its state. */
-	private async _createAndSubscribe(sessionResource: URI, model: ModelSelection | undefined, fork?: { session: URI; turnIndex: number; turnId: string }, config?: Record<string, unknown>): Promise<URI> {
-		const workingDirectory = this._resolveRequestedWorkingDirectory(sessionResource);
-		const requestedSession = fork ? undefined : this._resolveSessionUri(sessionResource);
-
-		this._logService.trace(`[AgentHost] Creating new session, model=${model?.id ?? '(default)'}, provider=${this._config.provider}${fork ? `, fork from ${fork.session.toString()} at index ${fork.turnIndex}` : ''}`);
-
-		// Eagerly authenticate before creating the session if the agent
-		// declares required protected resources. This avoids a wasted
-		// round-trip where createSession fails with AuthRequired.
+	private async _ensureRequiredAuthentication(): Promise<ProtectedResourceMetadata[]> {
 		const agentInfo = this._getRootState()?.agents.find(a => a.provider === this._config.provider);
 		const protectedResources = agentInfo?.protectedResources ?? [];
 		const hasRequiredAuth = protectedResources.some(r => r.required !== false);
@@ -3244,8 +3698,25 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 				throw new Error(localize('agentHost.authRequired', "Authentication is required to start a session. Please sign in and try again."));
 			}
 		}
+		return protectedResources;
+	}
+
+	/** Creates a new backend session and subscribes to its state. */
+	private async _createAndSubscribe(sessionResource: URI, model: ModelSelection | undefined, fork?: { session: URI; turnIndex: number; turnId: string }, config?: Record<string, unknown>, importConversation?: { readonly turns: readonly Turn[]; readonly model?: ModelSelection }): Promise<URI> {
+		const workingDirectory = this._resolveRequestedWorkingDirectory(sessionResource);
+		const requestedSession = fork ? undefined : this._resolveSessionUri(sessionResource);
+
+		this._logService.trace(`[AgentHost] Creating new session, model=${model?.id ?? '(default)'}, provider=${this._config.provider}${fork ? `, fork from ${fork.session.toString()} at index ${fork.turnIndex}` : ''}`);
+
+		const protectedResources = await this._ensureRequiredAuthentication();
 
 		const activeClient = this._getCurrentActiveClient();
+
+		// Opt in to bring-up progress (chiefly the lazy first-use SDK download)
+		// so the editor window surfaces the same download notification the
+		// Agents window does. The host echoes the download's own identity on
+		// each frame; this token only records interest.
+		const progressToken = generateUuid();
 
 		let session: URI;
 		try {
@@ -3256,7 +3727,9 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 				workingDirectory,
 				fork,
 				config,
+				importConversation,
 				activeClient,
+				progressToken,
 			});
 		} catch (err) {
 			// If authentication is required (e.g. token expired), try interactive auth and retry once
@@ -3271,7 +3744,9 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 						workingDirectory,
 						fork,
 						config,
+						importConversation,
 						activeClient,
+						progressToken,
 					});
 				} else {
 					throw new Error(localize('agentHost.authRequired', "Authentication is required to start a session. Please sign in and try again."));
@@ -3290,25 +3765,25 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		// Subscribe to the new session's state
 		const newSub = this._ensureSessionSubscription(session.toString());
 		if (!this._getSessionState(session.toString())) {
-			// Wait for the subscription to hydrate. Attach the listener
-			// before re-checking the value to close a race where another
-			// consumer (e.g. the chat-input picker) acquires the same
-			// subscription concurrently and triggers `handleSnapshot`
-			// between our `_getSessionState` check and the listener
-			// attachment.
-			await new Promise<void>(resolve => {
-				const d = newSub.onDidChange(() => { d.dispose(); resolve(); });
-				if (this._getSessionState(session.toString())) {
-					d.dispose();
-					resolve();
-				}
-			});
+			// Wait for the subscription to hydrate. `_whenSubscriptionHydrated`
+			// settles on snapshot, error, or cancellation and attaches its
+			// listeners before re-checking the value, closing the race where a
+			// concurrent consumer (e.g. the chat-input picker) hydrates the
+			// subscription between our check and the listener attachment. It
+			// also settles on `onDidError` — a failed subscribe flips the
+			// subscription via `setError`, which fires `onDidError` but NOT
+			// `onDidChange`, so an `onDidChange`-only wait would hang for the
+			// full turn timeout (issue #5242).
+			await this._whenSubscriptionHydrated(newSub, CancellationToken.None);
 		}
 
 		const rawState = this._requireRawSessionState(session.toString());
 		const chatURI = this._resolveChatUriFromState(sessionResource, rawState);
 		this._setChatURI(sessionResource, chatURI);
-		this._ensureChatSubscription(session.toString(), chatURI);
+		const chatSub = this._ensureChatSubscription(session.toString(), chatURI);
+		if (!fork) {
+			this._activeSessions.get(sessionResource)?.setStateSubscriptions(newSub, chatSub);
+		}
 
 		// Start syncing the chat model's pending requests to the protocol
 		this._ensurePendingMessageSubscription(sessionResource, session);
@@ -3562,6 +4037,12 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 				const billedModelId = resolved && !resolved.resolvedFromRaw ? rawModelId : undefined;
 				return formatTurnResponseDetails(resolved?.model, billedModelId, usage);
 			},
+			toAutoModeResolution: usage => {
+				const resolution = readUsageInfoMeta(usage).autoModeResolved;
+				const resolved = resolution ? lookupModel(resolution.chosenModel) : undefined;
+				const resolvedModelName = resolved?.resolvedFromRaw ? resolved.model.name : undefined;
+				return usageInfoToAutoModeResolution(usage, resolvedModelName);
+			},
 		};
 	}
 
@@ -3596,7 +4077,167 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 	}
 
 	private _convertVariablesToAttachments(request: IChatAgentRequest): MessageAttachment[] {
-		return this._variableEntriesToAttachments(request.variables.variables, request.sessionResource, request.message);
+		const attachments = this._variableEntriesToAttachments(request.variables.variables, request.sessionResource, request.message);
+		const explicitCount = attachments.length;
+		this._appendActiveEditorAttachments(attachments, request);
+		if (attachments.length !== explicitCount) {
+			this._logService.trace(`[AgentHost] Forwarded ${attachments.length - explicitCount} active editor attachment(s); ${attachments.length} total`);
+		}
+		return attachments;
+	}
+
+	/**
+	 * Forward the active editor (which the suggested-context flow omits in agent mode) as ambient context, deduped
+	 * against files the user attached explicitly. Gated on
+	 * {@link ChatConfiguration.ImplicitContextActiveEditor} (on by default, off in the Agents window).
+	 * Unsaved handling lives in {@link _convertVariableToAttachment}.
+	 */
+	private _appendActiveEditorAttachments(attachments: MessageAttachment[], request: IChatAgentRequest): void {
+		if (!this._configurationService.getValue<boolean>(ChatConfiguration.ImplicitContextActiveEditor)) {
+			return;
+		}
+		const implicitContext = this._chatWidgetService.getWidgetBySessionResource(request.sessionResource)?.input.implicitContext;
+		if (!implicitContext) {
+			return;
+		}
+		// Key on source entries (not produced attachments) so inlined unsaved buffers (no URI) still dedupe.
+		const existingKeys = new Set<string>();
+		for (const v of request.variables.variables) {
+			const key = this._fileEntryDedupeKey(v, request.sessionResource);
+			if (key) {
+				existingKeys.add(key);
+			}
+		}
+		// Backends that read files from disk can't see an untitled buffer, so don't forward it as a
+		// broken path unless we inline its live text below.
+		const skipUntitled = !this._backendInlinesUnsavedEditors();
+		for (const entry of implicitContext.values) {
+			if (entry.value === undefined) {
+				continue;
+			}
+			if (skipUntitled && entry.uri?.scheme === Schemas.untitled) {
+				continue;
+			}
+			const key = this._fileEntryDedupeKey(entry, request.sessionResource);
+			if (key) {
+				if (existingKeys.has(key)) {
+					continue;
+				}
+				existingKeys.add(key);
+			}
+			const attachment = this._convertVariableToAttachment(entry, request.sessionResource, request.message);
+			if (!Array.isArray(attachment) && attachment) {
+				attachments.push(attachment);
+			}
+		}
+	}
+
+	/** Dedupe identity for a file/implicit entry: rebased URI, suffixed with the range for a selection. */
+	private _fileEntryDedupeKey(entry: IChatRequestVariableEntry, sessionResource: URI): string | undefined {
+		if (entry.kind !== 'file' && entry.kind !== 'implicit') {
+			return undefined;
+		}
+		const value = entry.value;
+		const uri = isLocation(value) ? value.uri : (value instanceof URI ? value : undefined);
+		if (!uri) {
+			return undefined;
+		}
+		const selection = this._entrySelection(entry);
+		return this._attachmentDedupeKey(this._rebaseAttachmentUri(uri, sessionResource).toString(), selection);
+	}
+
+	/** The selection range carried by a file/implicit entry, or `undefined` for whole-document references. */
+	private _entrySelection(entry: IChatRequestVariableEntry): MessageEmbeddedResourceAttachment['selection'] {
+		const location = this._entrySelectionLocation(entry);
+		return location ? { range: this._toTextRange(location.range) } : undefined;
+	}
+
+	/** Dedupe identity: the bare URI for a whole document, suffixed with the range for a selection. */
+	private _attachmentDedupeKey(uri: string, selection?: MessageResourceAttachment['selection']): string {
+		if (!selection) {
+			return uri;
+		}
+		const { start, end } = selection.range;
+		return `${uri}#${start.line}:${start.character}-${end.line}:${end.character}`;
+	}
+
+	/**
+	 * Whether this backend reads referenced files from disk (rather than seeing the editor's
+	 * in-memory buffer) and therefore needs the live text of an unsaved / dirty editor inlined as
+	 * an embedded resource. Copilot CLI and Codex both run as separate processes with only disk
+	 * access, so a `@path` mention (or an `untitled:` URI) would give them stale or missing content.
+	 */
+	private _backendInlinesUnsavedEditors(): boolean {
+		return this._config.provider === SessionType.CopilotCLI || this._config.provider === CODEX_AGENT_PROVIDER_ID;
+	}
+
+	/** A resource is unsaved when it's untitled or a saved file with in-memory (dirty) changes. */
+	private _isUnsavedResource(uri: URI): boolean {
+		return uri.scheme === Schemas.untitled || this._workingCopyService.isDirty(uri);
+	}
+
+	/**
+	 * Inline the live (in-memory) text of an unsaved editor as an embedded resource so a path-reading backend still
+	 * gets current content, preserving the entry's selection, range and `_meta`. Selection entries inline only the
+	 * selected text; whole-document entries inline the full buffer. Returns `undefined` when no loaded text model is
+	 * available or the inlined text exceeds {@link MAX_INLINED_UNSAVED_EDITOR_BYTES}.
+	 */
+	private _buildUnsavedEditorAttachment(uri: URI, v: IChatRequestVariableEntry, range: MessageAttachment['range']): MessageAttachment | undefined {
+		const model = this._modelService.getModel(uri);
+		if (!model) {
+			return undefined;
+		}
+		const text = this._getUnsavedEditorAttachmentText(model, this._entryModelSelectionRange(v));
+		const buffer = text === undefined ? undefined : VSBuffer.fromString(text);
+		if (!buffer || buffer.byteLength > MAX_INLINED_UNSAVED_EDITOR_BYTES) {
+			this._logService.trace(`[AgentHost] Skipping inline of unsaved editor ${uri.toString()}: exceeds ${MAX_INLINED_UNSAVED_EDITOR_BYTES} byte cap`);
+			return undefined;
+		}
+		const selection = this._entrySelection(v);
+		const attachment: MessageEmbeddedResourceAttachment = {
+			type: MessageAttachmentKind.EmbeddedResource,
+			label: v.name,
+			displayKind: selection ? 'selection' : 'document',
+			data: encodeBase64(buffer),
+			contentType: 'text/plain',
+		};
+		if (selection) {
+			attachment.selection = selection;
+		}
+		if (range) {
+			attachment.range = range;
+		}
+		if (v._meta) {
+			attachment._meta = v._meta;
+		}
+		return attachment;
+	}
+
+	/**
+	 * The inline text to send for an unsaved editor: the selected text for a selection, else the whole buffer. Uses the
+	 * model length APIs so an over-cap buffer is skipped (returns `undefined`) without ever being materialized.
+	 */
+	private _getUnsavedEditorAttachmentText(model: ITextModel, range: IRange | undefined): string | undefined {
+		if (range) {
+			const selection = model.validateRange(range);
+			const selectionLength = model.getValueLengthInRange(selection);
+			if (selectionLength > 0) {
+				return selectionLength > MAX_INLINED_UNSAVED_EDITOR_BYTES ? undefined : model.getValueInRange(selection);
+			}
+		}
+		return model.getValueLength() > MAX_INLINED_UNSAVED_EDITOR_BYTES ? undefined : model.getValue();
+	}
+
+	/** The editor range of a file/implicit selection entry, used to slice the live model; `undefined` otherwise. */
+	private _entryModelSelectionRange(entry: IChatRequestVariableEntry): IRange | undefined {
+		return this._entrySelectionLocation(entry)?.range;
+	}
+
+	/** The {@link Location} of a file/implicit entry that represents a selection, or `undefined` for whole documents. */
+	private _entrySelectionLocation(entry: IChatRequestVariableEntry): Location | undefined {
+		const value = entry.value;
+		const isSelectionEntry = (entry.kind === 'file' || (entry.kind === 'implicit' && entry.isSelection)) && isLocation(value);
+		return isSelectionEntry ? value as Location : undefined;
 	}
 
 	private _variableEntriesToAttachments(variables: readonly IChatRequestVariableEntry[], sessionResource: URI, messageText?: string): MessageAttachment[] {
@@ -3610,19 +4251,32 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			}
 		}
 		if (attachments.length > 0) {
-			this._logService.trace(`[AgentHost] Converted ${attachments.length} attachments from ${variables.length} variables`);
+			this._logService.trace(`[AgentHost] Converted ${attachments.length} attachments from ${variables.length} explicit variables`);
 		}
 		return attachments;
 	}
 
 	private _convertVariableToAttachment(v: IChatRequestVariableEntry, sessionResource: URI, messageText?: string): MessageAttachment | MessageAttachment[] | undefined {
 		const referenceRange = this._toAttachmentReferenceRange(messageText, v.range);
-		// File / implicit attachments: a Location → selection, a URI → resource.
-		// Only the selection variant of an implicit attachment becomes a
-		// `selection`; the bare visible-document case stays a plain file
-		// reference (or, when there's no value at all, gets dropped).
+		// Copilot CLI and Codex can't read unsaved content from disk, so inline the live buffer; drop unreadable schemes.
+		if ((v.kind === 'file' || v.kind === 'implicit') && this._backendInlinesUnsavedEditors()) {
+			const uri = isLocation(v.value) ? v.value.uri : (v.value instanceof URI ? v.value : undefined);
+			if (uri && this._isUnsavedResource(uri)) {
+				const embedded = this._buildUnsavedEditorAttachment(uri, v, referenceRange);
+				if (embedded) {
+					return embedded;
+				}
+				if (uri.scheme !== Schemas.file) {
+					return undefined;
+				}
+			}
+		}
+		// File/implicit: a selection Location → 'selection'; a whole document/URI → 'document' (range dropped).
 		if ((v.kind === 'file' || (v.kind === 'implicit' && v.isSelection)) && isLocation(v.value)) {
 			return this._toSelectionAttachment(v.value, v.name, 'selection', sessionResource, v._meta, referenceRange);
+		}
+		if (v.kind === 'implicit' && isLocation(v.value)) {
+			return this._toResourceAttachment(v.value.uri, v.name, 'document', sessionResource, v._meta, referenceRange);
 		}
 		if ((v.kind === 'file' || v.kind === 'implicit') && v.value instanceof URI) {
 			return this._toResourceAttachment(v.value, v.name, 'document', sessionResource, v._meta, referenceRange);
@@ -3646,6 +4300,28 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		if (isAgentFeedbackVariableEntry(v)) {
 			return this._toAgentFeedbackAttachment(v);
 		}
+		if (v.kind === 'sessionReference' && v.value instanceof URI) {
+			const trajectoryPath = this._toSessionReferenceTrajectoryPath(v.value);
+			if (!trajectoryPath) {
+				return undefined;
+			}
+			return this._toSessionReferenceAttachments(v, v.value, trajectoryPath, referenceRange);
+		}
+		// Browser views are live pages rather than filesystem resources. Preserve
+		// the page ID as model-readable context so the agent can address the page
+		// with browser tools without trying to read the vscode-browser URI.
+		if (isBrowserViewVariableEntry(v)) {
+			return this._toSimpleAttachment(
+				v.name,
+				v.modelDescription ?? `Browser page: ${v.name}. The pageId is "${v.browserId}".`,
+				{
+					...v._meta,
+					[BrowserViewAttachmentMetadataKey]: { browserId: v.browserId, browserUri: v.value.toString() },
+				},
+				BrowserViewAttachmentDisplayKind,
+				referenceRange,
+			);
+		}
 		// Pasted code, prompt text, workspace context, and free-form string entries: surface their
 		// textual representation as an opaque attachment.
 		if (v.kind === 'paste') {
@@ -3655,7 +4331,7 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			return this._toSimpleAttachment(v.name, v.value, v._meta, undefined, referenceRange);
 		}
 		if (v.kind === 'workspace') {
-			return this._toSimpleAttachment(v.name, v.value, v._meta, undefined, referenceRange);
+			return this._toSimpleAttachment(v.name, v.value, v._meta, 'workspace', referenceRange);
 		}
 		if (v.kind === 'string' && typeof v.value === 'string') {
 			return this._toSimpleAttachment(v.name, v.value, v._meta, undefined, referenceRange);
@@ -3668,6 +4344,43 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			return this._toSimpleAttachment(v.name, undefined, v._meta, 'skill', referenceRange);
 		}
 		return undefined;
+	}
+
+	private _toSessionReferenceAttachment(v: IChatRequestVariableEntry, sessionResource: URI, trajectoryPath: string, range?: MessageAttachment['range']): MessageAttachment {
+		return this._toSimpleAttachment(
+			v.name,
+			toSessionReferenceModelRepresentation(v.name, sessionResource, trajectoryPath),
+			{ ...(v._meta ?? {}), ...toSessionReferenceAttachmentMeta(sessionResource) },
+			AgentHostSessionReferenceAttachmentDisplayKind,
+			range
+		);
+	}
+
+	private _toSessionReferenceAttachments(v: IChatRequestVariableEntry, sessionResource: URI, trajectoryPath: string, range?: MessageAttachment['range']): MessageAttachment[] {
+		return [
+			this._toSessionReferenceAttachment(v, sessionResource, trajectoryPath, range),
+			this._toSessionReferenceTrajectoryAttachment(v, sessionResource, trajectoryPath),
+		];
+	}
+
+	private _toSessionReferenceTrajectoryAttachment(v: IChatRequestVariableEntry, sessionResource: URI, trajectoryPath: string): MessageAttachment {
+		return {
+			type: MessageAttachmentKind.Resource,
+			uri: URI.file(trajectoryPath).toString(),
+			label: `${v.name} trajectory`,
+			displayKind: AgentHostSessionReferenceTrajectoryAttachmentDisplayKind,
+			_meta: { ...(v._meta ?? {}), ...toSessionReferenceAttachmentMeta(sessionResource) },
+		};
+	}
+
+	private _toSessionReferenceTrajectoryPath(sessionResource: URI): string | undefined {
+		// TODO: Support non-Copilot-CLI session references through IChatModel or a first-class AHP attachment path.
+		// TODO: Support full EH-to-AH session porting for continue/resume flows.
+		return buildHostLocalEventsPath(
+			sessionResource,
+			this._pathService.userHome({ preferLocal: true }),
+			authority => this._remoteAgentHostService.connections.find(connection => agentHostAuthority(connection.address) === authority),
+		);
 	}
 
 	private _toResourceAttachment(uri: URI, label: string, displayKind: string, sessionResource: URI, _meta: Record<string, unknown> | undefined, range?: MessageAttachment['range']): MessageAttachment | undefined {
@@ -4070,6 +4783,10 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 		return chatUri === this._requireDefaultChatUri(sessionUri)
 			? this._ensureDefaultChatSubscription(sessionUri)
 			: this._ensureAdditionalChatSubscription(chatUri);
+	}
+
+	resolveChatResponseUri(_sessionResource: URI, href: string, _kind: 'link' | 'image'): string {
+		return rewriteAgentHostLinkTarget(href, this._config.connectionAuthority);
 	}
 
 	/**

@@ -28,6 +28,10 @@ fsevents/test/**
 @vscode/deviceid/*.yml
 !@vscode/deviceid/build/Release/*.node
 
+@vscode/fs-copyfile/binding.gyp
+@vscode/fs-copyfile/build/**
+@vscode/fs-copyfile/src/**
+!@vscode/fs-copyfile/build/Release/*.node
 
 @vscode/sqlite3/binding.gyp
 @vscode/sqlite3/benchmark/**
@@ -175,6 +179,9 @@ prebuild-install/**/*
 **/test/**
 **/tests/**
 
+# Signing artifacts
+**/_manifest/**
+
 **/History.md
 **/CHANGELOG.md
 **/README.md
@@ -214,6 +221,14 @@ zone.js/dist/**
 @xterm/xterm-addon-*/out/**
 @xterm/xterm-addon-*/out-test/**
 
+# @vscode/os-proxy-resolver platform binaries - selected target is re-added during packaging
+@vscode/os-proxy-resolver-darwin-arm64/**
+@vscode/os-proxy-resolver-darwin-x64/**
+@vscode/os-proxy-resolver-linux-arm-gnueabihf/**
+@vscode/os-proxy-resolver-linux-arm64-gnu/**
+@vscode/os-proxy-resolver-linux-x64-gnu/**
+@vscode/os-proxy-resolver-win32-arm64-msvc/**
+@vscode/os-proxy-resolver-win32-x64-msvc/**
 # es5-ext is quarantined protestware (sonatype-2022-2248). It is only consumed
 # in websocket's browser.js inside a try/catch with a globalThis fallback,
 # so it is unnecessary in the browsers/runtimes VS Code supports.

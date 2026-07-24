@@ -75,7 +75,7 @@ function inputRequested(): StateAction {
 
 /** A completion trigger, optionally carrying `_meta` subagent attribution (how a subagent completion reaches us). */
 function turnComplete(meta?: Record<string, unknown>): StateAction {
-	return { type: ActionType.ChatTurnComplete, turnId: 'turn-1', _meta: meta };
+	return { type: ActionType.ChatTurnComplete, turnId: 'turn-1', duration: 1000, _meta: meta };
 }
 
 /** The live-badge state a rendered row carries: its badge chip's kind, or `null` when none is present. */

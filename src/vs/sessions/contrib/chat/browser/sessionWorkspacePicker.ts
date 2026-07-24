@@ -10,7 +10,7 @@ import { IAction, toAction } from '../../../../base/common/actions.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { disposableTimeout } from '../../../../base/common/async.js';
-import { Disposable, DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
+import { Disposable, DisposableStore, IDisposable, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { URI, UriComponents } from '../../../../base/common/uri.js';
 import { basename } from '../../../../base/common/resources.js';
 import { autorun } from '../../../../base/common/observable.js';
@@ -126,6 +126,7 @@ export class WorkspacePicker extends Disposable {
 
 	private _selectedFolderUri: URI | undefined;
 	private _selectedResolved: IResolvedFolderWorkspace | undefined;
+	private _selectionGeneration = 0;
 
 	/**
 	 * Set to `true` once the user has explicitly picked or cleared a workspace.
@@ -143,7 +144,14 @@ export class WorkspacePicker extends Disposable {
 	 */
 	private readonly _connectionStatusWatch = this._register(new MutableDisposable());
 
+	/**
+	 * "Primary" trigger. This is the most recently created entry. Preserved for subclass
+	 * read access (e.g. {@link WebWorkspacePicker} anchors its mobile sheet here) and for
+	 * {@link showPicker} calls that do not supply an anchor.
+	 */
 	protected _triggerElement: HTMLElement | undefined;
+	/** All live trigger elements. Label updates fan out to every entry. */
+	private readonly _triggerElements = new Set<HTMLElement>();
 	private readonly _renderDisposables = this._register(new DisposableStore());
 	private readonly _tabbedWidget: TabbedActionListWidget;
 	private readonly _pickerGroupContext: IContextKey<string>;
@@ -266,51 +274,83 @@ export class WorkspacePicker extends Disposable {
 	/**
 	 * Renders the project picker trigger button into the given container.
 	 * Returns the container element.
+	 *
+	 * Calling it again replaces the trigger created by the previous
+	 * {@link render} call.
 	 */
 	render(container: HTMLElement): HTMLElement {
 		this._renderDisposables.clear();
 
 		const slot = dom.append(container, dom.$('.sessions-chat-picker-slot.sessions-chat-workspace-picker'));
 		this._renderDisposables.add({ dispose: () => slot.remove() });
-		const trigger = dom.append(slot, dom.$('a.action-label'));
-		trigger.tabIndex = 0;
-		trigger.role = 'button';
-		trigger.setAttribute('aria-haspopup', 'listbox');
-		trigger.setAttribute('aria-expanded', 'false');
-		this._triggerElement = trigger;
-		// Onboarding spotlight target — id is referenced by the "new session" tour
-		// in vs/sessions/contrib/onboardingTours.
-		this._renderDisposables.add(markOnboardingTarget(trigger, 'sessions.newSession.workspacePicker'));
-
-		this._updateTriggerLabel();
-
-		this._renderDisposables.add(touch.Gesture.addTarget(trigger));
-		[dom.EventType.CLICK, touch.EventType.Tap].forEach(eventType => {
-			this._renderDisposables.add(dom.addDisposableListener(trigger, eventType, (e) => {
-				dom.EventHelper.stop(e, true);
-				this.showPicker();
-			}));
-		});
-
-		this._renderDisposables.add(dom.addDisposableListener(trigger, dom.EventType.KEY_DOWN, (e) => {
-			if (e.key === 'Enter' || e.key === ' ') {
-				dom.EventHelper.stop(e, true);
-				this.showPicker();
-			}
-		}));
+		this._renderDisposables.add(this._addTrigger(slot));
 
 		return slot;
 	}
 
 	/**
-	 * Shows the workspace picker dropdown anchored to the trigger element.
+	 * Shared trigger-creation core for {@link render}. Wires up the click /
+	 * keyboard / touch handlers and the per-trigger lifecycle.
+	 */
+	private _addTrigger(slot: HTMLElement): IDisposable {
+		const triggerDisposables = new DisposableStore();
+
+		const trigger = dom.append(slot, dom.$('a.action-label'));
+		trigger.tabIndex = 0;
+		trigger.role = 'button';
+		trigger.setAttribute('aria-haspopup', 'listbox');
+		trigger.setAttribute('aria-expanded', 'false');
+
+		this._triggerElements.add(trigger);
+		this._triggerElement = trigger;
+		this._renderTriggerLabel(trigger);
+		// Onboarding spotlight target — id is referenced by the "new session" tour
+		// in vs/sessions/contrib/onboardingTours.
+		triggerDisposables.add(markOnboardingTarget(trigger, 'sessions.newSession.workspacePicker'));
+
+		triggerDisposables.add(touch.Gesture.addTarget(trigger));
+		[dom.EventType.CLICK, touch.EventType.Tap].forEach(eventType => {
+			triggerDisposables.add(dom.addDisposableListener(trigger, eventType, (e) => {
+				dom.EventHelper.stop(e, true);
+				this.showPicker(false, trigger);
+			}));
+		});
+		triggerDisposables.add(dom.addDisposableListener(trigger, dom.EventType.KEY_DOWN, (e) => {
+			if (e.key === 'Enter' || e.key === ' ') {
+				dom.EventHelper.stop(e, true);
+				this.showPicker(false, trigger);
+			}
+		}));
+
+		triggerDisposables.add({
+			dispose: () => {
+				this._triggerElements.delete(trigger);
+				if (this._triggerElement === trigger) {
+					// Demote to any other live trigger so subclasses that read
+					// `_triggerElement` (e.g. WebWorkspacePicker's mobile sheet
+					// path) don't dereference a removed node.
+					this._triggerElement = this._triggerElements.values().next().value;
+				}
+			},
+		});
+
+		return triggerDisposables;
+	}
+
+	/**
+	 * Shows the workspace picker dropdown anchored to a trigger element.
 	 *
 	 * @param force When true, re-show even if the picker is already visible.
 	 *              Used internally when swapping items in place after a tab
 	 *              change.
+	 * @param anchor The specific trigger element to anchor the popup to. When
+	 *               omitted, defaults to the most-recently rendered trigger.
+	 *               Pass through when more than one trigger is live and the
+	 *               popup should align with the one the user actually clicked.
 	 */
-	showPicker(force = false): void {
-		if (!this._triggerElement) {
+	showPicker(force = false, anchor?: HTMLElement): void {
+		const triggerElement = anchor ?? this._triggerElement;
+		if (!triggerElement) {
 			return;
 		}
 		const alreadyVisible = this.actionWidgetService.isVisible || this._tabbedWidget.isVisible;
@@ -336,10 +376,10 @@ export class WorkspacePicker extends Disposable {
 
 		const tabbed = tabs.length > 1;
 		if (tabbed) {
-			this._showTabbedPicker(tabs);
+			this._showTabbedPicker(tabs, triggerElement);
 		} else {
 			this._activeTab = undefined;
-			this._showFlatPicker();
+			this._showFlatPicker(triggerElement);
 		}
 	}
 
@@ -409,11 +449,10 @@ export class WorkspacePicker extends Disposable {
 	 * `IActionWidgetService` so we benefit from its keybindings, focus
 	 * tracking and submenu chrome.
 	 */
-	private _showFlatPicker(): void {
+	private _showFlatPicker(triggerElement: HTMLElement): void {
 		// Tear down any previous tabbed popup before delegating to the
 		// shared service — the two presentations don't co-exist.
 		this._tabbedWidget.hide();
-		const triggerElement = this._triggerElement!;
 		const items = this._buildItems();
 		const delegate = this._buildDelegate(triggerElement, () => this._hidePicker());
 		triggerElement.setAttribute('aria-expanded', 'true');
@@ -439,8 +478,7 @@ export class WorkspacePicker extends Disposable {
 	 * platform `TabbedActionListWidget`; this picker only owns the data
 	 * and selection logic.
 	 */
-	private _showTabbedPicker(tabs: readonly ITabDescriptor[]): void {
-		const triggerElement = this._triggerElement!;
+	private _showTabbedPicker(tabs: readonly ITabDescriptor[], triggerElement: HTMLElement): void {
 		// Hide the flat picker if it's visible — the two presentations
 		// don't co-exist.
 		if (this.actionWidgetService.isVisible) {
@@ -478,24 +516,37 @@ export class WorkspacePicker extends Disposable {
 	 * subclass that opts to render a different UI but reuse the
 	 * selection semantics. Treats unavailable workspaces as a no-op.
 	 */
-	protected async _dispatchPickerItem(item: IWorkspacePickerItem): Promise<void> {
+	protected async _dispatchPickerItem(item: IWorkspacePickerItem): Promise<boolean> {
+		const generation = ++this._selectionGeneration;
 		this._reportPickerClosed(item);
 		if (item.run) {
 			item.run();
+			return true;
 		} else if (item.commandId) {
-			this.commandService.executeCommand(item.commandId);
+			void this.commandService.executeCommand(item.commandId);
+			return true;
 		} else if (item.folderUri && item.providerId && this._isProviderUnavailable(item.providerId)) {
 			// Workspace belongs to an unavailable remote — ignore selection
-			return;
+			return false;
 		}
 		if (item.browseActionIndex !== undefined) {
-			this._executeBrowseAction(item.browseActionIndex);
+			const folderUri = await this._executeBrowseAction(item.browseActionIndex);
+			if (!folderUri || generation !== this._selectionGeneration) {
+				return false;
+			}
+			this._selectFolder(folderUri);
+			return true;
 		} else if (item.folderUri) {
 			if (item.providerId && !await this._connectProviderOnDemand(item.providerId)) {
-				return;
+				return false;
+			}
+			if (generation !== this._selectionGeneration) {
+				return false;
 			}
 			this._selectFolder(item.folderUri);
+			return true;
 		}
+		return false;
 	}
 
 	/**
@@ -551,6 +602,7 @@ export class WorkspacePicker extends Disposable {
 	 * Clears the selected project.
 	 */
 	clearSelection(): void {
+		this._selectionGeneration++;
 		this._hidePicker();
 		this._userHasPicked = true;
 		this._connectionStatusWatch.clear();
@@ -574,6 +626,7 @@ export class WorkspacePicker extends Disposable {
 	}
 
 	private _selectFolder(folderUri: URI, fireEvent = true, providerIdHint?: string): void {
+		this._selectionGeneration++;
 		this._userHasPicked = true;
 		this._connectionStatusWatch.clear();
 		// Prefer the caller-supplied providerId hint, then the historical
@@ -628,11 +681,11 @@ export class WorkspacePicker extends Disposable {
 	/**
 	 * Executes a browse action from a provider, identified by index.
 	 */
-	protected async _executeBrowseAction(actionIndex: number): Promise<void> {
+	protected async _executeBrowseAction(actionIndex: number): Promise<URI | undefined> {
 		const allActions = this._getAllBrowseActions();
 		const action = allActions[actionIndex];
 		if (!action) {
-			return;
+			return undefined;
 		}
 
 		try {
@@ -640,12 +693,13 @@ export class WorkspacePicker extends Disposable {
 			if (workspace) {
 				const folderUri = workspace.folders[0]?.root;
 				if (folderUri) {
-					this._selectFolder(folderUri);
+					return folderUri;
 				}
 			}
 		} catch {
 			// browse action was cancelled or failed
 		}
+		return undefined;
 	}
 
 	/**
@@ -863,24 +917,26 @@ export class WorkspacePicker extends Disposable {
 		this._renderDisposables.add({ dispose: () => clearTimeout(timeout) });
 	}
 
-	private _updateTriggerLabel(): void {
-		if (!this._triggerElement) {
-			return;
+	protected _updateTriggerLabel(): void {
+		for (const trigger of this._triggerElements) {
+			this._renderTriggerLabel(trigger);
 		}
+	}
 
-		dom.clearNode(this._triggerElement);
+	protected _renderTriggerLabel(trigger: HTMLElement): void {
+		dom.clearNode(trigger);
 		const workspace = this._selectedResolved?.workspace;
 		const label = workspace ? workspace.label : localize('pickWorkspace', "workspace");
 		const icon = workspace ? workspace.icon : Codicon.project;
 
-		this._triggerElement.setAttribute('aria-label', workspace
+		trigger.setAttribute('aria-label', workspace
 			? localize('workspacePicker.selectedAriaLabel', "New session in {0}", label)
 			: localize('workspacePicker.pickAriaLabel', "Start by picking a workspace"));
 
-		dom.append(this._triggerElement, renderIcon(icon));
-		const labelSpan = dom.append(this._triggerElement, dom.$('span.sessions-chat-dropdown-label'));
+		dom.append(trigger, renderIcon(icon));
+		const labelSpan = dom.append(trigger, dom.$('span.sessions-chat-dropdown-label'));
 		labelSpan.textContent = label;
-		dom.append(this._triggerElement, renderIcon(Codicon.chevronDownCompact)).classList.add('sessions-chat-dropdown-chevron');
+		dom.append(trigger, renderIcon(Codicon.chevronDownCompact)).classList.add('sessions-chat-dropdown-chevron');
 	}
 
 	/**

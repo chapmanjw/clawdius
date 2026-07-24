@@ -12,7 +12,7 @@ const minimist = require('minimist');
 
 const [, , ...args] = process.argv;
 const opts = minimist(args, {
-	boolean: ['web'],
+	boolean: ['web', 'fail-zero'],
 	string: ['f', 'g']
 });
 

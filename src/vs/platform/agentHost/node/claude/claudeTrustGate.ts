@@ -124,7 +124,7 @@ export async function whenTrustForwarded(
 			};
 			store.add(configurationService.onDidRootConfigChange(recheck));
 			store.add(configurationService.onDidSessionConfigChange(changed => {
-				if (changed === sessionUri.toString()) {
+				if (changed.session === sessionUri.toString()) {
 					recheck();
 				}
 			}));

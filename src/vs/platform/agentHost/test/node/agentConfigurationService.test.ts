@@ -166,6 +166,23 @@ suite('AgentConfigurationService', () => {
 			const state = manager.getSessionState(uri);
 			assert.deepStrictEqual(state?.config?.values, { level: 'low', limit: 42 });
 		});
+
+		test('fires after the session config is updated', () => {
+			const uri = URI.from({ scheme: 'copilot', path: '/a' }).toString();
+			manager.createSession(makeSummary(uri));
+			seedSessionConfig(uri, { level: 'low' });
+			let change: { session: string; config: Record<string, unknown> } | undefined;
+			disposables.add(service.onDidSessionConfigChange(event => {
+				change = { session: event.session, config: event.config };
+			}));
+
+			service.updateSessionConfig(uri, { level: 'high' });
+
+			assert.deepStrictEqual(change, {
+				session: uri,
+				config: { level: 'high' },
+			});
+		});
 	});
 
 	// ---- config change events ----------------------------------------------
@@ -177,7 +194,7 @@ suite('AgentConfigurationService', () => {
 			manager.createSession(makeSummary(uri));
 			const sessionEvents: string[] = [];
 			let rootEvents = 0;
-			disposables.add(service.onDidSessionConfigChange(u => sessionEvents.push(u)));
+			disposables.add(service.onDidSessionConfigChange(u => sessionEvents.push(u.session)));
 			disposables.add(service.onDidRootConfigChange(() => rootEvents++));
 			service.updateSessionConfig(uri, { level: 'high' });
 			service.updateRootConfig({ level: 'low' });

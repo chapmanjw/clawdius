@@ -7,7 +7,7 @@ import { ProxyChannel } from '../../../base/parts/ipc/common/ipc.js';
 import { Server as ChildProcessServer } from '../../../base/parts/ipc/node/ipc.cp.js';
 import { Server as UtilityProcessServer } from '../../../base/parts/ipc/node/ipc.mp.js';
 import { isUtilityProcess } from '../../../base/parts/sandbox/node/electronTypes.js';
-import { Emitter } from '../../../base/common/event.js';
+import { Emitter, type Event } from '../../../base/common/event.js';
 import { DisposableStore, IDisposable } from '../../../base/common/lifecycle.js';
 import { joinPath } from '../../../base/common/resources.js';
 import { isWindows } from '../../../base/common/platform.js';
@@ -15,9 +15,11 @@ import { URI } from '../../../base/common/uri.js';
 import { generateUuid } from '../../../base/common/uuid.js';
 import * as os from 'os';
 import * as inspector from 'inspector';
-import { AgentHostClaudeAgentEnabledEnvVar, AgentHostIpcChannels, IAgentHostInspectInfo, IAgentHostSocketInfo, IAgentService, IConnectionTrackerService, isAgentEnabled } from '../common/agentService.js';
+import { AgentHostByokModelsEnabledEnvVar, AgentHostClaudeAgentEnabledEnvVar, AgentHostIpcChannels, IAgentHostInspectInfo, IAgentHostSocketInfo, IAgentService, IConnectionTrackerService, isAgentEnabled } from '../common/agentService.js';
 import { AgentService } from './agentService.js';
+import { IAgentHostStateManager } from './agentHostStateManager.js';
 import { IAgentConfigurationService } from './agentConfigurationService.js';
+import { IAgentHostGitHubEndpointService } from './agentHostGitHubEndpointService.js';
 import { IAgentHostCompletions } from './agentHostCompletions.js';
 import { IAgentHostTerminalManager } from './agentHostTerminalManager.js';
 import { ClaudeAgent } from './claude/claudeAgent.js';
@@ -32,7 +34,11 @@ import { ClaudeUsageStatsService } from '../../clawdius/node/claudeUsageStatsSer
 import { IClawdiusCliConfigService } from '../../clawdius/common/clawdiusCliConfig.js';
 import { ClawdiusCliConfigService } from '../../clawdius/node/clawdiusCliConfigService.js';
 // CLAWDIUS-END
-import { AgentSdkDownloader, IAgentSdkDownloader } from './agentSdkDownloader.js';
+import { ByokLmProxyService, IByokLmProxyService } from './copilot/byokLmProxyService.js';
+import { ByokLmBridgeRegistry, IByokLmBridgeRegistry } from './byokLmBridgeRegistry.js';
+import { IAgentHostProxyResolver } from './agentHostProxyResolver.js';
+import { INetworkDiagnosticsService, NetworkDiagnosticsService } from './networkDiagnosticsService.js';
+import { AgentSdkDownloader, IAgentSdkDownloader, type IAgentSdkDownloadProgress } from './agentSdkDownloader.js';
 import { IAgentHostOTelService } from '../common/otel/agentHostOTelService.js';
 import { AgentHostOTelService } from './otel/agentHostOTelService.js';
 import { ProtocolServerHandler } from './protocolServerHandler.js';
@@ -57,6 +63,7 @@ import { IInstantiationService } from '../../instantiation/common/instantiation.
 import { InstantiationService } from '../../instantiation/common/instantiationService.js';
 import { ServiceCollection } from '../../instantiation/common/serviceCollection.js';
 import { registerAgentHostNetworkServices } from './agentHostBootstrap.js';
+import { BANG_COMMAND_PREFIX } from './agentHostBangCommand.js';
 import { SessionDataService } from './sessionDataService.js';
 import { ISessionDataService } from '../common/sessionDataService.js';
 import { IWindowsMxcTerminalSandboxRuntime, WindowsMxcTerminalSandboxRuntime } from '../../sandbox/common/terminalSandboxMxcRuntime.js';
@@ -68,6 +75,8 @@ import { IEditSurvivalReporterFactory, EditSurvivalReporterFactory } from './sha
 import { AgentHostClientFileSystemProvider } from '../common/agentHostClientFileSystemProvider.js';
 import { AGENT_CLIENT_SCHEME } from '../common/agentClientUri.js';
 import { AGENT_HOST_CLIENT_RESOURCE_CHANNEL, createAgentHostClientResourceConnection } from '../common/agentHostClientResourceChannel.js';
+import { AGENT_HOST_CLIENT_BYOK_LM_CHANNEL, createAgentHostClientByokLmConnection } from '../common/agentHostClientByokLmChannel.js';
+import { AGENT_HOST_CLIENT_PROXY_CHANNEL, createAgentHostClientProxyConnection } from '../common/agentHostClientProxyChannel.js';
 import { IAgentPluginManager } from '../common/agentPluginManager.js';
 import { AgentPluginManager } from './agentPluginManager.js';
 import { AgentHostGitService } from './agentHostGitService.js';
@@ -130,25 +139,36 @@ async function startAgentHost(): Promise<void> {
 	// Session data service
 	const sessionDataService = new SessionDataService(URI.file(environmentService.userDataPath), fileService, logService);
 	const rootConfigResource = joinPath(environmentService.appSettingsHome, 'globalStorage', 'agent-host-config.json');
-	const telemetryService = await createAgentHostTelemetryService({ environmentService, productService, fileService, loggerService, logService, disposables });
 
 	// Create the real service implementation that lives in this process
 	let agentService: AgentService;
 	let instantiationService: IInstantiationService;
+	// Hoisted out of the `try` below so the protocol handlers (constructed
+	// after the block) can forward agent-SDK download progress to clients.
+	let sdkDownloadProgress: Event<IAgentSdkDownloadProgress> | undefined;
+	let byokLmBridgeRegistry: ByokLmBridgeRegistry;
+	let proxyResolver: IAgentHostProxyResolver | undefined;
+	// Gate BYOK *use* behind the opt-in `chat.agentHost.byokModels.enabled`
+	// setting, forwarded from the renderer as an env var. The proxy and bridge
+	// registry are always constructed below (so the session launcher can inject
+	// them), but when off they stay inert: the per-connection bridge and the
+	// renderer's BYOK server channel are not wired, so the registry stays empty
+	// and the proxy never binds.
+	const byokLmEnabled = isAgentEnabled(process.env[AgentHostByokModelsEnabledEnvVar], true);
 	try {
-		// Build the DI container early so the git service can be created via
-		// `createInstance` (it needs IFileService + INativeEnvironmentService).
+		// Build the process DI container and network stack before telemetry so every
+		// outbound fetch, including restricted telemetry, uses the same proxy resolver.
 		const diServices = new ServiceCollection();
 		diServices.set(INativeEnvironmentService, environmentService);
 		diServices.set(ILogService, logService);
 		diServices.set(IFileService, fileService);
 		diServices.set(ISessionDataService, sessionDataService);
 		diServices.set(IProductService, productService);
+		const networkServices = await registerAgentHostNetworkServices(diServices, fileService, environmentService, logService, disposables);
+		proxyResolver = networkServices.proxyResolver;
+		const fetchFn = proxyResolver.fetch.bind(proxyResolver);
+		const telemetryService = await createAgentHostTelemetryService({ environmentService, productService, fileService, loggerService, logService, disposables, fetchFn, requestService: networkServices.requestService });
 		diServices.set(ITelemetryService, telemetryService);
-		// Wire `IPolicyService` + `IConfigurationService` + `IRequestService`
-		// — the trio that `IAgentSdkDownloader` depends on for proxy-aware
-		// downloads. Must run before any downstream service that injects them.
-		await registerAgentHostNetworkServices(diServices, fileService, environmentService, logService, disposables);
 		instantiationService = new InstantiationService(diServices);
 		// CLAWDIUS-BEGIN cli backend resolution: resolve the Claude Code engine (bundled vs user cli.js) from clawdius.cli.* settings
 		diServices.set(IClawdiusCliConfigService, instantiationService.createInstance(ClawdiusCliConfigService));
@@ -168,8 +188,9 @@ async function startAgentHost(): Promise<void> {
 		// Register the agent SDK downloader BEFORE any service that injects it
 		// (ClaudeAgentSdkService below). The downloader resolves
 		// dev-override env var → on-disk cache → product.agentSdks download.
-		const agentSdkDownloader = instantiationService.createInstance(AgentSdkDownloader);
+		const agentSdkDownloader = disposables.add(instantiationService.createInstance(AgentSdkDownloader));
 		diServices.set(IAgentSdkDownloader, agentSdkDownloader);
+		sdkDownloadProgress = agentSdkDownloader.onDidDownloadProgress;
 		const claudeAgentSdkService = instantiationService.createInstance(ClaudeAgentSdkService);
 		diServices.set(IClaudeAgentSdkService, claudeAgentSdkService);
 		// CLAWDIUS-BEGIN live MCP tool discovery (#93): a short-lived SDK session lists a configured MCP
@@ -190,17 +211,30 @@ async function startAgentHost(): Promise<void> {
 		diServices.set(IClaudeUsageStatsService, usageStatsService);
 		server.registerChannel(ClaudeUsageStatsChannelName, ProxyChannel.fromService(usageStatsService, disposables));
 		// CLAWDIUS-END
+		// BYOK language-model proxy + bridge registry. Always registered so the
+		// session launcher can inject them, but BYOK *use* is gated: the
+		// per-connection bridge below (and the renderer's server channel) are only
+		// wired when `chat.agentHost.byokModels.enabled` is on, so the registry
+		// stays empty and the proxy never binds when the feature is off.
+		byokLmBridgeRegistry = new ByokLmBridgeRegistry();
+		diServices.set(IByokLmBridgeRegistry, byokLmBridgeRegistry);
+		const byokLmProxyService = disposables.add(instantiationService.createInstance(ByokLmProxyService));
+		diServices.set(IByokLmProxyService, byokLmProxyService);
 		// CLAWDIUS-BEGIN no agent-host OTEL exporter in clawdius (zero egress)
 		// Upstream constructs this unconditionally and it does NOT route through ITelemetryService, so
 		// enableTelemetry:false does not suppress it; a stray OTEL_EXPORTER_OTLP_ENDPOINT env var would
 		// make the first turn POST traces off-box. Gate on Clawdius mode (empty entitlementUrl).
 		if (productService.defaultChatAgent?.entitlementUrl) {
-			const agentHostOTelService = disposables.add(instantiationService.createInstance(AgentHostOTelService));
+			const agentHostOTelService = disposables.add(instantiationService.createInstance(AgentHostOTelService, fetchFn));
 			diServices.set(IAgentHostOTelService, agentHostOTelService);
 		}
 		// CLAWDIUS-END
-		agentService = new AgentService(logService, fileService, sessionDataService, productService, gitService, checkpointService, rootConfigResource, telemetryService, fileMonitorService);
+		agentService = new AgentService(logService, fileService, sessionDataService, productService, gitService, checkpointService, rootConfigResource, telemetryService, fileMonitorService, fetchFn);
+		const networkDiagnosticsService = instantiationService.createInstance(NetworkDiagnosticsService);
+		diServices.set(INetworkDiagnosticsService, networkDiagnosticsService);
+		agentService.setNetworkDiagnosticsService(networkDiagnosticsService);
 		diServices.set(IAgentService, agentService);
+		diServices.set(IAgentHostStateManager, agentService.stateManager);
 		const pluginManager = new AgentPluginManager(URI.file(environmentService.userDataPath), fileService, logService);
 		diServices.set(IAgentPluginManager, pluginManager);
 		const diffComputeService = disposables.add(new NodeWorkerDiffComputeService(logService));
@@ -209,6 +243,7 @@ async function startAgentHost(): Promise<void> {
 
 		diServices.set(IAgentHostTerminalManager, agentService.terminalManager);
 		diServices.set(IAgentConfigurationService, agentService.configurationService);
+		diServices.set(IAgentHostGitHubEndpointService, agentService.gitHubEndpointService);
 		diServices.set(IAgentHostCompletions, agentService.completionsService);
 		// The Claude provider is gated on two things:
 		//  1. The user-facing enable toggle (`chat.agentHost.claudeAgent.enabled`,
@@ -226,6 +261,23 @@ async function startAgentHost(): Promise<void> {
 		logService.error('Failed to create AgentService', err);
 		throw err;
 	}
+
+	// Surface agent-SDK download progress to clients as generic `progress`
+	// notifications. The downloader fires process-global frames keyed by package
+	// id; the agent service fans each out to the `createSession` progress tokens
+	// of the sessions waiting on that provider's SDK, routed through the state
+	// manager so both the local (IPC) and any external (WebSocket) renderer
+	// receive them via the same path as session updates.
+	if (sdkDownloadProgress) {
+		disposables.add(sdkDownloadProgress(p => agentService.emitDownloadProgress(
+			p.packageId,
+			p.displayName,
+			p.receivedBytes,
+			p.totalBytes,
+			p.phase === 'completed' || p.phase === 'failed',
+		)));
+	}
+
 	const agentChannel = ProxyChannel.fromService(agentService, disposables);
 	server.registerChannel(AgentHostIpcChannels.AgentHost, agentChannel);
 
@@ -237,8 +289,9 @@ async function startAgentHost(): Promise<void> {
 	disposables.add(fileService.registerProvider(AGENT_CLIENT_SCHEME, clientFileSystemProvider));
 
 	// Wire reverse-RPC for in-process renderer connections. The renderer's
-	// `MessagePortClient` ctx is its `clientId`, and it exposes
-	// `AGENT_HOST_CLIENT_RESOURCE_CHANNEL` for filesystem reads.
+	// `MessagePortClient` ctx is its `clientId`, and it exposes the
+	// `AGENT_HOST_CLIENT_RESOURCE_CHANNEL` (filesystem reads) and
+	// `AGENT_HOST_CLIENT_BYOK_LM_CHANNEL` (BYOK language-model calls).
 	if (server instanceof UtilityProcessServer) {
 		const authorityRegistrations = new Map<unknown, IDisposable>();
 		const registerConnection = (connection: (typeof server.connections)[number]) => {
@@ -249,9 +302,20 @@ async function startAgentHost(): Promise<void> {
 			if (typeof clientId !== 'string' || !clientId) {
 				return;
 			}
-			const channel = server.getChannel(AGENT_HOST_CLIENT_RESOURCE_CHANNEL, c => c.ctx === clientId);
-			const fsConnection = createAgentHostClientResourceConnection(channel);
-			authorityRegistrations.set(connection, clientFileSystemProvider.registerAuthority(clientId, fsConnection));
+			const connectionStore = new DisposableStore();
+			const getChannel = (channelName: string) => server.getChannel(channelName, c => c.ctx === clientId);
+			const fsConnection = createAgentHostClientResourceConnection(getChannel(AGENT_HOST_CLIENT_RESOURCE_CHANNEL));
+			connectionStore.add(clientFileSystemProvider.registerAuthority(clientId, fsConnection));
+			const proxyConnection = createAgentHostClientProxyConnection(getChannel(AGENT_HOST_CLIENT_PROXY_CHANNEL));
+			connectionStore.add(proxyResolver.register(clientId, proxyConnection));
+			// BYOK bridge is gated: only wire it when the feature is enabled, so
+			// the registry stays empty (and the launcher synthesizes no BYOK
+			// providers/models) when `chat.agentHost.byokModels.enabled` is off.
+			if (byokLmEnabled && byokLmBridgeRegistry) {
+				const byokLmConnection = createAgentHostClientByokLmConnection(getChannel(AGENT_HOST_CLIENT_BYOK_LM_CHANNEL));
+				connectionStore.add(byokLmBridgeRegistry.register(clientId, byokLmConnection));
+			}
+			authorityRegistrations.set(connection, connectionStore);
 		};
 		disposables.add(server.onDidAddConnection(registerConnection));
 		disposables.add(server.onDidRemoveConnection(connection => {
@@ -295,6 +359,7 @@ async function startAgentHost(): Promise<void> {
 				{
 					defaultDirectory: URI.file(os.homedir()).toString(),
 					completionTriggerCharacters: agentService.completionTriggerCharacters,
+					terminalCommandPrefix: BANG_COMMAND_PREFIX,
 					otlpLogEmitter,
 				},
 				clientFileSystemProvider,
@@ -429,6 +494,7 @@ async function startWebSocketServer(
 		{
 			defaultDirectory: URI.file(os.homedir()).toString(),
 			completionTriggerCharacters: agentService.completionTriggerCharacters,
+			terminalCommandPrefix: BANG_COMMAND_PREFIX,
 			otlpLogEmitter,
 		},
 		clientFileSystemProvider,

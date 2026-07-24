@@ -23,6 +23,7 @@ suite('claudeSdkOptions / buildSubprocessEnv', () => {
 		'ELECTRON_NO_ATTACH_CONSOLE',
 		'PATH',
 		'HOME',
+		'USERPROFILE',
 		'OTEL_EXPORTER_OTLP_ENDPOINT',
 		'OTEL_SERVICE_NAME',
 		'COPILOT_OTEL_TOKEN',
@@ -40,7 +41,7 @@ suite('claudeSdkOptions / buildSubprocessEnv', () => {
 		}
 	});
 
-	test('strips VSCODE_*, ELECTRON_*, NODE_OPTIONS, ANTHROPIC_API_KEY; keeps ELECTRON_RUN_AS_NODE; preserves unrelated vars', () => {
+	test('strips unsafe variables and forwards home paths in proxy mode', () => {
 		clearAndSet({
 			VSCODE_PID: '1234',
 			VSCODE_NLS_CONFIG: '{}',
@@ -49,6 +50,7 @@ suite('claudeSdkOptions / buildSubprocessEnv', () => {
 			ANTHROPIC_API_KEY: 'sk-leak',
 			PATH: '/usr/bin',
 			HOME: '/Users/test',
+			USERPROFILE: 'C:\\Users\\test',
 		});
 
 		const env = buildSubprocessEnv();
@@ -62,6 +64,7 @@ suite('claudeSdkOptions / buildSubprocessEnv', () => {
 			electronOther: env.ELECTRON_NO_ATTACH_CONSOLE,
 			path: env.PATH,
 			home: env.HOME,
+			userProfile: env.USERPROFILE,
 		}, {
 			runAsNode: '1',
 			nodeOptions: undefined,
@@ -70,7 +73,8 @@ suite('claudeSdkOptions / buildSubprocessEnv', () => {
 			vscodeNls: undefined,
 			electronOther: undefined,
 			path: undefined, // not explicitly forwarded; PATH is composed in settingsEnv, not subprocessEnv
-			home: undefined, // unrelated vars are simply absent from the override map (inherited by SDK)
+			home: '/Users/test',
+			userProfile: 'C:\\Users\\test',
 		});
 	});
 
@@ -158,6 +162,7 @@ suite('claudeSdkOptions / buildOptions plugins projection', () => {
 			permissionMode: 'default' as const,
 			trusted,
 			canUseTool: async () => ({ behavior: 'allow' as const, updatedInput: {} }),
+			onElicitation: async () => ({ action: 'cancel' as const }),
 			isResume: false,
 			mcpServers: undefined,
 			cliResolution,
@@ -166,42 +171,41 @@ suite('claudeSdkOptions / buildOptions plugins projection', () => {
 	}
 
 	test('Barrier 1: an untrusted workspace forces default mode, empty settingSources, no skip', async () => {
-		const opts = await buildOptions(input(undefined, BUNDLED, /*trusted*/ false), () => { }, () => { });
+		const opts = await buildOptions(input(undefined, BUNDLED, /*trusted*/ false), () => { });
 		assert.strictEqual(opts.permissionMode, 'default');
 		assert.deepStrictEqual(opts.settingSources, []);
 		assert.strictEqual(opts.allowDangerouslySkipPermissions, false);
 	});
 
 	test('Barrier 1: a trusted workspace loads all settingSources and honours bypassPermissions', async () => {
-		const opts = await buildOptions({ ...input(undefined), permissionMode: 'bypassPermissions' as const, trusted: true }, () => { }, () => { });
+		const opts = await buildOptions({ ...input(undefined), permissionMode: 'bypassPermissions' as const, trusted: true }, () => { });
 		assert.deepStrictEqual(opts.settingSources, ['user', 'project', 'local']);
 		assert.strictEqual(opts.allowDangerouslySkipPermissions, true);
 		assert.strictEqual(opts.permissionMode, 'bypassPermissions');
 	});
 
 	test('Barrier 1: an untrusted bypassPermissions request is neutralised', async () => {
-		const opts = await buildOptions({ ...input(undefined), permissionMode: 'bypassPermissions' as const, trusted: false }, () => { }, () => { });
+		const opts = await buildOptions({ ...input(undefined), permissionMode: 'bypassPermissions' as const, trusted: false }, () => { });
 		assert.strictEqual(opts.allowDangerouslySkipPermissions, false);
 		assert.strictEqual(opts.permissionMode, 'default');
 		assert.deepStrictEqual(opts.settingSources, []);
 	});
 
 	test('Barrier 1: an untrusted workspace sets strictMcpConfig; a trusted one does not', async () => {
-		const untrusted = await buildOptions(input(undefined, BUNDLED, /*trusted*/ false), () => { }, () => { });
-		const trusted = await buildOptions(input(undefined, BUNDLED, /*trusted*/ true), () => { }, () => { });
+		const untrusted = await buildOptions(input(undefined, BUNDLED, /*trusted*/ false), () => { });
+		const trusted = await buildOptions(input(undefined, BUNDLED, /*trusted*/ true), () => { });
 		assert.strictEqual(untrusted.strictMcpConfig, true);
 		assert.strictEqual(trusted.strictMcpConfig, false);
 	});
 
 	test('Barrier 1: an untrusted workspace drops local plugins', async () => {
-		const opts = await buildOptions(input([URI.file('/p/a')], BUNDLED, /*trusted*/ false), () => { }, () => { });
+		const opts = await buildOptions(input([URI.file('/p/a')], BUNDLED, /*trusted*/ false), () => { });
 		assert.strictEqual(opts.plugins, undefined);
 	});
 
 	test('non-empty plugins project to Options.plugins as local entries', async () => {
 		const opts = await buildOptions(
 			input([URI.file('/p/a'), URI.file('/p/b')]),
-			() => { },
 			() => { },
 		);
 		assert.deepStrictEqual(opts.plugins, [
@@ -211,47 +215,95 @@ suite('claudeSdkOptions / buildOptions plugins projection', () => {
 	});
 
 	test('empty plugins array omits Options.plugins', async () => {
-		const opts = await buildOptions(input([]), () => { }, () => { });
+		const opts = await buildOptions(input([]), () => { });
 		assert.strictEqual(opts.plugins, undefined);
 	});
 
 	test('undefined plugins omits Options.plugins', async () => {
-		const opts = await buildOptions(input(undefined), () => { }, () => { });
+		const opts = await buildOptions(input(undefined), () => { });
 		assert.strictEqual(opts.plugins, undefined);
 	});
 
 	test('bundled resolution maps executable to the current binary and omits pathToClaudeCodeExecutable', async () => {
-		const opts = await buildOptions(input(undefined, { mode: 'bundled', executable: 'node', extraEnv: {}, providerPreset: 'oauth', disableLoginPrompt: false }), () => { }, () => { });
+		const opts = await buildOptions(input(undefined, { mode: 'bundled', executable: 'node', extraEnv: {}, providerPreset: 'oauth', disableLoginPrompt: false }), () => { });
 		assert.strictEqual(opts.executable, process.execPath);
 		assert.strictEqual(opts.pathToClaudeCodeExecutable, undefined);
 	});
 
 	test('userCli resolution points the SDK at the user cli.js', async () => {
-		const opts = await buildOptions(input(undefined, { mode: 'userCli', executable: 'node', pathToClaudeCodeExecutable: '/u/claude/cli.js', extraEnv: {}, providerPreset: 'oauth', disableLoginPrompt: false }), () => { }, () => { });
+		const opts = await buildOptions(input(undefined, { mode: 'userCli', executable: 'node', pathToClaudeCodeExecutable: '/u/claude/cli.js', extraEnv: {}, providerPreset: 'oauth', disableLoginPrompt: false }), () => { });
 		assert.strictEqual(opts.pathToClaudeCodeExecutable, '/u/claude/cli.js');
 	});
 
 	test('extraEnv overlays onto the subprocess env (base env preserved)', async () => {
-		const opts = await buildOptions(input(undefined, { mode: 'bundled', executable: 'node', extraEnv: { CLAUDE_CODE_USE_BEDROCK: '1' }, providerPreset: 'bedrock', disableLoginPrompt: true }), () => { }, () => { });
+		const opts = await buildOptions(input(undefined, { mode: 'bundled', executable: 'node', extraEnv: { CLAUDE_CODE_USE_BEDROCK: '1' }, providerPreset: 'bedrock', disableLoginPrompt: true }), () => { });
 		const env = opts.env as Record<string, string | undefined>;
 		assert.strictEqual(env.CLAUDE_CODE_USE_BEDROCK, '1');
 		assert.strictEqual(env.ELECTRON_RUN_AS_NODE, '1');
 	});
 
 	test('user env overlay cannot reintroduce a scrubbed reserved key (scrub wins)', async () => {
-		const opts = await buildOptions(input(undefined, { mode: 'bundled', executable: 'node', extraEnv: { NODE_OPTIONS: '--inspect', SAFE_VAR: 'ok' }, providerPreset: 'oauth', disableLoginPrompt: false }), () => { }, () => { });
+		const opts = await buildOptions(input(undefined, { mode: 'bundled', executable: 'node', extraEnv: { NODE_OPTIONS: '--inspect', SAFE_VAR: 'ok' }, providerPreset: 'oauth', disableLoginPrompt: false }), () => { });
 		const env = opts.env as Record<string, string | undefined>;
 		assert.strictEqual(env.NODE_OPTIONS, undefined); // the deliberate scrub wins over the user overlay
 		assert.strictEqual(env.SAFE_VAR, 'ok'); // a non-reserved user var still passes through
 	});
 
 	test('wrapper resolution projects spawnClaudeCodeProcess (enterprise wrapper launch)', async () => {
-		const opts = await buildOptions(input(undefined, { mode: 'wrapper', executable: 'node', wrapperPath: '/opt/ent/claude', wrapperTarget: 'bundled', extraEnv: {}, providerPreset: 'oauth', disableLoginPrompt: false }), () => { }, () => { });
+		const opts = await buildOptions(input(undefined, { mode: 'wrapper', executable: 'node', wrapperPath: '/opt/ent/claude', wrapperTarget: 'bundled', extraEnv: {}, providerPreset: 'oauth', disableLoginPrompt: false }), () => { });
 		assert.strictEqual(typeof opts.spawnClaudeCodeProcess, 'function');
 	});
 
 	test('non-wrapper resolution omits spawnClaudeCodeProcess', async () => {
-		const opts = await buildOptions(input(undefined, { mode: 'bundled', executable: 'node', extraEnv: {}, providerPreset: 'oauth', disableLoginPrompt: false }), () => { }, () => { });
+		const opts = await buildOptions(input(undefined, { mode: 'bundled', executable: 'node', extraEnv: {}, providerPreset: 'oauth', disableLoginPrompt: false }), () => { });
 		assert.strictEqual(opts.spawnClaudeCodeProcess, undefined);
+	});
+});
+
+suite('claudeSdkOptions / buildOptions resumeSessionAt projection', () => {
+
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	const BUNDLED: IClawdiusCliResolution = { mode: 'bundled', executable: 'node', extraEnv: {}, providerPreset: 'oauth', disableLoginPrompt: false };
+
+	function input(isResume: boolean, resumeSessionAt: string | undefined) {
+		return {
+			sessionId: 's1',
+			workingDirectory: URI.file('/tmp/x'),
+			model: undefined,
+			abortController: new AbortController(),
+			permissionMode: 'default' as const,
+			trusted: true,
+			canUseTool: async () => ({ behavior: 'allow' as const, updatedInput: {} }),
+			onElicitation: async () => ({ action: 'cancel' as const }),
+			isResume,
+			mcpServers: undefined,
+			cliResolution: BUNDLED,
+			...(resumeSessionAt !== undefined ? { resumeSessionAt } : {}),
+		};
+	}
+
+	test('resume + resumeSessionAt projects onto Options.resume and Options.resumeSessionAt', async () => {
+		const opts = await buildOptions(input(true, 'anchor-uuid'), () => { });
+		assert.deepStrictEqual(
+			{ resume: opts.resume, sessionId: opts.sessionId, resumeSessionAt: opts.resumeSessionAt },
+			{ resume: 's1', sessionId: undefined, resumeSessionAt: 'anchor-uuid' },
+		);
+	});
+
+	test('resume without resumeSessionAt omits Options.resumeSessionAt', async () => {
+		const opts = await buildOptions(input(true, undefined), () => { });
+		assert.deepStrictEqual(
+			{ resume: opts.resume, resumeSessionAt: opts.resumeSessionAt },
+			{ resume: 's1', resumeSessionAt: undefined },
+		);
+	});
+
+	test('non-resume startup never carries resumeSessionAt even when provided', async () => {
+		const opts = await buildOptions(input(false, 'anchor-uuid'), () => { });
+		assert.deepStrictEqual(
+			{ sessionId: opts.sessionId, resume: opts.resume, resumeSessionAt: opts.resumeSessionAt },
+			{ sessionId: 's1', resume: undefined, resumeSessionAt: undefined },
+		);
 	});
 });

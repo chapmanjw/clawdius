@@ -369,7 +369,27 @@
 # workflows/control surface, its test, and the CI workflow. As with the entries above, the recorded baseline
 # moves by more than the code delta because this block's own comment lines also count toward the fork surface.
 
-upstream_version: 1.127.0
-upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
-recorded: 2026-07-22
-baseline: 5608 files changed, 51543 insertions(+), 1456125 deletions(-)
+# Disposition 2026-07-24 (+117 files, +522 insertions): merge upstream 1.130.0 (from 1.127.0). Take three
+# weekly upstream releases at once and re-apply the fork invariants they reintroduced. The counted growth is a
+# handful of new clawdius-owned files - the re-homed agent-host settings contribution, a fork-local
+# deterministic worktree branch-name generator (replacing upstream's network branch-namer, which called a
+# GitHub utility endpoint with a GitHub token), and a Bearer-parse helper for the local BYOK loopback proxy -
+# plus the CLAWDIUS-marked settings and branding edits re-anchored onto upstream's refactors (the agent-host
+# enablement service now owns the enabled/default-provider config; the model picker moved to a modelPicker/
+# directory), net of completing the Codex subsystem removal and dropping the re-introduced upstream assistant extension
+# and its billing-proxy transport, plus correcting stale merge test expectations to fork behaviour. As with the entries above, the recorded baseline
+# moves by more than the code delta because this block's own comment lines also count toward the fork surface.
+
+# Disposition 2026-07-24 (+4 files, +41 insertions): post-merge feature-audit hardening. An exhaustive audit of the
+# 1.128-1.130 new-feature surface found user-facing residue the merge left: the Claude agent-host session type asked
+# for a sign-in affordance, a fresh terminal showed the removed-assistant CLI hint, an orphaned Codex/OpenAI-branded
+# editor setting, brand strings in a dictation-model enum and an automation dialog, two unhidden harness-preference
+# settings, and a default-on dictation posture that downloads a model from a third-party host. Each was neutralized
+# (strip / rebrand / gate / hide), the sessions entitlement-context bootstrap was gated, a stray pnpm-lock.yaml carrying
+# the removed-agent dependency graph was deleted, and the fixes were pinned with branding-guard assertions. As with the
+# entries above, this block's own comment lines also count toward the recorded fork surface.
+
+upstream_version: 1.130.0
+upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
+recorded: 2026-07-24
+baseline: 5729 files changed, 52106 insertions(+), 1491004 deletions(-)

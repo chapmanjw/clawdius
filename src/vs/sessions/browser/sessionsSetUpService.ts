@@ -417,6 +417,7 @@ export class SessionsSetUpService extends Disposable implements ISessionsSetUpSe
 		@IUserDataProfilesService private readonly userDataProfilesService: IUserDataProfilesService,
 		@IChatEntitlementService private readonly chatEntitlementService: IChatEntitlementService,
 		@ILogService private readonly logService: ILogService,
+		@IProductService private readonly productService: IProductService,
 	) {
 		super();
 
@@ -444,6 +445,15 @@ export class SessionsSetUpService extends Disposable implements ISessionsSetUpSe
 	}
 
 	private async initialize(): Promise<void> {
+		// CLAWDIUS-BEGIN no copilot entitlement bootstrap
+		// Empty entitlementUrl (Clawdius): there is no IDE account, so do NOT construct ChatEntitlementContext here.
+		// It sets the shared `signedOut` context key from fresh default-profile storage (leaking entitlement -> Unknown),
+		// which the Agents-window session-type picker renders as "Sign in to GitHub Copilot" on the Claude agent.
+		// Mirrors the _start() gate above.
+		if (!this.productService.defaultChatAgent?.entitlementUrl) {
+			return;
+		}
+		// CLAWDIUS-END
 		if (this.chatEntitlementService.sentiment.completed) {
 			return;
 		}

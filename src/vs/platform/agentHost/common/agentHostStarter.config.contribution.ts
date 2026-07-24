@@ -10,6 +10,7 @@ import { ConfigurationScope, Extensions as ConfigurationExtensions, IConfigurati
 import { COPILOT_OTEL_CAPTURE_CONTENT_KEY, COPILOT_OTEL_ENABLED_KEY, COPILOT_OTEL_ENDPOINT_KEY, COPILOT_OTEL_HEADERS_KEY, COPILOT_OTEL_LOCK_CAPTURE_CONTENT_KEY, COPILOT_OTEL_PROTOCOL_KEY, COPILOT_OTEL_RESOURCE_ATTRIBUTES_KEY, COPILOT_OTEL_SERVICE_NAME_KEY, managedSettingValue } from '../../policy/common/copilotManagedSettings.js';
 import { Registry } from '../../registry/common/platform.js';
 import {
+	AgentHostByokModelsEnabledSettingId,
 	AgentHostClaudeAgentEnabledSettingId,
 	AgentHostOTelCaptureContentSettingId,
 	AgentHostOTelDbSpanExporterEnabledSettingId,
@@ -20,6 +21,7 @@ import {
 	AgentHostOTelOutfileSettingId,
 	AgentHostOTelResourceAttributesSettingId,
 	AgentHostOTelServiceNameSettingId,
+	AgentHostSystemProxyEnabledSettingId,
 } from './agentService.js';
 
 // Settings consumed by the agent host starter (`electronAgentHostStarter.ts`
@@ -78,6 +80,13 @@ configurationRegistry.registerConfiguration({
 	title: nls.localize('chatAgentHostStarterConfigurationTitle', "Chat Agent Host Starter"),
 	type: 'object',
 	properties: {
+		[AgentHostSystemProxyEnabledSettingId]: {
+			type: 'boolean',
+			description: nls.localize('chat.agentHost.systemProxy.enabled', "When enabled, Copilot sessions automatically discover and use the operating system's proxy configuration when no proxy environment variable is set."),
+			default: true,
+			tags: ['experimental', 'advanced'],
+			experiment: { mode: 'startup' },
+		},
 		[AgentHostClaudeAgentEnabledSettingId]: {
 			type: 'boolean',
 			description: nls.localize('chat.agentHost.claudeAgent.enabled', "When enabled, the agent host registers the Claude provider (subject to the Claude SDK being reachable). Independent of `#chat.agents.claude.preferAgentHost#` and `#chat.editor.claude.preferAgentHost#`, which choose which integration surfaces Claude. Requires `#chat.agentHost.enabled#`. The agent host process must be restarted for changes to take effect."),
@@ -102,6 +111,12 @@ configurationRegistry.registerConfiguration({
 					}
 				}
 			},
+		},
+		[AgentHostByokModelsEnabledSettingId]: {
+			type: 'boolean',
+			description: nls.localize('chat.agentHost.byokModels.enabled', "When enabled, the agent host wires up the BYOK ('bring your own key') language-model bridge so extension-provided BYOK models can run in agent-host sessions. Requires `#chat.agentHost.enabled#`. The agent host process must be restarted for changes to take effect."),
+			default: true,
+			tags: ['experimental', 'advanced'],
 		},
 		[AgentHostOTelEnabledSettingId]: {
 			type: 'boolean',

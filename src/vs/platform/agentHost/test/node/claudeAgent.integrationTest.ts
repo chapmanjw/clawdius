@@ -22,6 +22,7 @@
 
 import type { GetSessionMessagesOptions, Options, PermissionResult, Query, SDKMessage, SDKResultSuccess, SDKSessionInfo, SDKSystemMessage, SDKUserMessage, SessionMessage, WarmQuery } from '@anthropic-ai/claude-agent-sdk';
 import assert from 'assert';
+import { DeferredPromise } from '../../../../base/common/async.js';
 import { URI } from '../../../../base/common/uri.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
@@ -39,10 +40,12 @@ import { InMemoryFileSystemProvider } from '../../../files/common/inMemoryFilesy
 import { INativeEnvironmentService } from '../../../environment/common/environment.js';
 import { type AgentSignal } from '../../common/agentService.js';
 import { ActionType } from '../../common/state/sessionActions.js';
-import { buildDefaultChatUri, ResponsePartKind, ToolResultContentType, type ClientPluginCustomization } from '../../common/state/sessionState.js';
+import { ResponsePartKind, ToolResultContentType, ChatInputResponseKind, ChatInputAnswerState, ChatInputAnswerValueKind, type ChatInputRequest, type ClientPluginCustomization } from '../../common/state/sessionState.js';
 import { ISessionDataService } from '../../common/sessionDataService.js';
 import { AgentConfigurationService, IAgentConfigurationService } from '../../node/agentConfigurationService.js';
-import { AgentHostStateManager } from '../../node/agentHostStateManager.js';
+import { IAgentHostGitHubEndpointService } from '../../node/agentHostGitHubEndpointService.js';
+import { createTestGitHubEndpointService } from './testGitHubEndpointService.js';
+import { AgentHostStateManager, IAgentHostStateManager } from '../../node/agentHostStateManager.js';
 import { IAgentHostGitService } from '../../common/agentHostGitService.js';
 import { ClaudeAgent } from '../../node/claude/claudeAgent.js';
 import { IClaudeAgentSdkService } from '../../node/claude/claudeAgentSdkService.js';
@@ -151,10 +154,19 @@ interface CanUseToolMarker {
 	readonly toolUseID: string;
 }
 
-type QueryStreamItem = SDKMessage | CanUseToolMarker;
+interface ElicitationMarker {
+	readonly kind: 'elicitation';
+	readonly request: Parameters<NonNullable<Options['onElicitation']>>[0];
+}
+
+type QueryStreamItem = SDKMessage | CanUseToolMarker | ElicitationMarker;
 
 function isCanUseToolMarker(item: QueryStreamItem): item is CanUseToolMarker {
 	return (item as CanUseToolMarker).kind === 'canUseTool';
+}
+
+function isElicitationMarker(item: QueryStreamItem): item is ElicitationMarker {
+	return (item as ElicitationMarker).kind === 'elicitation';
 }
 
 /**
@@ -189,11 +201,16 @@ class RecordingSdkService implements IClaudeAgentSdkService {
 
 	/** Records the {@link PermissionResult} returned by each `canUseTool` invocation in {@link queryMessages} order. */
 	readonly canUseToolResults: PermissionResult[] = [];
+	readonly elicitationResults: Awaited<ReturnType<NonNullable<Options['onElicitation']>>>[] = [];
 
 	readonly warmQueries: RoundTripWarmQuery[] = [];
 
 	async listSessions(): Promise<readonly SDKSessionInfo[]> {
 		return [];
+	}
+
+	async canLoadWithoutDownload(): Promise<boolean> {
+		return true;
 	}
 
 	async getSessionInfo(_sessionId: string): Promise<SDKSessionInfo | undefined> {
@@ -293,6 +310,15 @@ class RoundTripQuery implements AsyncGenerator<SDKMessage, void> {
 				}
 				continue;
 			}
+			if (isElicitationMarker(item)) {
+				const startup = this._sdk.capturedStartupOptions[0];
+				if (!startup?.onElicitation) {
+					throw new Error('integration test: elicitation marker but Options.onElicitation not wired');
+				}
+				const result = await startup.onElicitation(item.request, { signal: new AbortController().signal });
+				this._sdk.elicitationResults.push(result);
+				continue;
+			}
 			return { done: false, value: item };
 		}
 		await this._drainer;
@@ -315,11 +341,11 @@ class RoundTripQuery implements AsyncGenerator<SDKMessage, void> {
 	setMaxThinkingTokens(): never { throw new Error('not modeled'); }
 	applyFlagSettings(): never { throw new Error('not modeled'); }
 	initializationResult(): never { throw new Error('not modeled'); }
+	reinitialize(): never { throw new Error('not modeled'); }
 	supportedCommands(): never { throw new Error('not modeled'); }
 	supportedModels(): never { throw new Error('not modeled'); }
 	supportedAgents(): never { throw new Error('not modeled'); }
 	mcpServerStatus(): never { throw new Error('not modeled'); }
-	reinitialize(): never { throw new Error('not modeled'); }
 	getContextUsage(): never { throw new Error('not modeled'); }
 	usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(): never { throw new Error('not modeled'); }
 	reloadPlugins(): never { throw new Error('not modeled'); }
@@ -380,6 +406,8 @@ suite('ClaudeAgent integration', function () {
 				async syncCustomizations(_clientId: string, _customizations: ClientPluginCustomization[]) { return []; },
 			}],
 			[IAgentConfigurationService, configService],
+			[IAgentHostStateManager, stateManager],
+			[IAgentHostGitHubEndpointService, createTestGitHubEndpointService()],
 			[IAgentHostGitService, createNoopGitService()],
 			...claudeFileEnvServices(disposables),
 		);
@@ -388,25 +416,40 @@ suite('ClaudeAgent integration', function () {
 
 		const created = await agent.createSession({ workingDirectory: URI.file('/integration-cwd') });
 		const sessionId = created.session.path.replace(/^\//, '');
-		sdk.queryMessages = [makeSystemInitMessage(sessionId), makeResultSuccess(sessionId)];
+		sdk.queryMessages = [
+			makeSystemInitMessage(sessionId),
+			{
+				kind: 'elicitation',
+				request: { serverName: 'mcp-test', message: 'pick a side', mode: 'form', requestedSchema: { type: 'object', properties: { side: { type: 'string' } } } },
+			},
+			makeResultSuccess(sessionId),
+		];
 
-		await agent.sendMessage(created.session, URI.parse(buildDefaultChatUri(created.session)), 'hi', undefined, 'turn-1');
+		const inputRequested = new DeferredPromise<ChatInputRequest>();
+		disposables.add(agent.onDidSessionProgress(s => {
+			if (s.kind === 'action' && s.action.type === ActionType.ChatInputRequested) {
+				inputRequested.complete(s.action.request);
+			}
+		}));
+
+		const sendPromise = agent.chats.sendMessage(created.session, 'hi', undefined, undefined, 'turn-1');
+		const inputRequest = await inputRequested.p;
 
 		const startup = sdk.sessionStartup();
 		assert.ok(startup, 'the session startup Options were recorded');
 		assert.ok(typeof startup.canUseTool === 'function', 'canUseTool was wired into Options');
 		assert.ok(typeof startup.onElicitation === 'function', 'onElicitation was wired into Options');
 
-		const elicitResult = await startup.onElicitation!(
-			{ serverName: 'mcp-test', message: 'pick a side', mode: 'form' },
-			{ signal: new AbortController().signal },
-		);
+		agent.respondToUserInputRequest(inputRequest.id, ChatInputResponseKind.Accept, {
+			side: { state: ChatInputAnswerState.Submitted, value: { kind: ChatInputAnswerValueKind.Text, value: 'left' } },
+		});
+		await sendPromise;
 
 		assert.deepStrictEqual({
-			elicitResult,
+			elicitResult: sdk.elicitationResults[0],
 			permissionMode: startup.permissionMode,
 		}, {
-			elicitResult: { action: 'cancel' },
+			elicitResult: { action: 'accept', content: { side: 'left' } },
 			permissionMode: 'default',
 		});
 	});
@@ -439,6 +482,8 @@ suite('ClaudeAgent integration', function () {
 				async syncCustomizations(_clientId: string, _customizations: ClientPluginCustomization[]) { return []; },
 			}],
 			[IAgentConfigurationService, configService],
+			[IAgentHostStateManager, stateManager],
+			[IAgentHostGitHubEndpointService, createTestGitHubEndpointService()],
 			[IAgentHostGitService, createNoopGitService()],
 			...claudeFileEnvServices(disposables),
 		);
@@ -480,7 +525,7 @@ suite('ClaudeAgent integration', function () {
 			}
 		}));
 
-		await agent.sendMessage(created.session, URI.parse(buildDefaultChatUri(created.session)), 'please read /tmp/x', undefined, 'turn-1');
+		await agent.chats.sendMessage(created.session, 'please read /tmp/x', undefined, undefined, 'turn-1');
 
 		// Snapshot the agent-side emission stream as a single shape so
 		// the failure surface is the whole pipeline.

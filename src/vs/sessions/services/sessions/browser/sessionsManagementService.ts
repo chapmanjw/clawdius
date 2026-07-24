@@ -4,6 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Emitter, Event } from '../../../../base/common/event.js';
+import { raceCancellationError } from '../../../../base/common/async.js';
+import { CancellationToken } from '../../../../base/common/cancellation.js';
+import { CancellationError } from '../../../../base/common/errors.js';
 import { Disposable, DisposableMap, DisposableStore, IDisposable } from '../../../../base/common/lifecycle.js';
 import { IObservable, observableValue } from '../../../../base/common/observable.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -23,6 +26,10 @@ import { ISessionsProvidersChangeEvent, ISessionsProvidersService } from './sess
 import { IDeleteChatOptions, ISessionChangeEvent, ISessionsProvider } from '../common/sessionsProvider.js';
 import { IChat, ISession, ISessionWorkspace, SessionStatus, ISessionType } from '../common/session.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
+import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
+
+/** Storage key for the last session type used to create a quick chat. */
+const LAST_USED_QUICK_CHAT_SESSION_TYPE_STORAGE_KEY = 'sessions.quickChat.lastUsedSessionType';
 
 export class SessionsManagementService extends Disposable implements ISessionsManagementService {
 
@@ -83,6 +90,7 @@ export class SessionsManagementService extends Disposable implements ISessionsMa
 		@IUriIdentityService private readonly uriIdentityService: IUriIdentityService,
 		@IChatService private readonly chatService: IChatService,
 		@IChatWidgetHistoryService private readonly chatWidgetHistoryService: IChatWidgetHistoryService,
+		@IStorageService private readonly storageService: IStorageService,
 		@IPathService private readonly pathService: IPathService,
 		@IRemoteAgentHostService private readonly remoteAgentHostService: IRemoteAgentHostService,
 	) {
@@ -218,6 +226,19 @@ export class SessionsManagementService extends Disposable implements ISessionsMa
 		return result;
 	}
 
+	getQuickChatSessionTypes(): IProviderSessionType[] {
+		const result: IProviderSessionType[] = [];
+		for (const provider of this.sessionsProvidersService.getProviders()) {
+			if (!provider.supportsQuickChats) {
+				continue;
+			}
+			for (const sessionType of provider.sessionTypes) {
+				result.push({ providerId: provider.id, sessionType });
+			}
+		}
+		return result;
+	}
+
 	resolveWorkspace(folderUri: URI): { providerId: string; workspace: ISessionWorkspace } | undefined {
 		for (const provider of this.sessionsProvidersService.getProviders()) {
 			const workspace = provider.resolveWorkspace(folderUri);
@@ -330,6 +351,79 @@ export class SessionsManagementService extends Disposable implements ISessionsMa
 		return session;
 	}
 
+	/**
+	 * Resolve the provider and session type to use for a quick chat, keyed on
+	 * {@link ISessionsProvider.supportsQuickChats} instead of `resolveWorkspace`.
+	 * Honors an explicit `options.sessionTypeId` (validated against the chosen
+	 * provider) and otherwise defaults to the last-used type, then the first
+	 * advertised one. Throws when no capable provider/type can be resolved.
+	 */
+	private _resolveProviderForQuickChat(options?: ICreateNewSessionOptions): { provider: ISessionsProvider; sessionTypeId: string } {
+		const providers = this.sessionsProvidersService.getProviders();
+		let provider: ISessionsProvider | undefined;
+
+		if (options?.providerId) {
+			provider = providers.find(p => p.id === options.providerId);
+			if (!provider) {
+				throw new Error(`Sessions provider '${options.providerId}' not found`);
+			}
+			if (!provider.supportsQuickChats) {
+				throw new Error(`Sessions provider '${options.providerId}' does not support quick chats`);
+			}
+			if (options.sessionTypeId && !provider.sessionTypes.some(t => t.id === options.sessionTypeId)) {
+				throw new Error(`Sessions provider '${options.providerId}' does not advertise session type '${options.sessionTypeId}'`);
+			}
+		} else {
+			// Iterate providers (in `order`) and pick the first that supports
+			// quick chats. When a specific session type was requested, also
+			// require the provider to advertise it.
+			for (const candidate of providers) {
+				if (!candidate.supportsQuickChats) {
+					continue;
+				}
+				if (options?.sessionTypeId && !candidate.sessionTypes.some(t => t.id === options.sessionTypeId)) {
+					continue;
+				}
+				provider = candidate;
+				break;
+			}
+			if (!provider) {
+				throw new Error('No sessions provider supports quick chats');
+			}
+		}
+		const sessionTypeId = options?.sessionTypeId ?? this._defaultQuickChatSessionType(provider);
+		if (!sessionTypeId) {
+			throw new Error(`No session types available for provider '${provider.id}'`);
+		}
+		return { provider, sessionTypeId };
+	}
+
+	/** Default quick-chat session type: the last-used one if still advertised, else the first. */
+	private _defaultQuickChatSessionType(provider: ISessionsProvider): string | undefined {
+		const lastUsed = this.storageService.get(LAST_USED_QUICK_CHAT_SESSION_TYPE_STORAGE_KEY, StorageScope.PROFILE);
+		if (lastUsed && provider.sessionTypes.some(t => t.id === lastUsed)) {
+			return lastUsed;
+		}
+		return provider.sessionTypes[0]?.id;
+	}
+
+	createQuickChat(options?: ICreateNewSessionOptions): ISession {
+		const { provider, sessionTypeId } = this._resolveProviderForQuickChat(options);
+
+		const previousNewSession = this._newSession.get();
+		const session = provider.createQuickChat(sessionTypeId);
+		this._newSession.set(session, undefined);
+		this.storageService.store(LAST_USED_QUICK_CHAT_SESSION_TYPE_STORAGE_KEY, sessionTypeId, StorageScope.PROFILE, StorageTarget.USER);
+
+		// Mirror `createNewSession`: dispose the previous new session this
+		// composer just replaced, using its own provider, after a successful
+		// create so a throw above leaves the previous one intact.
+		if (previousNewSession && previousNewSession.sessionId !== session.sessionId) {
+			this._getProvider(previousNewSession)?.deleteNewSession(previousNewSession.sessionId);
+		}
+		return session;
+	}
+
 	async createNewChatInSession(session: ISession, options?: ICreateNewChatInSessionOptions): Promise<IChat | undefined> {
 		const provider = this._getProvider(session);
 		if (!provider) {
@@ -353,7 +447,7 @@ export class SessionsManagementService extends Disposable implements ISessionsMa
 		if (!provider) {
 			throw new Error(`Provider '${session.providerId}' not found for session '${session.sessionId}'`);
 		}
-		if (!session.capabilities.supportsMultipleChats) {
+		if (!session.capabilities.get().supportsMultipleChats) {
 			throw new Error(`Session '${session.sessionId}' does not support forking into a chat`);
 		}
 		return provider.forkChat(session.sessionId, sourceChat, turnId);
@@ -470,22 +564,65 @@ export class SessionsManagementService extends Disposable implements ISessionsMa
 	 * Create a new session for the given folder and send a chat request to it,
 	 * without navigating into the started session. The started session appears
 	 * in the sessions list once the provider commits it, while the user's
-	 * current view is left untouched.
+	 * current view is left untouched. Returns the committed session,
+	 * or `undefined` if the service was disposed during the send.
 	 *
 	 * Unlike {@link sendNewChatRequest} with `background`, this does not go
 	 * through the new-session composer: it creates a fresh session purely for
 	 * this request and never sets it as pending/active. Intended for callers
 	 * outside the composer that want to kick off a session programmatically.
 	 *
-	 * If the send fails, the stranded draft is disposed through its provider and
-	 * the error is rethrown so the caller can react.
+	 * If the send or any configuration setter fails, the stranded draft is
+	 * disposed through its provider and the error is rethrown.
 	 */
-	async createAndSendNewChatRequest(folderUri: URI, options: ISendRequestOptions, createOptions?: ICreateNewSessionOptions): Promise<void> {
+	async createAndSendNewChatRequest(folderUri: URI, options: ISendRequestOptions, createOptions?: ICreateNewSessionOptions, token: CancellationToken = CancellationToken.None): Promise<ISession | undefined> {
 		const { provider, sessionTypeId } = this._resolveProviderForNewSession(folderUri, createOptions);
 		const session = provider.createNewSession(folderUri, sessionTypeId);
+		const supportsWorktreeConfiguration = provider.getSessionTypes(folderUri)
+			.find(sessionType => sessionType.id === sessionTypeId)?.supportsWorktreeConfiguration === true;
+		return this._configureAndSendNewSession(provider, session, options, createOptions, supportsWorktreeConfiguration, token);
+	}
 
+	async createAndSendQuickChatRequest(options: ISendRequestOptions, createOptions?: ICreateNewSessionOptions, token: CancellationToken = CancellationToken.None): Promise<ISession | undefined> {
+		const { provider, sessionTypeId } = this._resolveProviderForQuickChat(createOptions);
+		const session = provider.createQuickChat(sessionTypeId);
+		return this._configureAndSendNewSession(provider, session, options, createOptions, false, token);
+	}
+
+	private async _configureAndSendNewSession(
+		provider: ISessionsProvider,
+		session: ISession,
+		options: ISendRequestOptions,
+		createOptions: ICreateNewSessionOptions | undefined,
+		supportsWorktreeConfiguration: boolean,
+		token: CancellationToken,
+	): Promise<ISession | undefined> {
 		try {
-			await this._sendNewChatRequestInBackground(provider, session, options);
+			if (token.isCancellationRequested) {
+				throw new CancellationError();
+			}
+			if (createOptions?.modelId) {
+				provider.setModel(session.sessionId, createOptions.modelId);
+			}
+			if (createOptions?.modeId) {
+				provider.setMode?.(session.sessionId, createOptions.modeId);
+			}
+			if (createOptions?.permissionLevel) {
+				provider.setPermissionLevel?.(session.sessionId, createOptions.permissionLevel);
+			}
+			if (supportsWorktreeConfiguration && (createOptions?.isolationMode || createOptions?.branch)) {
+				if (createOptions.isolationMode && provider.setIsolationMode) {
+					await raceCancellationError(provider.setIsolationMode(session.sessionId, createOptions.isolationMode), token);
+				}
+				if (createOptions.branch && provider.setBranch) {
+					await raceCancellationError(provider.setBranch(session.sessionId, createOptions.branch), token);
+				}
+			}
+
+			if (token.isCancellationRequested) {
+				throw new CancellationError();
+			}
+			return await raceCancellationError(this._sendNewChatRequestInBackground(provider, session, options, token), token);
 		} catch (e) {
 			// The send never committed, so the draft is stranded. Dispose it
 			// through its provider to release the eager backend session before
@@ -511,11 +648,15 @@ export class SessionsManagementService extends Disposable implements ISessionsMa
 	 * Providers are multi-new-session aware, so the graduating session and a
 	 * concurrently reseeded composer draft coexist without conflict.
 	 */
-	private async _sendNewChatRequestInBackground(provider: ISessionsProvider, session: ISession, options: ISendRequestOptions): Promise<void> {
+	private async _sendNewChatRequestInBackground(provider: ISessionsProvider, session: ISession, options: ISendRequestOptions, token: CancellationToken = CancellationToken.None): Promise<ISession | undefined> {
+		if (token.isCancellationRequested) {
+			throw new CancellationError();
+		}
 		// Notify listeners (e.g., telemetry) that a send is starting so they can
 		// prewarm caches whose result is consumed when `onDidSendRequest` fires.
 		this._onWillSendRequest.fire(session);
-		const chat = await provider.createNewChat(session.sessionId, options.query);
+		const chatPromise = provider.createNewChat(session.sessionId, options.query);
+		const chat = token === CancellationToken.None ? await chatPromise : await raceCancellationError(chatPromise, token);
 
 		// Suppress the `chatService.onDidSubmitRequest` mirror for this send so
 		// `_onDidSendRequest` is not fired twice for providers that dispatch
@@ -523,17 +664,27 @@ export class SessionsManagementService extends Disposable implements ISessionsMa
 		const sendOptions = this._augmentOptionsForTroubleshoot(session, options);
 		const chatResourceKey = chat.resource.toString();
 		this._pendingSendChatResources.add(chatResourceKey);
+		const cancellationListener = token.onCancellationRequested(() => {
+			void this.chatService.cancelCurrentRequestForSession(chat.resource, 'sessionsManagement').catch(error => {
+				this.logService.warn('[SessionsManagement] Failed to cancel headless request:', error);
+			});
+		});
 		let updatedSession: ISession;
 		try {
 			updatedSession = await provider.sendRequest(session.sessionId, chat.resource, sendOptions);
 		} finally {
+			cancellationListener.dispose();
 			this._pendingSendChatResources.delete(chatResourceKey);
 		}
+		if (token.isCancellationRequested) {
+			throw new CancellationError();
+		}
 		if (this._store.isDisposed) {
-			return;
+			return undefined;
 		}
 		this._onDidStartSession.fire(updatedSession);
 		this._onDidSendRequest.fire({ session: updatedSession, chat, isNewSession: true, isNewChat: true, options });
+		return updatedSession;
 	}
 
 	async sendRequest(session: ISession, chat: IChat, options: ISendRequestOptions): Promise<void> {
@@ -615,6 +766,22 @@ export class SessionsManagementService extends Disposable implements ISessionsMa
 	async unarchiveSession(session: ISession): Promise<void> {
 		await this._getProvider(session)?.unarchiveSession(session.sessionId);
 		this._onDidUnarchiveSession.fire(session);
+	}
+
+	async setSessionReadState(session: ISession, isRead: boolean): Promise<void> {
+		await this._getProvider(session)?.setSessionReadState(session.sessionId, isRead);
+	}
+
+	markRead(session: ISession): Promise<void> {
+		return this.setSessionReadState(session, true);
+	}
+
+	markUnread(session: ISession): Promise<void> {
+		return this.setSessionReadState(session, false);
+	}
+
+	async markAllRead(sessions: readonly ISession[]): Promise<void> {
+		await Promise.all(sessions.map(session => this.setSessionReadState(session, true)));
 	}
 
 	async deleteSession(session: ISession): Promise<void> {

@@ -22,6 +22,7 @@ import {
 	resolveComponentDirs,
 	normalizeMcpServerConfiguration,
 	shellQuotePluginRootInCommand,
+	interpolateMcpPluginRoot,
 	convertBareEnvVarsToVsCodeSyntax,
 	toParsedAgent,
 	toParsedSkill,
@@ -241,6 +242,29 @@ suite('pluginParsers', () => {
 		});
 	});
 
+	suite('interpolateMcpPluginRoot', () => {
+
+		test('replaces tokens and sets env vars without pairing array entries', () => {
+			const result = interpolateMcpPluginRoot({
+				name: 'test',
+				uri: URI.file('/plugin/.mcp.json'),
+				configuration: {
+					type: McpServerType.LOCAL,
+					command: '${PLUGIN_ROOT}/bin/server',
+					args: ['--data', '${CLAUDE_PLUGIN_ROOT}/data'],
+				},
+				customization: stubMcpCustomization(),
+			}, '/plugin', ['${PLUGIN_ROOT}', '${CLAUDE_PLUGIN_ROOT}'], ['PLUGIN_ROOT']);
+
+			assert.deepStrictEqual(result.configuration, {
+				type: McpServerType.LOCAL,
+				command: '/plugin/bin/server',
+				args: ['--data', '/plugin/data'],
+				env: { PLUGIN_ROOT: '/plugin' },
+			});
+		});
+	});
+
 	// ---- convertBareEnvVarsToVsCodeSyntax -------------------------------
 
 	suite('convertBareEnvVarsToVsCodeSyntax', () => {
@@ -374,7 +398,7 @@ suite('pluginParsers', () => {
 
 	suite('makeMcpServerCustomization', () => {
 
-		test('builds a Starting server with DEFAULT_MCP_APP and a name-disambiguated id', () => {
+		test('builds a Stopped server with DEFAULT_MCP_APP and a name-disambiguated id', () => {
 			const uri = URI.file('/workspace/.mcp.json');
 			const customization = makeMcpServerCustomization(uri, 'fs server');
 			assert.deepStrictEqual(customization, {
@@ -383,7 +407,7 @@ suite('pluginParsers', () => {
 				uri: uri.toString(),
 				name: 'fs server',
 				enabled: true,
-				state: { kind: McpServerStatus.Starting },
+				state: { kind: McpServerStatus.Stopped },
 				mcpApp: DEFAULT_MCP_APP,
 			});
 		});

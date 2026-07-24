@@ -20,6 +20,9 @@ ok(!gal.itemUrl || OPEN_VSX.test(gal.itemUrl), 'gallery itemUrl is not Open VSX'
 ok(!gal.resourceUrlTemplate || OPEN_VSX.test(gal.resourceUrlTemplate), 'gallery resourceUrlTemplate is not Open VSX');
 
 ok(p.enableTelemetry === false, 'enableTelemetry is not false');
+// The agent-host GitHub/Aria telemetry senders are inert ONLY because supportsTelemetry() is false, which needs
+// BOTH enableTelemetry:false (above) AND no aiConfig.ariaKey. Pin the second factor so a merge cannot re-arm them.
+ok(!p.aiConfig || !p.aiConfig.ariaKey, 'product.json aiConfig.ariaKey is present (would re-arm the agent-host telemetry senders)');
 ok(!p.voiceWsUrl, 'voiceWsUrl (Microsoft voice endpoint) is present');
 ok(!p.defaultChatAgent || !/GitHub\.copilot/i.test(p.defaultChatAgent.extensionId || ''), 'defaultChatAgent still points at GitHub.copilot');
 ok(Object.keys(p.trustedExtensionAuthAccess || {}).length === 0, 'trustedExtensionAuthAccess is not empty');
@@ -290,7 +293,7 @@ const brandSites: { file: string; present: RegExp; absent: RegExp; what: string 
 	{ file: 'src/vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent.ts',
 		present: /altText: 'Claude multi file edits'/, absent: /altText: 'VS Code Copilot multi file edits'/, what: 'welcome walkthrough media alt text' },
 	{ file: 'src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts',
-		present: /provided by Claude, including chat/, absent: /provided by GitHub Copilot/, what: 'chat.disableAIFeatures description' },
+		present: /provided by Claude, including chat/, absent: /provided by GitHub Copilot, including chat/, what: 'chat.disableAIFeatures description' },
 	{ file: 'src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts',
 		present: /Sandbox mode for the agent SDK/, absent: /Sandbox mode for the Copilot SDK/, what: 'chat.agentHost.sdkSandbox description' },
 	{ file: 'src/vs/workbench/contrib/chat/browser/actions/chatActions.ts',
@@ -315,7 +318,7 @@ const brandSites: { file: string; present: RegExp; absent: RegExp; what: string 
 		present: /not compatible with Clawdius/, absent: /not compatible with VS Code/, what: 'extension-incompatible install error' },
 	{ file: 'src/vs/platform/extensionManagement/node/extensionManagementService.ts',
 		present: /restart Clawdius before reinstalling/, absent: /restart VS Code before reinstalling/, what: 'reinstall restart error' },
-	{ file: 'src/vs/workbench/contrib/chat/browser/widget/input/chatModelPicker.ts',
+	{ file: 'src/vs/workbench/contrib/chat/browser/widget/input/modelPicker/modelPickerItems.ts',
 		present: /Update Clawdius\]\(command:update\.checkForUpdate\)/, absent: /Update VS Code\]\(command:update\.checkForUpdate\)/, what: 'model-picker update prompt' },
 	// The OAuth/loopback sign-in pages: the `class="branding"` wordmark link must point at the fork, not
 	// code.visualstudio.com (an upstream merge silently reverts these, and the wordmark text is a variable so a
@@ -326,6 +329,10 @@ const brandSites: { file: string; present: RegExp; absent: RegExp; what: string 
 		present: /class="branding" href="https:\/\/github\.com\/chapmanjw\/clawdius"/, absent: /class="branding" href="https:\/\/code\.visualstudio\.com/, what: 'ms-auth loopback page branding href' },
 	{ file: 'extensions/microsoft-authentication/media/index.html',
 		present: /class="branding" href="https:\/\/github\.com\/chapmanjw\/clawdius"/, absent: /class="branding" href="https:\/\/code\.visualstudio\.com/, what: 'ms-auth landing page branding href' },
+	// The Claude agent-host session type must never require Copilot sign-in: with requiresCopilotSignIn:true a leaked
+	// entitlement=Unknown state renders "Sign in to GitHub Copilot to use this agent" on the Claude agent in the Agents window.
+	{ file: 'src/vs/workbench/contrib/chat/browser/agentSessions/agentHost/agentHostChatContribution.ts',
+		present: /requiresCopilotSignIn: false/, absent: /requiresCopilotSignIn: true/, what: 'Claude agent-host session-type sign-in requirement' },
 ];
 for (const s of brandSites) {
 	let src = '';

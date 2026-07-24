@@ -12,6 +12,7 @@ import { AgentHostStateManager } from '../../node/agentHostStateManager.js';
 import { AgentHostSessionTitleController } from '../../node/agentHostSessionTitleController.js';
 import { ActionType } from '../../common/state/sessionActions.js';
 import { SessionStatus, type SessionSummary } from '../../common/state/sessionState.js';
+import { createSessionDataService } from '../common/sessionTestHelpers.js';
 
 suite('AgentHostSessionTitleController', () => {
 	const disposables = new DisposableStore();
@@ -45,7 +46,7 @@ suite('AgentHostSessionTitleController', () => {
 				titleActions.push(e.action.title);
 			}
 		}));
-		const controller = disposables.add(new AgentHostSessionTitleController(stateManager));
+		const controller = disposables.add(new AgentHostSessionTitleController(stateManager, { sessionDataService: createSessionDataService() }, new NullLogService()));
 		return { controller, stateManager, session, titleActions };
 	}
 

@@ -9,6 +9,7 @@ import { ChatInputResponseKind, ToolCallPendingConfirmationState, ToolCallStatus
 import { IAgentConfigurationService } from '../agentConfigurationService.js';
 import { ClaudeAgentSession } from './claudeAgentSession.js';
 import { buildAskUserSessionInputQuestions, buildExitPlanModeConfirmationState, flattenAskUserAnswers, parseAskUserQuestionInput } from './claudeInteractiveTools.js';
+import { CLAUDE_PLAN_DECLINED_MESSAGE, CLAUDE_QUESTION_CANCELLED_MESSAGE, CLAUDE_USER_DECLINED_MESSAGE } from './claudeToolDenial.js';
 import { getClaudeConfirmationTitle, getClaudeInvocationMessage, getClaudePermissionKind, getClaudeToolDisplayName, getClaudeToolInputString, getClaudeToolPath, INTERACTIVE_CLAUDE_TOOLS, buildClaudeToolMeta } from './claudeToolDisplay.js';
 import { evaluateTrust, surfaceForToolCall } from '../../common/claudeTrust.js';
 import { resolveTrustState, resolveTrusted, trustDenyMessage } from './claudeTrustGate.js';
@@ -159,7 +160,7 @@ async function dispatchCanUseTool(
 	});
 	return approved
 		? { behavior: 'allow', updatedInput: input }
-		: { behavior: 'deny', message: 'User declined' };
+		: { behavior: 'deny', message: CLAUDE_USER_DECLINED_MESSAGE };
 }
 
 /**
@@ -255,7 +256,7 @@ async function handleExitPlanMode(
 		}
 		return { behavior: 'allow', updatedInput: input };
 	}
-	return { behavior: 'deny', message: 'The user declined the plan, maybe ask why?' };
+	return { behavior: 'deny', message: CLAUDE_PLAN_DECLINED_MESSAGE };
 }
 
 /**
@@ -282,12 +283,12 @@ async function handleAskUserQuestion(
 		questions: buildAskUserSessionInputQuestions(askInput),
 	}, parentToolCallId);
 	if (answer.response !== ChatInputResponseKind.Accept || !answer.answers) {
-		return { behavior: 'deny', message: 'The user cancelled the question' };
+		return { behavior: 'deny', message: CLAUDE_QUESTION_CANCELLED_MESSAGE };
 	}
 
 	const answers = flattenAskUserAnswers(askInput, answer.answers);
 	if (Object.keys(answers).length === 0) {
-		return { behavior: 'deny', message: 'The user cancelled the question' };
+		return { behavior: 'deny', message: CLAUDE_QUESTION_CANCELLED_MESSAGE };
 	}
 	return { behavior: 'allow', updatedInput: { ...input, answers } };
 }

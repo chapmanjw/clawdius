@@ -21,7 +21,6 @@ import { BranchPicker } from './branchPicker.js';
 import { ClaudePermissionModePicker } from './claudePermissionModePicker.js';
 import { ClaudeCodeSessionType, COPILOT_PROVIDER_ID, CopilotChatSessionsProvider } from './copilotChatSessionsProvider.js';
 import { LocalSessionType } from '../../localChatSessions/browser/localChatSessionsProvider.js';
-import { IsolationPicker } from './isolationPicker.js';
 import { ModePicker, ModePickerModel } from './modePicker.js';
 import { CopilotPermissionPickerDelegate, PermissionPicker } from './permissionPicker.js';
 import { BaseAgentHostSessionsProvider, CopilotCLISessionType } from '../../agentHost/browser/baseAgentHostSessionsProvider.js';
@@ -41,36 +40,14 @@ const IsActiveSessionCopilotChatLocal = ContextKeyExpr.and(IsActiveSessionLocal,
 registerAction2(class extends Action2 {
 	constructor() {
 		super({
-			id: 'sessions.defaultCopilot.isolationPicker',
-			title: localize2('isolationPicker', "Isolation Mode"),
-			f1: false,
-			menu: [{
-				id: Menus.NewSessionRepositoryConfig,
-				group: 'navigation',
-				order: 1,
-				when: ContextKeyExpr.and(
-					IsNewChatSessionContext,
-					IsActiveSessionCopilotChatCLI,
-					ContextKeyExpr.equals('config.github.copilot.chat.cli.isolationOption.enabled', true),
-				),
-			}],
-		});
-	}
-	override async run(): Promise<void> { /* handled by action view item */ }
-});
-
-registerAction2(class extends Action2 {
-	constructor() {
-		super({
 			id: 'sessions.defaultCopilot.branchPicker',
 			title: localize2('branchPicker', "Branch"),
 			f1: false,
-			precondition: SessionHasGitRepositoryContext,
 			menu: [{
 				id: Menus.NewSessionRepositoryConfig,
 				group: 'navigation',
 				order: 2,
-				when: ContextKeyExpr.and(IsNewChatSessionContext, IsActiveSessionCopilotChatCLI),
+				when: ContextKeyExpr.and(IsNewChatSessionContext, IsActiveSessionCopilotChatCLI, SessionHasGitRepositoryContext),
 			}],
 		});
 	}
@@ -184,14 +161,6 @@ class CopilotPickerActionViewItemContribution extends Disposable implements IWor
 		}));
 
 		this._register(actionViewItemService.register(
-			Menus.NewSessionRepositoryConfig, 'sessions.defaultCopilot.isolationPicker',
-			(_action, _options, scopedInstantiationService) => {
-				const { session } = scopedInstantiationService.invokeFunction(accessor => accessor.get(ISessionContext));
-				const picker = scopedInstantiationService.createInstance(IsolationPicker, session);
-				return new PickerActionViewItem(picker);
-			},
-		));
-		this._register(actionViewItemService.register(
 			Menus.NewSessionRepositoryConfig, 'sessions.defaultCopilot.branchPicker',
 			(_action, _options, scopedInstantiationService) => {
 				const { session } = scopedInstantiationService.invokeFunction(accessor => accessor.get(ISessionContext));
@@ -269,7 +238,12 @@ class CopilotActiveSessionContribution extends Disposable implements IWorkbenchC
 				const provider = sessionsProvidersService.getProvider(session.providerId);
 				const providerSession = provider instanceof CopilotChatSessionsProvider ? provider.getSession(session.sessionId) : undefined;
 				const isLoading = providerSession?.loading.read(reader);
-				hasRepositoryKey.set(!isLoading && !!providerSession?.gitRepository);
+				const gitRepository = providerSession?.gitRepository;
+				// An empty repository (no HEAD commit) cannot run worktree
+				// isolation, so treat it as having no usable git repository —
+				// mirrors CopilotCLISession's own worktree gating.
+				const hasHeadCommit = !!gitRepository?.state.read(reader).HEAD?.commit;
+				hasRepositoryKey.set(!isLoading && !!gitRepository && hasHeadCommit);
 			} else if (session?.providerId === LOCAL_AGENT_HOST_PROVIDER_ID) {
 				const provider = sessionsProvidersService.getProvider(session.providerId);
 				const providerSession = provider instanceof BaseAgentHostSessionsProvider

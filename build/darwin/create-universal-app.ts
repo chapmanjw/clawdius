@@ -58,8 +58,16 @@ async function main(buildDir?: string) {
 	// (x64ArchFiles) so the merger keeps both.
 	for (const plat of ['darwin-x64', 'darwin-arm64']) {
 		for (const base of nodeModulesBases) {
+			// @vscode/os-proxy-resolver-{platform} packages
+			crossCopyPlatformDir(x64AppPath, arm64AppPath, path.join(base, '@vscode', `os-proxy-resolver-${plat}`));
 			// @vscode/ripgrep-universal/bin/{platform} (rg binary)
 			crossCopyPlatformDir(x64AppPath, arm64AppPath, path.join(base, '@vscode', 'ripgrep-universal', 'bin', plat));
+		}
+	}
+
+	for (const base of nodeModulesBases) {
+		for (const mxcArch of ['x64', 'arm64']) {
+			crossCopyPlatformDir(x64AppPath, arm64AppPath, path.join(base, '@microsoft', 'mxc-sdk', 'bin', mxcArch));
 		}
 	}
 
@@ -67,6 +75,10 @@ async function main(buildDir?: string) {
 		'**/CodeResources',
 		'**/Credits.rtf',
 		'**/policies/{*.mobileconfig,**/*.plist}',
+		'**/node_modules/@vscode/os-proxy-resolver-darwin-x64/**',
+		'**/node_modules/@vscode/os-proxy-resolver-darwin-arm64/**',
+		'**/node_modules.asar.unpacked/@vscode/os-proxy-resolver-darwin-x64/**',
+		'**/node_modules.asar.unpacked/@vscode/os-proxy-resolver-darwin-arm64/**',
 		'**/node_modules/@vscode/ripgrep-universal/bin/darwin-x64/**',
 		'**/node_modules/@vscode/ripgrep-universal/bin/darwin-arm64/**',
 		'**/node_modules.asar.unpacked/@vscode/ripgrep-universal/bin/darwin-x64/**',
@@ -90,6 +102,11 @@ async function main(buildDir?: string) {
 		// @vscode/policy-watcher: same again.
 		'**/node_modules/@vscode/policy-watcher/build/Release/*.node',
 		'**/node_modules.asar.unpacked/@vscode/policy-watcher/build/Release/*.node',
+		// onnxruntime-node (on-device transcription) ships a darwin/arm64 binary
+		// but not darwin/x64; the x64 build strips the entire bin/ tree. The
+		// universal merger sees bin/ as unique to arm64 — skip it.
+		'**/node_modules/onnxruntime-node/bin/**',
+		'**/node_modules.asar.unpacked/onnxruntime-node/bin/**',
 	];
 
 	await makeUniversalApp({
@@ -99,7 +116,14 @@ async function main(buildDir?: string) {
 		outAppPath,
 		force: true,
 		mergeASARs: true,
-		x64ArchFiles: '{*/kerberos.node,**/extensions/microsoft-authentication/dist/libmsalruntime.dylib,**/extensions/microsoft-authentication/dist/msal-node-runtime.node,**/node_modules/@vscode/ripgrep-universal/bin/darwin-*/*,**/node_modules.asar.unpacked/@vscode/ripgrep-universal/bin/darwin-*/*,**/node_modules/@microsoft/mxc-sdk/bin/**,**/node_modules.asar.unpacked/@microsoft/mxc-sdk/bin/**,**/node_modules/@vscode/fs-copyfile/build/Release/*.node,**/node_modules.asar.unpacked/@vscode/fs-copyfile/build/Release/*.node,**/node_modules/@parcel/watcher/build/Release/*.node,**/node_modules.asar.unpacked/@parcel/watcher/build/Release/*.node,**/node_modules/@vscode/deviceid/build/Release/*.node,**/node_modules.asar.unpacked/@vscode/deviceid/build/Release/*.node,**/node_modules/@vscode/native-watchdog/build/Release/*.node,**/node_modules.asar.unpacked/@vscode/native-watchdog/build/Release/*.node,**/node_modules/@vscode/policy-watcher/build/Release/*.node,**/node_modules.asar.unpacked/@vscode/policy-watcher/build/Release/*.node}',
+		// Files that are unique to a single arch *inside* the merged `node_modules.asar`.
+		// Their on-disk (unpacked) copies are cross-copied between builds above, but the
+		// ASAR header still only references the target arch's package, so the merger sees
+		// them as arch-unique. Paths here are ASAR-internal (top level, no `node_modules`
+		// prefix). Over-covering is harmless: the allowlist is only consulted for files
+		// that are actually unique to one arch.
+		singleArchFiles: '{**/@vscode/ripgrep-universal/bin/darwin-*,**/@vscode/ripgrep-universal/bin/darwin-*/**,**/@vscode/os-proxy-resolver-darwin-*,**/@vscode/os-proxy-resolver-darwin-*/**,**/@microsoft/mxc-sdk/bin/*,**/@microsoft/mxc-sdk/bin/*/**,**/onnxruntime-node/bin,**/onnxruntime-node/bin/**}',
+		x64ArchFiles: '{*/kerberos.node,**/extensions/microsoft-authentication/dist/libmsalruntime.dylib,**/extensions/microsoft-authentication/dist/msal-node-runtime.node,**/node_modules/@vscode/ripgrep-universal/bin/darwin-*/*,**/node_modules.asar.unpacked/@vscode/ripgrep-universal/bin/darwin-*/*,**/node_modules/@vscode/os-proxy-resolver-darwin-*/**,**/node_modules.asar.unpacked/@vscode/os-proxy-resolver-darwin-*/**,**/node_modules/@microsoft/mxc-sdk/bin/**,**/node_modules.asar.unpacked/@microsoft/mxc-sdk/bin/**,**/node_modules/@vscode/fs-copyfile/build/Release/*.node,**/node_modules.asar.unpacked/@vscode/fs-copyfile/build/Release/*.node,**/node_modules/@parcel/watcher/build/Release/*.node,**/node_modules.asar.unpacked/@parcel/watcher/build/Release/*.node,**/node_modules/@vscode/deviceid/build/Release/*.node,**/node_modules.asar.unpacked/@vscode/deviceid/build/Release/*.node,**/node_modules/@vscode/native-watchdog/build/Release/*.node,**/node_modules.asar.unpacked/@vscode/native-watchdog/build/Release/*.node,**/node_modules/@vscode/policy-watcher/build/Release/*.node,**/node_modules.asar.unpacked/@vscode/policy-watcher/build/Release/*.node}',
 		filesToSkipComparison: (file: string) => {
 			for (const expected of filesToSkip) {
 				if (minimatch(file, expected)) {

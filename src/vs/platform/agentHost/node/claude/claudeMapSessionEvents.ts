@@ -14,6 +14,7 @@ import { buildTopLevelSubagentReadyAction, emitInnerAssistantSignals, mapSubagen
 import type { SubagentRegistry } from './claudeSubagentRegistry.js';
 import { stripClientToolNamePrefix, hasClientToolNamePrefix } from './clientTools/claudeClientToolMcpServer.js';
 import { buildClaudeToolMeta, getClaudePastTenseMessage, getClaudeToolDisplayName } from './claudeToolDisplay.js';
+import { claudeToolDenialCode } from './claudeToolDenial.js';
 import { ClaudeToolCallRegistry } from './claudeToolCallRegistry.js';
 import { ToolCallConfirmationReason, ToolCallContributorKind, type StringOrMarkdown } from '../../common/state/protocol/state.js';
 
@@ -220,6 +221,7 @@ export function mapSDKMessageToAgentSignals(
 	logService: ILogService,
 	registry: SubagentRegistry,
 	clientToolOwner?: (toolName: string) => string | undefined,
+	turnDuration?: number,
 ): AgentSignal[] {
 	if (logService.getLevel() <= LogLevel.Trace) {
 		try {
@@ -238,7 +240,7 @@ export function mapSDKMessageToAgentSignals(
 				registry,
 			);
 		case 'result':
-			return mapResult(message, chat, turnId, state, logService, registry);
+			return mapResult(message, chat, turnId, turnDuration, state, logService, registry);
 		case 'assistant':
 			return tagWithParent(
 				mapAssistantCanonical(message, chat, turnId, state, message.parent_tool_use_id, registry),
@@ -369,6 +371,10 @@ function mapUserMessage(
 		const pastTenseMessage: StringOrMarkdown = info
 			? getClaudePastTenseMessage(info.toolName, info.displayName, info.parsedInput, !isError, resultText)
 			: `${getClaudeToolDisplayName(tracked.toolName)} finished`;
+		// A denied/cancelled tool surfaces as an `is_error` result whose content
+		// is the deny `message` we returned from `canUseTool`; classify it so the
+		// telemetry reports `userCancelled` rather than a generic error.
+		const denialCode = isError ? claudeToolDenialCode(resultText) : undefined;
 		signals.push({
 			kind: 'action',
 			resource: chat,
@@ -380,6 +386,7 @@ function mapUserMessage(
 					success: !isError,
 					pastTenseMessage,
 					content: content.length > 0 ? content : undefined,
+					...(denialCode ? { error: { message: resultText, code: denialCode } } : {}),
 				},
 			},
 		});
@@ -436,6 +443,7 @@ function mapResult(
 	message: Extract<SDKMessage, { type: 'result' }>,
 	session: URI,
 	turnId: string,
+	turnDuration: number | undefined,
 	state: ClaudeMapperState,
 	logService: ILogService,
 	registry: SubagentRegistry,
@@ -482,6 +490,7 @@ function mapResult(
 			action: {
 				type: ActionType.ChatError,
 				turnId,
+				duration: typeof turnDuration === 'number' && Number.isFinite(turnDuration) ? Math.max(0, turnDuration) : 0,
 				error: {
 					errorType: message.subtype,
 					...extractForwardedErrorInfo(errorText),
@@ -733,4 +742,3 @@ function makeContentBlockPartId(
 	}
 	return `${turnId}#${messageId}#${index}`;
 }
-

@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { McpSdkServerConfigWithInstance, Options } from '@anthropic-ai/claude-agent-sdk';
+import type { McpSdkServerConfigWithInstance, OnElicitation, Options } from '@anthropic-ai/claude-agent-sdk';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { tmpdir } from 'os';
 import { delimiter, dirname } from '../../../../base/common/path.js';
@@ -40,6 +40,7 @@ export interface IBuildOptionsInput {
 	 */
 	readonly trusted: boolean;
 	readonly canUseTool: NonNullable<Options['canUseTool']>;
+	readonly onElicitation: OnElicitation;
 	readonly isResume: boolean;
 	/**
 	 * One-shot SDK assistant-message uuid to resume *up to and including*
@@ -106,7 +107,6 @@ export interface IBuildOptionsInput {
 export async function buildOptions(
 	input: IBuildOptionsInput,
 	logStderr: (data: string) => void,
-	logElicitation: (msg: string) => void,
 ): Promise<Options> {
 	// CLAWDIUS native ~/.claude auth: no CAPI proxy, so keep the inherited ANTHROPIC_API_KEY env intact and
 	// never redirect ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN — the SDK subprocess authenticates via ~/.claude OAuth.
@@ -147,10 +147,7 @@ export async function buildOptions(
 		allowDangerouslySkipPermissions: input.trusted && input.permissionMode === 'bypassPermissions',
 		// CLAWDIUS-END
 		canUseTool: input.canUseTool,
-		onElicitation: async req => {
-			logElicitation(req.message ?? '');
-			return { action: 'cancel' };
-		},
+		onElicitation: input.onElicitation,
 		disallowedTools: ['WebSearch'],
 		includePartialMessages: true,
 		forwardSubagentText: true,
@@ -268,7 +265,13 @@ export function buildSubprocessEnv(proxied: boolean = true): Record<string, stri
 	// Native mode: inherit the real env so the user's own credentials + PATH
 	// reach the subprocess (replace semantics wipe anything not present here).
 	const env: Record<string, string | undefined> = proxied
-		? { ELECTRON_RUN_AS_NODE: '1', NODE_OPTIONS: undefined, ANTHROPIC_API_KEY: undefined }
+		? {
+			ELECTRON_RUN_AS_NODE: '1',
+			NODE_OPTIONS: undefined,
+			ANTHROPIC_API_KEY: undefined,
+			HOME: process.env['HOME'],
+			USERPROFILE: process.env['USERPROFILE'],
+		}
 		: { ...process.env, ELECTRON_RUN_AS_NODE: '1', NODE_OPTIONS: undefined };
 	for (const key of Object.keys(process.env)) {
 		if (key === 'ELECTRON_RUN_AS_NODE') { continue; }

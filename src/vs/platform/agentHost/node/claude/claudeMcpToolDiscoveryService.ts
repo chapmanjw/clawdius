@@ -60,12 +60,15 @@ export class ClaudeMcpToolDiscoveryService implements IClaudeMcpToolDiscoverySer
 					permissionMode: 'plan',
 					trusted, // renderer-resolved workspace trust (always true here: untrusted callers were refused above)
 					canUseTool: denyTool,
+					onElicitation: async () => {
+						this.logService.trace('[mcp-discovery] declined elicitation: discovery never sends a prompt');
+						return { action: 'cancel' };
+					},
 					isResume: false,
 					mcpServers: undefined,
 					cliResolution,
 				},
 				data => this.logService.trace(`[mcp-discovery stderr] ${redactSecrets(data)}`),
-				msg => this.logService.trace(`[mcp-discovery] declined elicitation: ${msg}`),
 			);
 
 			warm = await this.sdkService.startup({ options });

@@ -53,7 +53,8 @@ const opts = minimist(args, {
 		'remote',
 		'web',
 		'headless',
-		'tracing'
+		'tracing',
+		'skip-stable-build'
 	],
 	default: {
 		verbose: false
@@ -64,6 +65,7 @@ const opts = minimist(args, {
 	headless?: boolean;
 	web?: boolean;
 	tracing?: boolean;
+	'skip-stable-build'?: boolean;
 	build?: string;
 	'stable-build'?: string;
 	browser?: 'chromium' | 'webkit' | 'firefox' | 'chromium-msedge' | 'chromium-chrome';
@@ -136,7 +138,19 @@ function getTestTypeSuffix(): string {
 	}
 }
 
-const testDataPath = path.join(os.tmpdir(), `vscsmoke-${getTestTypeSuffix()}`);
+function getTmpDir(): string {
+	const tmpDir = os.tmpdir();
+	if (process.platform === 'win32') {
+		try {
+			return fs.realpathSync.native(tmpDir);
+		} catch {
+			// ignore and fall back to the short path
+		}
+	}
+	return tmpDir;
+}
+
+const testDataPath = path.join(getTmpDir(), `vscsmoke-${getTestTypeSuffix()}`);
 if (fs.existsSync(testDataPath)) {
 	fs.rmSync(testDataPath, { recursive: true, force: true, maxRetries: 10, retryDelay: 1000 });
 }
@@ -351,7 +365,7 @@ async function setup(): Promise<void> {
 	logger.log('Test data path:', testDataPath);
 	logger.log('Preparing smoketest setup...');
 
-	if (!opts.web && !opts.remote && opts.build) {
+	if (!opts.web && !opts.remote && opts.build && !opts['skip-stable-build']) {
 		// only enabled when running with --build and not in web or remote
 		await measureAndLog(() => ensureStableCode(), 'ensureStableCode', logger);
 	}

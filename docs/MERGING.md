@@ -10,7 +10,7 @@ keeps that tractable.
 - `git rerere` is enabled so conflict resolutions are recorded and replayed on the next merge.
 
 ## Current base
-`UPSTREAM_VERSION` = `1.127.0`, the newest stable upstream tag taken. Bump that file and this doc as
+`UPSTREAM_VERSION` = `1.130.0`, the newest stable upstream tag taken. Bump that file and this doc as
 part of every merge.
 
 ## History and LFS notes

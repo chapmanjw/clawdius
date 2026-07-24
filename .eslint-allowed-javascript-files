@@ -14,6 +14,7 @@ build/azure-pipelines/common/installPlaywright.js
 build/azure-pipelines/github-check-run.js
 build/builtin/browser-main.js
 build/builtin/main.js
+build/npm/stubs/sharp/index.js
 eslint.config.js
 extensions/cpp/build/update-grammars.js
 extensions/css-language-features/server/test/index.js

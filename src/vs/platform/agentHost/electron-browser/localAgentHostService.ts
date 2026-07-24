@@ -8,7 +8,7 @@ import { Emitter, Relay } from '../../../base/common/event.js';
 import { Disposable, DisposableStore, IReference } from '../../../base/common/lifecycle.js';
 import { IObservable, ISettableObservable, observableValue } from '../../../base/common/observable.js';
 import { generateUuid } from '../../../base/common/uuid.js';
-import { getDelayedChannel, ProxyChannel } from '../../../base/parts/ipc/common/ipc.js';
+import { getDelayedChannel, IChannelServer, ProxyChannel } from '../../../base/parts/ipc/common/ipc.js';
 import { Client as MessagePortClient } from '../../../base/parts/ipc/common/ipc.mp.js';
 import { acquirePort } from '../../../base/parts/ipc/electron-browser/ipc.mp.js';
 import { ipcRenderer } from '../../../base/parts/sandbox/electron-browser/globals.js';
@@ -16,22 +16,27 @@ import { IInstantiationService } from '../../instantiation/common/instantiation.
 import { IConfigurationService } from '../../configuration/common/configuration.js';
 import { IEnvironmentService } from '../../environment/common/environment.js';
 import { ILogService } from '../../log/common/log.js';
-import { AgentHostAhpJsonlLoggingSettingId, AgentHostIpcChannels, IAgentCreateChatOptions, IAgentCreateSessionConfig, IAgentHostInspectInfo, IAgentHostService, IAgentResolveSessionConfigParams, IAgentService, IAgentSessionConfigCompletionsParams, IAgentSessionMetadata, AuthenticateParams, AuthenticateResult, IAgentHostSocketInfo, IConnectionTrackerService, isAgentHostEnabled, IMcpNotification, AgentHostOTelPolicyIpcChannel, readAgentHostOTelPolicySettings } from '../common/agentService.js';
+import { AgentHostAhpJsonlLoggingSettingId, AgentHostByokModelsEnabledSettingId, AgentHostIpcChannels, IAgentCreateChatOptions, IAgentCreateSessionConfig, IAgentHostInspectInfo, IAgentHostNetworkDiagnosticsInfo, IAgentHostNetworkFetchResult, IAgentHostService, IAgentResolveSessionConfigParams, IAgentService, IAgentSessionConfigCompletionsParams, IAgentSessionMetadata, AuthenticateParams, AuthenticateResult, IAgentHostSocketInfo, IConnectionTrackerService, IMcpNotification, AgentHostOTelPolicyIpcChannel, readAgentHostOTelPolicySettings, AgentHostSystemProxyEnabledSettingId } from '../common/agentService.js';
+import { IAgentHostEnablementService } from '../common/agentHostEnablementService.js';
 import { AhpJsonlLogger } from '../common/ahpJsonlLogger.js';
+import type { InitializeResult } from '../common/state/protocol/common/commands.js';
+import { PROTOCOL_VERSION } from '../common/state/protocol/version/registry.js';
 import { wrapAgentServiceWithAhpLogging } from './localAhpJsonlLogging.js';
 import { AgentSubscriptionManager, isActionEnvelopeRelevantToSubscriptionUris, type IActiveSubscriptionInfo, type IAgentSubscription } from '../common/state/agentSubscription.js';
 import type { CompletionsParams, CompletionsResult, CreateTerminalParams, ResolveSessionConfigResult, SessionConfigCompletionsResult } from '../common/state/protocol/commands.js';
 import type { InvokeChangesetOperationParams, InvokeChangesetOperationResult } from '../common/state/protocol/channels-changeset/commands.js';
-import { ActionType, type ActionEnvelope, type INotification, type IRootConfigChangedAction, type SessionAction, type TerminalAction, type ClientAnnotationsAction } from '../common/state/sessionActions.js';
+import { ActionType, type ActionEnvelope, type INotification, type IRootConfigChangedAction, type SessionAction, type ChatAction, type TerminalAction, type ClientAnnotationsAction, type ClientChangesetAction } from '../common/state/sessionActions.js';
 import { createRemoteWatchHandle, type IRemoteWatchHandle } from '../common/agentHostFileSystemProvider.js';
 import type { CreateResourceWatchParams, CreateResourceWatchResult, ResourceCopyParams, ResourceCopyResult, ResourceDeleteParams, ResourceDeleteResult, ResourceListResult, ResourceMkdirParams, ResourceMkdirResult, ResourceMoveParams, ResourceMoveResult, ResourceReadResult, ResourceResolveParams, ResourceResolveResult, ResourceWriteParams, ResourceWriteResult, IStateSnapshot } from '../common/state/sessionProtocol.js';
 import { StateComponents, ROOT_STATE_URI, parseChatUri, type RootState } from '../common/state/sessionState.js';
 import { revive } from '../../../base/common/marshalling.js';
 import { URI } from '../../../base/common/uri.js';
 import { AGENT_HOST_CLIENT_RESOURCE_CHANNEL, AgentHostClientResourceChannel } from '../common/agentHostClientResourceChannel.js';
+import { AGENT_HOST_CLIENT_BYOK_LM_CHANNEL, AgentHostClientByokLmChannel } from '../common/agentHostClientByokLmChannel.js';
+import { AGENT_HOST_CLIENT_PROXY_CHANNEL, AgentHostClientProxyChannel } from '../common/agentHostClientProxyChannel.js';
 import { TELEMETRY_CRASH_REPORTER_SETTING_ID, TELEMETRY_OLD_SETTING_ID, TELEMETRY_SETTING_ID } from '../../telemetry/common/telemetry.js';
 import { getTelemetryLevel } from '../../telemetry/common/telemetryUtils.js';
-import { AgentHostTelemetryLevelConfigKey, AgentHostSessionSyncEnabledConfigKey, AgentHostTerminalAutoApproveEnabledConfigKey, AgentHostGlobalAutoApproveEnabledConfigKey, AgentHostWorkspaceTrustDenyByDefaultConfigKey, AgentHostAutoReplyEnabledConfigKey, AgentHostTerminalAutoApproveRulesConfigKey, getAgentHostTerminalAutoApproveRulesConfig, SESSION_SYNC_ENABLED_SETTING_ID, TERMINAL_AUTO_APPROVE_ENABLED_SETTING_ID, GLOBAL_AUTO_APPROVE_SETTING_ID, WORKSPACE_TRUST_DENY_BY_DEFAULT_SETTING_ID, AUTO_REPLY_SETTING_ID, TERMINAL_AUTO_APPROVE_SETTING_ID, TERMINAL_IGNORE_DEFAULT_AUTO_APPROVE_RULES_SETTING_ID, telemetryLevelToAgentHostConfigValue } from '../common/agentHostSchema.js';
+import { AgentHostTelemetryLevelConfigKey, AgentHostSessionSyncEnabledConfigKey, AgentHostTerminalAutoApproveEnabledConfigKey, AgentHostGlobalAutoApproveEnabledConfigKey, AgentHostWorkspaceTrustDenyByDefaultConfigKey, AgentHostAutoReplyEnabledConfigKey, AgentHostPreferLongContextEnabledConfigKey, AgentHostSystemProxyEnabledConfigKey, AgentHostTerminalAutoApproveRulesConfigKey, getAgentHostTerminalAutoApproveRulesConfig, SESSION_SYNC_ENABLED_SETTING_ID, TERMINAL_AUTO_APPROVE_ENABLED_SETTING_ID, GLOBAL_AUTO_APPROVE_SETTING_ID, WORKSPACE_TRUST_DENY_BY_DEFAULT_SETTING_ID, AUTO_REPLY_SETTING_ID, PREFER_LONG_CONTEXT_SETTING_ID, TERMINAL_AUTO_APPROVE_SETTING_ID, TERMINAL_IGNORE_DEFAULT_AUTO_APPROVE_RULES_SETTING_ID, telemetryLevelToAgentHostConfigValue } from '../common/agentHostSchema.js';
 import { ClaudeMcpToolDiscoveryChannelName, IClaudeMcpToolDiscoveryResult, IClaudeMcpToolDiscoveryService } from '../common/claudeMcpToolDiscovery.js';
 import { ClaudeUsageContributionChannelName, IClaudeUsageContributionResult, IClaudeUsageContributionService } from '../common/claudeUsageContribution.js';
 import { ClaudeUsageStatsChannelName, IClaudeUsageStatsResult, IClaudeUsageStatsService } from '../../clawdius/common/claudeUsageStats.js';
@@ -75,6 +80,8 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 	private readonly _authenticationPending: ISettableObservable<boolean> = observableValue('authenticationPending', true);
 	readonly authenticationPending: IObservable<boolean> = this._authenticationPending;
 	private _authenticationSettled = false;
+	private _completionTriggerCharactersOnce: Promise<readonly string[]> | undefined;
+	private readonly _initializeResult: ISettableObservable<InitializeResult | undefined> = observableValue('agentHostInitializeResult', undefined);
 
 	setAuthenticationPending(pending: boolean): void {
 		// Sticky: once the first authentication pass settles, never surface
@@ -89,11 +96,16 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 		this._authenticationPending.set(pending, undefined);
 	}
 
+	get initializeResult(): IObservable<InitializeResult | undefined> {
+		return this._initializeResult;
+	}
+
 	constructor(
 		@ILogService private readonly _logService: ILogService,
 		@IConfigurationService private readonly _configurationService: IConfigurationService,
 		@IEnvironmentService environmentService: IEnvironmentService,
 		@IInstantiationService private readonly _instantiationService: IInstantiationService,
+		@IAgentHostEnablementService private readonly _agentHostEnablementService: IAgentHostEnablementService,
 	) {
 		super();
 
@@ -162,12 +174,18 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 			if (e.affectsConfiguration(AUTO_REPLY_SETTING_ID)) {
 				this._updateAutoReplyEnabled();
 			}
+			if (e.affectsConfiguration(PREFER_LONG_CONTEXT_SETTING_ID)) {
+				this._updatePreferLongContextEnabled();
+			}
+			if (e.affectsConfiguration(AgentHostSystemProxyEnabledSettingId)) {
+				this._updateSystemProxyEnabled();
+			}
 			if (e.affectsConfiguration(TERMINAL_AUTO_APPROVE_SETTING_ID) || e.affectsConfiguration(TERMINAL_IGNORE_DEFAULT_AUTO_APPROVE_RULES_SETTING_ID)) {
 				this._updateTerminalAutoApproveRules();
 			}
 		}));
 
-		if (isAgentHostEnabled(this._configurationService)) {
+		if (this._agentHostEnablementService.enabled) {
 			this._connect();
 		}
 	}
@@ -189,10 +207,17 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 		// calls (vscode-agent-client filesystem reads) back to this renderer
 		// via `IPCServer.getChannel(name, c => c.ctx === clientId)`.
 		const client = store.add(new MessagePortClient(port, this.clientId));
-		// Serve filesystem reverse-RPCs from the local file service. The
-		// agent host registers an authority on its
-		// AgentHostClientFileSystemProvider that calls back through this channel.
-		client.registerChannel(AGENT_HOST_CLIENT_RESOURCE_CHANNEL, this._instantiationService.createInstance(AgentHostClientResourceChannel, this._ahpLogger));
+		registerAgentHostClientChannels(client, this._instantiationService, this._logService, this._ahpLogger, this._configurationService.getValue<boolean>(AgentHostByokModelsEnabledSettingId) === true);
+
+		// The in-process (local) transport does not perform the AHP `initialize`
+		// handshake, so synthesize a minimal InitializeResult carrying the only
+		// field meaningful to clients here: the terminal command prefix. It is
+		// hardcoded to match the host's `BANG_COMMAND_PREFIX` (`!`) — the local
+		// host runs the same bundled code, so there is no need for an extra RPC
+		// round-trip. Set before `complete(client)` so any session created
+		// afterwards observes it.
+		this._initializeResult.set({ protocolVersion: PROTOCOL_VERSION, serverSeq: 0, snapshots: [], terminalCommandPrefix: '!' }, undefined);
+
 		this._clientEventually.complete(client);
 		this._updateTelemetryLevel();
 		this._updateSessionSyncEnabled();
@@ -200,6 +225,8 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 		this._updateGlobalAutoApproveEnabled();
 		this._updateWorkspaceTrustDenyByDefault();
 		this._updateAutoReplyEnabled();
+		this._updatePreferLongContextEnabled();
+		this._updateSystemProxyEnabled();
 		this._updateTerminalAutoApproveRules();
 
 		store.add(this._proxy.onDidAction(e => {
@@ -280,6 +307,22 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 		}, this.clientId, 0);
 	}
 
+	private _updatePreferLongContextEnabled(): void {
+		const enabled = this._configurationService.getValue<boolean>(PREFER_LONG_CONTEXT_SETTING_ID) === true;
+		this.dispatchAction(ROOT_STATE_URI, {
+			type: ActionType.RootConfigChanged,
+			config: { [AgentHostPreferLongContextEnabledConfigKey]: enabled },
+		}, this.clientId, 0);
+	}
+
+	private _updateSystemProxyEnabled(): void {
+		const enabled = this._configurationService.getValue<boolean>(AgentHostSystemProxyEnabledSettingId) !== false;
+		this.dispatchAction(ROOT_STATE_URI, {
+			type: ActionType.RootConfigChanged,
+			config: { [AgentHostSystemProxyEnabledConfigKey]: enabled },
+		}, this.clientId, 0);
+	}
+
 	private _updateTerminalAutoApproveRules(): void {
 		this.dispatchAction(ROOT_STATE_URI, {
 			type: ActionType.RootConfigChanged,
@@ -291,6 +334,12 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 
 	authenticate(params: AuthenticateParams): Promise<AuthenticateResult> {
 		return this._proxy.authenticate(params);
+	}
+	getNetworkDiagnosticsInfo(): Promise<IAgentHostNetworkDiagnosticsInfo> {
+		return this._proxy.getNetworkDiagnosticsInfo();
+	}
+	diagnosticsFetch(url: string): Promise<IAgentHostNetworkFetchResult> {
+		return this._proxy.diagnosticsFetch(url);
 	}
 	listSessions(): Promise<IAgentSessionMetadata[]> {
 		return this._proxy.listSessions();
@@ -320,7 +369,6 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 	getCompletionTriggerCharacters(): Promise<readonly string[]> {
 		return this._completionTriggerCharactersOnce ??= this._proxy.getCompletionTriggerCharacters();
 	}
-	private _completionTriggerCharactersOnce: Promise<readonly string[]> | undefined;
 	disposeSession(session: URI): Promise<void> {
 		return this._proxy.disposeSession(session);
 	}
@@ -378,7 +426,7 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 			this._subscribedResources.set(key, count - 1);
 		}
 	}
-	dispatchAction(channel: string, action: SessionAction | TerminalAction | ClientAnnotationsAction | IRootConfigChangedAction, clientId: string, clientSeq: number): void {
+	dispatchAction(channel: string, action: SessionAction | ChatAction | TerminalAction | ClientChangesetAction | ClientAnnotationsAction | IRootConfigChangedAction, clientId: string, clientSeq: number): void {
 		this._proxy.dispatchAction(channel, action, clientId, clientSeq);
 	}
 	private _nextSeq = 1;
@@ -406,7 +454,7 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 		return this._subscriptionManager.getActiveSubscriptions();
 	}
 
-	dispatch(channel: string, action: SessionAction | TerminalAction | ClientAnnotationsAction | IRootConfigChangedAction): void {
+	dispatch(channel: string, action: SessionAction | ChatAction | TerminalAction | ClientChangesetAction | ClientAnnotationsAction | IRootConfigChangedAction): void {
 		const seq = this._subscriptionManager.dispatchOptimistic(channel, action);
 		this.dispatchAction(channel, action, this.clientId, seq);
 	}
@@ -462,7 +510,7 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 	async discoverMcpServerTools(serverName: string, workingDirectoryPath: string, trusted: boolean): Promise<IClaudeMcpToolDiscoveryResult> {
 		// Readiness guard: when the agent host is disabled the delayed channel would queue forever; report it
 		// instead of hanging. We never auto-_connect() from a config dropdown.
-		if (!isAgentHostEnabled(this._configurationService)) {
+		if (!this._agentHostEnablementService.enabled) {
 			return { status: 'disabled', tools: [], message: 'The Agent Host is disabled; enable it to load MCP tools.' };
 		}
 		// Race READINESS, not the call (codex): if we issued the RPC on the delayed channel and the renderer
@@ -483,7 +531,7 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 
 	// CLAWDIUS-BEGIN usage-contribution fetch (#usage)
 	async fetchUsageContribution(workingDirectoryPath: string): Promise<IClaudeUsageContributionResult> {
-		if (!isAgentHostEnabled(this._configurationService)) {
+		if (!this._agentHostEnablementService.enabled) {
 			return { text: undefined, status: 'disabled' };
 		}
 		// Race READINESS, not the call (mirrors discoverMcpServerTools): wait for the MessagePort client so we
@@ -502,7 +550,7 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 
 	// CLAWDIUS-BEGIN transcript-derived usage stats (#94)
 	async getUsageStats(homeDirPath: string): Promise<IClaudeUsageStatsResult> {
-		if (!isAgentHostEnabled(this._configurationService)) {
+		if (!this._agentHostEnablementService.enabled) {
 			return { status: 'unavailable', message: 'The Agent Host is disabled; usage stats come from the CLI cache.' };
 		}
 		// Wait for the MessagePort client before issuing the RPC (a disabled/not-yet-ready host would queue the
@@ -518,4 +566,40 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 		return this._usageStatsProxy.getUsageStats(homeDirPath);
 	}
 	// CLAWDIUS-END
+}
+
+/**
+ * Register the reverse-RPC server channels every in-process renderer exposes to
+ * the agent host's {@link UtilityProcessServer}: the filesystem resource bridge
+ * ({@link AGENT_HOST_CLIENT_RESOURCE_CHANNEL}), the proxy-resolution bridge
+ * ({@link AGENT_HOST_CLIENT_PROXY_CHANNEL}), and the BYOK language-model bridge
+ * ({@link AGENT_HOST_CLIENT_BYOK_LM_CHANNEL}). The agent host reaches these via
+ * `server.getChannel(name, c => c.ctx === clientId)`.
+ */
+export function registerAgentHostClientChannels(
+	client: IChannelServer,
+	instantiationService: IInstantiationService,
+	logService: ILogService,
+	ahpLogger: AhpJsonlLogger | undefined,
+	byokEnabled: boolean,
+): void {
+	// Serve filesystem reverse-RPCs from the local file service. The agent host
+	// registers an authority on its AgentHostClientFileSystemProvider that calls
+	// back through this channel.
+	client.registerChannel(AGENT_HOST_CLIENT_RESOURCE_CHANNEL, instantiationService.createInstance(AgentHostClientResourceChannel, ahpLogger));
+	// Serve proxy-resolution reverse-RPCs from the renderer's request service so
+	// the agent host resolves proxies through VS Code's Electron session (system
+	// settings / PAC scripts) rather than guessing from environment variables.
+	client.registerChannel(AGENT_HOST_CLIENT_PROXY_CHANNEL, instantiationService.createInstance(AgentHostClientProxyChannel));
+	// Serve BYOK language-model reverse-RPCs from the renderer LM API, gated
+	// behind `chat.agentHost.byokModels.enabled`. When disabled, the node-side
+	// proxy + registry are also skipped, so the channel would never be called.
+
+	if (byokEnabled) {
+		try {
+			client.registerChannel(AGENT_HOST_CLIENT_BYOK_LM_CHANNEL, instantiationService.createInstance(AgentHostClientByokLmChannel));
+		} catch (err) {
+			logService.warn(`[AgentHost:renderer] BYOK language-model bridge not registered for this window. ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
 }

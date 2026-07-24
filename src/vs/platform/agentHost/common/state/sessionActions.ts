@@ -77,6 +77,7 @@ export {
 	type SessionAddedParams,
 	type SessionRemovedParams,
 	type SessionSummaryChangedParams,
+	type ProgressParams,
 	type AuthRequiredParams,
 } from './protocol/notifications.js';
 
@@ -90,6 +91,7 @@ export const NotificationType = {
 	SessionAdded: 'root/sessionAdded',
 	SessionRemoved: 'root/sessionRemoved',
 	SessionSummaryChanged: 'root/sessionSummaryChanged',
+	Progress: 'root/progress',
 	AuthRequired: 'auth/required',
 } as const;
 export type NotificationType = typeof NotificationType[keyof typeof NotificationType];
@@ -127,8 +129,8 @@ import type {
 	RootConfigChangedAction,
 } from './protocol/actions.js';
 
-import type { SessionAddedParams, SessionRemovedParams, SessionSummaryChangedParams, AuthRequiredParams } from './protocol/notifications.js';
-import type { RootAction as IRootAction_, SessionAction as ISessionAction_, ChatAction as IChatAction_, ClientSessionAction as IClientSessionAction_, ServerSessionAction as IServerSessionAction_, ClientChatAction as IClientChatAction_, ServerChatAction as IServerChatAction_, TerminalAction as ITerminalAction_, ClientTerminalAction as IClientTerminalAction_, ChangesetAction as IChangesetAction_, AnnotationsAction as IAnnotationsAction_, ClientAnnotationsAction as IClientAnnotationsAction_ } from './protocol/action-origin.generated.js';
+import type { SessionAddedParams, SessionRemovedParams, SessionSummaryChangedParams, ProgressParams, AuthRequiredParams } from './protocol/notifications.js';
+import type { RootAction as IRootAction_, SessionAction as ISessionAction_, ChatAction as IChatAction_, ClientSessionAction as IClientSessionAction_, ServerSessionAction as IServerSessionAction_, ClientChatAction as IClientChatAction_, ServerChatAction as IServerChatAction_, TerminalAction as ITerminalAction_, ClientTerminalAction as IClientTerminalAction_, ChangesetAction as IChangesetAction_, ClientChangesetAction as IClientChangesetAction_, AnnotationsAction as IAnnotationsAction_, ClientAnnotationsAction as IClientAnnotationsAction_ } from './protocol/action-origin.generated.js';
 
 /**
  * Discriminated union of all server→client protocol notifications other than
@@ -140,6 +142,7 @@ export type ProtocolNotification =
 	| ({ type: 'root/sessionAdded' } & SessionAddedParams)
 	| ({ type: 'root/sessionRemoved' } & SessionRemovedParams)
 	| ({ type: 'root/sessionSummaryChanged' } & SessionSummaryChangedParams)
+	| ({ type: 'root/progress' } & ProgressParams)
 	| ({ type: 'auth/required' } & AuthRequiredParams);
 
 export type RootAction = IRootAction_;
@@ -152,6 +155,7 @@ export type ServerChatAction = IServerChatAction_;
 export type TerminalAction = ITerminalAction_;
 export type ClientTerminalAction = IClientTerminalAction_;
 export type ChangesetAction = IChangesetAction_;
+export type ClientChangesetAction = IClientChangesetAction_;
 export type AnnotationsAction = IAnnotationsAction_;
 export type ClientAnnotationsAction = IClientAnnotationsAction_;
 

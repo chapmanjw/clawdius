@@ -359,7 +359,17 @@
 # FINAL RECONCILIATION (2026-07-19): this baseline is the net fork surface across every shipped slice of this
 # feature, each of which recorded its own disposition above; `diff-stat --check` passes against it on the final tree.
 
+# Disposition 2026-07-22 (+0 files, +408 insertions): rework the Ultracode Workflows drill-in rendering, fix the
+# Control Center tab overflow, and correct the CI unit-test list. The result/agent detail panes now render a
+# parsed JSON object or array as a sectioned document - keyed sections, listed array items, Markdown string
+# leaves, plain scalars - instead of an escaped-JSON blob with literal newlines, expanding deep nesting rather
+# than falling back to raw JSON; the Control Center Star/Sponsor actions flow inline at the end of the scrolling
+# tab strip with an edge fade for a clipped tab, instead of a pinned block that squeezed the tabs. The CI list
+# drops a phantom workflow test file and adds the four that exist. No new files; isolated to the clawdius-owned
+# workflows/control surface, its test, and the CI workflow. As with the entries above, the recorded baseline
+# moves by more than the code delta because this block's own comment lines also count toward the fork surface.
+
 upstream_version: 1.127.0
 upstream_commit: a22d00300655c17490ce63dffc28bcdcedcd82c4
-recorded: 2026-07-19
-baseline: 5608 files changed, 51125 insertions(+), 1456122 deletions(-)
+recorded: 2026-07-22
+baseline: 5608 files changed, 51543 insertions(+), 1456125 deletions(-)

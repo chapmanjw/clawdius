@@ -300,7 +300,10 @@ jobs:
             "out/vs/workbench/contrib/clawdius/test/browser/claudeReaderSeamFormats.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeFleetEnumeration.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeWorkflowEnumeration.test.js" \
-            "out/vs/workbench/contrib/clawdius/test/browser/claudeWorkflowsView.test.js" \
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeWorkflowAwareness.test.js" \
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeWorkflowDetails.test.js" \
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeWorkflowObservation.test.js" \
+            "out/vs/workbench/contrib/clawdius/test/browser/claudeWorkflowTree.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeWorkflowTranscriptEditor.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeWorkflowOwnership.test.js" \
             "out/vs/workbench/contrib/clawdius/test/browser/claudeWorkflowBadges.test.js"; do

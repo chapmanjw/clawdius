@@ -31,9 +31,15 @@ import { join } from 'path';
 const REPO = process.cwd();
 const args = process.argv.slice(2);
 const opt = (name, def) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : def; };
-const OUT = opt('--out', join(REPO, '.build', 'clawdius-e2e'));
+const OUT_DEFAULT = join(REPO, '.build', 'clawdius-e2e');
+const OUT = opt('--out', OUT_DEFAULT);
 const KEEP_OPEN = args.includes('--keep-open');
 const GREP = opt('--grep', '');
+// Start each run from a clean default OUT: this dir holds one PNG per scenario under a `NN-<name>.png`
+// name that repeats every run, so keeping several runs' PNGs side by side lets a visual review pick up
+// a stale run's screenshot by mistake. Only the DEFAULT scratch dir is auto-cleared; a caller-supplied
+// --out is left intact (never blindly recursively deleted, since it may be a real directory).
+if (OUT === OUT_DEFAULT) { rmSync(OUT, { recursive: true, force: true }); }
 mkdirSync(OUT, { recursive: true });
 
 const results = [];
@@ -1111,6 +1117,20 @@ try {
 		);
 		await win.waitForTimeout(500);
 
+		// The wait above is satisfied by the empty-state container as readily as by rows, and on a cold
+		// start against a large real config root the empty state paints FIRST - the ~1200-run disk read
+		// has not landed yet. Taking that at face value is what let this critical scenario early-return an
+		// "honest empty state" and skip its substantive assertions (including the pixel-layout guard
+		// below). So when no row is present yet, keep waiting for the read to finish; only a state that
+		// OUTLASTS this extended wait is a genuinely empty root.
+		if (!(await win.$('.clawdius-workflow-run-row'))) {
+			await win.waitForFunction(
+				() => document.querySelector('.clawdius-workflow-run-row') !== null,
+				undefined, { timeout: 45000 },
+			).catch(() => { /* genuinely empty / unreadable / slower than this - the empty-state branch below reports it */ });
+			await win.waitForTimeout(500);
+		}
+
 		// No FORK-AUTHORED "Mission(s)" text may remain after the rename. Scan the workbench for the whole
 		// word "mission" but skip only the USER-DATA leaves the reader surfaces verbatim - the run row
 		// (.clawdius-workflow-run-row, whose label is the run's own summary/workflowName/runId) and expanded
@@ -1543,17 +1563,43 @@ try {
 	// 5. Usage dashboard
 	await scenario('usage-dashboard', true, async () => {
 		await runCommand('Open Claude Code Usage Dashboard');
-		await win.waitForTimeout(1500);
-		const body = await win.$eval('.monaco-workbench', el => el.innerText || '');
-		assert(/usage/i.test(body), 'usage dashboard did not render');
-		return 'dashboard rendered';
+		// Wait for the dashboard EDITOR'S OWN root (`.clawdius-usage-dashboard` is the editor container,
+		// `.clawdius-usage-dashboard-inner` is the rendered view) - proves THIS editor opened, not merely that
+		// the word "usage" survives somewhere in the workbench chrome.
+		await win.waitForSelector('.clawdius-usage-dashboard .clawdius-usage-dashboard-inner', { state: 'visible', timeout: 8000 });
+		const heroTitle = ((await (await win.$('.clawdius-usage-dashboard .clawdius-usage-hero-title'))?.textContent()) || '').trim();
+		const blockTitles = await win.$$eval('.clawdius-usage-dashboard .clawdius-usage-block-title', els => els.map(e => (e.textContent || '').trim()));
+		const heroLabels = await win.$$eval('.clawdius-usage-dashboard .clawdius-usage-kv-label', els => els.map(e => (e.textContent || '').trim()));
+		// These three signals are all emitted UNCONDITIONALLY (renderHero + renderLimits run before any
+		// capacity/transcript-data branch), so the oracle proves the dashboard SURFACE, not sample data:
+		// the branded hero title, the "Subscription limits" section heading, and the Engine + Auth hero fields.
+		assert(heroTitle === 'Claude Code Usage', `dashboard hero title wrong: "${heroTitle}"`);
+		assert(blockTitles.includes('Subscription limits'), `dashboard missing "Subscription limits" heading: ${blockTitles.join(' | ') || '(none)'}`);
+		assert(heroLabels.includes('Engine') && heroLabels.includes('Auth'), `dashboard hero missing Engine/Auth fields: ${heroLabels.join(' | ') || '(none)'}`);
+		return `dashboard rendered (hero="${heroTitle}", sections=[${blockTitles.join(', ')}])`;
 	});
 
 	// 6. Context Budget panel
 	await scenario('context-budget-panel', false, async () => {
 		await runCommand('Open Claude Code Context Budget');
-		await win.waitForTimeout(1200);
-		return 'opened';
+		// The panel resolves its memory/rules scan asynchronously; until it resolves it renders only a
+		// ".ctxb-empty" placeholder ("Scanning Claude memory & rules…"). ".ctxb-total" is emitted by
+		// renderHead() on every RESOLVED render (before the empty-state check), so waiting on it both
+		// proves the scan finished and dodges the scanning race. (clawdiusContextBudgetView.ts renderHead/renderBudget)
+		const totalEl = await win.waitForSelector('.clawdius-ctxbudget .ctxb-total', { state: 'visible', timeout: 8000 });
+		const totalText = ((await totalEl.textContent()) || '').trim();
+		// Headline the panel always renders post-resolve: "memory & rules: ~N (estimated)".
+		assert(/memory & rules:/i.test(totalText) && /\(estimated\)/i.test(totalText),
+			`context-budget head did not render the memory & rules estimate: "${totalText}"`);
+		// This workspace (repo root) has a project .claude/CLAUDE.md + a skill, so the ALWAYS-ON section must render.
+		const secText = (await win.$$eval('.clawdius-ctxbudget .ctxb-sec', els => els.map(e => (e.textContent || '').trim()))).join(' || ');
+		assert(/Always-on/i.test(secText) && /every turn/i.test(secText),
+			`context-budget missing the always-on/every-turn section: "${secText}"`);
+		// ...and at least one CLAUDE.md memory row under it (label ".claude/CLAUDE.md" for this project).
+		const names = await win.$$eval('.clawdius-ctxbudget .ctxb-name', els => els.map(e => (e.textContent || '').trim()));
+		assert(names.some(n => /CLAUDE\.md/i.test(n)),
+			`context-budget listed no CLAUDE.md row: ${JSON.stringify(names.slice(0, 8))}`);
+		return `head "${totalText}"; always-on section present; ${names.length} rows`;
 	});
 
 	// 7. Permission-mode picker
@@ -1572,8 +1618,21 @@ try {
 		await runCommand('Set Default Effort Level');
 		await win.waitForSelector('.quick-input-widget', { state: 'visible', timeout: 8000 });
 		const rows = await win.$$eval('.quick-input-list .monaco-list-row', els => els.map(e => (e.textContent || '').trim()));
+		// Match on the LABEL element specifically (`.label-name`), not the whole-row text: as a substring
+		// "Max" is otherwise satisfied by "Maximum" in the Extra-high row's DETAIL, so a dropped Max row
+		// would slip past a full-row `includes`. Exact label equality closes that blind spot.
+		const labels = await win.$$eval('.quick-input-list .monaco-list-row .label-name', els => els.map(e => (e.textContent || '').trim()));
 		await closeQuickInput();
-		return `effort options: ${rows.length}`;
+		const text = rows.join('\n');
+		// The picker must render the plugin's exact five effort levels PLUS the Ultracode superset - not just
+		// "some rows". Labels are verbatim from effortLevels() / ultracodeLabel() in clawdiusEffortStatusEntry.ts.
+		const expected = ['Low', 'Medium', 'High', 'Extra high', 'Max', 'Ultracode'];
+		const missing = expected.filter(label => !labels.includes(label));
+		assert(missing.length === 0, `effort picker missing options [${missing.join(', ')}] (labels: ${labels.join(' | ') || '(none)'})`);
+		// A distinguishing detail string proves these are the effort rows (xhigh/max are "(model-gated)"),
+		// not a generic six-item quick pick that happens to contain the words above.
+		assert(/model-gated/i.test(text), `effort picker missing model-gated detail copy: ${text}`);
+		return `effort options: ${labels.length} (${expected.join('/')})`;
 	});
 
 	// 9. Check for Updates (no network assertion here; just that it runs without throwing)
@@ -3357,10 +3416,18 @@ try {
 	});
 
 	// 10-11. Themes - switch + screenshot the status bar to eyeball the safety-pill contrast fix
-	await scenario('theme-clawdius-dark', false, async () => { await setTheme('Clawdius Dark'); return 'set'; });
-	await scenario('theme-clawdius-light', false, async () => { await setTheme('Clawdius Light'); return 'set'; });
+	await scenario('theme-clawdius-dark', false, async () => {
+		const actual = await setThemeVerified('Clawdius Dark');
+		assert(actual === 'vs-dark', `expected .monaco-workbench theme-type class "vs-dark" after selecting "Clawdius Dark", got "${actual}"`);
+		return `theme-type=${actual}`;
+	});
+	await scenario('theme-clawdius-light', false, async () => {
+		const actual = await setThemeVerified('Clawdius Light');
+		assert(actual === 'vs', `expected .monaco-workbench theme-type class "vs" after selecting "Clawdius Light", got "${actual}"`);
+		return `theme-type=${actual}`;
+	});
 	// restore dark
-	await setTheme('Clawdius Dark');
+	await setThemeVerified('Clawdius Dark');
 
 	if (KEEP_OPEN) { console.log('\n--keep-open: leaving the window up. Ctrl+C to exit.'); await win.waitForTimeout(600000); }
 } finally {

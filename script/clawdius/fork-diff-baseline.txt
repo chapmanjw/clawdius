@@ -401,7 +401,14 @@
 # host model (empty entitlement URL) so a change to the pill's render/config path cannot silently re-gate
 # it — a caller-level gate stays out of the unit's reach. Growth is one new test file. This block counts too.
 
+# Disposition 2026-07-25 (+0 files, +67 insertions): harden the e2e UX harness. Its workflows-sidebar
+# scenario could early-return on a cold-start empty pane before the large config-root read landed,
+# silently skipping its own assertions (the row-layout regression guard included); it now waits out the
+# read. The output dir is cleared per run so stale screenshots can't cross runs. Four scenarios that
+# asserted only presence (usage dashboard, context budget, effort picker, themes) now assert
+# distinguishing content. No new files; test-harness only. This block's own lines count too.
+
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
-recorded: 2026-07-24
-baseline: 5728 files changed, 51986 insertions(+), 1491053 deletions(-)
+recorded: 2026-07-25
+baseline: 5728 files changed, 52060 insertions(+), 1491053 deletions(-)

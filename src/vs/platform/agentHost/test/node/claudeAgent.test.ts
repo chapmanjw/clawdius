@@ -2755,7 +2755,10 @@ suite('ClaudeAgent', () => {
 		// `disposeSession` for a provisional URI complete without
 		// throwing, both share the `_disposeSequencer` for the same
 		// key, and the agent does not surface a double-dispose error.
-		const { agent } = createTestContext(disposables);
+		// Writable temp home: createSession materializes and a session path is created on the real fs under
+		// userHome, so the mock home must be writable (the default '/mock-home' is not on a Linux CI runner).
+		const userHome = URI.file(await fs.mkdtemp(`${os.tmpdir()}/claude-ah-shutdown-`));
+		const { agent } = createTestContext(disposables, { userHome });
 		const r1 = await agent.createSession({});
 		await agent.createSession({});
 

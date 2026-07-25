@@ -37,7 +37,7 @@ function fakeConfig(trust: ITrustConfigValue | undefined, rawSession?: Record<st
 function eventedConfig(store: Pick<DisposableStore, 'add'>) {
 	let trust: ITrustConfigValue | undefined;
 	const rootChange = store.add(new Emitter<void>());
-	const sessionChange = store.add(new Emitter<string>());
+	const sessionChange = store.add(new Emitter<{ session: string; config: Record<string, unknown> }>());
 	const svc = {
 		getEffectiveValue: () => trust,
 		getSessionConfigValues: () => undefined,
@@ -158,9 +158,9 @@ suite('Clawdius workspace-trust gate (node)', () => {
 		const p = whenTrustForwarded(svc, URI.file('/s'), 5_000);
 		setTrust({ [AgentHostTrustKey.Trusted]: true });
 		// A different session's config write must not wake the barrier even though trust is now readable.
-		sessionChange.fire(URI.file('/other').toString());
+		sessionChange.fire({ session: URI.file('/other').toString(), config: {} });
 		assert.strictEqual(await Promise.race([p, timeout(20).then(() => 'still-waiting' as const)]), 'still-waiting');
-		sessionChange.fire(URI.file('/s').toString());
+		sessionChange.fire({ session: URI.file('/s').toString(), config: {} });
 		assert.strictEqual(await p, 'forwarded');
 	});
 

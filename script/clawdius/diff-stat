@@ -43,7 +43,7 @@ BASE="$(resolve_base)"
 
 if [ "${1:-}" != "--check" ]; then
 	echo "Clawdius fork surface vs upstream $VER:"
-	git -C "$ROOT" diff "$BASE..HEAD" --stat
+	git -C "$ROOT" -c diff.renameLimit=999999 diff "$BASE..HEAD" --stat
 	exit 0
 fi
 
@@ -53,7 +53,9 @@ parse_num() {
 	echo "$1" | grep -oE "[0-9]+ $2" | grep -oE '^[0-9]+' || echo 0
 }
 
-cur="$(git -C "$ROOT" diff "$BASE..HEAD" --shortstat)"
+# Exhaustive rename detection (renameLimit high enough to never cap) so the count is deterministic across
+# environments - the capped default pairs renames differently on the CI runner than locally, drifting the number.
+cur="$(git -C "$ROOT" -c diff.renameLimit=999999 diff "$BASE..HEAD" --shortstat)"
 base_line="$(sed -n 's/^baseline:[[:space:]]*//p' "$BASELINE")"
 if [ -z "$base_line" ]; then
 	echo "diff-stat --check: no 'baseline:' line found in $BASELINE" >&2

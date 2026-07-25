@@ -389,7 +389,12 @@
 # the removed-agent dependency graph was deleted, and the fixes were pinned with branding-guard assertions. As with the
 # entries above, this block's own comment lines also count toward the recorded fork surface.
 
+# Disposition 2026-07-24 (determinism, not growth): pinned diff.renameLimit in script/clawdius/diff-stat so the
+# fork-diff ratchet detects renames exhaustively. The recorded numbers drop from the previous capped values
+# (files 5729->5727, insertions 52106->51904) because more moved files score as renames rather than delete+add
+# - a measurement change identical on CI and locally, not a surface change. This block's own lines count too.
+
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
 recorded: 2026-07-24
-baseline: 5729 files changed, 52106 insertions(+), 1491004 deletions(-)
+baseline: 5727 files changed, 51909 insertions(+), 1491052 deletions(-)

@@ -320,7 +320,9 @@ export async function resolveAuthenticationInteractively(
 		const setupResult = await commandService.executeCommand<IChatSetupResult>(CHAT_SETUP_ACTION_ID, undefined, {
 			forceSignInDialog: true,
 			additionalScopes: scopes,
-			dialogTitle: localize('agentHost.signInDialogTitle', "Sign in to use GitHub Copilot"),
+			// CLAWDIUS-BEGIN neutral MCP-auth wording (this dialog authenticates an OAuth-protected MCP server, not Copilot)
+			dialogTitle: localize('agentHost.signInDialogTitle', "Sign in to authorize the MCP server"),
+			// CLAWDIUS-END
 			disableChatViewReveal: true,
 			returnResult: true,
 		});
@@ -328,7 +330,9 @@ export async function resolveAuthenticationInteractively(
 			return false;
 		}
 		if (!setupResult.success) {
-			throw setupResult.error ?? new Error(localize('agentHost.signInFailed', "Failed to sign in to use GitHub Copilot."));
+			// CLAWDIUS-BEGIN neutral MCP-auth wording
+			throw setupResult.error ?? new Error(localize('agentHost.signInFailed', "Failed to authorize the MCP server."));
+			// CLAWDIUS-END
 		}
 		token = await resolveTokenForResource(
 			resourceUri,

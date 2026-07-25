@@ -9071,7 +9071,7 @@ suite('AgentHostChatContribution', () => {
 					args: [undefined, {
 						forceSignInDialog: true,
 						additionalScopes: ['read:user'],
-						dialogTitle: 'Sign in to use GitHub Copilot',
+						dialogTitle: 'Sign in to authorize the MCP server',
 						disableChatViewReveal: true,
 						returnResult: true,
 					}],

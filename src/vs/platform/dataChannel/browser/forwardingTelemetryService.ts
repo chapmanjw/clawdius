@@ -5,7 +5,6 @@
 
 import { ClassifiedEvent, OmitMetadata, IGDPRProperty, StrictPropertyCheck } from '../../telemetry/common/gdprTypings.js';
 import { ITelemetryData, ITelemetryService, TelemetryLevel } from '../../telemetry/common/telemetry.js';
-import { IDataChannelService } from '../common/dataChannel.js';
 
 export class InterceptingTelemetryService implements ITelemetryService {
 	_serviceBrand: undefined;
@@ -84,19 +83,15 @@ export interface IEditTelemetryData {
 export class DataChannelForwardingTelemetryService extends InterceptingTelemetryService {
 	constructor(
 		@ITelemetryService telemetryService: ITelemetryService,
-		@IDataChannelService dataChannelService: IDataChannelService,
 	) {
-		super(telemetryService, (eventName, data) => {
-			// filter for extension
-			let forward = true;
-			if (data && shouldForwardToChannel in data) {
-				forward = Boolean(data[shouldForwardToChannel]);
-			}
-
-			if (forward) {
-				dataChannelService.getDataChannel<IEditTelemetryData>('editTelemetry').sendData({ eventName, data: data ?? {} });
-			}
-		});
+		// CLAWDIUS-BEGIN never forward telemetry to the editTelemetry data channel (zero-telemetry: close the bypass)
+		// Upstream forwards every intercepted event to the in-process 'editTelemetry' data channel, which BYPASSES
+		// the telemetry-level gate: the base ITelemetryService is Clawdius's NullTelemetryService, but this leg does
+		// NOT route through it. It is inert only while no extension holds the `dataChannels` proposed API; to keep
+		// zero-telemetry airtight regardless of that allowlist (or a `--enable-proposed-api dataChannels` sideload),
+		// the interceptor is a no-op. The `forwardToChannelIf` tags callers attach are therefore ignored.
+		super(telemetryService, () => { /* no-op: never forward */ });
+		// CLAWDIUS-END
 	}
 }
 

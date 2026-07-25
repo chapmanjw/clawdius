@@ -539,7 +539,9 @@ configurationRegistry.registerConfiguration({
 		},
 		'agents.voice.backendUrl': {
 			type: 'string',
-			description: nls.localize('agents.voice.backendUrl', "Voice backend WebSocket URL. Leave empty to use the default hosted backend. Set to e.g. `ws://localhost:8000/api/v1/realtime/voice` to point at a backend running on your machine."),
+			// CLAWDIUS-BEGIN no fork-hosted voice backend: empty means voice mode has no remote endpoint (stays off)
+			description: nls.localize('agents.voice.backendUrl', "Voice backend WebSocket URL. Leave empty to keep voice mode off (Clawdius bundles no remote voice backend). Set to e.g. `ws://localhost:8000/api/v1/realtime/voice` to point at a backend running on your machine."),
+			// CLAWDIUS-END
 			default: '',
 			scope: ConfigurationScope.APPLICATION,
 			included: false,

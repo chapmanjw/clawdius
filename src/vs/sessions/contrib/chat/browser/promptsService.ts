@@ -112,6 +112,8 @@ export class AgenticPromptsService extends PromptsService {
  * Matches the sanitization applied by PromptsService for other skill sources.
  */
 function sanitizeSkillText(text: string, maxLength: number): string {
-	const sanitized = text.replace(/<[^>]+>/g, '');
+	// Strip complete tags, then drop any residual angle brackets so an
+	// incomplete or nested tag (e.g. "<script" with no ">") cannot survive.
+	const sanitized = text.replace(/<[^>]*>/g, '').replace(/[<>]/g, '');
 	return sanitized.length > maxLength ? sanitized.substring(0, maxLength) : sanitized;
 }

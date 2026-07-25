@@ -417,7 +417,16 @@
 # de-branded MCP-auth/voice strings); the codex excisions are net line removals. Dead code gone, Claude-only
 # hard-enforced, tree compiles clean. This block counts too.
 
+# Disposition 2026-07-25 (+5 files, +8 insertions): fix five CodeQL-flagged defects on the shipped
+# surface, all in files byte-identical to upstream (so patching them grows the fork surface). Two
+# ANSI-SGR regexes (ansi.ts, debugANSIHandling.ts) parsed a 2-digit run two ways ((a|a)*), a renderer
+# ReDoS on crafted terminal/notebook output; rewritten to a strict-equivalent linear form. A snippet
+# regex (snippets.ts) had overlapping alternatives reachable via a workspace setting; the overlap is
+# removed, preserving captures for valid transforms while an unescaped "/" must now use the "\/" escape.
+# webSocketClientTransport.ts moves a network-controlled preview out of a console.warn format string;
+# promptsService.ts hardens the built-in skill-text stripper (bundled metadata only). This block counts too.
+
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
 recorded: 2026-07-25
-baseline: 5787 files changed, 52102 insertions(+), 1499439 deletions(-)
+baseline: 5792 files changed, 52119 insertions(+), 1499444 deletions(-)

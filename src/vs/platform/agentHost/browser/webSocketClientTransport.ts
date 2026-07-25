@@ -135,7 +135,8 @@ export class WebSocketClientTransport extends Disposable implements IClientTrans
 					if (this._malformedFrames <= MALFORMED_FRAMES_LOG_CAP) {
 						const preview = text.length > 80 ? text.slice(0, 80) + '…' : text;
 						console.warn(
-							`[WebSocketClientTransport] Malformed frame #${this._malformedFrames} (len=${text.length}): ${preview}`,
+							`[WebSocketClientTransport] Malformed frame #${this._malformedFrames} (len=${text.length}):`,
+							preview,
 							err instanceof Error ? err.message : String(err)
 						);
 					}

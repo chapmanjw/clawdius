@@ -53,15 +53,6 @@ const SESSIONS: readonly SessionConfig[] = [
 const COPILOT_SANDBOX_SCENARIO_ID = 'smoke-hello-copilot-sandbox';
 const COPILOT_SANDBOX_REPLY = 'MOCKED_COPILOT_SANDBOX_RESPONSE';
 
-const CODEX_SCENARIO_ID = 'smoke-hello-codex';
-const CODEX_REPLY = 'MOCKED_CODEX_RESPONSE';
-
-// Lightweight throwaway scenario used by {@link warmUpCodexModel} to pre-pay
-// the Codex session cold-start cost (native codex app-server spawn + model
-// list resolution) before the real assertion runs.
-const CODEX_WARMUP_SCENARIO_ID = 'smoke-hello-codex-warmup';
-const CODEX_WARMUP_REPLY = 'MOCKED_CODEX_WARMUP_RESPONSE';
-
 // Lightweight throwaway scenario used by {@link warmUpClaudeModel} to
 // pre-pay the Claude session cold-start cost (bundled SDK import, language
 // model server startup, SDK subprocess spawn, plugin loading) before the
@@ -1032,122 +1023,6 @@ export function setup(logger: Logger) {
 			}
 		});
 	});
-
-	describe('Agents Window (Codex)', () => {
-
-		const codex = setupAgentHostSuite(logger, {
-			serverLabel: 'Codex',
-			registerScenarios: ({ ScenarioBuilder, registerScenario }) => {
-				registerScenario(CODEX_SCENARIO_ID, new ScenarioBuilder().emit(CODEX_REPLY).build());
-				registerScenario(CODEX_WARMUP_SCENARIO_ID, new ScenarioBuilder().emit(CODEX_WARMUP_REPLY).build());
-			},
-			settings: {
-				// Register the Codex provider in the agent host process (it is
-				// off by default). The provider resolves the codex SDK from the
-				// repo's `node_modules` in dev, or `product.agentSdks.codex` in
-				// packaged builds (or the VSCODE_AGENT_HOST_CODEX_SDK_ROOT
-				// override) — so the test below is a hard requirement in dev and
-				// skips only in built products where the SDK is genuinely absent.
-				'chat.agentHost.codexAgent.enabled': true,
-			},
-		});
-
-		it('Test Codex session', async function () {
-			this.timeout(5 * 60 * 1000);
-
-			const app = this.app as Application;
-
-			// Resolve Codex availability OUTSIDE the try/catch below so that the
-			// Pending thrown by `this.skip()` is not swallowed (and re-thrown as a
-			// failure) by the failure-diagnostics handler.
-			await app.workbench.agentsWindow.waitForNewSessionView();
-			const codexAvailable = await app.workbench.agentsWindow.isSessionTypeAvailable('Codex');
-			if (!codexAvailable) {
-				// Codex must be available — and so this test must run rather than
-				// skip — whenever the build under test is supposed to be able to
-				// resolve the SDK:
-				//   - Running from source (VSCODE_DEV=1, set by the smoke runner
-				//     when no `--build` is passed): the agent host is not built, so
-				//     it resolves the SDK from the repo's `node_modules`
-				//     (`@openai/codex` is a devDependency).
-				//   - Publish builds: `product.agentSdks.codex` is stamped (only
-				//     when VSCODE_PUBLISH=true, see build/azure-pipelines/common/
-				//     agent-sdk-produce.yml) so the SDK is fetched from the CDN.
-				// In both cases an unavailable Codex is a regression — fail loudly.
-				// Otherwise (built non-publish CI, where the SDK is neither shipped
-				// nor stamped) Codex is legitimately absent, so skip gracefully.
-				//
-				// VSCODE_DEV (not app.quality === Quality.Dev) is the precise
-				// "from source" signal: parseQuality() also returns Quality.Dev for
-				// a `--build` product when VSCODE_QUALITY is unset, which would
-				// wrongly hard-fail a packaged build that legitimately lacks Codex.
-				const isFromSource = process.env['VSCODE_DEV'] === '1';
-				const isPublishBuild = (process.env['VSCODE_PUBLISH'] ?? '').toLowerCase() === 'true';
-				if (isFromSource || isPublishBuild) {
-					throw new Error(`[Agents Window/Codex] Codex session type unexpectedly unavailable (VSCODE_DEV=${process.env['VSCODE_DEV'] ?? '<unset>'}, VSCODE_PUBLISH=${process.env['VSCODE_PUBLISH'] ?? '<unset>'}) — the SDK should be resolvable from node_modules (from source) or product.agentSdks.codex (publish build)`);
-				}
-				logger.log('[Agents Window/Codex] Codex session type not available in this built product (no product.agentSdks.codex); skipping');
-				this.skip();
-			}
-
-			// Codex reports as "available" once the `@openai/codex` launcher shim
-			// resolves, but the native binary ships as a separate per-platform
-			// optional dependency that npm silently skips when its install fails.
-			// A stale `node_modules` cache can thus have the shim but no binary, so
-			// fail fast here (from source) instead of timing out at spawn time.
-			if (process.env['VSCODE_DEV'] === '1') {
-				const repoRoot = path.resolve(process.cwd(), '..', '..');
-				const platformPkgDir = path.join(repoRoot, 'node_modules', `@openai/codex-${process.platform}-${process.arch}`);
-				const binaryName = process.platform === 'win32' ? 'codex.exe' : 'codex';
-				let codexBinaryFound = false;
-				try {
-					const vendorDir = path.join(platformPkgDir, 'vendor');
-					codexBinaryFound = fs.readdirSync(vendorDir).some(triple => fs.existsSync(path.join(vendorDir, triple, 'bin', binaryName)));
-				} catch {
-					// vendor dir (or the whole platform package) is missing → treated as not found
-				}
-				if (!codexBinaryFound) {
-					throw new Error(`[Agents Window/Codex] Codex native binary missing at ${platformPkgDir}. We depend on \`@openai/codex\`, which is only a thin launcher shim; the actual native binaries ship as its per-platform optional dependencies (\`@openai/codex-<platform>-<arch>\`). \`npm install\` does not fail when an optional dependency can't be installed, so node_modules can end up with the shim but no binary — Codex then reports as "available" but has nothing to spawn. Try bumping build/.cachesalt to force a fresh \`npm ci\` that reinstalls the binary.`);
-				}
-			}
-
-			try {
-				// Pre-pay the Codex session cold-start cost: the first Codex session
-				// in a fresh agent host has to spawn the native codex app-server and
-				// resolve its model list before the first /responses request can
-				// complete. A throwaway prompt absorbs that so the real assertion
-				// runs against a warm pipeline.
-				await warmUpCodexModel(app, logger, 'Agents Window/Codex');
-
-				const requestsBefore = codex.mockServer.requestCount();
-				logger.log(`[Agents Window/Codex] submitting prompt; requestCount=${requestsBefore}`);
-				await app.workbench.agentsWindow.submitNewSessionPrompt(`hello world [scenario:${CODEX_SCENARIO_ID}]`);
-
-				const text = await app.workbench.agentsWindow.waitForAssistantText(CODEX_REPLY);
-				logger.log(`[Agents Window/Codex] response (length=${text.length}): ${text}`);
-
-				assert.ok(
-					codex.mockServer.requestCount() > requestsBefore,
-					`expected the mock LLM server to have received a new request from the Codex session (before=${requestsBefore}, after=${codex.mockServer.requestCount()})`
-				);
-
-				// Confirm the request flowed through the AgentHost process (the codex
-				// harness) and not a renderer-side fallback by checking for a
-				// `chat/turnStarted` frame in the AHP JSONL transcript. The transcript
-				// is written through an async queue, so poll briefly.
-				const ahpLogDir = path.join(codex.logsPath, 'ahp');
-				const ahpFrames = await waitForLogContent(() => readAhpFrames(ahpLogDir), '"type":"chat/turnStarted"');
-				assert.ok(
-					ahpFrames.includes('"type":"chat/turnStarted"'),
-					`expected the AgentHost process to have received a chat/turnStarted dispatchAction (checked ${ahpJsonlFiles(ahpLogDir).length} jsonl files under ${ahpLogDir}); if missing, the renderer-side extension likely served the reply instead`
-				);
-			} catch (error) {
-				logger.log(`[Agents Window/Codex] FAILURE: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
-				await dumpFailureDiagnostics(app, logger, 'Agents Window/Codex', { sendButtonSelector: AGENTS_SEND_BUTTON_SELECTOR });
-				throw error;
-			}
-		});
-	});
 }
 
 /**
@@ -1211,34 +1086,6 @@ async function warmUpClaudeModel(app: Application, logger: Logger, label: string
 	await app.workbench.agentsWindow.startNewSession();
 	await app.workbench.agentsWindow.waitForNewSessionView();
 	await app.workbench.agentsWindow.selectSessionType('Claude');
-}
-
-/**
- * Pre-pays the Codex session cold-start cost: the first Codex session in a
- * fresh agent host has to spawn the native `codex app-server` binary and
- * resolve its model list before the first `/responses` request can complete.
- *
- * Assumes the Agents Window is showing a new-session view AND that the 'Codex'
- * session type is available (callers gate on
- * {@link AgentsWindow.isSessionTypeAvailable} first). Sends a throwaway prompt
- * to a 'Codex' session, ignores its outcome (the warm-up itself may hit the
- * cold start), then leaves a fresh new-session view with 'Codex' selected so
- * the caller can submit the real prompt against a warm pipeline.
- */
-async function warmUpCodexModel(app: Application, logger: Logger, label: string): Promise<void> {
-	await app.workbench.agentsWindow.waitForNewSessionView();
-	await app.workbench.agentsWindow.selectSessionType('Codex');
-	await app.workbench.agentsWindow.submitNewSessionPrompt(`hello world [scenario:${CODEX_WARMUP_SCENARIO_ID}]`);
-	try {
-		await app.workbench.agentsWindow.waitForAssistantText(CODEX_WARMUP_REPLY, 60_000);
-	} catch (error) {
-		// Ignore — the warm-up itself may hit the cold-start race; the caller's
-		// real attempt runs against an already-warmed pipeline.
-		logger.log(`${label} warm-up attempt did not produce the expected reply (likely the cold-start race); proceeding with the real attempt. Reason: ${error instanceof Error ? error.message : String(error)}`);
-	}
-	await app.workbench.agentsWindow.startNewSession();
-	await app.workbench.agentsWindow.waitForNewSessionView();
-	await app.workbench.agentsWindow.selectSessionType('Codex');
 }
 
 /**

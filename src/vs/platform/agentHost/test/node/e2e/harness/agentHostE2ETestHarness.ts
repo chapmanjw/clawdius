@@ -183,8 +183,6 @@ export interface IAgentHostE2EProviderConfig {
 	 * the Claude provider.
 	 */
 	readonly claudeSdkRoot?: string;
-	/** Optional path to a locally installed `codex` binary. Forwarded to `startRealServer`. */
-	readonly codexSdkRoot?: string;
 	/**
 	 * Provider implements `config.isolation: 'worktree'` and resolves the
 	 * working directory to a `.worktrees/...` path on materialization. Now
@@ -602,7 +600,7 @@ export class AgentHostE2EServerLease {
 
 	constructor(
 		private readonly _config: IAgentHostE2EProviderConfig,
-		private readonly _startOptions: { readonly claudeSdkRoot?: string; readonly codexSdkRoot?: string; readonly homeDir?: string; readonly userDataDir?: string },
+		private readonly _startOptions: { readonly claudeSdkRoot?: string; readonly homeDir?: string; readonly userDataDir?: string },
 	) {
 		// Server reuse is a replay-only optimization: recording writes one fixture
 		// per proxy and so needs a fresh proxy (hence a fresh server) per test.

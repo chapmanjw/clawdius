@@ -63,7 +63,6 @@ export function findMissingNativeOptionalDep(nodeModulesDir: string, basePackage
 // Base packages whose per-platform package (`<base>-<platform>-<arch>`) is
 // required whenever the base package itself is installed.
 const NATIVE_OPTIONAL_DEP_BASE_PACKAGES = [
-	'@openai/codex',
 	'@anthropic-ai/claude-agent-sdk',
 ];
 

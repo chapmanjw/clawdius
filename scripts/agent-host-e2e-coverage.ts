@@ -32,11 +32,9 @@ const providerPackages = [
 	'@anthropic-ai/claude-agent-sdk',
 	'@github/copilot',
 	'@github/copilot-sdk',
-	'@openai/codex',
 ];
 
 const incompatibleFlags = [
-	'AGENT_HOST_REAL_CODEX',
 	'AGENT_HOST_REAL_SDK',
 	'AGENT_HOST_REPLAY_RECORD',
 	'AGENT_HOST_UPDATE_AHP_SNAPSHOTS',
@@ -157,7 +155,7 @@ function writeStats(): void {
 				'src/vs/platform/agentHost/common/**/*.ts',
 				'src/vs/platform/agentHost/node/**/*.ts',
 			],
-			suites: ['claude', 'codex', 'copilotcli'],
+			suites: ['claude', 'copilotcli'],
 		},
 		total,
 		files,

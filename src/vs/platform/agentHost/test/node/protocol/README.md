@@ -2,7 +2,7 @@
 
 These tests start a real Agent Host server and drive it over AHP WebSocket/JSON-RPC using `ScriptedMockAgent`. They cover protocol contracts, subscriptions, multi-client behavior, persistence, resource operations, permissions, and turn routing without loading a bundled provider SDK or calling an LLM.
 
-Use this folder when the behavior is owned by the Agent Host server or AHP contract and a scripted agent can express it precisely. Use `../e2e/` when the behavior depends on a real Claude, Copilot, or Codex process. Use a `*.test.ts` unit test when no server process is required.
+Use this folder when the behavior is owned by the Agent Host server or AHP contract and a scripted agent can express it precisely. Use `../e2e/` when the behavior depends on a real Claude or Copilot process. Use a `*.test.ts` unit test when no server process is required.
 
 Run one suite with:
 

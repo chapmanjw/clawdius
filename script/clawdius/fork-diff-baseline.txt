@@ -408,7 +408,16 @@
 # asserted only presence (usage dashboard, context budget, effort picker, themes) now assert
 # distinguishing content. No new files; test-harness only. This block's own lines count too.
 
+# Disposition 2026-07-25 (+59 files, +33 insertions, +8386 deletions): remove the dead OpenAI-Codex agent-host
+# subsystem and close two merge privacy residuals. Codex was inert (only ClaudeAgent registers as a provider);
+# deleting the upstream codex surface (approvals picker, config keys, e2e provider/fixtures/snapshots, build/codex
+# tooling) plus excising codex-only regions from shared files makes the fork DIVERGE further from upstream, so
+# files-changed and deletions GROW even though the shipped product shrinks - removing upstream code adds diff, it
+# does not subtract it. The +29 insertions are the privacy hardening (a no-op'd edit-telemetry forwarding leg plus
+# de-branded MCP-auth/voice strings); the codex excisions are net line removals. Dead code gone, Claude-only
+# hard-enforced, tree compiles clean. This block counts too.
+
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
 recorded: 2026-07-25
-baseline: 5728 files changed, 52060 insertions(+), 1491053 deletions(-)
+baseline: 5787 files changed, 52102 insertions(+), 1499439 deletions(-)

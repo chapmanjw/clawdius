@@ -1,6 +1,6 @@
 ---
 name: agent-host-e2e-tests
-description: Use when writing, recording, updating, or troubleshooting the agent host end-to-end tests under src/vs/platform/agentHost/test/node/e2e (black-box tests that drive the whole agent host over the AHP protocol, using a CapiReplayProxy record/replay system for Claude/Copilot/Codex). Covers adding a cross-provider test, re-recording fixtures after an SDK bump, gating non-deterministic or platform-specific tests, and diagnosing replay cache misses.
+description: Use when writing, recording, updating, or troubleshooting the agent host end-to-end tests under src/vs/platform/agentHost/test/node/e2e (black-box tests that drive the whole agent host over the AHP protocol, using a CapiReplayProxy record/replay system for Claude/Copilot). Covers adding a cross-provider test, re-recording fixtures after an SDK bump, gating non-deterministic or platform-specific tests, and diagnosing replay cache misses.
 ---
 
 # Agent host end-to-end tests
@@ -39,7 +39,7 @@ Re-record when you add a test, or when a bundled SDK/CLI bump changes its wire b
    AGENT_HOST_REPLAY_RECORD=1 ./scripts/test-integration.sh --run \
      src/vs/platform/agentHost/test/node/e2e/providers/claudeAgentHostE2E.integrationTest.ts
    ```
-   Repeat for `copilotAgentHostE2E` / `codexAgentHostE2E` as needed.
+   Repeat for `copilotAgentHostE2E` as needed.
 3. **Review `git diff` on the fixtures**: no local usernames/absolute paths, no tokens, no unreleased model ids. If something leaked, the fix is to extend normalization/redaction in `capiReplayProxy.ts` (`_normalize` + the `*_RE` redactors) and re-record — not to edit the fixture.
 4. Run plain replay (no env var) to confirm green, then commit.
 
@@ -52,7 +52,7 @@ Real-time streaming, mid-turn aborts, and POSIX-specific local execution (shell 
 - **Record-only** (no deterministic replay at all): `(RECORD ? test : test.skip)('…')` — see `can abort a running turn`.
 - **Subagent fixtures stale after an SDK bump**: re-record them (`AGENT_HOST_REPLAY_RECORD=1 …`). Subagent flows are the most SDK-version-sensitive (parent + child share one `/v1/messages` sequence), but replay reliably once re-recorded, so no gating is needed.
 - **POSIX-only** (fails on Windows): gate with `!isWindows`, or a targeted per-provider flag when only one provider diverges. See the worktree and subagent-reopen tests.
-- **Provider/OS-specific replay**: add a targeted config gate that still permits recording and unaffected platforms. See the Codex shell-tool Linux gate.
+- **Provider/OS-specific replay**: add a targeted config gate that still permits recording and unaffected platforms.
 
 Always add a comment explaining *why* the gate exists.
 

@@ -7,10 +7,9 @@ import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../../base/test/common/utils.js';
 import { ClaudeSessionConfigKey } from '../../../../../../platform/agentHost/common/claudeSessionConfigKeys.js';
 import { SessionConfigKey } from '../../../../../../platform/agentHost/common/sessionConfigKeys.js';
-import { CodexSessionConfigKey } from '../../../../../../platform/agentHost/common/codexSessionConfigKeys.js';
 import type { SessionConfigPropertySchema } from '../../../../../../platform/agentHost/common/state/protocol/commands.js';
 import { getConfigPickerItemHover, getConfigPickerListOptions, getConfigPickerTriggerHover, resolveConfigChipValue } from '../../../browser/agentSessions/agentHost/agentHostChatInputPicker.js';
-import { getAgentHostPickerProperty, OpenAgentHostAutoApprovePickerAction, OpenAgentHostCodexApprovalsPickerAction, OpenAgentHostModePickerAction, OpenAgentHostPermissionModePickerAction } from '../../../browser/agentSessions/agentHost/agentHostChatInputPicker.contribution.js';
+import { getAgentHostPickerProperty, OpenAgentHostAutoApprovePickerAction, OpenAgentHostModePickerAction, OpenAgentHostPermissionModePickerAction } from '../../../browser/agentSessions/agentHost/agentHostChatInputPicker.contribution.js';
 import { isAutoApproveValuePolicyRestricted, isPermissionLevelVisible, normalizeSessionConfigValue } from '../../../common/agentHostConfigPolicy.js';
 import { ChatPermissionLevel } from '../../../common/constants.js';
 
@@ -23,12 +22,10 @@ suite('AgentHostChatInputPicker - action mapping', () => {
 			getAgentHostPickerProperty(OpenAgentHostModePickerAction.ID),
 			getAgentHostPickerProperty(OpenAgentHostAutoApprovePickerAction.ID),
 			getAgentHostPickerProperty(OpenAgentHostPermissionModePickerAction.ID),
-			getAgentHostPickerProperty(OpenAgentHostCodexApprovalsPickerAction.ID),
 		], [
 			SessionConfigKey.Mode,
 			SessionConfigKey.AutoApprove,
 			ClaudeSessionConfigKey.PermissionMode,
-			CodexSessionConfigKey.PermissionsPreset,
 		]);
 	});
 });
@@ -42,17 +39,10 @@ suite('AgentHostChatInputPicker - list options', () => {
 			mode: getConfigPickerListOptions(SessionConfigKey.Mode),
 			approvals: getConfigPickerListOptions(SessionConfigKey.AutoApprove),
 			claudePermissions: getConfigPickerListOptions(ClaudeSessionConfigKey.PermissionMode),
-			codexApprovals: getConfigPickerListOptions(CodexSessionConfigKey.PermissionsPreset),
 		}, {
 			mode: { minWidth: 260 },
 			approvals: { minWidth: 255 },
 			claudePermissions: undefined,
-			codexApprovals: {
-				className: 'codex-approvals-picker',
-				minWidth: 340,
-				maxWidth: 340,
-				detailItemHeight: 76,
-			},
 		});
 	});
 });
@@ -143,21 +133,6 @@ suite('AgentHostChatInputPicker - resolveConfigChipValue', () => {
 			);
 		});
 
-		test('explains the selected Codex permissions preset on the trigger hover', () => {
-			const codexApprovalsSchema = {
-				type: 'string',
-				title: 'Approvals',
-				description: 'How much Codex can do on its own before asking for approval.',
-				enum: ['default', 'auto-review', 'full-access'],
-				enumLabels: ['Default Permissions', 'Auto-Review', 'Full Access'],
-				enumDescriptions: ['Default access', 'Auto-review access', 'Full machine access'],
-			} as SessionConfigPropertySchema;
-
-			assert.strictEqual(
-				getConfigPickerTriggerHover(CodexSessionConfigKey.PermissionsPreset, codexApprovalsSchema, 'full-access', false),
-				'Full machine access'
-			);
-		});
 	});
 
 	suite('untitled (pre-send) session', () => {

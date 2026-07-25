@@ -23,7 +23,7 @@ const isWindows = process.platform === 'win32';
 export function defineAgentHostE2ETests(config: IAgentHostE2EProviderConfig): void {
 	(config.enabled ? suite : suite.skip)(config.suiteTitle, function () {
 		const shellToolReplayEnabled = !isWindows && (RECORD || !isLinux || !config.shellToolReplayUnstableOnLinux);
-		const stableNewScenarioResponse = config.provider !== 'codex';
+		const stableNewScenarioResponse = true;
 		let client: TestProtocolClient;
 		let lease: AgentHostE2EServerLease | undefined;
 		let suiteDataDir: string | undefined;
@@ -45,7 +45,6 @@ export function defineAgentHostE2ETests(config: IAgentHostE2EProviderConfig): vo
 			suiteDataDir = mkdtempSync(join(tmpdir(), 'vscode-agent-host-e2e-'));
 			lease = new AgentHostE2EServerLease(config, {
 				claudeSdkRoot: config.claudeSdkRoot,
-				codexSdkRoot: config.codexSdkRoot,
 				homeDir: suiteDataDir,
 				userDataDir: join(suiteDataDir, 'user-data'),
 			});

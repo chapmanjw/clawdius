@@ -70,17 +70,6 @@ export const AgentHostSystemProxyEnabledSettingId = 'chat.agentHost.systemProxy.
 export const AgentHostClaudeAgentEnabledSettingId = 'chat.agentHost.claudeAgent.enabled';
 
 /**
- * Configuration key identifying whether the (unregistered, fork-disabled) Codex
- * provider would be surfaced. Clawdius never registers a Codex provider or spawns
- * the Codex SDK — this constant exists only because {@link affectsAgentHostProviderPreference}
- * and {@link shouldSurfaceLocalAgentHostProvider} below use it as one arm of a
- * generic per-provider settings switch (consumed by out-of-tree Agents Window
- * contributions). Always evaluates falsy in practice since nothing ever sets it
- * to `true` or registers `'codex'` as a live provider.
- */
-export const AgentHostCodexAgentEnabledSettingId = 'chat.agentHost.codexAgent.enabled';
-
-/**
  * Configuration key controlling whether the agent host *wires up* the BYOK
  * ("bring your own key") language-model bridge: the renderer LM handler, the
  * reverse-RPC channel, and the per-connection link to the node-side OpenAI
@@ -195,12 +184,6 @@ export const ClaudePreferAgentHostAgentsSettingId = 'chat.agents.claude.preferAg
  */
 export const ClaudePreferAgentHostEditorSettingId = 'chat.editor.claude.preferAgentHost';
 
-/**
- * Selects whether the regular workbench surfaces Codex from the agent host
- * instead of the OpenAI extension.
- */
-export const CodexPreferAgentHostEditorSettingId = 'chat.editor.codex.preferAgentHost';
-
 export function claudePreferAgentHostSettingId(isSessionsWindow: boolean): string {
 	return isSessionsWindow
 		? ClaudePreferAgentHostAgentsSettingId
@@ -208,16 +191,13 @@ export function claudePreferAgentHostSettingId(isSessionsWindow: boolean): strin
 }
 
 export function affectsAgentHostProviderPreference(event: IConfigurationChangeEvent, isSessionsWindow: boolean): boolean {
-	return event.affectsConfiguration(claudePreferAgentHostSettingId(isSessionsWindow))
-		|| event.affectsConfiguration(isSessionsWindow ? AgentHostCodexAgentEnabledSettingId : CodexPreferAgentHostEditorSettingId);
+	return event.affectsConfiguration(claudePreferAgentHostSettingId(isSessionsWindow));
 }
 
 export function shouldSurfaceLocalAgentHostProvider(provider: AgentProvider, configurationService: IConfigurationService, isSessionsWindow: boolean): boolean {
 	switch (provider) {
 		case CLAUDE_AGENT_PROVIDER_ID:
 			return configurationService.getValue<boolean>(claudePreferAgentHostSettingId(isSessionsWindow)) === true;
-		case CODEX_AGENT_PROVIDER_ID:
-			return configurationService.getValue<boolean>(isSessionsWindow ? AgentHostCodexAgentEnabledSettingId : CodexPreferAgentHostEditorSettingId) === true;
 		default:
 			return true;
 	}
@@ -692,9 +672,6 @@ export type AgentProvider = string;
 
 /** Well-known agent provider id for the Claude agent-host backend. */
 export const CLAUDE_AGENT_PROVIDER_ID = 'claude' as const;
-
-/** Well-known agent provider id for the Codex agent-host backend. */
-export const CODEX_AGENT_PROVIDER_ID = 'codex' as const;
 
 /**
  * Static capability facts an agent backend advertises about itself. Each flag

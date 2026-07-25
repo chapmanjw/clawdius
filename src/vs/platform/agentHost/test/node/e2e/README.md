@@ -1,6 +1,6 @@
 # Agent host end-to-end tests
 
-End-to-end tests that exercise the **whole agent host** — the real server process, the real bundled provider SDK/CLI subprocess (Claude / Copilot / Codex), and the real JSON-RPC + AHP protocol over a WebSocket — **without a token and without network**.
+End-to-end tests that exercise the **whole agent host** — the real server process, the real bundled provider SDK/CLI subprocess (Claude / Copilot), and the real JSON-RPC + AHP protocol over a WebSocket — **without a token and without network**.
 
 They do this by recording the model traffic once (against real CAPI) into committed YAML fixtures, then **replaying** those fixtures deterministically on every run. Only the *model responses* are faked; everything else (the server, the SDK subprocess, tool execution, the protocol) is real.
 
@@ -40,7 +40,7 @@ flowchart LR
         client[TestProtocolClient<br/>WebSocket + JSON-RPC]
     end
     subgraph host[Agent host server subprocess]
-        agent[Provider SDK / CLI<br/>Claude / Copilot / Codex]
+        agent[Provider SDK / CLI<br/>Claude / Copilot]
     end
     client -- AHP protocol --> host
     agent -- HTTP /v1/messages, /responses --> proxy[CapiReplayProxy]
@@ -63,7 +63,7 @@ Key properties:
 
 | Path | Role |
 |---|---|
-| `providers/` | Deterministic provider entry points and provider-specific scenarios. Live Codex scenarios are isolated in `codexAgentHostLive.integrationTest.ts`. |
+| `providers/` | Deterministic provider entry points and provider-specific scenarios. |
 | `suites/` | Cross-provider scenarios grouped by behavior. Add new shared scenarios to the closest existing suite; add a suite module when a new behavior area emerges. |
 | `harness/` | Record/replay, AHP snapshots, shared turn drivers, and server lifecycle. |
 | `captures/*.yaml` | The committed fixtures, one per `(provider, test)`. |
@@ -123,7 +123,6 @@ Provider availability:
 
 - **Copilot** (`copilotcli`) — always enabled (the CLI is a dev dependency).
 - **Claude** — enabled when `node_modules/@anthropic-ai/claude-agent-sdk` is present (dev dep).
-- **Codex** — shared suite enabled when `node_modules/@openai/codex` is present. Codex-specific *steering* tests (real-time, non-deterministic) are extra and gated behind `AGENT_HOST_REAL_CODEX=1`.
 
 ---
 
@@ -151,7 +150,7 @@ Run the deterministic full-stack provider suites and collect native V8 coverage 
 npm run test-agent-host-e2e-coverage
 ```
 
-The command retranspiles the sources, runs only the Claude, Codex, and Copilot E2E suites in replay mode, and sets `AGENT_HOST_E2E_COVERAGE=1`. These suites exercise the real Agent Host server, bundled provider process, AHP transport, and local tools; only model traffic is replayed. Mock-agent protocol tests, mocked-LLM provider tests, and direct SDK integration tests do not contribute to this coverage report.
+The command retranspiles the sources, runs only the Claude and Copilot E2E suites in replay mode, and sets `AGENT_HOST_E2E_COVERAGE=1`. These suites exercise the real Agent Host server, bundled provider process, AHP transport, and local tools; only model traffic is replayed. Mock-agent protocol tests, mocked-LLM provider tests, and direct SDK integration tests do not contribute to this coverage report.
 
 The coverage opt-in sets `NODE_V8_COVERAGE` only on Agent Host child processes. Provider suite teardown closes the server's stdin and awaits its graceful shutdown so Node flushes coverage after the host finishes its existing persistence cleanup.
 
@@ -298,8 +297,6 @@ The fixture was never recorded (or the test title changed and orphaned it). Reco
 
 Usually the *local execution* diverges by platform (the model replay is byte-identical everywhere). Windows shells, `pwd`, `git worktree` paths, and some SDK tool calls behave differently. Gate the test off that platform (`!isWindows` or a per-provider flag) — don't bump timeouts to mask it.
 
-Codex fixtures use its unified `exec_command` tool, so Codex record/replay servers explicitly enable `features.unified_exec` rather than inheriting an app-server configuration that advertises the incompatible legacy `shell_command` tool. Packaged Linux still completes those recorded turns without command-execution notifications, so the shell-dependent Codex replay tests are gated there.
-
 ### A test passes on macOS/Linux but fails on Windows
 
 Same as above — it's platform-specific real execution, not the proxy. See the worktree and subagent gates for established patterns.
@@ -334,7 +331,7 @@ This system is a lighter-weight adaptation of the `copilot-agent-runtime` CLI e2
 |---|---|---|
 | **System under test** | The agent host server, driven over the AHP WebSocket / JSON-RPC protocol | The Copilot CLI itself, driven through a real PTY / xterm terminal emulator (the full TUI) |
 | **Assertions** | On AHP protocol notifications | On rendered terminal output (`app.expect(…)`, tool-call UI, menus, tab-completion) |
-| **Providers** | Multi-provider (Claude / Copilot / Codex) via one shared parameterized suite | Copilot CLI only |
+| **Providers** | Multi-provider (Claude / Copilot) via one shared parameterized suite | Copilot CLI only |
 | **Response matching** | Sequence-based per `(method, path)` — no body matching | Normalized **request-body** matching (canonicalized to chat-completions), reports a `mismatchReason` on miss |
 | **Fixtures** | One minimal YAML per `(provider, test)` | A directory of named YAML snapshots per scenario |
 | **Runner / record** | Mocha (Electron) via `test-integration.sh`; record with `AGENT_HOST_REPLAY_RECORD=1` | vitest; `SKIP_CACHE` / `STRICT_CAPTURES`, plus asciinema session recording |

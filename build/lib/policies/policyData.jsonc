@@ -234,21 +234,6 @@
             ]
         },
         {
-            "key": "chat.agentHost.codexAgent.enabled",
-            "name": "Codex3PIntegration",
-            "category": "InteractiveSession",
-            "minimumVersion": "1.126",
-            "localization": {
-                "description": {
-                    "key": "chat.agentHost.codexAgent.enabled.policy",
-                    "value": "Enable Codex Agent sessions in Clawdius. Start and resume agentic coding sessions powered by OpenAI Codex SDK."
-                }
-            },
-            "type": "boolean",
-            "default": false,
-            "included": true
-        },
-        {
             "key": "chat.agentHost.otel.enabled",
             "name": "CopilotOtelEnabled",
             "category": "InteractiveSession",

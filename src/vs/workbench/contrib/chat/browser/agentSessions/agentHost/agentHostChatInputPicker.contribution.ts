@@ -6,7 +6,6 @@
 import { localize2 } from '../../../../../../nls.js';
 import { Action2, MenuId, registerAction2 } from '../../../../../../platform/actions/common/actions.js';
 import { ClaudeSessionConfigKey } from '../../../../../../platform/agentHost/common/claudeSessionConfigKeys.js';
-import { CodexSessionConfigKey } from '../../../../../../platform/agentHost/common/codexSessionConfigKeys.js';
 import { SessionConfigKey } from '../../../../../../platform/agentHost/common/sessionConfigKeys.js';
 import { ContextKeyExpr } from '../../../../../../platform/contextkey/common/contextkey.js';
 import { IsSessionsWindowContext, WorkspaceFolderCountContext } from '../../../../../common/contextkeys.js';
@@ -24,7 +23,6 @@ import { ChatContextKeys, ChatContextKeyExprs } from '../../../common/actions/ch
  *   0.7  OpenAgentHostModePickerAction        (NEW — Mode)
  *   0.8  OpenAgentHostAutoApprovePickerAction (NEW — Auto-Approve)
  *   0.9  OpenAgentHostPermissionModePickerAction (NEW — Claude Approvals)
- *   0.9  OpenAgentHostCodexApprovalsPickerAction (NEW — Codex Approvals)
  *   1    OpenPermissionPickerAction           (Default Approvals)
  *   1.1  OpenAgentHostFolderPickerAction      (NEW — Folder, multi-root only;
  *                                              ordered last to match the
@@ -118,25 +116,6 @@ export class OpenAgentHostPermissionModePickerAction extends Action2 {
 	override async run(): Promise<void> { /* the action view item handles interaction */ }
 }
 
-export class OpenAgentHostCodexApprovalsPickerAction extends Action2 {
-	static readonly ID = 'workbench.action.chat.openAgentHostCodexApprovalsPicker';
-	constructor() {
-		super({
-			id: OpenAgentHostCodexApprovalsPickerAction.ID,
-			title: localize2('agentHost.codexApprovalsPicker', "Approvals"),
-			f1: false,
-			precondition: ChatContextKeys.enabled,
-			menu: [{
-				id: MenuId.ChatInputSecondary,
-				group: 'navigation',
-				order: 0.9,
-				when: ChatContextKeyExprs.isAgentHostSession,
-			}],
-		});
-	}
-	override async run(): Promise<void> { /* the action view item handles interaction */ }
-}
-
 export function getAgentHostPickerProperty(actionId: string): string | undefined {
 	switch (actionId) {
 		case OpenAgentHostModePickerAction.ID:
@@ -145,8 +124,6 @@ export function getAgentHostPickerProperty(actionId: string): string | undefined
 			return SessionConfigKey.AutoApprove;
 		case OpenAgentHostPermissionModePickerAction.ID:
 			return ClaudeSessionConfigKey.PermissionMode;
-		case OpenAgentHostCodexApprovalsPickerAction.ID:
-			return CodexSessionConfigKey.PermissionsPreset;
 		default:
 			return undefined;
 	}
@@ -155,5 +132,4 @@ export function getAgentHostPickerProperty(actionId: string): string | undefined
 registerAction2(OpenAgentHostModePickerAction);
 registerAction2(OpenAgentHostAutoApprovePickerAction);
 registerAction2(OpenAgentHostPermissionModePickerAction);
-registerAction2(OpenAgentHostCodexApprovalsPickerAction);
 registerAction2(OpenAgentHostFolderPickerAction);

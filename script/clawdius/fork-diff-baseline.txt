@@ -394,7 +394,14 @@
 # (files 5729->5727, insertions 52106->51904) because more moved files score as renames rather than delete+add
 # - a measurement change identical on CI and locally, not a surface change. This block's own lines count too.
 
+# Disposition 2026-07-24 (+1 file, +66 insertions): agent-host effort-pill guard test. The 1.130.0 merge
+# deleted the fork's chatModelPicker override that forced the thinking-effort pill on; the pill still
+# renders because upstream removed the usage-based-billing gate, so it now shows purely from the model's
+# advertised navigation-group config. Add a unit test asserting the effort pill is visible for an agent-
+# host model (empty entitlement URL) so a change to the pill's render/config path cannot silently re-gate
+# it — a caller-level gate stays out of the unit's reach. Growth is one new test file. This block counts too.
+
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
 recorded: 2026-07-24
-baseline: 5727 files changed, 51913 insertions(+), 1491053 deletions(-)
+baseline: 5728 files changed, 51986 insertions(+), 1491053 deletions(-)

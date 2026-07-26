@@ -384,6 +384,10 @@ function packageTask(type: string, platform: string, arch: string, sourceFolderN
 			.filter(entry => !entry.clientOnly)
 			.map(entry => entry.name);
 		const extensionPaths = [...localWorkspaceExtensions, ...marketplaceExtensions]
+			// gulp 5 / vinyl-fs 4 throws ENOENT when a glob's directory is absent, where gulp 4 gave an empty
+			// stream. Some selected names are never built - the test extensions in build/lib/extensions.ts's
+			// excludedExtensions (e.g. vscode-colorize-tests) - so glob only the names the build produced.
+			.filter(name => fs.existsSync(`.build/extensions/${name}`))
 			.map(name => `.build/extensions/${name}/**`);
 
 		const extensions = gulp.src(extensionPaths, { base: '.build', dot: true, encoding: false });

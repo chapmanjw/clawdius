@@ -340,7 +340,14 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 				this.emit('data', file);
 			}));
 
-		const license = gulp.src([product.licenseFileName, 'ThirdPartyNotices.txt', 'licenses/**'], { base: '.', allowEmpty: true });
+		// gulp 5 / vinyl-fs 4 throws ENOENT on the `licenses/**` glob when the licenses directory is absent,
+		// where gulp 4 tolerated it. Clawdius has no top-level licenses/ tree, so include that glob only when
+		// the directory exists; the license files are still read (allowEmpty covers their own absence).
+		const licenseGlobs = [product.licenseFileName, 'ThirdPartyNotices.txt'];
+		if (fs.existsSync('licenses')) {
+			licenseGlobs.push('licenses/**');
+		}
+		const license = gulp.src(licenseGlobs, { base: '.', allowEmpty: true });
 
 		// TODO the API should be copied to `out` during compile, not here
 		const api = gulp.src('src/vscode-dts/vscode.d.ts').pipe(rename('out/vscode-dts/vscode.d.ts'));

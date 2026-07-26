@@ -476,7 +476,17 @@
 # runs vscode-reh-linux-x64. The win32/darwin package paths share the guarded code but are not
 # ubuntu-buildable in CI, so they are covered by parity. This block's own lines count too.
 
+# Disposition 2026-07-26 (+22 insertions): guard two more absent gulp-5 packaging roots - the licenses dir
+# and the REH test-extension globs. Follow-on to the packaging guards above (same vinyl-fs 4 scandir ENOENT
+# that allowEmpty does not suppress). Desktop: the license stream globs `licenses/**` alongside the LICENSE
+# and ThirdPartyNotices files, and clawdius has no top-level licenses/ tree, so that glob is now included
+# only when the directory exists (the two files are still read). REH: extensionPaths globbed
+# `.build/extensions/<name>/**` for every selected name, but the test extensions in build/lib/extensions.ts's
+# excludedExtensions (vscode-colorize-tests and -perf-tests) are never built, so their dirs are absent; the
+# name list is now filtered to the dirs the build actually produced. gulpfile.vscode.ts + gulpfile.reh.ts.
+# This block's own lines count too.
+
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
 recorded: 2026-07-25
-baseline: 5812 files changed, 53424 insertions(+), 1502929 deletions(-)
+baseline: 5812 files changed, 53446 insertions(+), 1502930 deletions(-)

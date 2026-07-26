@@ -37,6 +37,34 @@ suite('claudeUsageProvider', () => {
 		);
 	});
 
+	test('providerFromEnv: host-spoof base URLs are Custom, not Anthropic (egress gate)', () => {
+		// The provider gate must classify by the parsed HOST, not a substring/regex match, so a lookalike or
+		// userinfo/query/fragment trick cannot be mistaken for Anthropic and leak the CLI OAuth token. Genuine
+		// forms (port, path, uppercase, http) stay Anthropic; unparseable/scheme-less fail closed to Custom.
+		assert.deepStrictEqual(
+			[
+				providerFromEnv({ ANTHROPIC_BASE_URL: 'https://api.anthropic.com@evil.example/' }),
+				providerFromEnv({ ANTHROPIC_BASE_URL: 'https://evil.example?@api.anthropic.com' }),
+				providerFromEnv({ ANTHROPIC_BASE_URL: 'https://evil.example#@api.anthropic.com' }),
+				providerFromEnv({ ANTHROPIC_BASE_URL: 'https://api.anthropic.com.evil.example/' }),
+				providerFromEnv({ ANTHROPIC_BASE_URL: 'ftp://api.anthropic.com' }),
+				providerFromEnv({ ANTHROPIC_BASE_URL: 'api.anthropic.com' }),
+				providerFromEnv({ ANTHROPIC_BASE_URL: 'https://api.anthropic.com:443/v1' }),
+				providerFromEnv({ ANTHROPIC_BASE_URL: 'http://API.ANTHROPIC.COM' }),
+			],
+			[
+				ClaudeProvider.Custom,
+				ClaudeProvider.Custom,
+				ClaudeProvider.Custom,
+				ClaudeProvider.Custom,
+				ClaudeProvider.Custom,
+				ClaudeProvider.Custom,
+				ClaudeProvider.Anthropic,
+				ClaudeProvider.Anthropic,
+			],
+		);
+	});
+
 	// --- engineIsAnthropic ------------------------------------------------------------------------------------
 
 	test('engineIsAnthropic: true only for Anthropic, false for Bedrock/Vertex/Custom', () => {

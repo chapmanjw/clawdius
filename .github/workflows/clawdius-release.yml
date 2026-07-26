@@ -210,7 +210,7 @@ jobs:
         run: |
           npm run gulp vscode-linux-${{ matrix.arch }}-min
           npm run gulp vscode-linux-${{ matrix.arch }}-prepare-snap
-      - uses: snapcore/action-build@v1
+      - uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1
         id: snapbuild
         with:
           # gulp prepare-snap writes the snapcraft tree to .build/linux/snap/<arch>/<applicationName>-<arch>
@@ -224,7 +224,7 @@ jobs:
         # attached to the GitHub release; only the store upload is held. To re-enable, restore the gate:
         #   if: ${{ env.SNAPCRAFT_STORE_CREDENTIALS != '' && !startsWith(github.ref_name, 'v0.0.0') }}
         if: ${{ false }}
-        uses: snapcore/action-publish@v1
+        uses: snapcore/action-publish@214b86e5ca036ead1668c79afb81e550e6c54d40 # v1
         with:
           snap: ${{ steps.snapbuild.outputs.snap }}
           release: edge
@@ -304,7 +304,7 @@ jobs:
       - name: List assets
         run: ls -la dist
       - name: Create draft release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           draft: true
           prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || startsWith(github.ref_name, 'v0.0.0') }}

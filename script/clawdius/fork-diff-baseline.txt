@@ -483,7 +483,16 @@
 # query-filters to the CodeQL config excluding those, keeping the security queries plus the useful quality
 # queries (js/missing-await, js/comparison-between-incompatible-types). This block's own lines count too.
 
+# Disposition 2026-07-26 (+70 insertions): fix six triaged CodeQL security findings on fork code. Of the
+# scoped scan's 17 security findings, 6 were genuine and are fixed here: pin three third-party release
+# actions to commit SHAs (supply-chain); JSON.stringify the malformed-frame log preview AND the parse-error
+# message (a WebSocket peer's CR/LF could otherwise forge log lines); and match the api.anthropic.com host by
+# parsing the base URL with `new URL` in both mirrored copies (a substring/regex check let a lookalike or
+# userinfo-trick host - api.anthropic.com.evil, evil?@api.anthropic.com - defeat the egress gate). The 9
+# false positives are dismissed via the code-scanning API with rationale, and the 2 dev-only .github/skills
+# file-race findings are dropped from scan scope. This block's own lines count too.
+
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
 recorded: 2026-07-25
-baseline: 5812 files changed, 52847 insertions(+), 1500096 deletions(-)
+baseline: 5812 files changed, 52917 insertions(+), 1500098 deletions(-)

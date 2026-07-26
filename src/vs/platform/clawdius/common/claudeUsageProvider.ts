@@ -20,6 +20,20 @@ export const enum ClaudeProvider {
 }
 
 /**
+ * True only when a base URL's parsed host is exactly api.anthropic.com over http(s). Parsing with URL rather
+ * than a substring/regex match prevents lookalike or userinfo-trick hosts - api.anthropic.com.evil,
+ * api.anthropic.com@evil, evil?@api.anthropic.com - from being treated as Anthropic. Unparseable -> false.
+ */
+function isAnthropicApiHost(baseUrl: string): boolean {
+	try {
+		const url = new URL(baseUrl);
+		return (url.protocol === 'https:' || url.protocol === 'http:') && url.hostname.toLowerCase() === 'api.anthropic.com';
+	} catch {
+		return false;
+	}
+}
+
+/**
  * Infer the engine provider from a Claude Code settings `env` map. Pure (the file read lives in each caller);
  * extracted so the provider precedence is unit-testable without a file service. Precedence: Bedrock, then Vertex,
  * then a non-Anthropic ANTHROPIC_BASE_URL (custom), else Anthropic.
@@ -29,7 +43,7 @@ export function providerFromEnv(env: { readonly [key: string]: unknown }): Claud
 	if (truthy(env['CLAUDE_CODE_USE_BEDROCK'])) { return ClaudeProvider.Bedrock; }
 	if (truthy(env['CLAUDE_CODE_USE_VERTEX'])) { return ClaudeProvider.Vertex; }
 	const baseUrl = env['ANTHROPIC_BASE_URL'];
-	if (typeof baseUrl === 'string' && baseUrl.length > 0 && !/api\.anthropic\.com/i.test(baseUrl)) {
+	if (typeof baseUrl === 'string' && baseUrl.length > 0 && !isAnthropicApiHost(baseUrl)) {
 		return ClaudeProvider.Custom;
 	}
 	return ClaudeProvider.Anthropic;

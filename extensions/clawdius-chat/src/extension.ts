@@ -307,6 +307,19 @@ function buildMessages(history: ReadonlyArray<vscode.ChatRequestTurn | vscode.Ch
  * zero uninitiated network egress (the zero-egress guarantee); the bars populate when the user looks at them.
  */
 /**
+ * True only when a base URL's parsed host is exactly api.anthropic.com over http(s). Parsing with URL rather
+ * than a substring/regex match prevents lookalike or userinfo-trick hosts - api.anthropic.com.evil,
+ * api.anthropic.com@evil, evil?@api.anthropic.com - from being treated as Anthropic. Unparseable -> false.
+ */
+function isAnthropicApiHost(baseUrl: string): boolean {
+	try {
+		const url = new URL(baseUrl);
+		return (url.protocol === 'https:' || url.protocol === 'http:') && url.hostname.toLowerCase() === 'api.anthropic.com';
+	} catch {
+		return false;
+	}
+}
+/**
  * Whether ~/.claude/settings.json points the engine at Anthropic's own API (vs Bedrock / Vertex / a custom base
  * URL). Only Anthropic exposes /api/oauth/usage, so the capacity fetch is skipped for any other provider - the IDE
  * never reaches api.anthropic.com when the user's engine is elsewhere. Mirrors detectProvider() in
@@ -321,7 +334,7 @@ function engineIsAnthropic(): boolean {
 			return false;
 		}
 		const baseUrl = env.ANTHROPIC_BASE_URL;
-		if (typeof baseUrl === 'string' && baseUrl.length > 0 && !/api\.anthropic\.com/i.test(baseUrl)) {
+		if (typeof baseUrl === 'string' && baseUrl.length > 0 && !isAnthropicApiHost(baseUrl)) {
 			return false;
 		}
 		return true;

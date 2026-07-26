@@ -133,11 +133,14 @@ export class WebSocketClientTransport extends Disposable implements IClientTrans
 				} catch (err) {
 					this._malformedFrames++;
 					if (this._malformedFrames <= MALFORMED_FRAMES_LOG_CAP) {
-						const preview = text.length > 80 ? text.slice(0, 80) + '…' : text;
+						// JSON.stringify escapes CR/LF and control chars so a malformed frame from the peer cannot
+						// forge additional log lines (log injection, CWE-117). The JSON.parse error message reproduces
+						// the frame text, so it is escaped the same way.
+						const preview = JSON.stringify(text.length > 80 ? text.slice(0, 80) + '…' : text);
 						console.warn(
 							`[WebSocketClientTransport] Malformed frame #${this._malformedFrames} (len=${text.length}):`,
 							preview,
-							err instanceof Error ? err.message : String(err)
+							JSON.stringify(err instanceof Error ? err.message : String(err))
 						);
 					}
 					if (this._malformedFrames > MALFORMED_FRAMES_FORCE_CLOSE_THRESHOLD) {

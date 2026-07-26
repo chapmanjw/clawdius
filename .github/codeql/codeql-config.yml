@@ -24,13 +24,14 @@ paths:
   - cli
   - .github
 
-# Never analyze vendored dependencies, generated output, or ambient type declarations, even inside the
-# owned paths above.
+# Never analyze vendored dependencies, generated output, ambient type declarations, or the dev-only Claude
+# Code skill helpers under .github/skills (not shipped in the product), even inside the owned paths above.
 paths-ignore:
   - '**/node_modules'
   - '**/*.d.ts'
   - out
   - out-build
+  - .github/skills
 
 # Security + quality. Scoped to Clawdius-owned code above, so quality/maintainability findings land on the
 # fork's own code and are actionable. For a security-only posture, narrow this to `security-extended` (deep

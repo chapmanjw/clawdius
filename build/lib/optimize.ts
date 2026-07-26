@@ -190,7 +190,7 @@ function bundleESMTask(opts: IBundleESMTaskOpts): NodeJS.ReadWriteStream {
 		es.readArray(output.files).pipe(bundlesStream);
 
 		// forward all resources
-		gulp.src(opts.resources ?? [], { base: `${opts.src}`, allowEmpty: true }).pipe(resourcesStream);
+		gulp.src(opts.resources ?? [], { base: `${opts.src}`, allowEmpty: true, encoding: false }).pipe(resourcesStream);
 	});
 
 	const result = es.merge(

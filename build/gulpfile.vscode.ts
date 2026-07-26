@@ -276,7 +276,7 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 			'vs/sessions/electron-browser/sessions.js'
 		]);
 
-		const src = gulp.src(out + '/**', { base: '.' })
+		const src = gulp.src(out + '/**', { base: '.', encoding: false })
 			.pipe(rename(function (path) { path.dirname = path.dirname!.replace(new RegExp('^' + out), 'out'); }))
 			.pipe(util.setExecutableBit(['**/*.sh']));
 
@@ -289,7 +289,7 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 			return !set.has(platform);
 		}).map(ext => `!.build/extensions/${ext.name}/**`);
 
-		const extensions = gulp.src(['.build/extensions/**', ...platformSpecificBuiltInExtensionsExclusions], { base: '.build', dot: true });
+		const extensions = gulp.src(['.build/extensions/**', ...platformSpecificBuiltInExtensionsExclusions], { base: '.build', dot: true, encoding: false });
 
 		const sourceFilterPattern = stripSourceMapsInPackagingTasks
 			? ['**', '!**/*.{js,css}.map']
@@ -357,12 +357,12 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 			depFilterPattern.push('!**/*.{js,css}.map');
 		}
 
-		const cleanedDeps = gulp.src(dependenciesSrc, { base: '.', dot: true })
+		const cleanedDeps = gulp.src(dependenciesSrc, { base: '.', dot: true, encoding: false })
 			.pipe(filter(depFilterPattern))
 			.pipe(util.cleanNodeModules(path.join(import.meta.dirname, '.moduleignore')))
 			.pipe(util.cleanNodeModules(path.join(import.meta.dirname, `.moduleignore.${process.platform}`)));
 		ensureOSProxyResolverPlatformPackage(platform, arch);
-		const osProxyResolverPlatformPackage = gulp.src(getOSProxyResolverPlatformFiles(platform, arch), { base: '.', dot: true, allowEmpty: true });
+		const osProxyResolverPlatformPackage = gulp.src(getOSProxyResolverPlatformFiles(platform, arch), { base: '.', dot: true, allowEmpty: true, encoding: false });
 		const deps = es.merge(cleanedDeps, osProxyResolverPlatformPackage)
 			.pipe(filter(getRipgrepExcludeFilter(platform, arch)))
 			.pipe(filter(getMxcExcludeFilter(arch)))
@@ -461,7 +461,7 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 		} else if (platform === 'linux') {
 			const policyDest = gulp.src('.build/policies/linux/**', { base: '.build/policies/linux' })
 				.pipe(rename(f => f.dirname = `policies/${f.dirname}`));
-			all = es.merge(all, gulp.src('resources/linux/code.png', { base: '.' }), policyDest);
+			all = es.merge(all, gulp.src('resources/linux/code.png', { base: '.', encoding: false }), policyDest);
 		} else if (platform === 'darwin') {
 			const shortcut = gulp.src('resources/darwin/bin/code.sh')
 				.pipe(replace('@@APPNAME@@', product.applicationName))

@@ -448,7 +448,16 @@
 # advisory (type-only import in the fork, so type-safe, zero runtime footprint). Re-land of the SDK
 # part of the reverted gulp 5 commit, isolated from the build migration. This block's own lines count too.
 
+# Disposition 2026-07-25 (+2 files, +699 insertions): migrate the build from gulp 4 to gulp 5 with the
+# ubuntu-build fixes. gulp ^4->^5 (lockfile drops gulp 4's stale chokidar/micromatch/braces subtree:
+# +699 ins / +2828 del as the fork diverges from upstream's gulp 4), clearing 14 advisories. Fixes:
+# gulpfile.extensions.ts passes resolveSymlinks:false (vinyl-fs 4 crashed the terminal-suggest symlink
+# fixture on Linux); twelve gulp.src binary/mixed copies (native .node, server node, images, wasm, the
+# packaging re-reads) pass encoding:false (vinyl-fs 4 transcodes to utf8 and corrupts binaries); facade.ts
+# augments SrcOptions.encoding for typing. A re-added release-build CI job runs vscode-linux-x64-min each
+# CI run to surface this class before a release tag. This block's own lines count too.
+
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
 recorded: 2026-07-25
-baseline: 5810 files changed, 52670 insertions(+), 1500097 deletions(-)
+baseline: 5812 files changed, 53378 insertions(+), 1502925 deletions(-)

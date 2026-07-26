@@ -17,6 +17,13 @@ on:
 permissions:
   contents: read
 
+# @vscode/ripgrep's postinstall fetches its prebuilt binary from the GitHub API during `npm ci`
+# (node_modules/@vscode/ripgrep/lib/postinstall.js reads GITHUB_TOKEN). Unauthenticated, the API rate
+# limit returns an intermittent 403 on shared CI runners. Expose the Actions-provided read-only token so
+# every npm-ci job authenticates the download instead of racing the anonymous limit.
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 jobs:
   fork-hygiene:
     runs-on: ubuntu-latest

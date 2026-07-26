@@ -457,7 +457,14 @@
 # augments SrcOptions.encoding for typing. A re-added release-build CI job runs vscode-linux-x64-min each
 # CI run to surface this class before a release tag. This block's own lines count too.
 
+# Disposition 2026-07-26 (+0 files, +14 insertions): authenticate @vscode/ripgrep's postinstall in CI.
+# The re-added release-build job's npm ci hit an intermittent GitHub-API 403 fetching ripgrep's prebuilt
+# binary - the unauthenticated shared-runner rate limit, not a gulp-5 fault (e2e-smoke's symlink path and
+# the hygiene/unit jobs passed the same run). A workflow-level env now exposes the Actions-provided
+# read-only GITHUB_TOKEN so every npm-ci job authenticates the download instead of racing the anonymous
+# limit. CI workflow only; no product change. This block's own lines count too.
+
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
 recorded: 2026-07-25
-baseline: 5812 files changed, 53378 insertions(+), 1502925 deletions(-)
+baseline: 5812 files changed, 53392 insertions(+), 1502925 deletions(-)

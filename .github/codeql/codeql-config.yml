@@ -1,0 +1,39 @@
+name: "Clawdius CodeQL config"
+
+# Clawdius is a fork of VS Code. CodeQL scans the code the fork actually OWNS - the Clawdius-authored
+# TypeScript surface, the Rust CLI, and the fork's own GitHub Actions workflows - not the inherited
+# upstream VS Code tree. Microsoft scans that tree upstream; re-flagging its ~100 MB across nine languages
+# here only produced noise (test fixtures in C#/Go/Java/Python/Ruby that are hundreds of bytes each, plus
+# thousands of inherited findings the fork does not own). The one-time triage of inherited alerts is done;
+# ongoing scanning should surface NEW defects in Clawdius code, where they are actionable.
+#
+# The path filters below apply to the JavaScript/TypeScript analysis and to Rust (build-mode: none).
+# `paths` is a union across all three languages in the matrix - each language self-selects its own files
+# within it: `.github` covers the `actions` analysis, `cli` covers Rust, and the clawdius/* dirs cover
+# JS/TS. Files outside this union (the inherited upstream tree) are never analyzed.
+
+paths:
+  - clawdius
+  - src/vs/workbench/contrib/clawdius
+  - src/vs/platform/clawdius
+  - src/vs/platform/agentHost
+  - src/vs/sessions
+  - script/clawdius
+  - extensions/clawdius-chat
+  - extensions/clawdius-themes
+  - cli
+  - .github
+
+# Never analyze vendored dependencies, generated output, or ambient type declarations, even inside the
+# owned paths above.
+paths-ignore:
+  - '**/node_modules'
+  - '**/*.d.ts'
+  - out
+  - out-build
+
+# Security + quality. Scoped to Clawdius-owned code above, so quality/maintainability findings land on the
+# fork's own code and are actionable. If quality findings prove too noisy, narrow this to `security-extended`
+# (deep security queries only, no maintainability queries) - a one-line change.
+queries:
+  - uses: security-and-quality

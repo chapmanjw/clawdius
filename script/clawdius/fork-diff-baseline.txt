@@ -466,7 +466,17 @@
 # a hung packaging build fails fast instead of burning the full default runner budget. CI workflow only.
 # This block's own lines count too.
 
+# Disposition 2026-07-26 (+2 files, +106 insertions): scope CodeQL to Clawdius-owned code via advanced setup.
+# GitHub's default CodeQL setup auto-scanned 11 language entries - including c-cpp/csharp/go/java-kotlin/
+# python/ruby detected from hundreds-of-bytes upstream test fixtures - across the whole inherited VS Code
+# tree, producing findings the fork does not own (the one-time inherited-alert triage is already done).
+# Add an advanced-setup workflow (.github/workflows/codeql.yml) plus config (.github/codeql/codeql-config.yml)
+# that scans only javascript-typescript (the shipped product + tooling), rust (the CLI), and actions
+# (workflow supply-chain), path-scoped to the clawdius-owned dirs with the security-and-quality suite so
+# findings land on fork code where they are actionable. Default setup is disabled in repo settings so this
+# workflow is the active scanner. This block's own lines count too.
+
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
 recorded: 2026-07-25
-baseline: 5810 files changed, 52722 insertions(+), 1500096 deletions(-)
+baseline: 5812 files changed, 52828 insertions(+), 1500096 deletions(-)

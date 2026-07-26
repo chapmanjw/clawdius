@@ -448,45 +448,17 @@
 # advisory (type-only import in the fork, so type-safe, zero runtime footprint). Re-land of the SDK
 # part of the reverted gulp 5 commit, isolated from the build migration. This block's own lines count too.
 
-# Disposition 2026-07-25 (+2 files, +699 insertions): migrate the build from gulp 4 to gulp 5 with the
-# ubuntu-build fixes. gulp ^4->^5 (lockfile drops gulp 4's stale chokidar/micromatch/braces subtree:
-# +699 ins / +2828 del as the fork diverges from upstream's gulp 4), clearing 14 advisories. Fixes:
-# gulpfile.extensions.ts passes resolveSymlinks:false (vinyl-fs 4 crashed the terminal-suggest symlink
-# fixture on Linux); twelve gulp.src binary/mixed copies (native .node, server node, images, wasm, the
-# packaging re-reads) pass encoding:false (vinyl-fs 4 transcodes to utf8 and corrupts binaries); facade.ts
-# augments SrcOptions.encoding for typing. A re-added release-build CI job runs vscode-linux-x64-min each
-# CI run to surface this class before a release tag. This block's own lines count too.
-
-# Disposition 2026-07-26 (+0 files, +14 insertions): authenticate @vscode/ripgrep's postinstall in CI.
-# The re-added release-build job's npm ci hit an intermittent GitHub-API 403 fetching ripgrep's prebuilt
-# binary - the unauthenticated shared-runner rate limit, not a gulp-5 fault (e2e-smoke's symlink path and
-# the hygiene/unit jobs passed the same run). A workflow-level env now exposes the Actions-provided
-# read-only GITHUB_TOKEN so every npm-ci job authenticates the download instead of racing the anonymous
-# limit. CI workflow only; no product change. This block's own lines count too.
-
-# Disposition 2026-07-26 (+32 insertions): fix gulp-5 packaging ENOENT on absent generated dirs. vinyl-fs 4
-# throws ENOENT when a gulp.src glob's directory prefix is absent, where gulp 4 yielded an empty stream.
-# Clawdius ships without telemetry or enterprise policies, so `.build/telemetry`, `.build/policies/<plat>`,
-# and `.build/win32/appx` are never generated, and the release package task - run bare by build/release/*
-# with no extraction step - crashed at package time under gulp 5 (release-build CI job caught it after the
-# ripgrep-auth fix let install through). A srcIfPresent helper in gulpfile.vscode.ts guards the telemetry
-# read and the linux/darwin/win32 policy + win32 appx reads; gulpfile.reh.ts guards
-# `.build/extensions/node_modules` the same way; each yields an empty stream when its directory is absent,
-# restoring gulp-4 behavior. Also drops reh.ts's unused fetchGithub import, and the release-build CI now also
-# runs vscode-reh-linux-x64. The win32/darwin package paths share the guarded code but are not
-# ubuntu-buildable in CI, so they are covered by parity. This block's own lines count too.
-
-# Disposition 2026-07-26 (+22 insertions): guard two more absent gulp-5 packaging roots - the licenses dir
-# and the REH test-extension globs. Follow-on to the packaging guards above (same vinyl-fs 4 scandir ENOENT
-# that allowEmpty does not suppress). Desktop: the license stream globs `licenses/**` alongside the LICENSE
-# and ThirdPartyNotices files, and clawdius has no top-level licenses/ tree, so that glob is now included
-# only when the directory exists (the two files are still read). REH: extensionPaths globbed
-# `.build/extensions/<name>/**` for every selected name, but the test extensions in build/lib/extensions.ts's
-# excludedExtensions (vscode-colorize-tests and -perf-tests) are never built, so their dirs are absent; the
-# name list is now filtered to the dirs the build actually produced. gulpfile.vscode.ts + gulpfile.reh.ts.
-# This block's own lines count too.
+# Disposition 2026-07-26 (+43 insertions): revert the gulp 4->5 migration; keep the CI additions. gulp 5's
+# vinyl-fs 4 (streamx) is incompatible with event-stream's merge, which the release package task is built
+# on: es.merge(...).pipe(vfs.dest) throws "this.pipeTo.end is not a function", so the release package build
+# cannot complete under gulp 5. Upstream vscode stays on gulp 4 and the merge-stream replacement carries the
+# same streamx risk, so the whole gulp-5 attempt (the ^5 bump, the symlink/binary-encoding fixes, and the
+# absent-dir packaging guards) is reverted to the gulp-4 state; the 14 gulp-subtree dev advisories are dev-
+# tooling only (not shipped) and are handled separately. Kept from the attempt: the release-build CI job that
+# validates the gulp-4 release packaging each run, and the workflow-level GITHUB_TOKEN that authenticates
+# @vscode/ripgrep's postinstall. This block's own lines count too.
 
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
 recorded: 2026-07-25
-baseline: 5812 files changed, 53446 insertions(+), 1502930 deletions(-)
+baseline: 5810 files changed, 52713 insertions(+), 1500096 deletions(-)

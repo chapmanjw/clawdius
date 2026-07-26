@@ -126,11 +126,7 @@ const tasks = compilations.map(function (tsconfigFile) {
 	const srcRoot = path.dirname(tsconfigFile);
 	const srcBase = path.join(srcRoot, 'src');
 	const src = path.join(srcBase, '**');
-	// gulp 5 / vinyl-fs 4: resolveSymlinks defaults to true and lstat's a relative symlink target
-	// against process.cwd() (repo root) rather than the link's dir, so the terminal-suggest
-	// symlink-test fixture crashes the extension copy on Linux with ENOENT. Emit symlinks as-is
-	// (gulp.dest recreates them in out/) - which is also what the symlink test needs.
-	const srcOpts = { cwd: root, base: srcBase, dot: true, resolveSymlinks: false };
+	const srcOpts = { cwd: root, base: srcBase, dot: true };
 
 	const out = path.join(srcRoot, 'out');
 	const baseUrl = getBaseUrl(out);

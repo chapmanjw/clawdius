@@ -390,10 +390,9 @@ jobs:
     runs-on: ubuntu-latest
     # Runs the actual release builds clawdius-release.yml runs on a tag - the desktop esbuild bundle +
     # minify + package (vscode-linux-x64-min) and the REH server package (vscode-reh-linux-x64) - on each
-    # CI run, so gulp-5 packaging-glob, symlink, and binary-encoding regressions surface here instead of
-    # only at release time. The win32/darwin package paths share the same guarded glob code but are not
-    # ubuntu-buildable here, so they are covered by code parity rather than exercised. continue-on-error
-    # until this is confirmed green on CI; then make it a required check.
+    # CI run, so a packaging regression surfaces here instead of only at release time. The win32/darwin
+    # package paths are not ubuntu-buildable here, so they are covered by parity. continue-on-error until
+    # this is confirmed green on CI; then make it a required check.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7
@@ -411,5 +410,5 @@ jobs:
         run: npm ci
       - name: Release minify build (esbuild bundle + minify + package)
         run: npm run gulp vscode-linux-x64-min
-      - name: Release REH server build (exercises the gulp-5 reh packaging path)
+      - name: Release REH server build (validates the reh packaging path)
         run: npm run gulp vscode-reh-linux-x64

@@ -276,7 +276,7 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 			'vs/sessions/electron-browser/sessions.js'
 		]);
 
-		const src = gulp.src(out + '/**', { base: '.', encoding: false })
+		const src = gulp.src(out + '/**', { base: '.' })
 			.pipe(rename(function (path) { path.dirname = path.dirname!.replace(new RegExp('^' + out), 'out'); }))
 			.pipe(util.setExecutableBit(['**/*.sh']));
 
@@ -289,7 +289,7 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 			return !set.has(platform);
 		}).map(ext => `!.build/extensions/${ext.name}/**`);
 
-		const extensions = gulp.src(['.build/extensions/**', ...platformSpecificBuiltInExtensionsExclusions], { base: '.build', dot: true, encoding: false });
+		const extensions = gulp.src(['.build/extensions/**', ...platformSpecificBuiltInExtensionsExclusions], { base: '.build', dot: true });
 
 		const sourceFilterPattern = stripSourceMapsInPackagingTasks
 			? ['**', '!**/*.{js,css}.map']
@@ -340,26 +340,12 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 				this.emit('data', file);
 			}));
 
-		// gulp 5 / vinyl-fs 4 throws ENOENT on the `licenses/**` glob when the licenses directory is absent,
-		// where gulp 4 tolerated it. Clawdius has no top-level licenses/ tree, so include that glob only when
-		// the directory exists; the license files are still read (allowEmpty covers their own absence).
-		const licenseGlobs = [product.licenseFileName, 'ThirdPartyNotices.txt'];
-		if (fs.existsSync('licenses')) {
-			licenseGlobs.push('licenses/**');
-		}
-		const license = gulp.src(licenseGlobs, { base: '.', allowEmpty: true });
+		const license = gulp.src([product.licenseFileName, 'ThirdPartyNotices.txt', 'licenses/**'], { base: '.', allowEmpty: true });
 
 		// TODO the API should be copied to `out` during compile, not here
 		const api = gulp.src('src/vscode-dts/vscode.d.ts').pipe(rename('out/vscode-dts/vscode.d.ts'));
 
-		// gulp 5 / vinyl-fs 4 throws ENOENT when a glob's directory prefix is absent, where gulp 4 yielded an
-		// empty stream. Clawdius ships without telemetry or enterprise policies, so those generated `.build/*`
-		// directories are never produced; read such a glob only when its directory is present, preserving the
-		// gulp-4 packaging behavior. Required build inputs (out-vscode-min, .build/extensions) are not guarded.
-		const srcIfPresent = (dir: string, glob: string | string[], opts: Parameters<typeof gulp.src>[1]) =>
-			fs.existsSync(dir) ? gulp.src(glob, opts) : es.readArray([]);
-
-		const telemetry = srcIfPresent('.build/telemetry', '.build/telemetry/**', { base: '.build/telemetry', dot: true });
+		const telemetry = gulp.src('.build/telemetry/**', { base: '.build/telemetry', dot: true });
 
 		const jsFilter = util.filter(data => !data.isDirectory() && /\.js$/.test(data.path));
 		const root = path.resolve(path.join(import.meta.dirname, '..'));
@@ -371,12 +357,12 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 			depFilterPattern.push('!**/*.{js,css}.map');
 		}
 
-		const cleanedDeps = gulp.src(dependenciesSrc, { base: '.', dot: true, encoding: false })
+		const cleanedDeps = gulp.src(dependenciesSrc, { base: '.', dot: true })
 			.pipe(filter(depFilterPattern))
 			.pipe(util.cleanNodeModules(path.join(import.meta.dirname, '.moduleignore')))
 			.pipe(util.cleanNodeModules(path.join(import.meta.dirname, `.moduleignore.${process.platform}`)));
 		ensureOSProxyResolverPlatformPackage(platform, arch);
-		const osProxyResolverPlatformPackage = gulp.src(getOSProxyResolverPlatformFiles(platform, arch), { base: '.', dot: true, allowEmpty: true, encoding: false });
+		const osProxyResolverPlatformPackage = gulp.src(getOSProxyResolverPlatformFiles(platform, arch), { base: '.', dot: true, allowEmpty: true });
 		const deps = es.merge(cleanedDeps, osProxyResolverPlatformPackage)
 			.pipe(filter(getRipgrepExcludeFilter(platform, arch)))
 			.pipe(filter(getMxcExcludeFilter(arch)))
@@ -473,15 +459,15 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 				'resources/win32/code_150x150.png'
 			], { base: '.' }));
 		} else if (platform === 'linux') {
-			const policyDest = srcIfPresent('.build/policies/linux', '.build/policies/linux/**', { base: '.build/policies/linux' })
+			const policyDest = gulp.src('.build/policies/linux/**', { base: '.build/policies/linux' })
 				.pipe(rename(f => f.dirname = `policies/${f.dirname}`));
-			all = es.merge(all, gulp.src('resources/linux/code.png', { base: '.', encoding: false }), policyDest);
+			all = es.merge(all, gulp.src('resources/linux/code.png', { base: '.' }), policyDest);
 		} else if (platform === 'darwin') {
 			const shortcut = gulp.src('resources/darwin/bin/code.sh')
 				.pipe(replace('@@APPNAME@@', product.applicationName))
 				.pipe(replace('@@NAME@@', product.nameShort))
 				.pipe(rename('bin/code'));
-			const policyDest = srcIfPresent('.build/policies/darwin', '.build/policies/darwin/**', { base: '.build/policies/darwin' })
+			const policyDest = gulp.src('.build/policies/darwin/**', { base: '.build/policies/darwin' })
 				.pipe(rename(f => f.dirname = `policies/${f.dirname}`));
 			all = es.merge(all, shortcut, policyDest);
 		}
@@ -555,11 +541,11 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 				.pipe(replace('@@VERSIONFOLDER@@', versionedResourcesFolder ? `${versionedResourcesFolder}\\` : ''))
 				.pipe(rename(product.nameShort + '.VisualElementsManifest.xml')));
 
-			result = es.merge(result, srcIfPresent('.build/policies/win32', '.build/policies/win32/**', { base: '.build/policies/win32' })
+			result = es.merge(result, gulp.src('.build/policies/win32/**', { base: '.build/policies/win32' })
 				.pipe(rename(f => f.dirname = `policies/${f.dirname}`)));
 
 			if (quality === 'stable' || quality === 'insider') {
-				result = es.merge(result, srcIfPresent('.build/win32/appx', '.build/win32/appx/**', { base: '.build/win32' }));
+				result = es.merge(result, gulp.src('.build/win32/appx/**', { base: '.build/win32' }));
 				const rawVersion = version.replace(/-\w+$/, '').split('.');
 				const appxVersion = `${rawVersion[0]}.0.${rawVersion[1]}.${rawVersion[2]}`;
 				result = es.merge(result, gulp.src('resources/win32/appx/AppxManifest.xml', { base: '.' })

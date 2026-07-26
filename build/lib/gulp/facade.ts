@@ -29,16 +29,6 @@ import svgmin_ from 'gulp-svgmin';
 import sort_ from 'gulp-sort';
 import g from 'gulp';
 
-// gulp 5 uses vinyl-fs 4, which added a src `encoding` option (default 'utf8') that transcodes file
-// contents through iconv-lite; binary copies (native modules, the bundled node binary, images) must
-// pass `encoding: false` to stay byte-exact. @types/vinyl-fs (a stale DefinitelyTyped stub) lacks the
-// option, so augment SrcOptions here so the fork's `encoding: false` build sites type-check.
-declare module 'vinyl-fs' {
-	interface SrcOptions {
-		encoding?: string | false;
-	}
-}
-
 export const filter = filter_;
 export type { FileFunction } from 'gulp-filter';
 export const rename = rename_;

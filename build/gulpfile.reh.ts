@@ -344,7 +344,7 @@ function packageTask(type: string, platform: string, arch: string, sourceFolderN
 	const destination = path.join(BUILD_ROOT, destinationFolderName);
 
 	return () => {
-		const src = gulp.src(sourceFolderName + '/**', { base: '.', encoding: false })
+		const src = gulp.src(sourceFolderName + '/**', { base: '.' })
 			.pipe(rename(function (path) { path.dirname = path.dirname!.replace(new RegExp('^' + sourceFolderName), 'out'); }))
 			.pipe(util.setExecutableBit(['**/*.sh']))
 			.pipe(filter(['**', '!**/*.{js,css}.map']));
@@ -384,19 +384,10 @@ function packageTask(type: string, platform: string, arch: string, sourceFolderN
 			.filter(entry => !entry.clientOnly)
 			.map(entry => entry.name);
 		const extensionPaths = [...localWorkspaceExtensions, ...marketplaceExtensions]
-			// gulp 5 / vinyl-fs 4 throws ENOENT when a glob's directory is absent, where gulp 4 gave an empty
-			// stream. Some selected names are never built - the test extensions in build/lib/extensions.ts's
-			// excludedExtensions (e.g. vscode-colorize-tests) - so glob only the names the build produced.
-			.filter(name => fs.existsSync(`.build/extensions/${name}`))
 			.map(name => `.build/extensions/${name}/**`);
 
-		const extensions = gulp.src(extensionPaths, { base: '.build', dot: true, encoding: false });
-		// gulp 5 / vinyl-fs 4 throws ENOENT when a glob's directory prefix is absent, where gulp 4 yielded an
-		// empty stream. Built-in extensions may ship no hoisted common dependencies, so
-		// `.build/extensions/node_modules` need not exist; read it only when present.
-		const extensionsCommonDependencies = fs.existsSync('.build/extensions/node_modules')
-			? gulp.src('.build/extensions/node_modules/**', { base: '.build', dot: true, encoding: false })
-			: es.readArray([]);
+		const extensions = gulp.src(extensionPaths, { base: '.build', dot: true });
+		const extensionsCommonDependencies = gulp.src('.build/extensions/node_modules/**', { base: '.build', dot: true });
 		const sources = es.merge(src, extensions, extensionsCommonDependencies)
 			.pipe(filter(['**', '!**/*.{js,css}.map'], { dot: true }));
 
@@ -446,7 +437,7 @@ function packageTask(type: string, platform: string, arch: string, sourceFolderN
 
 		const productionDependencies = getProductionDependencies(REMOTE_FOLDER);
 		const dependenciesSrc = productionDependencies.map(d => path.relative(REPO_ROOT, d)).map(d => [`${d}/**`, `!${d}/**/{test,tests}/**`, `!${d}/.bin/**`]).flat();
-		const cleanedDeps = gulp.src(dependenciesSrc, { base: 'remote', dot: true, encoding: false })
+		const cleanedDeps = gulp.src(dependenciesSrc, { base: 'remote', dot: true })
 			// filter out unnecessary files, no source maps in server build
 			.pipe(filter(['**', '!**/package-lock.json', '!**/*.{js,css}.map']))
 			.pipe(util.cleanNodeModules(path.join(import.meta.dirname, '.moduleignore')))
@@ -459,7 +450,7 @@ function packageTask(type: string, platform: string, arch: string, sourceFolderN
 			.pipe(jsFilter.restore);
 
 		const nodePath = `.build/node/v${nodeVersion}/${platform}-${arch}`;
-		const node = gulp.src(`${nodePath}/**`, { base: nodePath, dot: true, encoding: false });
+		const node = gulp.src(`${nodePath}/**`, { base: nodePath, dot: true });
 
 		let web: NodeJS.ReadWriteStream[] = [];
 		if (type === 'reh-web') {

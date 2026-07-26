@@ -444,14 +444,7 @@
 # needs a --force major bump or is inherited: postcss 7->8, adm-zip 0.5->0.6, gyp brace-expansion (node-gyp
 # 13), the @typescript-eslint/gulp/glob/nodemon dev-tool majors, and Rust russh. This block counts too.
 
-# Disposition 2026-07-25 (net +686 insertions: 679 code + this 7-line block): migrate from gulp 4 to
-# gulp 5, bump @anthropic-ai/sdk 0.82->0.92 (type-only import), and add a release-build CI job. gulp 5
-# replaces gulp 4's stale transitive deps with patched versions (lockfile diverges from upstream's
-# gulp 4: +679 ins / +2820 del), clearing 14 advisories; the client build compiles 0-errors under it.
-# The CI job runs the real release minify build (gulp vscode-linux-x64-min: esbuild + minify + package)
-# every push (continue-on-error) so gulp-5 packaging/minify regressions surface pre-release. Block counts.
-
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
 recorded: 2026-07-25
-baseline: 5810 files changed, 53347 insertions(+), 1502912 deletions(-)
+baseline: 5810 files changed, 52661 insertions(+), 1500092 deletions(-)

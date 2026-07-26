@@ -33,7 +33,19 @@ paths-ignore:
   - out-build
 
 # Security + quality. Scoped to Clawdius-owned code above, so quality/maintainability findings land on the
-# fork's own code and are actionable. If quality findings prove too noisy, narrow this to `security-extended`
-# (deep security queries only, no maintainability queries) - a one-line change.
+# fork's own code and are actionable. For a security-only posture, narrow this to `security-extended` (deep
+# security queries, no maintainability queries) and drop the query-filters below - a small change.
 queries:
   - uses: security-and-quality
+
+# Keep security-and-quality's security and correctness queries, but filter out its unused-code maintainability
+# queries: on the fork surface those dominated the quality findings (rust/unused-variable, js/unused-local-
+# variable, js/useless-assignment-to-local) without indicating a security or correctness problem. The useful
+# quality queries (e.g. js/missing-await, js/comparison-between-incompatible-types) are retained.
+query-filters:
+  - exclude:
+      id: rust/unused-variable
+  - exclude:
+      id: js/unused-local-variable
+  - exclude:
+      id: js/useless-assignment-to-local

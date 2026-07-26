@@ -476,7 +476,14 @@
 # findings land on fork code where they are actionable. Default setup is disabled in repo settings so this
 # workflow is the active scanner. This block's own lines count too.
 
+# Disposition 2026-07-26 (+19 insertions): filter unused-code queries from the scoped CodeQL scan. The
+# advanced setup's first run surfaced 17 security findings on fork code, but its security-and-quality quality
+# half was dominated by unused-code maintainability queries (rust/unused-variable, js/unused-local-variable,
+# js/useless-assignment-to-local = ~33 low-value results) that flag no security or correctness problem. Add
+# query-filters to the CodeQL config excluding those, keeping the security queries plus the useful quality
+# queries (js/missing-await, js/comparison-between-incompatible-types). This block's own lines count too.
+
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
 recorded: 2026-07-25
-baseline: 5812 files changed, 52828 insertions(+), 1500096 deletions(-)
+baseline: 5812 files changed, 52847 insertions(+), 1500096 deletions(-)

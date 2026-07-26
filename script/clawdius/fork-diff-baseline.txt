@@ -444,7 +444,11 @@
 # needs a --force major bump or is inherited: postcss 7->8, adm-zip 0.5->0.6, gyp brace-expansion (node-gyp
 # 13), the @typescript-eslint/gulp/glob/nodemon dev-tool majors, and Rust russh. This block counts too.
 
+# Disposition 2026-07-25 (+5 insertions): bump @anthropic-ai/sdk 0.82->0.92 to clear a moderate
+# advisory (type-only import in the fork, so type-safe, zero runtime footprint). Re-land of the SDK
+# part of the reverted gulp 5 commit, isolated from the build migration. This block's own lines count too.
+
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
 recorded: 2026-07-25
-baseline: 5810 files changed, 52661 insertions(+), 1500092 deletions(-)
+baseline: 5810 files changed, 52670 insertions(+), 1500097 deletions(-)

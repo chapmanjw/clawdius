@@ -426,7 +426,16 @@
 # webSocketClientTransport.ts moves a network-controlled preview out of a console.warn format string;
 # promptsService.ts hardens the built-in skill-text stripper (bundled metadata only). This block counts too.
 
+# Disposition 2026-07-25 (+17 files, +176 insertions): land the six Dependabot dependency
+# bumps plus the node-tar criticals. hono 4.12.25->4.12.32 and body-parser 2.2.2->2.3.0 (bundled
+# Claude agent SDK) close a JSX-escaping XSS, a hono/jsx cross-request disclosure, and DoS advisories;
+# node-tar 7.5.16/7.5.17->7.5.22 (root + remote) closes several tar parse/decompression DoS advisories
+# (all published through 7.5.21). The grouped update refreshes dompurify, brace-expansion, linkify-it,
+# postcss, fast-uri, shell-quote (incl. the root lockfile) across build, remote, test, and the extensions;
+# @anthropic-ai/claude-agent-sdk refreshed to current 0.3.x; actions/setup-node->v7 and the checkout
+# SHA pin->v7.0.1. Lockfile and workflow churn across the fork-owned tree. This block's own lines count too.
+
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
 recorded: 2026-07-25
-baseline: 5792 files changed, 52119 insertions(+), 1499444 deletions(-)
+baseline: 5809 files changed, 52304 insertions(+), 1499574 deletions(-)

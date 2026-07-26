@@ -239,7 +239,7 @@ export class AgentConfigurationService extends Disposable implements IAgentConfi
 	}
 
 	async resolveWorkingDirectoryForResume(session: ProtocolURI, workingDirectory: URI): Promise<URI> {
-		return this._worktree?.resolveWorkingDirectoryForResume(URI.parse(session), AgentSession.id(session), workingDirectory) ?? workingDirectory;
+		return (await this._worktree?.resolveWorkingDirectoryForResume(URI.parse(session), AgentSession.id(session), workingDirectory)) ?? workingDirectory;
 	}
 
 	updateSessionConfig(session: ProtocolURI, patch: Record<string, unknown>): void {

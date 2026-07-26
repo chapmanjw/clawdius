@@ -174,9 +174,6 @@ export function parseSSHHostInput(value: string): { host: string; username?: str
 	} else {
 		host = hostPart;
 	}
-	if (!host) {
-		return undefined;
-	}
 	return { host, username, port };
 }
 

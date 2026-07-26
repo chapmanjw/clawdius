@@ -264,6 +264,7 @@
     "yaserver": "^0.4.0"
   },
   "overrides": {
+    "adm-zip": "^0.6.0",
     "node-gyp-build": "4.8.1",
     "sharp": "file:build/npm/stubs/sharp",
     "kerberos@2.1.1": {

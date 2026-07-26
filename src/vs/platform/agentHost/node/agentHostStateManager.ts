@@ -1186,7 +1186,7 @@ export class AgentHostStateManager extends Disposable {
 			const chatAction = action as ChatAction;
 			const sessionKey = parseRequiredSessionUriFromChatUri(channel);
 			const chat = this._chatStates.get(channel);
-			if (chat && sessionKey !== undefined) {
+			if (chat) {
 				const newChat = chatReducer(chat, chatAction, this._log);
 				this._chatStates.set(channel, newChat);
 				this._onChatStateChanged(sessionKey, channel, chat, newChat);

@@ -311,9 +311,7 @@ export function buildDefaultChangesetCatalog(sessionUri: URI, gitState?: ISessio
 	return [
 		{
 			label: branchChangesetLabel(),
-			description: gitState
-				? formatBranchChangesetDescription(gitState)
-				: undefined,
+			description: formatBranchChangesetDescription(gitState),
 			uriTemplate: buildBranchChangesetUri(sessionUri),
 			changeKind: ChangesetKind.Branch,
 			capabilities: { review: {} }

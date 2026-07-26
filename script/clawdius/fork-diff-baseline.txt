@@ -492,7 +492,21 @@
 # false positives are dismissed via the code-scanning API with rationale, and the 2 dev-only .github/skills
 # file-race findings are dropped from scan scope. This block's own lines count too.
 
+# Disposition 2026-07-26 (+3 files, +21 insertions; part of the files/deletions shift is rename-detection
+# drift on the edited fork files, not new content): fix reachable fork-code quality findings + the adm-zip
+# advisory. Four CodeQL-quality fixes: await the worktree resolve so `??` guards the resolved URI not the
+# always-truthy promise (agentConfigurationService); remove three CodeQL-confirmed-dead conditionals (a
+# string-vs-undefined comparison, an unreachable !host guard, a redundant gitState ternary) - all
+# behavior-preserving. One shipped-dependency bump: adm-zip 0.5->0.6 via a root override (transitive of the
+# shipped onnxruntime-node; create/extract API unchanged). The rest are dismissed via the API with per-alert
+# rationale: the Rust cli/ deps (russh/russh-cryptovec/rand) are inherited upstream source the fork's release
+# never compiles (no cargo build - not shipped); the npm postcss/braces/diff/@hono alerts are dev/test-only;
+# uuid's vulnerable v3/v5 buffer path is unused (only v4); brace-expansion in the two shipped extensions has
+# no export-compatible patch (5.0.8, the sole fix, breaks the bundled minimatch) so it is a low-reachability
+# glob DoS accepted pending an upstream minimatch bump; and four quality findings are FP/benign/test-only.
+# This block's own lines count too.
+
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
 recorded: 2026-07-25
-baseline: 5812 files changed, 52917 insertions(+), 1500098 deletions(-)
+baseline: 5815 files changed, 52938 insertions(+), 1500109 deletions(-)

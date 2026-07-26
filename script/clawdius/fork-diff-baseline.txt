@@ -464,7 +464,19 @@
 # read-only GITHUB_TOKEN so every npm-ci job authenticates the download instead of racing the anonymous
 # limit. CI workflow only; no product change. This block's own lines count too.
 
+# Disposition 2026-07-26 (+32 insertions): fix gulp-5 packaging ENOENT on absent generated dirs. vinyl-fs 4
+# throws ENOENT when a gulp.src glob's directory prefix is absent, where gulp 4 yielded an empty stream.
+# Clawdius ships without telemetry or enterprise policies, so `.build/telemetry`, `.build/policies/<plat>`,
+# and `.build/win32/appx` are never generated, and the release package task - run bare by build/release/*
+# with no extraction step - crashed at package time under gulp 5 (release-build CI job caught it after the
+# ripgrep-auth fix let install through). A srcIfPresent helper in gulpfile.vscode.ts guards the telemetry
+# read and the linux/darwin/win32 policy + win32 appx reads; gulpfile.reh.ts guards
+# `.build/extensions/node_modules` the same way; each yields an empty stream when its directory is absent,
+# restoring gulp-4 behavior. Also drops reh.ts's unused fetchGithub import, and the release-build CI now also
+# runs vscode-reh-linux-x64. The win32/darwin package paths share the guarded code but are not
+# ubuntu-buildable in CI, so they are covered by parity. This block's own lines count too.
+
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
 recorded: 2026-07-25
-baseline: 5812 files changed, 53392 insertions(+), 1502925 deletions(-)
+baseline: 5812 files changed, 53424 insertions(+), 1502929 deletions(-)

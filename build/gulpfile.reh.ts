@@ -29,7 +29,7 @@ import * as cp from 'child_process';
 import crypto from 'crypto';
 import log from 'fancy-log';
 import buildfile from './buildfile.ts';
-import { fetchUrls, fetchGithub } from './lib/fetch.ts';
+import { fetchUrls } from './lib/fetch.ts';
 import { downloadFeedPackage } from './lib/azureFeed.ts';
 import { getMxcExcludeFilter, getRipgrepExcludeFilter } from './lib/copilot.ts';
 import { readAgentSdkResults } from './agent-sdk/common.ts';
@@ -387,7 +387,12 @@ function packageTask(type: string, platform: string, arch: string, sourceFolderN
 			.map(name => `.build/extensions/${name}/**`);
 
 		const extensions = gulp.src(extensionPaths, { base: '.build', dot: true, encoding: false });
-		const extensionsCommonDependencies = gulp.src('.build/extensions/node_modules/**', { base: '.build', dot: true, encoding: false });
+		// gulp 5 / vinyl-fs 4 throws ENOENT when a glob's directory prefix is absent, where gulp 4 yielded an
+		// empty stream. Built-in extensions may ship no hoisted common dependencies, so
+		// `.build/extensions/node_modules` need not exist; read it only when present.
+		const extensionsCommonDependencies = fs.existsSync('.build/extensions/node_modules')
+			? gulp.src('.build/extensions/node_modules/**', { base: '.build', dot: true, encoding: false })
+			: es.readArray([]);
 		const sources = es.merge(src, extensions, extensionsCommonDependencies)
 			.pipe(filter(['**', '!**/*.{js,css}.map'], { dot: true }));
 

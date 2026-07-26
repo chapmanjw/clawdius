@@ -462,7 +462,11 @@
 # green under gulp 4 (both vscode-linux-x64-min and vscode-reh-linux-x64 package cleanly), so drop
 # continue-on-error - a release-packaging regression now fails CI. This block's own lines count too.
 
+# Disposition 2026-07-26 (+6 insertions): cap the now-required release-build job at timeout-minutes: 60 so
+# a hung packaging build fails fast instead of burning the full default runner budget. CI workflow only.
+# This block's own lines count too.
+
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
 recorded: 2026-07-25
-baseline: 5810 files changed, 52716 insertions(+), 1500096 deletions(-)
+baseline: 5810 files changed, 52722 insertions(+), 1500096 deletions(-)

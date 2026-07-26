@@ -388,6 +388,8 @@ jobs:
 
   release-build:
     runs-on: ubuntu-latest
+    # Cap the now-required heavy packaging job so a hang fails fast instead of burning the full runner budget.
+    timeout-minutes: 60
     # Runs the actual release builds clawdius-release.yml runs on a tag - the desktop esbuild bundle +
     # minify + package (vscode-linux-x64-min) and the REH server package (vscode-reh-linux-x64) - on each
     # CI run, so a packaging regression surfaces here instead of only at release time. The win32/darwin

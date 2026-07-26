@@ -435,7 +435,16 @@
 # @anthropic-ai/claude-agent-sdk refreshed to current 0.3.x; actions/setup-node->v7 and the checkout
 # SHA pin->v7.0.1. Lockfile and workflow churn across the fork-owned tree. This block's own lines count too.
 
+# Disposition 2026-07-25 (npm advisory cleanup): close the npm advisories fixable WITHOUT a major bump,
+# across every fork-owned lockfile - as of this commit, `npm audit fix --dry-run` reports no further
+# non-force fix anywhere in the fork tree. Fixes: body-parser 2.2.2->2.3.0 (root DoS); tsec 0.2.7->0.2.9
+# and @vscode/vsce 3.6.1->3.9.2 (exact-pinned dev tools re-pinned in package.json); ip-address + tar in
+# build/npm/gyp. Incidental in-range floats: axios, hono, js-yaml, brace-expansion, uuid, fast-uri,
+# linkify-it, svgo, @hono/node-server; the vsce bump prunes much of build/package-lock.json. What remains
+# needs a --force major bump or is inherited: postcss 7->8, adm-zip 0.5->0.6, gyp brace-expansion (node-gyp
+# 13), the @typescript-eslint/gulp/glob/nodemon dev-tool majors, and Rust russh. This block counts too.
+
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
 recorded: 2026-07-25
-baseline: 5809 files changed, 52304 insertions(+), 1499574 deletions(-)
+baseline: 5810 files changed, 52661 insertions(+), 1500092 deletions(-)

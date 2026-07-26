@@ -458,7 +458,11 @@
 # validates the gulp-4 release packaging each run, and the workflow-level GITHUB_TOKEN that authenticates
 # @vscode/ripgrep's postinstall. This block's own lines count too.
 
+# Disposition 2026-07-26 (+3 insertions): make the release-build CI job a required check. It is confirmed
+# green under gulp 4 (both vscode-linux-x64-min and vscode-reh-linux-x64 package cleanly), so drop
+# continue-on-error - a release-packaging regression now fails CI. This block's own lines count too.
+
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
 recorded: 2026-07-25
-baseline: 5810 files changed, 52713 insertions(+), 1500096 deletions(-)
+baseline: 5810 files changed, 52716 insertions(+), 1500096 deletions(-)

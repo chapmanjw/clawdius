@@ -391,9 +391,8 @@ jobs:
     # Runs the actual release builds clawdius-release.yml runs on a tag - the desktop esbuild bundle +
     # minify + package (vscode-linux-x64-min) and the REH server package (vscode-reh-linux-x64) - on each
     # CI run, so a packaging regression surfaces here instead of only at release time. The win32/darwin
-    # package paths are not ubuntu-buildable here, so they are covered by parity. continue-on-error until
-    # this is confirmed green on CI; then make it a required check.
-    continue-on-error: true
+    # package paths are not ubuntu-buildable here, so they are covered by parity. Required check - a
+    # packaging regression fails CI (confirmed green under gulp 4).
     steps:
       - uses: actions/checkout@v7
         with:

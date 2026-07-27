@@ -11,7 +11,18 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
+import { Emitter, Event } from '../../../../../base/common/event.js';
+import { Disposable, DisposableStore } from '../../../../../base/common/lifecycle.js';
+import { URI } from '../../../../../base/common/uri.js';
+import { VSBuffer } from '../../../../../base/common/buffer.js';
+import { timeout } from '../../../../../base/common/async.js';
+import { IStatusbarService } from '../../../../services/statusbar/browser/statusbar.js';
+import { IFileService } from '../../../../../platform/files/common/files.js';
+import { IPathService } from '../../../../services/path/common/pathService.js';
+import { ILanguageModelsService } from '../../../chat/common/languageModels.js';
+import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import {
+	ClawdiusModelStatusEntry,
 	MODEL_KEY,
 	DEFAULT_MODEL,
 	ICatalogModel,
@@ -209,6 +220,59 @@ suite('Clawdius model pill', () => {
 		assert.ok(/Bedrock/.test(modelDisplay('opus[1m]', list, 'bedrock').tooltip), 'bedrock preset annotates the tooltip');
 		// Unset key resolves to the Default row without throwing.
 		assert.ok(modelDisplay(DEFAULT_MODEL, list, 'oauth').text.includes('Default'));
+	});
+
+	test('live refresh: a catalog change RE-READS settings.json (regression: pill stuck on "Default" after a pick)', async () => {
+		// Repro of the model-pill-stuck-on-Default bug. Setting a model writes ~/.claude/settings.json and restarts
+		// the ext host, which re-fires onDidChangeLanguageModels - but the single-file home-dir settings.json watch
+		// can miss the write. The catalog/config handlers must RE-READ settings on that reliable event (refresh),
+		// not reuse the stale in-memory cache. Before the fix they called update() (stale) and the pill never moved.
+		const store = new DisposableStore();
+		try {
+			const lmChange = store.add(new Emitter<void>());
+			let fileContent = '{ "model": "" }';
+			let lastText: string | undefined;
+
+			const pathService = { userHome: async () => URI.file('/home/test') };
+			const fileService = {
+				readFile: async () => ({ value: VSBuffer.fromString(fileContent) }),
+				watch: () => Disposable.None,
+				onDidFilesChange: Event.None,
+			};
+			const languageModelsService = {
+				getLanguageModelIds: () => [],
+				lookupLanguageModel: () => undefined,
+				onDidChangeLanguageModels: lmChange.event,
+			};
+			const configurationService = { getValue: () => undefined, onDidChangeConfiguration: Event.None };
+			const statusbarService = {
+				addEntry: (props: { text: string }) => {
+					lastText = props.text;
+					return { update: (p: { text: string }) => { lastText = p.text; }, dispose: () => { } };
+				},
+			};
+
+			store.add(new ClawdiusModelStatusEntry(
+				statusbarService as unknown as IStatusbarService,
+				fileService as unknown as IFileService,
+				pathService as unknown as IPathService,
+				languageModelsService as unknown as ILanguageModelsService,
+				configurationService as unknown as IConfigurationService,
+			));
+
+			// Async init (userHome -> read settings -> render). Wait for the first paint.
+			for (let i = 0; i < 50 && lastText === undefined; i++) { await timeout(0); }
+			assert.ok(lastText !== undefined, 'pill initialized');
+			assert.ok(lastText.includes('Default'), `unset model shows Default (got: ${lastText})`);
+
+			// The pick landed on disk but the file-watch missed it; the ext-host restart re-fires the catalog event.
+			fileContent = '{ "model": "opus[1m]" }';
+			lmChange.fire();
+			for (let i = 0; i < 50 && !(lastText && lastText.includes('opus[1m]')); i++) { await timeout(0); }
+			assert.ok(lastText.includes('opus[1m]'), `catalog event re-reads settings and reflects the pick (got: ${lastText})`);
+		} finally {
+			store.dispose();
+		}
 	});
 });
 // CLAWDIUS-END

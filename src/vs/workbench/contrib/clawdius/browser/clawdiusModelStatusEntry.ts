@@ -567,12 +567,15 @@ export class ClawdiusModelStatusEntry extends Disposable implements IWorkbenchCo
 				void this.refresh();
 			}
 		}));
-		// Track the live catalog: models resolve/change asynchronously after the agent host connects.
-		this.watch.add(this.languageModelsService.onDidChangeLanguageModels(() => this.update()));
-		// Track proxied-model config edits (clawdius.cli.environmentVariables / providerPreset).
+		// Track the live catalog: models resolve/change asynchronously after the agent host connects. Setting a
+		// model restarts the ext host, which re-fires this event - so we RE-READ settings.json here (refresh, not
+		// update) to reflect the just-written selection even when the home-dir settings.json watch above misses it.
+		this.watch.add(this.languageModelsService.onDidChangeLanguageModels(() => void this.refresh()));
+		// Track proxied-model config edits (clawdius.cli.environmentVariables / providerPreset). Re-read settings
+		// too, so an env/provider change reflects the current on-disk model without relying on the file watch.
 		this.watch.add(this.configurationService.onDidChangeConfiguration(e => {
 			if (e.affectsConfiguration(CLI_ENV_VARS_KEY) || e.affectsConfiguration(CLI_PROVIDER_PRESET_KEY) || e.affectsConfiguration(CLAWDIUS_STATUS_BAR_ENABLED_SETTING)) {
-				this.update();
+				void this.refresh();
 			}
 		}));
 		await this.refresh();

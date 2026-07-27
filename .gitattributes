@@ -9,3 +9,26 @@ ThirdPartyNotices.txt eol=crlf
 *.sh eol=lf
 *.rtf -text
 **/*.json linguist-language=jsonc
+
+# Binary assets: never apply text/EOL conversion. A CRLF-mangled binary is corrupt - e.g. a codicon.ttf
+# normalized to CRLF fails to decode and every icon renders as a tofu box. `binary` overrides `* text=auto`.
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.eot binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.bmp binary
+*.tif binary
+*.tiff binary
+*.mp3 binary
+*.zip binary
+*.asar binary
+*.exe binary
+*.dll binary
+*.pdf binary

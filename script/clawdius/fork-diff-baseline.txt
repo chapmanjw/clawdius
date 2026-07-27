@@ -514,7 +514,13 @@
 # swaps and a removed step, net ~0). Isolated to the clawdius-owned surface; no upstream file grows. This
 # block's own lines count too.
 
+# Disposition 2026-07-26 (+1 file, +29 insertions): mark binary assets in .gitattributes so no platform's git
+# (Windows autocrlf) applies EOL conversion to fonts / images / archives, which corrupts them - a CRLF-mangled
+# codicon.ttf fails to decode and renders every icon as a tofu box. Adds explicit `binary` rules for
+# ttf/otf/woff/woff2/eot, png/jpg/jpeg/gif/ico/icns/bmp/tif/tiff, and mp3/zip/asar/exe/dll/pdf over `* text=auto`
+# (.snap stays text). .gitattributes was upstream-clean, so this newly diverges one file. Own lines count too.
+
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
 recorded: 2026-07-26
-baseline: 5815 files changed, 53015 insertions(+), 1500117 deletions(-)
+baseline: 5816 files changed, 53044 insertions(+), 1500117 deletions(-)

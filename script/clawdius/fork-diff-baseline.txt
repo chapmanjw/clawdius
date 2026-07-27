@@ -506,7 +506,15 @@
 # glob DoS accepted pending an upstream minimatch bump; and four quality findings are FP/benign/test-only.
 # This block's own lines count too.
 
+# Disposition 2026-07-26 (+0 files, +77 insertions): model status pill live-refresh + accent contrast polish.
+# The model pill only re-read ~/.claude/settings.json from the settings-file watch, which misses home-dir
+# writes, so a selected model did not appear until a window reload; the fix routes the catalog/config change
+# handlers through refresh(). Most of the growth is a new class-level regression test asserting the pill
+# re-reads on the post-restart catalog event. Also folds in the accent-contrast + walkthrough edits (value
+# swaps and a removed step, net ~0). Isolated to the clawdius-owned surface; no upstream file grows. This
+# block's own lines count too.
+
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
-recorded: 2026-07-25
-baseline: 5815 files changed, 52938 insertions(+), 1500109 deletions(-)
+recorded: 2026-07-26
+baseline: 5815 files changed, 53015 insertions(+), 1500117 deletions(-)

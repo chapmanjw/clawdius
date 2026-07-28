@@ -23,7 +23,8 @@
 // push effort into a live webview).
 
 import './media/claudeEffort.css';
-import { Disposable, DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
+import { Disposable, DisposableStore, MutableDisposable, markAsSingleton } from '../../../../base/common/lifecycle.js';
+import { Emitter, Event } from '../../../../base/common/event.js';
 import { VSBuffer } from '../../../../base/common/buffer.js';
 import { MarkdownString } from '../../../../base/common/htmlContent.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -55,6 +56,18 @@ export type EffortSelection = EffortLevel | 'ultracode';
 export const EFFORT_LEVEL_KEY = 'effortLevel';
 export const ULTRACODE_KEY = 'ultracode';
 export const SET_EFFORT_COMMAND_ID = 'clawdius.setEffortLevel';
+
+/**
+ * Fired by {@link SetEffortLevelAction} right after it writes effortLevel/ultracode to ~/.claude/settings.json,
+ * so the status pill refreshes immediately. The settings-file watch (a home-directory file the renderer's
+ * watcher misses) is an unreliable trigger, so the action that changes the value notifies the display directly -
+ * both live in this module.
+ */
+const _onDidWriteEffort = markAsSingleton(new Emitter<void>());
+/** Subscribe to learn the effort level was just written to settings.json (module-local: only the pill listens). */
+const onDidWriteEffort: Event<void> = _onDidWriteEffort.event;
+/** Called by SetEffortLevelAction after a successful write to nudge the pill to re-read settings.json now. */
+export function signalEffortWritten(): void { _onDidWriteEffort.fire(); }
 
 /** Meter width in cells - matches the usage bar (STATUS_BAR_CELLS = 10) so the two line up visually. */
 const METER_CELLS = 10;
@@ -378,6 +391,9 @@ export class SetEffortLevelAction extends Action2 {
 					await fileService.writeFile(settingsUri, VSBuffer.fromString('{}\n'));
 				}
 				await jsonEditing.write(settingsUri, plan.writes.map(w => ({ path: [...w.path], value: w.value })), true);
+				// Notify the pill to re-read settings.json immediately (the home-dir file-watch is an unreliable
+				// trigger for this write, so the action signals the display directly).
+				signalEffortWritten();
 				// Re-activate the Claude plugin so its CLI re-reads ~/.claude/settings.json fresh - the only
 				// reliable way to apply the new effort to open chats (a plain webview reload is page-only and
 				// reads the plugin's STALE cached config, landing one selection behind). On a LOCAL window the
@@ -433,6 +449,9 @@ export class ClawdiusEffortStatusEntry extends Disposable implements IWorkbenchC
 				void this.refresh();
 			}
 		}));
+		// The pick action writes settings.json then restarts the ext host; the home-dir file-watch is unreliable
+		// here, so refresh directly off SetEffortLevelAction's own write signal.
+		this.watch.add(onDidWriteEffort(() => void this.refresh()));
 		await this.refresh();
 	}
 

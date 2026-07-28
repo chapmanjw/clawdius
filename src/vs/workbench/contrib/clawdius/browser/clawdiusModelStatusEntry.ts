@@ -28,7 +28,8 @@
 // for NEW conversations; it does not switch a chat already in progress (the official plugin owns the live
 // chat and exposes no host->webview model switch), so after a write we restart the ext host to re-seed.
 
-import { Disposable, DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
+import { Disposable, DisposableStore, MutableDisposable, markAsSingleton } from '../../../../base/common/lifecycle.js';
+import { Emitter, Event } from '../../../../base/common/event.js';
 import { VSBuffer } from '../../../../base/common/buffer.js';
 import { MarkdownString } from '../../../../base/common/htmlContent.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -59,6 +60,18 @@ export const SET_MODEL_COMMAND_ID = 'clawdius.setModel';
 
 /** Sentinel selection meaning "no explicit default - let Claude Code decide" (the `model` key is absent). */
 export const DEFAULT_MODEL = '';
+
+/**
+ * Fired by {@link SetModelAction} right after it writes the default model to ~/.claude/settings.json, so the
+ * status pill refreshes immediately. The pill cannot rely on the settings-file watch (a home-directory file the
+ * renderer's watcher misses) nor on the ext-host-restart catalog event (does not reliably re-fire here), so the
+ * action that changes the value notifies the display directly - both live in this module.
+ */
+const _onDidWriteModelDefault = markAsSingleton(new Emitter<void>());
+/** Subscribe to learn the default model was just written to settings.json (module-local: only the pill listens). */
+const onDidWriteModelDefault: Event<void> = _onDidWriteModelDefault.event;
+/** Called by SetModelAction after a successful write to nudge the pill to re-read settings.json now. */
+export function signalModelDefaultWritten(): void { _onDidWriteModelDefault.fire(); }
 
 /** U+2026 HORIZONTAL ELLIPSIS, referenced by code point to keep this source ASCII-only. */
 const ELLIPSIS = String.fromCharCode(0x2026);
@@ -519,6 +532,9 @@ export class SetModelAction extends Action2 {
 					await fileService.writeFile(settingsUri, VSBuffer.fromString('{}\n'));
 				}
 				await jsonEditing.write(settingsUri, plan.writes.map(w => ({ path: [...w.path], value: w.value })), true);
+				// Notify the pill to re-read settings.json immediately (the home-dir file-watch and the catalog event
+				// are both unreliable triggers for this write, so the action signals the display directly).
+				signalModelDefaultWritten();
 				// Re-activate the Claude plugin so its CLI re-reads ~/.claude/settings.json fresh (a plain webview
 				// reload reads the plugin's STALE cached config). On a LOCAL window restart the local ext host; on a
 				// REMOTE window restart ONLY the remote host (a full restart would drop the remote connection).
@@ -578,6 +594,9 @@ export class ClawdiusModelStatusEntry extends Disposable implements IWorkbenchCo
 				void this.refresh();
 			}
 		}));
+		// The pick action writes settings.json then restarts the ext host; since neither the home-dir file-watch
+		// nor the catalog event reliably fires here, refresh directly off SetModelAction's own write signal.
+		this.watch.add(onDidWriteModelDefault(() => void this.refresh()));
 		await this.refresh();
 	}
 

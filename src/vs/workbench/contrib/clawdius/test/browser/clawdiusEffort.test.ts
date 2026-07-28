@@ -10,7 +10,18 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
+import { Event } from '../../../../../base/common/event.js';
+import { Disposable, DisposableStore } from '../../../../../base/common/lifecycle.js';
+import { URI } from '../../../../../base/common/uri.js';
+import { VSBuffer } from '../../../../../base/common/buffer.js';
+import { timeout } from '../../../../../base/common/async.js';
+import { IStatusbarService } from '../../../../services/statusbar/browser/statusbar.js';
+import { IFileService } from '../../../../../platform/files/common/files.js';
+import { IPathService } from '../../../../services/path/common/pathService.js';
+import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import {
+	ClawdiusEffortStatusEntry,
+	signalEffortWritten,
 	EFFORT_LEVEL_KEY,
 	ULTRACODE_KEY,
 	IEffortWrite,
@@ -251,6 +262,50 @@ suite('Clawdius effort pill', () => {
 			{ action: 'write', seed: true, writes: effortWrites('high') },
 			{ action: 'write', seed: false, writes: effortWrites('high') },
 		]);
+	});
+
+	test('live refresh: the write signal RE-READS settings.json (regression: effort pill stuck after a pick)', async () => {
+		// Same bug as the model pill: the effort pill refreshed only from the ~/.claude/settings.json file-watch (a
+		// home-dir file the renderer's watcher misses), so a pick did not appear until a window reload.
+		// SetEffortLevelAction now signals the pill directly after the write; verify the pill re-reads on it.
+		const store = new DisposableStore();
+		try {
+			let fileContent = '{}';
+			let lastText: string | undefined;
+
+			const pathService = { userHome: async () => URI.file('/home/test') };
+			const fileService = {
+				readFile: async () => ({ value: VSBuffer.fromString(fileContent) }),
+				watch: () => Disposable.None,
+				onDidFilesChange: Event.None,
+			};
+			const configurationService = { getValue: () => undefined, onDidChangeConfiguration: Event.None };
+			const statusbarService = {
+				addEntry: (props: { text: string }) => {
+					lastText = props.text;
+					return { update: (p: { text: string }) => { lastText = p.text; }, dispose: () => { } };
+				},
+			};
+
+			store.add(new ClawdiusEffortStatusEntry(
+				statusbarService as unknown as IStatusbarService,
+				fileService as unknown as IFileService,
+				pathService as unknown as IPathService,
+				configurationService as unknown as IConfigurationService,
+			));
+
+			for (let i = 0; i < 50 && lastText === undefined; i++) { await timeout(0); }
+			assert.ok(lastText !== undefined, 'pill initialized');
+			assert.ok(lastText.includes('Auto'), `unset effort shows Auto (got: ${lastText})`);
+
+			// The pick wrote settings.json (simulated) then signals the pill directly via signalEffortWritten().
+			fileContent = '{ "effortLevel": "high" }';
+			signalEffortWritten();
+			for (let i = 0; i < 50 && !(lastText && lastText.includes('High')); i++) { await timeout(0); }
+			assert.ok(lastText.includes('High'), `write signal re-reads settings and reflects the pick (got: ${lastText})`);
+		} finally {
+			store.dispose();
+		}
 	});
 });
 // CLAWDIUS-END

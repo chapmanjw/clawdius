@@ -11,7 +11,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { Emitter, Event } from '../../../../../base/common/event.js';
+import { Event } from '../../../../../base/common/event.js';
 import { Disposable, DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
@@ -23,6 +23,7 @@ import { ILanguageModelsService } from '../../../chat/common/languageModels.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import {
 	ClawdiusModelStatusEntry,
+	signalModelDefaultWritten,
 	MODEL_KEY,
 	DEFAULT_MODEL,
 	ICatalogModel,
@@ -229,7 +230,6 @@ suite('Clawdius model pill', () => {
 		// not reuse the stale in-memory cache. Before the fix they called update() (stale) and the pill never moved.
 		const store = new DisposableStore();
 		try {
-			const lmChange = store.add(new Emitter<void>());
 			let fileContent = '{ "model": "" }';
 			let lastText: string | undefined;
 
@@ -242,7 +242,7 @@ suite('Clawdius model pill', () => {
 			const languageModelsService = {
 				getLanguageModelIds: () => [],
 				lookupLanguageModel: () => undefined,
-				onDidChangeLanguageModels: lmChange.event,
+				onDidChangeLanguageModels: Event.None,
 			};
 			const configurationService = { getValue: () => undefined, onDidChangeConfiguration: Event.None };
 			const statusbarService = {
@@ -265,11 +265,12 @@ suite('Clawdius model pill', () => {
 			assert.ok(lastText !== undefined, 'pill initialized');
 			assert.ok(lastText.includes('Default'), `unset model shows Default (got: ${lastText})`);
 
-			// The pick landed on disk but the file-watch missed it; the ext-host restart re-fires the catalog event.
+			// The pick wrote settings.json (simulated) then signals the pill directly - the file-watch and catalog
+			// events are unreliable for a home-dir write, so SetModelAction notifies via signalModelDefaultWritten().
 			fileContent = '{ "model": "opus[1m]" }';
-			lmChange.fire();
+			signalModelDefaultWritten();
 			for (let i = 0; i < 50 && !(lastText && lastText.includes('opus[1m]')); i++) { await timeout(0); }
-			assert.ok(lastText.includes('opus[1m]'), `catalog event re-reads settings and reflects the pick (got: ${lastText})`);
+			assert.ok(lastText.includes('opus[1m]'), `write signal re-reads settings and reflects the pick (got: ${lastText})`);
 		} finally {
 			store.dispose();
 		}

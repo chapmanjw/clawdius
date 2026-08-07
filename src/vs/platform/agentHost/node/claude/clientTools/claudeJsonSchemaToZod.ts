@@ -3,7 +3,14 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { z, type ZodTypeAny } from 'zod';
+// Deliberately the `zod/v3` surface, not the package root. The root is zod 4, whose
+// schemas carry a `_zod` marker that the Claude Agent SDK duck-types on to pick a
+// different JSON Schema emitter for the advertised tool list. Staying on v3 also keeps
+// two runtime behaviours this converter relies on: `.default()` under `.optional()` does
+// not materialise the default for an absent key, and the `z.any()` fallback below still
+// tolerates a required key being absent rather than rejecting the whole tool.
+import { z, type ZodTypeAny } from 'zod/v3';
+import type { ZodRawShape } from 'zod';
 import type { ToolDefinition } from '../../../common/state/protocol/state.js';
 
 /**
@@ -18,7 +25,7 @@ import type { ToolDefinition } from '../../../common/state/protocol/state.js';
  */
 export function jsonSchemaToZodRawShape(
 	inputSchema: ToolDefinition['inputSchema'] | undefined
-): Record<string, ZodTypeAny> {
+): ZodRawShape {
 	if (!inputSchema || inputSchema.type !== 'object' || !inputSchema.properties) {
 		return {};
 	}
@@ -36,7 +43,11 @@ export function jsonSchemaToZodRawShape(
 		}
 		shape[name] = zodType;
 	}
-	return shape;
+	// The MCP `tool()` factory types this parameter as zod 4's shape, which requires the
+	// `_zod` marker these v3 schemas do not carry. The SDK duck-types on that marker at
+	// runtime and handles v3 schemas through its bundled v3 path, so the shape is accepted
+	// — this cast records that the mismatch is deliberate, not accidental.
+	return shape as unknown as ZodRawShape;
 }
 
 interface JsonSchemaProperty {

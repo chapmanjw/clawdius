@@ -1555,6 +1555,7 @@ export default defineConfig(
 					'when': 'hasNode',
 					'allow': [
 						'zod',
+						'zod/v3', // the agentHost tool-schema converter pins the v3 surface on purpose
 						'@microsoft/dev-tunnels-contracts',
 						'@microsoft/dev-tunnels-management',
 						'@parcel/watcher',
@@ -1703,7 +1704,8 @@ export default defineConfig(
 						'@anthropic-ai/sdk', // used by agentHost for Anthropic API requests
 						'@anthropic-ai/claude-agent-sdk', // used by agentHost for Claude Agent SDK session enumeration / queries
 						'@modelcontextprotocol/sdk/**/*', // used by agentHost for Claude client-tool MCP result types
-						'zod' // used by agentHost for Claude client-tool MCP input schemas
+						'zod', // used by agentHost for Claude client-tool MCP input schemas
+						'zod/v3' // the tool-schema converter pins the v3 surface on purpose
 					]
 				},
 				{

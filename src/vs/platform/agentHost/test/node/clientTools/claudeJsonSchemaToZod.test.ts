@@ -4,12 +4,16 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
-import { z } from 'zod';
+// `zod/v3` to match the converter — a v4 `z.object()` cannot wrap v3 schemas.
+import { z } from 'zod/v3';
+import type { ZodRawShape } from 'zod';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { jsonSchemaToZodRawShape } from '../../../node/claude/clientTools/claudeJsonSchemaToZod.js';
 
-function parse(shape: Record<string, z.ZodTypeAny>, value: unknown) {
-	return z.object(shape).safeParse(value);
+function parse(shape: ZodRawShape, value: unknown) {
+	// Mirrors the cast in the converter: the shape is v3-backed at runtime even though
+	// the SDK-facing type is zod 4's.
+	return z.object(shape as unknown as Record<string, z.ZodTypeAny>).safeParse(value);
 }
 
 suite('claudeJsonSchemaToZod', () => {
@@ -96,5 +100,20 @@ suite('claudeJsonSchemaToZod', () => {
 		});
 		assert.strictEqual(parse(shape, { weird: 42 }).success, true, 'any accepts anything');
 		assert.strictEqual(parse(shape, { weird: { nested: true }, worse: 'also fine' }).success, true);
+	});
+
+	test('shape stays v3-backed', () => {
+		// The converter imports `zod/v3` on purpose. Switching it to the package root
+		// (zod 4) is silent: it still compiles and every assertion above still passes,
+		// but the schemas gain a `_zod` marker that the Claude Agent SDK duck-types on to
+		// select a different JSON Schema emitter for the advertised tool list, and
+		// `.default()` under `.optional()` starts materialising defaults the caller never
+		// sent. This asserts the marker directly so that switch cannot pass unnoticed.
+		const shape = jsonSchemaToZodRawShape({ type: 'object', properties: { a: { type: 'string' } } });
+		const a = (shape as unknown as Record<string, { _def?: unknown; _zod?: unknown }>).a;
+		assert.deepStrictEqual(
+			{ v3: a._def !== undefined, v4: a._zod !== undefined },
+			{ v3: true, v4: false }
+		);
 	});
 });

@@ -526,7 +526,26 @@
 # in-module signal the pill subscribes to, right after the write. Most of the growth is two class-level
 # regression tests. Isolated to the clawdius-owned surface; no upstream file grows. Own lines count too.
 
+# Disposition 2026-08-07 (+7 files, +127 insertions): dependency advisories, in three parts.
+# (1) The grouped security bump across 13 lockfiles. It moved extensions/npm to minimatch 10, whose
+# version 9 dropped the default export, so tasks.ts switches to the named import - without it the
+# extension fails to compile (TS2349). Behaviour is unchanged: minimatch 5 and 10 agree on all 252
+# pattern/path combinations the npm.exclude call site handles.
+# (2) @anthropic-ai/sdk 0.92 -> 0.115, to satisfy the Claude Agent SDK's raised peer floor. Type-only
+# import in the fork, so no runtime change; the newer types add required fields, which the test
+# fixtures now carry, and one inlined usage literal is deduped onto the shared helper (net -2 lines).
+# (3) zod -> 4.x with the tool-schema converter pinned to the `zod/v3` subpath. The package root is
+# zod 4, and moving the converter onto it is silent: it compiles and every assertion still passes,
+# while `.default()` under `.optional()` starts materialising defaults the caller never sent and the
+# z.any() fallback stops tolerating an absent required key. A differential over 65 schema/input pairs
+# shows no difference from 3.25.76 on the v3 subpath and twelve on the v4 root. Carries a test that
+# asserts the shape stays v3-backed, and two eslint import-allowlist entries for the subpath.
+# Also restores build/rspack/package-lock.json: the grouped bump stripped 827 lines from it, including
+# the webpack peer-dependency tree, leaving it out of sync with its package.json so `npm ci` failed
+# there (EUSAGE). Regenerated in place; that restoration is most of the file growth here.
+# Confined to the agentHost tool-schema surface, the npm extension, and lockfiles. Own lines count too.
+
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
-recorded: 2026-07-26
-baseline: 5816 files changed, 53144 insertions(+), 1500117 deletions(-)
+recorded: 2026-08-07
+baseline: 5823 files changed, 53271 insertions(+), 1502333 deletions(-)

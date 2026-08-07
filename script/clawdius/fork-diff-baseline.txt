@@ -526,7 +526,7 @@
 # in-module signal the pill subscribes to, right after the write. Most of the growth is two class-level
 # regression tests. Isolated to the clawdius-owned surface; no upstream file grows. Own lines count too.
 
-# Disposition 2026-08-07 (+7 files, +127 insertions): dependency advisories, in three parts.
+# Disposition 2026-08-07 (+7 files, +380 insertions): dependency advisories, in three parts.
 # (1) The grouped security bump across 13 lockfiles. It moved extensions/npm to minimatch 10, whose
 # version 9 dropped the default export, so tasks.ts switches to the named import - without it the
 # extension fails to compile (TS2349). Behaviour is unchanged: minimatch 5 and 10 agree on all 252
@@ -548,4 +548,4 @@
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
 recorded: 2026-08-07
-baseline: 5823 files changed, 53271 insertions(+), 1502333 deletions(-)
+baseline: 5823 files changed, 53524 insertions(+), 1501632 deletions(-)

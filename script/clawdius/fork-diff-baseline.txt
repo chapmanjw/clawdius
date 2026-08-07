@@ -545,7 +545,12 @@
 # there (EUSAGE). Regenerated in place; that restoration is most of the file growth here.
 # Confined to the agentHost tool-schema surface, the npm extension, and lockfiles. Own lines count too.
 
+# Disposition 2026-08-07 (+1 file, +5 insertions): map the `zod/v3` subpath in the Electron unit-test
+# import map. That map is generated from dependency NAMES in package.json, so a subpath specifier never
+# gets an entry, and every agentHost test file failed to load once the tool-schema converter moved to
+# zod/v3. test/unit/electron/renderer.html was upstream-clean, so this newly diverges one file.
+
 upstream_version: 1.130.0
 upstream_commit: 1b6a188127eeaf9194f945eb6eb89a657e93c54c
 recorded: 2026-08-07
-baseline: 5823 files changed, 53524 insertions(+), 1501632 deletions(-)
+baseline: 5824 files changed, 53529 insertions(+), 1501632 deletions(-)

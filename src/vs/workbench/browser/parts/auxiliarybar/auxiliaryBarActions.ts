@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { alert } from '../../../../base/browser/ui/aria/aria.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import product from '../../../../platform/product/common/product.js';
 import { localize, localize2 } from '../../../../nls.js';
@@ -10,8 +11,7 @@ import { Action2, MenuId, MenuRegistry, registerAction2 } from '../../../../plat
 import { ContextKeyExpr } from '../../../../platform/contextkey/common/contextkey.js';
 import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js';
 import { Categories } from '../../../../platform/action/common/actionCommonCategories.js';
-import { alert } from '../../../../base/browser/ui/aria/aria.js';
-import { AuxiliaryBarMaximizedContext, AuxiliaryBarVisibleContext, IsAuxiliaryWindowContext } from '../../../common/contextkeys.js';
+import { AuxiliaryBarMaximizedContext, AuxiliaryBarVisibleContext, IsAuxiliaryWindowContext, SecondarySideBarVisibleContext } from '../../../common/contextkeys.js';
 import { ViewContainerLocation, ViewContainerLocationToString } from '../../../common/views.js';
 import { ActivityBarPosition, IWorkbenchLayoutService, LayoutSettings, Parts } from '../../../services/layout/browser/layoutService.js';
 import { IPaneCompositePartService } from '../../../services/panecomposite/browser/panecomposite.js';
@@ -57,7 +57,7 @@ export class ToggleAuxiliaryBarAction extends Action2 {
 			id: ToggleAuxiliaryBarAction.ID,
 			title: ToggleAuxiliaryBarAction.LABEL,
 			toggled: {
-				condition: AuxiliaryBarVisibleContext,
+				condition: SecondarySideBarVisibleContext,
 				// CLAWDIUS-BEGIN Claude chat-bubble toggle label
 				title: auxBarHide,
 				icon: closeIcon,
@@ -90,18 +90,22 @@ export class ToggleAuxiliaryBarAction extends Action2 {
 	}
 
 	override async run(accessor: ServicesAccessor): Promise<void> {
+		// CLAWDIUS-BEGIN Claude chat-bubble toggle label
+		// Upstream delegates to IWorkbenchLayoutService.toggleSecondarySideBar(), which hard-codes the
+		// "Secondary Side Bar shown/hidden" screen-reader announcement. Clawdius keeps the toggle inline so the
+		// announcement can name the surface the user actually sees (the native Claude chat) without editing
+		// layout.ts, which every other secondary-side-bar caller shares.
 		const layoutService = accessor.get(IWorkbenchLayoutService);
 		const isCurrentlyVisible = layoutService.isVisible(Parts.AUXILIARYBAR_PART);
 
 		layoutService.setPartHidden(isCurrentlyVisible, Parts.AUXILIARYBAR_PART);
 
 		// Announce visibility change to screen readers
-		// CLAWDIUS-BEGIN Claude chat-bubble toggle label
 		const alertMessage = isCurrentlyVisible
 			? (clawdiusChatToggle ? localize('claudeChatHidden', "Claude Code Chat hidden") : localize('auxiliaryBarHidden', "Secondary Side Bar hidden"))
 			: (clawdiusChatToggle ? localize('claudeChatShown', "Claude Code Chat shown") : localize('auxiliaryBarVisible', "Secondary Side Bar shown"));
-		// CLAWDIUS-END
 		alert(alertMessage);
+		// CLAWDIUS-END
 	}
 }
 

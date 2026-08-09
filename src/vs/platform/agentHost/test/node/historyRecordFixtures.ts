@@ -50,7 +50,6 @@ export interface IHistoryToolStartRecord extends IHistoryRecordBase {
 	readonly toolInput?: string;
 	readonly toolKind?: 'terminal' | 'subagent' | 'search';
 	readonly language?: string;
-	readonly toolArguments?: string;
 	readonly subagentAgentName?: string;
 	readonly subagentDescription?: string;
 	readonly mcpServerName?: string;

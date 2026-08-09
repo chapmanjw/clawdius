@@ -65,6 +65,7 @@ suite('claudeSdkOptions / buildSubprocessEnv', () => {
 			path: env.PATH,
 			home: env.HOME,
 			userProfile: env.USERPROFILE,
+			aiAgent: env.AI_AGENT,
 		}, {
 			runAsNode: '1',
 			nodeOptions: undefined,
@@ -75,6 +76,7 @@ suite('claudeSdkOptions / buildSubprocessEnv', () => {
 			path: undefined, // not explicitly forwarded; PATH is composed in settingsEnv, not subprocessEnv
 			home: '/Users/test',
 			userProfile: 'C:\\Users\\test',
+			aiAgent: 'github_copilot_vscode_agent',
 		});
 	});
 
@@ -110,6 +112,8 @@ suite('claudeSdkOptions / buildSubprocessEnv', () => {
 			electronOther: env.ELECTRON_NO_ATTACH_CONSOLE,
 			nodeOptions: env.NODE_OPTIONS,
 			runAsNode: env.ELECTRON_RUN_AS_NODE,
+			// Announces the originating VS Code surface to `gh`.
+			aiAgent: env.AI_AGENT,
 		}, {
 			anthropicKey: 'sk-user-key',
 			oauthToken: 'sk-ant-oat-user',
@@ -119,6 +123,7 @@ suite('claudeSdkOptions / buildSubprocessEnv', () => {
 			electronOther: undefined,
 			nodeOptions: undefined,
 			runAsNode: '1',
+			aiAgent: 'github_copilot_vscode_agent',
 		});
 	});
 
@@ -305,5 +310,50 @@ suite('claudeSdkOptions / buildOptions resumeSessionAt projection', () => {
 			{ sessionId: opts.sessionId, resume: opts.resume, resumeSessionAt: opts.resumeSessionAt },
 			{ sessionId: 's1', resume: undefined, resumeSessionAt: undefined },
 		);
+	});
+});
+
+suite('claudeSdkOptions / buildOptions additionalDirectories projection', () => {
+
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	const BUNDLED: IClawdiusCliResolution = { mode: 'bundled', executable: 'node', extraEnv: {}, providerPreset: 'oauth', disableLoginPrompt: false };
+
+	function input(additionalDirectories: readonly URI[] | undefined) {
+		return {
+			sessionId: 's1',
+			workingDirectory: URI.file('/tmp/primary'),
+			model: undefined,
+			abortController: new AbortController(),
+			permissionMode: 'default' as const,
+			trusted: true,
+			canUseTool: async () => ({ behavior: 'allow' as const, updatedInput: {} }),
+			onElicitation: async () => ({ action: 'cancel' as const }),
+			isResume: false,
+			mcpServers: undefined,
+			cliResolution: BUNDLED,
+			...(additionalDirectories !== undefined ? { additionalDirectories } : {}),
+		};
+	}
+
+	test('projects cwd from the primary and additionalDirectories from the tail', async () => {
+		const opts = await buildOptions(input([URI.file('/tmp/b'), URI.file('/tmp/c')]), () => { });
+		assert.deepStrictEqual(
+			{ cwd: opts.cwd, additionalDirectories: opts.additionalDirectories },
+			{ cwd: URI.file('/tmp/primary').fsPath, additionalDirectories: [URI.file('/tmp/b').fsPath, URI.file('/tmp/c').fsPath] },
+		);
+	});
+
+	test('empty additionalDirectories omits Options.additionalDirectories', async () => {
+		const opts = await buildOptions(input([]), () => { });
+		assert.deepStrictEqual(
+			{ cwd: opts.cwd, additionalDirectories: opts.additionalDirectories },
+			{ cwd: URI.file('/tmp/primary').fsPath, additionalDirectories: undefined },
+		);
+	});
+
+	test('undefined additionalDirectories omits Options.additionalDirectories', async () => {
+		const opts = await buildOptions(input(undefined), () => { });
+		assert.strictEqual(opts.additionalDirectories, undefined);
 	});
 });

@@ -35,6 +35,7 @@ import { setup as setupAgentsWindowTests } from './areas/agentsWindow/agentsWind
 // CLAWDIUS-BEGIN Clawdius e2e smoke suite
 import { setup as setupClawdiusTests } from './areas/clawdius/clawdius.test';
 // CLAWDIUS-END
+import { setup as setupBrowserViewTests } from './areas/browserView/browserView.test';
 
 const rootPath = path.join(__dirname, '..', '..', '..');
 
@@ -441,6 +442,7 @@ describe(`VSCode Smoke Tests (${opts.web ? 'Web' : 'Electron'})`, () => {
 	if (!opts.web && !opts.remote) { setupChatSessionsTests(logger); }
 	if (!opts.web && !opts.remote) { setupChatModelConfigTests(logger); }
 	if (!opts.web && !opts.remote) { setupAgentsWindowTests(logger); }
+	if (!opts.web && !opts.remote) { setupBrowserViewTests(logger); }
 	setupAccessibilityTests(logger, opts, quality);
 	// CLAWDIUS-BEGIN Clawdius e2e smoke suite (Electron only: drives the native Control Center + status bar)
 	if (!opts.web) { setupClawdiusTests(logger); }

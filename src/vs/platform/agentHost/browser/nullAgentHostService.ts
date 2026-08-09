@@ -7,7 +7,7 @@ import { Event } from '../../../base/common/event.js';
 import { IReference } from '../../../base/common/lifecycle.js';
 import { constObservable, IObservable } from '../../../base/common/observable.js';
 import { URI } from '../../../base/common/uri.js';
-import type { IAgentCreateSessionConfig, IAgentHostInspectInfo, IAgentHostNetworkDiagnosticsInfo, IAgentHostNetworkFetchResult, IAgentHostService, IAgentHostSocketInfo, IAgentResolveSessionConfigParams, IAgentSessionConfigCompletionsParams, IAgentSessionMetadata, AuthenticateParams, AuthenticateResult } from '../common/agentService.js';
+import type { IAgentCreateSessionConfig, IAgentHostInspectInfo, IAgentHostManagedSettingsDiagnostics, IAgentHostNetworkDiagnosticsInfo, IAgentHostNetworkFetchResult, IAgentHostService, IAgentHostSocketInfo, IAgentResolveSessionConfigParams, IAgentSessionConfigCompletionsParams, IAgentSessionMetadata, AuthenticateParams, AuthenticateResult } from '../common/agentService.js';
 import type { IClaudeMcpToolDiscoveryResult } from '../common/claudeMcpToolDiscovery.js';
 import type { IClaudeUsageContributionResult } from '../common/claudeUsageContribution.js';
 import type { IClaudeUsageStatsResult } from '../../clawdius/common/claudeUsageStats.js';
@@ -38,6 +38,7 @@ export class NullAgentHostService implements IAgentHostService {
 
 	readonly authenticationPending: IObservable<boolean> = constObservable(false);
 	setAuthenticationPending(_pending: boolean): void { /* no-op */ }
+	startAgentHost(): void { /* no-op */ }
 
 	readonly initializeResult: IObservable<InitializeResult | undefined> = constObservable(undefined);
 
@@ -52,6 +53,7 @@ export class NullAgentHostService implements IAgentHostService {
 	async restartAgentHost(): Promise<void> { notSupported(); }
 	async authenticate(_params: AuthenticateParams): Promise<AuthenticateResult> { return notSupported(); }
 	async getNetworkDiagnosticsInfo(): Promise<IAgentHostNetworkDiagnosticsInfo> { return notSupported(); }
+	async getManagedSettingsDiagnostics(): Promise<readonly IAgentHostManagedSettingsDiagnostics[]> { return []; }
 	async diagnosticsFetch(_url: string): Promise<IAgentHostNetworkFetchResult> { return notSupported(); }
 	async listSessions(): Promise<IAgentSessionMetadata[]> { return []; }
 	async createSession(_config?: IAgentCreateSessionConfig): Promise<URI> { return notSupported(); }

@@ -10,7 +10,7 @@ keeps that tractable.
 - `git rerere` is enabled so conflict resolutions are recorded and replayed on the next merge.
 
 ## Current base
-`UPSTREAM_VERSION` = `1.130.0`, the newest stable upstream tag taken. Bump that file and this doc as
+`UPSTREAM_VERSION` = `1.132.0`, the newest stable upstream tag taken. Bump that file and this doc as
 part of every merge.
 
 ## History and LFS notes
@@ -185,6 +185,13 @@ segment is dropped for VS2026). The silent installer CLI (`setup.exe modify --qu
 Installer itself has a pending self-update, so use the GUI. If the libs land on a different VS instance than
 node-gyp auto-selects (it picks the highest build number), point node-gyp at the right MSBuild with
 `export npm_config_msbuild_path=".../<instance>/MSBuild/Current/Bin/amd64/MSBuild.exe"` before `npm ci`.
+Where the libs actually landed is worth checking rather than assuming: a Build Tools and a full
+Professional install of the same VS version carry the same toolset number but not necessarily the same
+components, and node-gyp will pick Build Tools. `Get-ChildItem "C:\Program Files*\Microsoft Visual
+Studio\*\*\VC\Tools\MSVC\*"` and look for a `lib\spectre` directory under each toolset to find the
+instance that has them. Symptom when this is wrong: `npm install` fails in
+`remote/node_modules/@vscode/windows-process-tree` with MSB8040 during `postinstall.ts`, long after the
+root dependency tree installed fine.
 
 ### `npm install` re-prunes the ssh2 stub; restore the committed lock, don't regenerate
 Recovering from a broken `node_modules` with `npm install` re-prunes the `ssh2/cpu-features` stub from the

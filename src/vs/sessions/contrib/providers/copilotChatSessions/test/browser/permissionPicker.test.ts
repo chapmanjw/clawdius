@@ -32,7 +32,7 @@ suite('Copilot PermissionPicker', () => {
 			{
 				level: ChatPermissionLevel.Autopilot,
 				label: 'Autopilot (Preview)',
-				detail: 'Autonomously iterates from start to finish',
+				detail: 'Works autonomously within permissions',
 			},
 		]);
 	});

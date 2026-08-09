@@ -4,89 +4,208 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { DeferredPromise, timeout } from '../../../base/common/async.js';
-import { Emitter, Relay } from '../../../base/common/event.js';
+import { Emitter, Event } from '../../../base/common/event.js';
 import { Disposable, DisposableStore, IReference } from '../../../base/common/lifecycle.js';
-import { IObservable, ISettableObservable, observableValue } from '../../../base/common/observable.js';
+import { autorun, constObservable, IObservable, ISettableObservable, observableValue } from '../../../base/common/observable.js';
+import { mark } from '../../../base/common/performance.js';
+import { URI } from '../../../base/common/uri.js';
 import { generateUuid } from '../../../base/common/uuid.js';
 import { getDelayedChannel, IChannelServer, ProxyChannel } from '../../../base/parts/ipc/common/ipc.js';
 import { Client as MessagePortClient } from '../../../base/parts/ipc/common/ipc.mp.js';
 import { acquirePort } from '../../../base/parts/ipc/electron-browser/ipc.mp.js';
 import { ipcRenderer } from '../../../base/parts/sandbox/electron-browser/globals.js';
-import { IInstantiationService } from '../../instantiation/common/instantiation.js';
 import { IConfigurationService } from '../../configuration/common/configuration.js';
 import { IEnvironmentService } from '../../environment/common/environment.js';
+import { IInstantiationService } from '../../instantiation/common/instantiation.js';
 import { ILogService } from '../../log/common/log.js';
-import { AgentHostAhpJsonlLoggingSettingId, AgentHostByokModelsEnabledSettingId, AgentHostIpcChannels, IAgentCreateChatOptions, IAgentCreateSessionConfig, IAgentHostInspectInfo, IAgentHostNetworkDiagnosticsInfo, IAgentHostNetworkFetchResult, IAgentHostService, IAgentResolveSessionConfigParams, IAgentService, IAgentSessionConfigCompletionsParams, IAgentSessionMetadata, AuthenticateParams, AuthenticateResult, IAgentHostSocketInfo, IConnectionTrackerService, IMcpNotification, AgentHostOTelPolicyIpcChannel, readAgentHostOTelPolicySettings, AgentHostSystemProxyEnabledSettingId } from '../common/agentService.js';
-import { IAgentHostEnablementService } from '../common/agentHostEnablementService.js';
+import { AgentHostIpcChannelTransport } from '../browser/agentHostIpcChannelTransport.js';
+import { RemoteAgentHostProtocolClient } from '../browser/remoteAgentHostProtocolClient.js';
 import { AhpJsonlLogger } from '../common/ahpJsonlLogger.js';
-import type { InitializeResult } from '../common/state/protocol/common/commands.js';
-import { PROTOCOL_VERSION } from '../common/state/protocol/version/registry.js';
-import { wrapAgentServiceWithAhpLogging } from './localAhpJsonlLogging.js';
-import { AgentSubscriptionManager, isActionEnvelopeRelevantToSubscriptionUris, type IActiveSubscriptionInfo, type IAgentSubscription } from '../common/state/agentSubscription.js';
-import type { CompletionsParams, CompletionsResult, CreateTerminalParams, ResolveSessionConfigResult, SessionConfigCompletionsResult } from '../common/state/protocol/commands.js';
-import type { InvokeChangesetOperationParams, InvokeChangesetOperationResult } from '../common/state/protocol/channels-changeset/commands.js';
-import { ActionType, type ActionEnvelope, type INotification, type IRootConfigChangedAction, type SessionAction, type ChatAction, type TerminalAction, type ClientAnnotationsAction, type ClientChangesetAction } from '../common/state/sessionActions.js';
-import { createRemoteWatchHandle, type IRemoteWatchHandle } from '../common/agentHostFileSystemProvider.js';
-import type { CreateResourceWatchParams, CreateResourceWatchResult, ResourceCopyParams, ResourceCopyResult, ResourceDeleteParams, ResourceDeleteResult, ResourceListResult, ResourceMkdirParams, ResourceMkdirResult, ResourceMoveParams, ResourceMoveResult, ResourceReadResult, ResourceResolveParams, ResourceResolveResult, ResourceWriteParams, ResourceWriteResult, IStateSnapshot } from '../common/state/sessionProtocol.js';
-import { StateComponents, ROOT_STATE_URI, parseChatUri, type RootState } from '../common/state/sessionState.js';
-import { revive } from '../../../base/common/marshalling.js';
-import { URI } from '../../../base/common/uri.js';
-import { AGENT_HOST_CLIENT_RESOURCE_CHANNEL, AgentHostClientResourceChannel } from '../common/agentHostClientResourceChannel.js';
 import { AGENT_HOST_CLIENT_BYOK_LM_CHANNEL, AgentHostClientByokLmChannel } from '../common/agentHostClientByokLmChannel.js';
 import { AGENT_HOST_CLIENT_PROXY_CHANNEL, AgentHostClientProxyChannel } from '../common/agentHostClientProxyChannel.js';
-import { TELEMETRY_CRASH_REPORTER_SETTING_ID, TELEMETRY_OLD_SETTING_ID, TELEMETRY_SETTING_ID } from '../../telemetry/common/telemetry.js';
-import { getTelemetryLevel } from '../../telemetry/common/telemetryUtils.js';
-import { AgentHostTelemetryLevelConfigKey, AgentHostSessionSyncEnabledConfigKey, AgentHostTerminalAutoApproveEnabledConfigKey, AgentHostGlobalAutoApproveEnabledConfigKey, AgentHostWorkspaceTrustDenyByDefaultConfigKey, AgentHostAutoReplyEnabledConfigKey, AgentHostPreferLongContextEnabledConfigKey, AgentHostSystemProxyEnabledConfigKey, AgentHostTerminalAutoApproveRulesConfigKey, getAgentHostTerminalAutoApproveRulesConfig, SESSION_SYNC_ENABLED_SETTING_ID, TERMINAL_AUTO_APPROVE_ENABLED_SETTING_ID, GLOBAL_AUTO_APPROVE_SETTING_ID, WORKSPACE_TRUST_DENY_BY_DEFAULT_SETTING_ID, AUTO_REPLY_SETTING_ID, PREFER_LONG_CONTEXT_SETTING_ID, TERMINAL_AUTO_APPROVE_SETTING_ID, TERMINAL_IGNORE_DEFAULT_AUTO_APPROVE_RULES_SETTING_ID, telemetryLevelToAgentHostConfigValue } from '../common/agentHostSchema.js';
+import { IAgentHostEnablementService } from '../common/agentHostEnablementService.js';
+// CLAWDIUS-BEGIN agent-host side channels (MCP tool discovery, usage contribution, usage stats)
 import { ClaudeMcpToolDiscoveryChannelName, IClaudeMcpToolDiscoveryResult, IClaudeMcpToolDiscoveryService } from '../common/claudeMcpToolDiscovery.js';
 import { ClaudeUsageContributionChannelName, IClaudeUsageContributionResult, IClaudeUsageContributionService } from '../common/claudeUsageContribution.js';
 import { ClaudeUsageStatsChannelName, IClaudeUsageStatsResult, IClaudeUsageStatsService } from '../../clawdius/common/claudeUsageStats.js';
+// CLAWDIUS-END
+import { LOCAL_AGENT_HOST_RESOURCE_IDENTITY } from '../common/agentHostResourceService.js';
+import {
+	AgentHostAhpJsonlLoggingSettingId,
+	AgentHostByokModelsEnabledSettingId,
+	AgentHostIpcChannels,
+	AgentHostOTelPolicyIpcChannel,
+	AgentSession,
+	IAgentCreateChatOptions,
+	IAgentCreateSessionConfig,
+	IAgentHostInspectInfo,
+	IAgentHostManagementService,
+	IAgentHostManagedSettingsDiagnostics,
+	IAgentHostNetworkDiagnosticsInfo,
+	IAgentHostNetworkFetchResult,
+	IAgentHostService,
+	IAgentHostSocketInfo,
+	IAgentResolveSessionConfigParams,
+	IAgentSessionConfigCompletionsParams,
+	IAgentSessionMetadata,
+	AuthenticateParams,
+	AuthenticateResult,
+	IMcpNotification,
+	readAgentHostOTelPolicySettings,
+} from '../common/agentService.js';
+import type { IRemoteWatchHandle } from '../common/agentHostFileSystemProvider.js';
+import type { IActiveSubscriptionInfo, IAgentSubscription } from '../common/state/agentSubscription.js';
+import type { CompletionsParams, CompletionsResult, CreateTerminalParams, ResolveSessionConfigResult, SessionConfigCompletionsResult } from '../common/state/protocol/commands.js';
+import type { Implementation, InitializeResult } from '../common/state/protocol/common/commands.js';
+import type { InvokeChangesetOperationParams, InvokeChangesetOperationResult } from '../common/state/protocol/channels-changeset/commands.js';
+import type { CreateResourceWatchParams, CreateResourceWatchResult, ResourceCopyParams, ResourceCopyResult, ResourceDeleteParams, ResourceDeleteResult, ResourceListResult, ResourceMkdirParams, ResourceMkdirResult, ResourceMoveParams, ResourceMoveResult, ResourceReadResult, ResourceResolveParams, ResourceResolveResult, ResourceWriteParams, ResourceWriteResult } from '../common/state/sessionProtocol.js';
+import type { ActionEnvelope, ChatAction, ClientAnnotationsAction, ClientChangesetAction, INotification, IRootConfigChangedAction, SessionAction, TerminalAction } from '../common/state/sessionActions.js';
+import type { ComponentToState, RootState, StateComponents } from '../common/state/sessionState.js';
+
+const LOG_PREFIX = '[AgentHost:renderer]';
 
 /**
- * Renderer-side implementation of {@link IAgentHostService} that connects
- * directly to the agent host utility process via MessagePort, bypassing
- * the main process relay. Uses the same `getDelayedChannel` pattern as
- * the pty host so the proxy is usable immediately while the port is acquired.
+ * Renderer-side implementation of {@link IAgentHostService} for the local
+ * agent host. State and request traffic use AHP over the Protocol channel;
+ * management remains on the narrow Management IPC channel.
  */
 export class LocalAgentHostServiceClient extends Disposable implements IAgentHostService {
 	declare readonly _serviceBrand: undefined;
 
-	/** Unique identifier for this window, used in action envelope origin tracking. */
 	readonly clientId = generateUuid();
 
 	private readonly _clientEventually = new DeferredPromise<MessagePortClient>();
-	private readonly _proxy: IAgentService;
+	private readonly _management: IAgentHostManagementService;
+	// CLAWDIUS-BEGIN agent-host side channels
 	private readonly _mcpDiscoveryProxy: IClaudeMcpToolDiscoveryService;
 	private readonly _usageContributionProxy: IClaudeUsageContributionService;
 	private readonly _usageStatsProxy: IClaudeUsageStatsService;
+	private readonly _agentHostEnablementService: IAgentHostEnablementService;
+	// CLAWDIUS-END
 	private readonly _ahpLogger: AhpJsonlLogger | undefined;
-	private readonly _connectionTracker: IConnectionTrackerService;
-	private readonly _subscriptionManager: AgentSubscriptionManager;
-	private readonly _subscribedResources = new Map<string, number>();
+	private _protocolClient: RemoteAgentHostProtocolClient | undefined;
+	private _connectStarted = false;
+	private _didStartInitialSessionList = false;
+	private _didCompleteInitialSessionList = false;
 
 	private readonly _onAgentHostExit = this._register(new Emitter<number>());
 	readonly onAgentHostExit = this._onAgentHostExit.event;
 	private readonly _onAgentHostStart = this._register(new Emitter<void>());
 	readonly onAgentHostStart = this._onAgentHostStart.event;
 
-	private readonly _onDidAction = this._register(new Emitter<ActionEnvelope>());
-	readonly onDidAction = this._onDidAction.event;
-
-	private readonly _onDidNotification = this._register(new Emitter<INotification>());
-	readonly onDidNotification = this._onDidNotification.event;
-
-	private readonly _onMcpNotification = this._register(new Relay<IMcpNotification>());
-	readonly onMcpNotification = this._onMcpNotification.event;
-
 	private readonly _authenticationPending: ISettableObservable<boolean> = observableValue('authenticationPending', true);
 	readonly authenticationPending: IObservable<boolean> = this._authenticationPending;
 	private _authenticationSettled = false;
-	private _completionTriggerCharactersOnce: Promise<readonly string[]> | undefined;
-	private readonly _initializeResult: ISettableObservable<InitializeResult | undefined> = observableValue('agentHostInitializeResult', undefined);
+	private readonly _noopRootState: IAgentSubscription<RootState> = {
+		value: undefined,
+		verifiedValue: undefined,
+		onDidChange: Event.None,
+		onWillApplyAction: Event.None,
+		onDidApplyAction: Event.None,
+	};
+
+	constructor(
+		private readonly _clientInfo: Implementation,
+		@ILogService private readonly _logService: ILogService,
+		@IConfigurationService private readonly _configurationService: IConfigurationService,
+		@IEnvironmentService environmentService: IEnvironmentService,
+		@IInstantiationService private readonly _instantiationService: IInstantiationService,
+		@IAgentHostEnablementService agentHostEnablementService: IAgentHostEnablementService,
+	) {
+		super();
+		// CLAWDIUS-BEGIN agent-host side channels: delayed-channel proxies to the three Clawdius services
+		// the agent host exposes alongside the AHP protocol channel. They are plain IPC channels, not AHP,
+		// so they survive the protocol-client refactor unchanged.
+		this._agentHostEnablementService = agentHostEnablementService;
+		this._mcpDiscoveryProxy = ProxyChannel.toService<IClaudeMcpToolDiscoveryService>(
+			getDelayedChannel(this._clientEventually.p.then(client => client.getChannel(ClaudeMcpToolDiscoveryChannelName)))
+		);
+		this._usageContributionProxy = ProxyChannel.toService<IClaudeUsageContributionService>(
+			getDelayedChannel(this._clientEventually.p.then(client => client.getChannel(ClaudeUsageContributionChannelName)))
+		);
+		this._usageStatsProxy = ProxyChannel.toService<IClaudeUsageStatsService>(
+			getDelayedChannel(this._clientEventually.p.then(client => client.getChannel(ClaudeUsageStatsChannelName)))
+		);
+		// CLAWDIUS-END
+		this._management = ProxyChannel.toService<IAgentHostManagementService>(
+			getDelayedChannel(this._clientEventually.p.then(client => client.getChannel(AgentHostIpcChannels.Management)))
+		);
+		this._ahpLogger = this._configurationService.getValue<boolean>(AgentHostAhpJsonlLoggingSettingId)
+			? this._register(this._instantiationService.createInstance(AhpJsonlLogger, {
+				logsHome: environmentService.logsHome,
+				connectionId: this.clientId,
+				transport: 'local',
+			}))
+			: undefined;
+
+		this._register(autorun(reader => {
+			if (agentHostEnablementService.enabled.read(reader)) {
+				this.startAgentHost();
+			}
+		}));
+	}
+
+	startAgentHost(): void {
+		if (!this._protocolClient) {
+			const transport = new AgentHostIpcChannelTransport(
+				getDelayedChannel(this._clientEventually.p.then(client => client.getChannel(AgentHostIpcChannels.Protocol))),
+				this._ahpLogger,
+			);
+			this._protocolClient = this._register(this._instantiationService.createInstance(
+				RemoteAgentHostProtocolClient,
+				LOCAL_AGENT_HOST_RESOURCE_IDENTITY,
+				transport,
+				undefined,
+				this.clientId,
+				this._clientInfo,
+			));
+			this._register(this._protocolClient.onDidClose(() => this._onAgentHostExit.fire(0)));
+		}
+
+		void this._connect().catch(error => {
+			this._protocolClient?.notifyTransportClosed();
+			this._logService.error(`${LOG_PREFIX} Protocol connection failed`, error);
+		});
+	}
+
+	private async _connect(): Promise<void> {
+		if (this._connectStarted) {
+			return;
+		}
+		this._connectStarted = true;
+		mark('code/agentHost/willStart');
+
+		this._logService.info(`${LOG_PREFIX} Acquiring MessagePort to agent host...`);
+		ipcRenderer.send(AgentHostOTelPolicyIpcChannel, readAgentHostOTelPolicySettings(this._configurationService));
+		const port = await acquirePort('vscode:createAgentHostMessageChannel', 'vscode:createAgentHostMessageChannelResult');
+		mark('code/agentHost/didAcquireMessagePort');
+		this._logService.info(`${LOG_PREFIX} MessagePort acquired, creating client...`);
+
+		const store = this._register(new DisposableStore());
+		const client = store.add(new MessagePortClient(port, this.clientId));
+		registerAgentHostClientChannels(
+			client,
+			this._instantiationService,
+			this._logService,
+			this._configurationService.getValue<boolean>(AgentHostByokModelsEnabledSettingId) === true,
+		);
+		this._clientEventually.complete(client);
+
+		const protocolClient = this._requireClient();
+		await protocolClient.connect();
+		mark('code/agentHost/didConnect');
+		this._logService.info(`${LOG_PREFIX} Protocol connection established; clientId=${protocolClient.clientId}`);
+		this._onAgentHostStart.fire();
+	}
+
+	private _requireClient(): RemoteAgentHostProtocolClient {
+		if (!this._protocolClient) {
+			throw new Error('Local agent host is not connected.');
+		}
+		return this._protocolClient;
+	}
 
 	setAuthenticationPending(pending: boolean): void {
-		// Sticky: once the first authentication pass settles, never surface
-		// pending again. Subsequent re-auths (account/session changes, reconnect)
-		// happen silently in the background and should not flicker the UI.
 		if (this._authenticationSettled) {
 			return;
 		}
@@ -97,470 +216,237 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 	}
 
 	get initializeResult(): IObservable<InitializeResult | undefined> {
-		return this._initializeResult;
-	}
-
-	constructor(
-		@ILogService private readonly _logService: ILogService,
-		@IConfigurationService private readonly _configurationService: IConfigurationService,
-		@IEnvironmentService environmentService: IEnvironmentService,
-		@IInstantiationService private readonly _instantiationService: IInstantiationService,
-		@IAgentHostEnablementService private readonly _agentHostEnablementService: IAgentHostEnablementService,
-	) {
-		super();
-
-		// Create a proxy backed by a delayed channel - usable immediately,
-		// calls queue until the MessagePort connection is established.
-		const rawProxy = ProxyChannel.toService<IAgentService>(
-			getDelayedChannel(this._clientEventually.p.then(client => client.getChannel(AgentHostIpcChannels.AgentHost)))
-		);
-
-		// Optionally wrap the proxy with a logging layer that synthesizes JSON-RPC
-		// frames for every request/response/notification on the in-process MessagePort
-		// channel, mirroring the AHP transport JSONL logs produced by remote agent hosts.
-		this._ahpLogger = this._configurationService.getValue<boolean>(AgentHostAhpJsonlLoggingSettingId)
-			? this._register(this._instantiationService.createInstance(AhpJsonlLogger, {
-				logsHome: environmentService.logsHome,
-				connectionId: this.clientId,
-				transport: 'local',
-			}))
-			: undefined;
-		this._proxy = this._ahpLogger ? wrapAgentServiceWithAhpLogging(rawProxy, this._ahpLogger) : rawProxy;
-
-		// CLAWDIUS-BEGIN live MCP tool discovery (#93): a delayed-channel proxy to the agentHost discovery service.
-		this._mcpDiscoveryProxy = ProxyChannel.toService<IClaudeMcpToolDiscoveryService>(
-			getDelayedChannel(this._clientEventually.p.then(client => client.getChannel(ClaudeMcpToolDiscoveryChannelName)))
-		);
-		// CLAWDIUS-END
-		// CLAWDIUS-BEGIN usage-contribution fetch (#usage): a delayed-channel proxy to the agentHost usage-contribution service.
-		this._usageContributionProxy = ProxyChannel.toService<IClaudeUsageContributionService>(
-			getDelayedChannel(this._clientEventually.p.then(client => client.getChannel(ClaudeUsageContributionChannelName)))
-		);
-		// CLAWDIUS-END
-		// CLAWDIUS-BEGIN transcript-derived usage stats (#94): a delayed-channel proxy to the agentHost aggregator.
-		this._usageStatsProxy = ProxyChannel.toService<IClaudeUsageStatsService>(
-			getDelayedChannel(this._clientEventually.p.then(client => client.getChannel(ClaudeUsageStatsChannelName)))
-		);
-		// CLAWDIUS-END
-
-		this._connectionTracker = ProxyChannel.toService<IConnectionTrackerService>(
-			getDelayedChannel(this._clientEventually.p.then(client => client.getChannel(AgentHostIpcChannels.ConnectionTracker)))
-		);
-
-		this._subscriptionManager = this._register(new AgentSubscriptionManager(
-			this.clientId,
-			() => this.nextClientSeq(),
-			msg => this._logService.warn(`[AgentHost:renderer] ${msg}`),
-			resource => this.subscribe(resource),
-			resource => this.unsubscribe(resource),
-		));
-
-		this._register(this._configurationService.onDidChangeConfiguration(e => {
-			if (e.affectsConfiguration(TELEMETRY_SETTING_ID) || e.affectsConfiguration(TELEMETRY_OLD_SETTING_ID) || e.affectsConfiguration(TELEMETRY_CRASH_REPORTER_SETTING_ID)) {
-				this._updateTelemetryLevel();
-			}
-			if (e.affectsConfiguration(SESSION_SYNC_ENABLED_SETTING_ID)) {
-				this._updateSessionSyncEnabled();
-			}
-			if (e.affectsConfiguration(TERMINAL_AUTO_APPROVE_ENABLED_SETTING_ID)) {
-				this._updateTerminalAutoApproveEnabled();
-			}
-			if (e.affectsConfiguration(GLOBAL_AUTO_APPROVE_SETTING_ID)) {
-				this._updateGlobalAutoApproveEnabled();
-			}
-			if (e.affectsConfiguration(WORKSPACE_TRUST_DENY_BY_DEFAULT_SETTING_ID)) {
-				this._updateWorkspaceTrustDenyByDefault();
-			}
-			if (e.affectsConfiguration(AUTO_REPLY_SETTING_ID)) {
-				this._updateAutoReplyEnabled();
-			}
-			if (e.affectsConfiguration(PREFER_LONG_CONTEXT_SETTING_ID)) {
-				this._updatePreferLongContextEnabled();
-			}
-			if (e.affectsConfiguration(AgentHostSystemProxyEnabledSettingId)) {
-				this._updateSystemProxyEnabled();
-			}
-			if (e.affectsConfiguration(TERMINAL_AUTO_APPROVE_SETTING_ID) || e.affectsConfiguration(TERMINAL_IGNORE_DEFAULT_AUTO_APPROVE_RULES_SETTING_ID)) {
-				this._updateTerminalAutoApproveRules();
-			}
-		}));
-
-		if (this._agentHostEnablementService.enabled) {
-			this._connect();
-		}
-	}
-
-	private async _connect(): Promise<void> {
-		this._logService.info('[AgentHost:renderer] Acquiring MessagePort to agent host...');
-		// Forward the enterprise-resolved OTel policy to the main-process starter BEFORE
-		// requesting the connection. The main config service does not include the renderer-only
-		// managed-settings policy (`AccountPolicyService`), so without this the agent host would
-		// be spawned missing managed OTel settings (endpoint/protocol/enabled). Sent first so it
-		// is processed (FIFO per sender) before the starter spawns the host on the connection
-		// request. See `AgentHostOTelPolicyIpcChannel`.
-		ipcRenderer.send(AgentHostOTelPolicyIpcChannel, readAgentHostOTelPolicySettings(this._configurationService));
-		const port = await acquirePort('vscode:createAgentHostMessageChannel', 'vscode:createAgentHostMessageChannelResult');
-		this._logService.info('[AgentHost:renderer] MessagePort acquired, creating client...');
-
-		const store = this._register(new DisposableStore());
-		// Use clientId as the IPC ctx so the agent host can route reverse-RPC
-		// calls (vscode-agent-client filesystem reads) back to this renderer
-		// via `IPCServer.getChannel(name, c => c.ctx === clientId)`.
-		const client = store.add(new MessagePortClient(port, this.clientId));
-		registerAgentHostClientChannels(client, this._instantiationService, this._logService, this._ahpLogger, this._configurationService.getValue<boolean>(AgentHostByokModelsEnabledSettingId) === true);
-
-		// The in-process (local) transport does not perform the AHP `initialize`
-		// handshake, so synthesize a minimal InitializeResult carrying the only
-		// field meaningful to clients here: the terminal command prefix. It is
-		// hardcoded to match the host's `BANG_COMMAND_PREFIX` (`!`) — the local
-		// host runs the same bundled code, so there is no need for an extra RPC
-		// round-trip. Set before `complete(client)` so any session created
-		// afterwards observes it.
-		this._initializeResult.set({ protocolVersion: PROTOCOL_VERSION, serverSeq: 0, snapshots: [], terminalCommandPrefix: '!' }, undefined);
-
-		this._clientEventually.complete(client);
-		this._updateTelemetryLevel();
-		this._updateSessionSyncEnabled();
-		this._updateTerminalAutoApproveEnabled();
-		this._updateGlobalAutoApproveEnabled();
-		this._updateWorkspaceTrustDenyByDefault();
-		this._updateAutoReplyEnabled();
-		this._updatePreferLongContextEnabled();
-		this._updateSystemProxyEnabled();
-		this._updateTerminalAutoApproveRules();
-
-		store.add(this._proxy.onDidAction(e => {
-			const revived = revive(e) as ActionEnvelope;
-			if (!isActionEnvelopeRelevantToSubscriptionUris(revived, this._subscribedResources.keys())) {
-				return;
-			}
-			if (this._ahpLogger) {
-				const frame = { jsonrpc: '2.0' as const, method: 'action', params: e };
-				this._ahpLogger.log(frame, 's2c');
-			}
-			this._subscriptionManager.receiveEnvelope(revived);
-			this._onDidAction.fire(revived);
-		}));
-		store.add(this._proxy.onDidNotification(e => {
-			if (this._ahpLogger) {
-				const frame = { jsonrpc: '2.0' as const, method: 'notification', params: { notification: e } };
-				this._ahpLogger.log(frame, 's2c');
-			}
-			this._onDidNotification.fire(revive(e));
-		}));
-		this._onMcpNotification.input = this._proxy.onMcpNotification;
-		this._logService.info('[AgentHost:renderer] Direct MessagePort connection established');
-		this._onAgentHostStart.fire();
-
-		// Subscribe to root state
-		this.subscribe(URI.parse(ROOT_STATE_URI)).then(snapshot => {
-			this._subscriptionManager.handleRootSnapshot(snapshot.state as RootState, snapshot.fromSeq);
-		}).catch(err => {
-			this._logService.error('[AgentHost:renderer] Failed to subscribe to root state', err);
-		});
-	}
-
-	private _updateTelemetryLevel(): void {
-		this.dispatchAction(ROOT_STATE_URI, {
-			type: ActionType.RootConfigChanged,
-			config: { [AgentHostTelemetryLevelConfigKey]: telemetryLevelToAgentHostConfigValue(getTelemetryLevel(this._configurationService)) },
-		}, this.clientId, 0);
-	}
-
-	private _updateSessionSyncEnabled(): void {
-		const enabled = !!this._configurationService.getValue<boolean>(SESSION_SYNC_ENABLED_SETTING_ID);
-		this.dispatchAction(ROOT_STATE_URI, {
-			type: ActionType.RootConfigChanged,
-			config: { [AgentHostSessionSyncEnabledConfigKey]: enabled },
-		}, this.clientId, 0);
-	}
-
-	private _updateTerminalAutoApproveEnabled(): void {
-		const enabled = this._configurationService.getValue<boolean>(TERMINAL_AUTO_APPROVE_ENABLED_SETTING_ID) !== false;
-		this.dispatchAction(ROOT_STATE_URI, {
-			type: ActionType.RootConfigChanged,
-			config: { [AgentHostTerminalAutoApproveEnabledConfigKey]: enabled },
-		}, this.clientId, 0);
-	}
-
-	private _updateGlobalAutoApproveEnabled(): void {
-		const enabled = this._configurationService.getValue<boolean>(GLOBAL_AUTO_APPROVE_SETTING_ID) === true;
-		this.dispatchAction(ROOT_STATE_URI, {
-			type: ActionType.RootConfigChanged,
-			config: { [AgentHostGlobalAutoApproveEnabledConfigKey]: enabled },
-		}, this.clientId, 0);
-	}
-
-	private _updateWorkspaceTrustDenyByDefault(): void {
-		const enabled = this._configurationService.getValue<boolean>(WORKSPACE_TRUST_DENY_BY_DEFAULT_SETTING_ID) === true;
-		this.dispatchAction(ROOT_STATE_URI, {
-			type: ActionType.RootConfigChanged,
-			config: { [AgentHostWorkspaceTrustDenyByDefaultConfigKey]: enabled },
-		}, this.clientId, 0);
-	}
-
-	private _updateAutoReplyEnabled(): void {
-		const enabled = this._configurationService.getValue<boolean>(AUTO_REPLY_SETTING_ID) === true;
-		this.dispatchAction(ROOT_STATE_URI, {
-			type: ActionType.RootConfigChanged,
-			config: { [AgentHostAutoReplyEnabledConfigKey]: enabled },
-		}, this.clientId, 0);
-	}
-
-	private _updatePreferLongContextEnabled(): void {
-		const enabled = this._configurationService.getValue<boolean>(PREFER_LONG_CONTEXT_SETTING_ID) === true;
-		this.dispatchAction(ROOT_STATE_URI, {
-			type: ActionType.RootConfigChanged,
-			config: { [AgentHostPreferLongContextEnabledConfigKey]: enabled },
-		}, this.clientId, 0);
-	}
-
-	private _updateSystemProxyEnabled(): void {
-		const enabled = this._configurationService.getValue<boolean>(AgentHostSystemProxyEnabledSettingId) !== false;
-		this.dispatchAction(ROOT_STATE_URI, {
-			type: ActionType.RootConfigChanged,
-			config: { [AgentHostSystemProxyEnabledConfigKey]: enabled },
-		}, this.clientId, 0);
-	}
-
-	private _updateTerminalAutoApproveRules(): void {
-		this.dispatchAction(ROOT_STATE_URI, {
-			type: ActionType.RootConfigChanged,
-			config: { [AgentHostTerminalAutoApproveRulesConfigKey]: getAgentHostTerminalAutoApproveRulesConfig(this._configurationService) },
-		}, this.clientId, 0);
-	}
-
-	// ---- IAgentService forwarding (no await needed, delayed channel handles queuing) ----
-
-	authenticate(params: AuthenticateParams): Promise<AuthenticateResult> {
-		return this._proxy.authenticate(params);
-	}
-	getNetworkDiagnosticsInfo(): Promise<IAgentHostNetworkDiagnosticsInfo> {
-		return this._proxy.getNetworkDiagnosticsInfo();
-	}
-	diagnosticsFetch(url: string): Promise<IAgentHostNetworkFetchResult> {
-		return this._proxy.diagnosticsFetch(url);
-	}
-	listSessions(): Promise<IAgentSessionMetadata[]> {
-		return this._proxy.listSessions();
-	}
-	createSession(config?: IAgentCreateSessionConfig): Promise<URI> {
-		const promise = this._proxy.createSession(config);
-		// When the caller pre-specifies the session URI, a subscribe for
-		// that URI can race the in-flight create. Register the promise so
-		// `AgentSubscriptionManager.getSubscription` gates the wire-level
-		// subscribe on it (avoids transient `AHP_SESSION_NOT_FOUND`).
-		// When the server assigns the URI, no caller can subscribe to it
-		// ahead of `await createSession()`, so there's no race to track.
-		if (config?.session) {
-			this._subscriptionManager.trackSessionCreate(config.session, promise);
-		}
-		return promise;
-	}
-	resolveSessionConfig(params: IAgentResolveSessionConfigParams): Promise<ResolveSessionConfigResult> {
-		return this._proxy.resolveSessionConfig(params);
-	}
-	sessionConfigCompletions(params: IAgentSessionConfigCompletionsParams): Promise<SessionConfigCompletionsResult> {
-		return this._proxy.sessionConfigCompletions(params);
-	}
-	completions(params: CompletionsParams): Promise<CompletionsResult> {
-		return this._proxy.completions(params);
-	}
-	getCompletionTriggerCharacters(): Promise<readonly string[]> {
-		return this._completionTriggerCharactersOnce ??= this._proxy.getCompletionTriggerCharacters();
-	}
-	disposeSession(session: URI): Promise<void> {
-		return this._proxy.disposeSession(session);
-	}
-	createChat(session: URI, chat: URI, options?: IAgentCreateChatOptions): Promise<void> {
-		return this._proxy.createChat(session, chat, options);
-	}
-	disposeChat(chat: URI): Promise<void> {
-		const session = parseChatUri(chat)?.session;
-		if (!session) {
-			return Promise.resolve();
-		}
-		return this._proxy.disposeChat(URI.parse(session), chat);
-	}
-	createTerminal(params: CreateTerminalParams): Promise<void> {
-		return this._proxy.createTerminal(params);
-	}
-	disposeTerminal(terminal: URI): Promise<void> {
-		return this._proxy.disposeTerminal(terminal);
-	}
-	invokeChangesetOperation(params: InvokeChangesetOperationParams): Promise<InvokeChangesetOperationResult> {
-		return this._proxy.invokeChangesetOperation(params);
-	}
-	handleMcpRequest(channel: string, method: string, params: Record<string, unknown> | undefined): Promise<unknown> {
-		return this._proxy.handleMcpRequest(channel, method, params);
-	}
-	shutdown(): Promise<void> {
-		return this._proxy.shutdown();
-	}
-	private subscribe(resource: URI): Promise<IStateSnapshot> {
-		this._addSubscribedResource(resource);
-		return this._proxy.subscribe(resource, this.clientId).catch(err => {
-			this._removeSubscribedResource(resource);
-			throw err;
-		});
-	}
-	private unsubscribe(resource: URI): void {
-		this._removeSubscribedResource(resource);
-		this._proxy.unsubscribe(resource, this.clientId);
-	}
-
-	private _addSubscribedResource(resource: URI): void {
-		const key = resource.toString();
-		this._subscribedResources.set(key, (this._subscribedResources.get(key) ?? 0) + 1);
-	}
-
-	private _removeSubscribedResource(resource: URI): void {
-		const key = resource.toString();
-		const count = this._subscribedResources.get(key);
-		if (count === undefined) {
-			return;
-		}
-		if (count === 1) {
-			this._subscribedResources.delete(key);
-		} else {
-			this._subscribedResources.set(key, count - 1);
-		}
-	}
-	dispatchAction(channel: string, action: SessionAction | ChatAction | TerminalAction | ClientChangesetAction | ClientAnnotationsAction | IRootConfigChangedAction, clientId: string, clientSeq: number): void {
-		this._proxy.dispatchAction(channel, action, clientId, clientSeq);
-	}
-	private _nextSeq = 1;
-	nextClientSeq(): number {
-		return this._nextSeq++;
+		return this._protocolClient?.initializeResult ?? constObservable(undefined);
 	}
 
 	get rootState(): IAgentSubscription<RootState> {
-		return this._subscriptionManager.rootState;
+		return this._protocolClient?.rootState ?? this._noopRootState;
 	}
 
-	getSubscription<T>(kind: StateComponents, resource: URI, owner: string): IReference<IAgentSubscription<T>> {
-		return this._subscriptionManager.getSubscription<T>(kind, resource, owner);
+	get onDidAction(): Event<ActionEnvelope> {
+		return this._protocolClient?.onDidAction ?? Event.None;
 	}
 
-	getSubscriptionUnmanaged<T>(_kind: StateComponents, resource: URI): IAgentSubscription<T> | undefined {
-		return this._subscriptionManager.getSubscriptionUnmanaged<T>(resource);
+	get onDidNotification(): Event<INotification> {
+		return this._protocolClient?.onDidNotification ?? Event.None;
+	}
+
+	get onMcpNotification(): Event<IMcpNotification> {
+		return this._protocolClient?.onMcpNotification ?? Event.None;
+	}
+
+	getSubscription<T extends StateComponents>(kind: T, resource: URI, owner: string): IReference<IAgentSubscription<ComponentToState[T]>> {
+		return this._requireClient().getSubscription<ComponentToState[T]>(kind, resource, owner);
+	}
+
+	getSubscriptionUnmanaged<T extends StateComponents>(kind: T, resource: URI): IAgentSubscription<ComponentToState[T]> | undefined {
+		return this._protocolClient?.getSubscriptionUnmanaged<ComponentToState[T]>(kind, resource);
 	}
 
 	getInflightSessionCreate(resource: URI): Promise<unknown> | undefined {
-		return this._subscriptionManager.getInflightSessionCreate(resource);
+		return this._protocolClient?.getInflightSessionCreate(resource);
 	}
 
 	getActiveSubscriptions(): readonly IActiveSubscriptionInfo[] {
-		return this._subscriptionManager.getActiveSubscriptions();
+		return this._protocolClient?.getActiveSubscriptions() ?? [];
 	}
 
 	dispatch(channel: string, action: SessionAction | ChatAction | TerminalAction | ClientChangesetAction | ClientAnnotationsAction | IRootConfigChangedAction): void {
-		const seq = this._subscriptionManager.dispatchOptimistic(channel, action);
-		this.dispatchAction(channel, action, this.clientId, seq);
+		this._requireClient().dispatch(channel, action);
+	}
+
+	authenticate(params: AuthenticateParams): Promise<AuthenticateResult> {
+		return this._requireClient().authenticate(params);
+	}
+
+	listSessions(): Promise<IAgentSessionMetadata[]> {
+		if (!this._didStartInitialSessionList) {
+			this._didStartInitialSessionList = true;
+			mark('code/agentHost/willListSessions');
+		}
+		return this._requireClient().listSessions().then(sessions => {
+			if (!this._didCompleteInitialSessionList) {
+				this._didCompleteInitialSessionList = true;
+				mark('code/agentHost/didListSessions');
+			}
+			return sessions;
+		});
+	}
+
+	createSession(config?: IAgentCreateSessionConfig): Promise<URI> {
+		if (config && hasSessionExtensions(config)) {
+			if (!config.provider) {
+				throw new Error('Cannot create local agent host session without a provider.');
+			}
+			const session = config.session ?? AgentSession.uri(config.provider, generateUuid());
+			const promise = this._management.createSessionWithExtensions({ ...config, session });
+			this._requireClient().trackSessionCreate(session, promise);
+			return promise;
+		}
+		return this._requireClient().createSession(config);
+	}
+
+	resolveSessionConfig(params: IAgentResolveSessionConfigParams): Promise<ResolveSessionConfigResult> {
+		return this._requireClient().resolveSessionConfig(params);
+	}
+
+	sessionConfigCompletions(params: IAgentSessionConfigCompletionsParams): Promise<SessionConfigCompletionsResult> {
+		return this._requireClient().sessionConfigCompletions(params);
+	}
+
+	completions(params: CompletionsParams): Promise<CompletionsResult> {
+		return this._requireClient().completions(params);
+	}
+
+	getCompletionTriggerCharacters(): Promise<readonly string[]> {
+		return this._requireClient().getCompletionTriggerCharacters();
+	}
+
+	disposeSession(session: URI): Promise<void> {
+		return this._requireClient().disposeSession(session);
+	}
+
+	createChat(session: URI, chat: URI, options?: IAgentCreateChatOptions): Promise<void> {
+		if (options && hasChatExtensions(options)) {
+			return this._management.createChatWithExtensions(session, chat, options);
+		}
+		return this._requireClient().createChat(session, chat, options);
+	}
+
+	disposeChat(chat: URI): Promise<void> {
+		return this._requireClient().disposeChat(chat);
+	}
+
+	createTerminal(params: CreateTerminalParams): Promise<void> {
+		return this._requireClient().createTerminal(params);
+	}
+
+	disposeTerminal(terminal: URI): Promise<void> {
+		return this._requireClient().disposeTerminal(terminal);
+	}
+
+	invokeChangesetOperation(params: InvokeChangesetOperationParams): Promise<InvokeChangesetOperationResult> {
+		return this._requireClient().invokeChangesetOperation(params);
+	}
+
+	handleMcpRequest(channel: string, method: string, params: Record<string, unknown> | undefined): Promise<unknown> {
+		return this._requireClient().handleMcpRequest(channel, method, params);
 	}
 
 	resourceList(uri: URI): Promise<ResourceListResult> {
-		return this._proxy.resourceList(uri);
+		return this._requireClient().resourceList(uri);
 	}
+
 	resourceRead(uri: URI): Promise<ResourceReadResult> {
-		return this._proxy.resourceRead(uri);
+		return this._requireClient().resourceRead(uri);
 	}
+
 	resourceWrite(params: ResourceWriteParams): Promise<ResourceWriteResult> {
-		return this._proxy.resourceWrite(params);
+		return this._requireClient().resourceWrite(params);
 	}
+
 	resourceCopy(params: ResourceCopyParams): Promise<ResourceCopyResult> {
-		return this._proxy.resourceCopy(params);
+		return this._requireClient().resourceCopy(params);
 	}
+
 	resourceDelete(params: ResourceDeleteParams): Promise<ResourceDeleteResult> {
-		return this._proxy.resourceDelete(params);
+		return this._requireClient().resourceDelete(params);
 	}
+
 	resourceMove(params: ResourceMoveParams): Promise<ResourceMoveResult> {
-		return this._proxy.resourceMove(params);
+		return this._requireClient().resourceMove(params);
 	}
+
 	resourceResolve(params: ResourceResolveParams): Promise<ResourceResolveResult> {
-		return this._proxy.resourceResolve(params);
+		return this._requireClient().resourceResolve(params);
 	}
+
 	resourceMkdir(params: ResourceMkdirParams): Promise<ResourceMkdirResult> {
-		return this._proxy.resourceMkdir(params);
+		return this._requireClient().resourceMkdir(params);
 	}
+
 	createResourceWatch(params: CreateResourceWatchParams): Promise<CreateResourceWatchResult> {
-		return this._proxy.createResourceWatch(params);
+		return this._requireClient().createResourceWatch(params);
 	}
+
 	watchResource(params: CreateResourceWatchParams): Promise<IRemoteWatchHandle> {
-		return createRemoteWatchHandle({
-			createResourceWatch: p => this._proxy.createResourceWatch(p),
-			subscribe: uri => this.subscribe(uri),
-			unsubscribe: uri => this.unsubscribe(uri),
-			onDidAction: this.onDidAction,
-		}, params);
+		return this._requireClient().watchResource(params);
 	}
+
+	shutdown(): Promise<void> {
+		return this._management.shutdown();
+	}
+
+	getNetworkDiagnosticsInfo(): Promise<IAgentHostNetworkDiagnosticsInfo> {
+		return this._management.getNetworkDiagnosticsInfo();
+	}
+
+	getManagedSettingsDiagnostics(): Promise<readonly IAgentHostManagedSettingsDiagnostics[]> {
+		return this._management.getManagedSettingsDiagnostics();
+	}
+
+	diagnosticsFetch(url: string): Promise<IAgentHostNetworkFetchResult> {
+		return this._management.diagnosticsFetch(url);
+	}
+
 	async restartAgentHost(): Promise<void> {
-		// Restart is handled by the main process side
+		// Restart is managed by the main process lifecycle owner.
 	}
 
 	startWebSocketServer(): Promise<IAgentHostSocketInfo> {
-		return this._connectionTracker.startWebSocketServer();
+		return this._management.startWebSocketServer();
 	}
 
 	getInspectInfo(tryEnable: boolean): Promise<IAgentHostInspectInfo | undefined> {
-		return this._connectionTracker.getInspectInfo(tryEnable);
+		return this._management.getInspectInfo(tryEnable);
 	}
 
-	// CLAWDIUS-BEGIN live MCP tool discovery (#93)
-	async discoverMcpServerTools(serverName: string, workingDirectoryPath: string, trusted: boolean): Promise<IClaudeMcpToolDiscoveryResult> {
-		// Readiness guard: when the agent host is disabled the delayed channel would queue forever; report it
-		// instead of hanging. We never auto-_connect() from a config dropdown.
-		if (!this._agentHostEnablementService.enabled) {
-			return { status: 'disabled', tools: [], message: 'The Agent Host is disabled; enable it to load MCP tools.' };
-		}
-		// Race READINESS, not the call (codex): if we issued the RPC on the delayed channel and the renderer
-		// timeout won, the discovery request would stay queued on `_clientEventually` and fire later - contacting
-		// the MCP server AFTER the UI reported a timeout, breaking the click-only egress contract. So wait for
-		// the MessagePort client to connect first; if it does not within the cap, return WITHOUT ever issuing
-		// the RPC. Once ready the call is live (not queued) and the node service self-caps at 25s.
-		const ready = await Promise.race([
+	/**
+	 * Wait for the MessagePort client before issuing a side-channel RPC. The proxies above sit on delayed
+	 * channels, so a call made while the host is down would queue and fire later - after the UI already
+	 * reported a timeout. Racing READINESS (not the call) keeps the click-only egress contract: if the host
+	 * is not up within the cap, no RPC is ever issued.
+	 */
+	private _whenClientReady(): Promise<boolean> {
+		return Promise.race([
 			this._clientEventually.p.then(() => true),
 			timeout(30_000).then(() => false),
 		]);
-		if (!ready) {
+	}
+
+	// CLAWDIUS-BEGIN live MCP tool discovery
+	async discoverMcpServerTools(serverName: string, workingDirectoryPath: string, trusted: boolean): Promise<IClaudeMcpToolDiscoveryResult> {
+		// Readiness guard: when the agent host is disabled the delayed channel would queue forever; report it
+		// instead of hanging. We never auto-connect from a config dropdown.
+		if (!this._agentHostEnablementService.enabled.get()) {
+			return { status: 'disabled', tools: [], message: 'The Agent Host is disabled; enable it to load MCP tools.' };
+		}
+		if (!await this._whenClientReady()) {
 			return { status: 'timeout', tools: [], message: 'Timed out reaching the Agent Host.' };
 		}
 		return this._mcpDiscoveryProxy.discoverServerTools(serverName, workingDirectoryPath, trusted);
 	}
 	// CLAWDIUS-END
 
-	// CLAWDIUS-BEGIN usage-contribution fetch (#usage)
+	// CLAWDIUS-BEGIN usage-contribution fetch
 	async fetchUsageContribution(workingDirectoryPath: string): Promise<IClaudeUsageContributionResult> {
-		if (!this._agentHostEnablementService.enabled) {
+		if (!this._agentHostEnablementService.enabled.get()) {
 			return { text: undefined, status: 'disabled' };
 		}
-		// Race READINESS, not the call (mirrors discoverMcpServerTools): wait for the MessagePort client so we
-		// never queue a session spawn that fires after a reported timeout. Once ready the call is live and the
-		// node service self-caps at 25s.
-		const ready = await Promise.race([
-			this._clientEventually.p.then(() => true),
-			timeout(30_000).then(() => false),
-		]);
-		if (!ready) {
+		if (!await this._whenClientReady()) {
 			return { text: undefined, status: 'timeout' };
 		}
 		return this._usageContributionProxy.fetchUsageContribution(workingDirectoryPath);
 	}
 	// CLAWDIUS-END
 
-	// CLAWDIUS-BEGIN transcript-derived usage stats (#94)
+	// CLAWDIUS-BEGIN transcript-derived usage stats
 	async getUsageStats(homeDirPath: string): Promise<IClaudeUsageStatsResult> {
-		if (!this._agentHostEnablementService.enabled) {
+		if (!this._agentHostEnablementService.enabled.get()) {
 			return { status: 'unavailable', message: 'The Agent Host is disabled; usage stats come from the CLI cache.' };
 		}
-		// Wait for the MessagePort client before issuing the RPC (a disabled/not-yet-ready host would queue the
-		// call on the delayed channel forever). Local file reads only - zero egress - so the readiness wait is
-		// purely about not hanging, not an egress contract.
-		const ready = await Promise.race([
-			this._clientEventually.p.then(() => true),
-			timeout(30_000).then(() => false),
-		]);
-		if (!ready) {
+		// Local file reads only - zero egress - so the readiness wait is purely about not hanging.
+		if (!await this._whenClientReady()) {
 			return { status: 'unavailable', message: 'Timed out reaching the Agent Host.' };
 		}
 		return this._usageStatsProxy.getUsageStats(homeDirPath);
@@ -568,38 +454,30 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 	// CLAWDIUS-END
 }
 
+function hasSessionExtensions(config: IAgentCreateSessionConfig): boolean {
+	return config.model !== undefined || config.agent !== undefined || config.importConversation !== undefined;
+}
+
+function hasChatExtensions(options: IAgentCreateChatOptions): boolean {
+	return options.title !== undefined || options.model !== undefined;
+}
+
 /**
- * Register the reverse-RPC server channels every in-process renderer exposes to
- * the agent host's {@link UtilityProcessServer}: the filesystem resource bridge
- * ({@link AGENT_HOST_CLIENT_RESOURCE_CHANNEL}), the proxy-resolution bridge
- * ({@link AGENT_HOST_CLIENT_PROXY_CHANNEL}), and the BYOK language-model bridge
- * ({@link AGENT_HOST_CLIENT_BYOK_LM_CHANNEL}). The agent host reaches these via
- * `server.getChannel(name, c => c.ctx === clientId)`.
+ * Registers local-only IPC reverse channels for one renderer connection.
  */
 export function registerAgentHostClientChannels(
 	client: IChannelServer,
 	instantiationService: IInstantiationService,
 	logService: ILogService,
-	ahpLogger: AhpJsonlLogger | undefined,
 	byokEnabled: boolean,
 ): void {
-	// Serve filesystem reverse-RPCs from the local file service. The agent host
-	// registers an authority on its AgentHostClientFileSystemProvider that calls
-	// back through this channel.
-	client.registerChannel(AGENT_HOST_CLIENT_RESOURCE_CHANNEL, instantiationService.createInstance(AgentHostClientResourceChannel, ahpLogger));
-	// Serve proxy-resolution reverse-RPCs from the renderer's request service so
-	// the agent host resolves proxies through VS Code's Electron session (system
-	// settings / PAC scripts) rather than guessing from environment variables.
 	client.registerChannel(AGENT_HOST_CLIENT_PROXY_CHANNEL, instantiationService.createInstance(AgentHostClientProxyChannel));
-	// Serve BYOK language-model reverse-RPCs from the renderer LM API, gated
-	// behind `chat.agentHost.byokModels.enabled`. When disabled, the node-side
-	// proxy + registry are also skipped, so the channel would never be called.
 
 	if (byokEnabled) {
 		try {
 			client.registerChannel(AGENT_HOST_CLIENT_BYOK_LM_CHANNEL, instantiationService.createInstance(AgentHostClientByokLmChannel));
-		} catch (err) {
-			logService.warn(`[AgentHost:renderer] BYOK language-model bridge not registered for this window. ${err instanceof Error ? err.message : String(err)}`);
+		} catch (error) {
+			logService.warn(`${LOG_PREFIX} BYOK language-model bridge not registered for this window. ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 }

@@ -20,7 +20,7 @@
  *  - Disposing the session disposes the WarmQuery (no orphan resources).
  */
 
-import type { GetSessionMessagesOptions, Options, PermissionResult, Query, SDKMessage, SDKResultSuccess, SDKSessionInfo, SDKSystemMessage, SDKUserMessage, SessionMessage, WarmQuery } from '@anthropic-ai/claude-agent-sdk';
+import type { GetSessionMessagesOptions, Options, PermissionResult, Query, SDKControlInterruptResponse, SDKMessage, SDKResultSuccess, SDKSessionInfo, SDKSystemMessage, SDKUserMessage, SessionMessage, WarmQuery } from '@anthropic-ai/claude-agent-sdk';
 import assert from 'assert';
 import { DeferredPromise } from '../../../../base/common/async.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -190,7 +190,7 @@ class RecordingSdkService implements IClaudeAgentSdkService {
 	queryMessages: QueryStreamItem[] = [];
 
 	/** Records the {@link PermissionResult} returned by each `canUseTool` invocation in {@link queryMessages} order. */
-	readonly canUseToolResults: PermissionResult[] = [];
+	readonly canUseToolResults: (PermissionResult | null)[] = [];
 	readonly elicitationResults: Awaited<ReturnType<NonNullable<Options['onElicitation']>>>[] = [];
 
 	readonly warmQueries: RoundTripWarmQuery[] = [];
@@ -293,7 +293,7 @@ class RoundTripQuery implements AsyncGenerator<SDKMessage, void> {
 				const result = await startup.canUseTool(item.toolName, item.input, {
 					signal: new AbortController().signal,
 					toolUseID: item.toolUseID,
-					requestId: `req_${item.toolUseID}`,
+					requestId: item.toolUseID,
 				});
 				if (result) {
 					this._sdk.canUseToolResults.push(result);
@@ -323,7 +323,7 @@ class RoundTripQuery implements AsyncGenerator<SDKMessage, void> {
 		throw err;
 	}
 
-	async interrupt(): ReturnType<Query['interrupt']> { return undefined; }
+	async interrupt(): Promise<SDKControlInterruptResponse | undefined> { return undefined; }
 
 	setPermissionMode(): never { throw new Error('not modeled'); }
 	setMcpPermissionModeOverride(): never { throw new Error('not modeled'); }
@@ -404,7 +404,7 @@ suite('ClaudeAgent integration', function () {
 		const instantiationService = disposables.add(new InstantiationService(services));
 		const agent = disposables.add(instantiationService.createInstance(ClaudeAgent));
 
-		const created = await agent.createSession({ workingDirectory: URI.file('/integration-cwd') });
+		const created = await agent.createSession({ workingDirectories: [URI.file('/integration-cwd')] });
 		const sessionId = created.session.path.replace(/^\//, '');
 		sdk.queryMessages = [
 			makeSystemInitMessage(sessionId),
@@ -480,7 +480,7 @@ suite('ClaudeAgent integration', function () {
 		const instantiationService = disposables.add(new InstantiationService(services));
 		const agent = disposables.add(instantiationService.createInstance(ClaudeAgent));
 
-		const created = await agent.createSession({ workingDirectory: URI.file('/integration-cwd') });
+		const created = await agent.createSession({ workingDirectories: [URI.file('/integration-cwd')] });
 		const sessionId = created.session.path.replace(/^\//, '');
 
 		// Canned turn: assistant says "reading", calls `Read`, the SDK

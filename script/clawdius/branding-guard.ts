@@ -318,7 +318,7 @@ const brandSites: { file: string; present: RegExp; absent: RegExp; what: string 
 		present: /not compatible with Clawdius/, absent: /not compatible with VS Code/, what: 'extension-incompatible install error' },
 	{ file: 'src/vs/platform/extensionManagement/node/extensionManagementService.ts',
 		present: /restart Clawdius before reinstalling/, absent: /restart VS Code before reinstalling/, what: 'reinstall restart error' },
-	{ file: 'src/vs/workbench/contrib/chat/browser/widget/input/modelPicker/modelPickerItems.ts',
+	{ file: 'src/vs/workbench/contrib/chat/browser/widget/input/modelPicker/modelPickerItemPrimitives.ts',
 		present: /Update Clawdius\]\(command:update\.checkForUpdate\)/, absent: /Update VS Code\]\(command:update\.checkForUpdate\)/, what: 'model-picker update prompt' },
 	// The OAuth/loopback sign-in pages: the `class="branding"` wordmark link must point at the fork, not
 	// code.visualstudio.com (an upstream merge silently reverts these, and the wordmark text is a variable so a

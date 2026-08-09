@@ -21,7 +21,7 @@ import { IMcpService } from '../../../../workbench/contrib/mcp/common/mcpTypes.j
 import { ILanguageModelToolsService } from '../../../../workbench/contrib/chat/common/tools/languageModelToolsService.js';
 import { AGENT_HOST_COPILOT_CLI_SESSION_TYPE, countEnabledCustomizationTools, IAgentHostToolSetEnablementService } from '../../../../workbench/contrib/chat/browser/agentSessions/agentHost/agentHostToolSetEnablementService.js';
 import { Menus } from '../../../browser/menus.js';
-import { agentIcon, automationIcon, instructionsIcon, mcpServerIcon, pluginIcon, skillIcon, hookIcon, toolsIcon } from '../../../../workbench/contrib/chat/browser/aiCustomization/aiCustomizationIcons.js';
+import { agentIcon, instructionsIcon, mcpServerIcon, pluginIcon, skillIcon, hookIcon, toolsIcon } from '../../../../workbench/contrib/chat/browser/aiCustomization/aiCustomizationIcons.js';
 import { ActionViewItem, IBaseActionViewItemOptions } from '../../../../base/browser/ui/actionbar/actionViewItems.js';
 import { IAction } from '../../../../base/common/actions.js';
 import { $, append } from '../../../../base/browser/dom.js';
@@ -31,8 +31,6 @@ import { defaultButtonStyles } from '../../../../platform/theme/browser/defaultS
 import { IEditorService } from '../../../../workbench/services/editor/common/editorService.js';
 import { AICustomizationManagementSection } from '../../../../workbench/contrib/chat/common/aiCustomizationWorkspaceService.js';
 import { ChatContextKeys } from '../../../../workbench/contrib/chat/common/actions/chatContextKeys.js';
-import { ChatAutomationsEnabledContext } from '../../../../workbench/contrib/chat/common/automations/automationsEnabled.js';
-import { IAutomationService } from '../../../../workbench/contrib/chat/common/automations/automationService.js';
 import { ICustomizationHarnessService } from '../../../../workbench/contrib/chat/common/customizationHarnessService.js';
 import { ISession } from '../../../services/sessions/common/session.js';
 import { ISessionsService } from '../../../services/sessions/browser/sessionsService.js';
@@ -47,7 +45,6 @@ export interface ICustomizationItemConfig {
 	readonly isMcp?: boolean;
 	readonly isPlugins?: boolean;
 	readonly isTools?: boolean;
-	readonly isAutomations?: boolean;
 	/** Additional `when` clause beyond the standard harness-visibility gate. */
 	readonly when?: ContextKeyExpression;
 }
@@ -98,14 +95,6 @@ export const CUSTOMIZATION_ITEMS: ICustomizationItemConfig[] = [
 		modelSection: AICustomizationManagementSection.Hooks,
 	},
 	{
-		id: 'sessions.customization.automations',
-		label: localize('automations', "Automations"),
-		icon: automationIcon,
-		section: AICustomizationManagementSection.Automations,
-		isAutomations: true,
-		when: ChatAutomationsEnabledContext,
-	},
-	{
 		id: 'sessions.customization.mcpServers',
 		label: localize('mcpServers', "MCP Servers"),
 		icon: mcpServerIcon,
@@ -125,6 +114,12 @@ export const CUSTOMIZATION_ITEMS: ICustomizationItemConfig[] = [
 		icon: toolsIcon,
 		section: AICustomizationManagementSection.Tools,
 		isTools: true,
+	},
+	{
+		id: 'sessions.customization.harnessSettings',
+		label: localize('harnessSettings', "Codex Settings"),
+		icon: Codicon.openai,
+		section: AICustomizationManagementSection.HarnessSettings,
 	},
 ];
 
@@ -174,7 +169,6 @@ export class CustomizationLinkViewItem extends ActionViewItem {
 		@IMcpService private readonly _mcpService: IMcpService,
 		@ILanguageModelToolsService private readonly _toolsService: ILanguageModelToolsService,
 		@IAgentHostToolSetEnablementService private readonly _toolEnablementService: IAgentHostToolSetEnablementService,
-		@IAutomationService private readonly _automationService: IAutomationService,
 	) {
 		super(undefined, action, { ...options, icon: false, label: false });
 		this._viewItemDisposables = this._register(new DisposableStore());
@@ -233,9 +227,6 @@ export class CustomizationLinkViewItem extends ActionViewItem {
 			const toolSets = this._toolsService.toolSets.read(reader);
 			return countEnabledCustomizationTools(toolSets, state, reader);
 		}
-		if (this._config.isAutomations) {
-			return this._automationService.automations.read(reader).length;
-		}
 		return 0;
 	}
 
@@ -277,6 +268,7 @@ export class CustomizationsToolbarContribution extends Disposable implements IWo
 			visibilityKeys.set(config.section, key);
 		}
 		this._register(autorun(reader => {
+			// Read for reactivity: the visible sections depend on which harness is active.
 			harnessService.activeHarness.read(reader);
 			harnessService.availableHarnesses.read(reader);
 			const descriptor = harnessService.getActiveDescriptor();
@@ -285,7 +277,9 @@ export class CustomizationsToolbarContribution extends Disposable implements IWo
 				if (!config.section) {
 					continue;
 				}
-				visibilityKeys.get(config.section)!.set(!hidden.has(config.section));
+				// CLAWDIUS: upstream shows the harness-settings section only for the Codex harness, which the fork removes.
+				const supported = config.section !== AICustomizationManagementSection.HarnessSettings;
+				visibilityKeys.get(config.section)!.set(!hidden.has(config.section) && supported);
 			}
 		}));
 

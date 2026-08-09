@@ -320,6 +320,11 @@ const brandSites: { file: string; present: RegExp; absent: RegExp; what: string 
 		present: /restart Clawdius before reinstalling/, absent: /restart VS Code before reinstalling/, what: 'reinstall restart error' },
 	{ file: 'src/vs/workbench/contrib/chat/browser/widget/input/modelPicker/modelPickerItemPrimitives.ts',
 		present: /Update Clawdius\]\(command:update\.checkForUpdate\)/, absent: /Update VS Code\]\(command:update\.checkForUpdate\)/, what: 'model-picker update prompt' },
+	// The seeded plugin marketplaces: upstream ships two GitHub-hosted catalogs as the default, which the
+	// marketplace service then background-polls (and PluginAutoUpdate silently installs from) once any plugin
+	// is installed. An upstream merge re-seeds this default silently, so pin the empty list here.
+	{ file: 'src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts',
+		present: /no seeded remote plugin marketplaces/, absent: /'github\/copilot-plugins'/, what: 'seeded plugin marketplaces' },
 	// The OAuth/loopback sign-in pages: the `class="branding"` wordmark link must point at the fork, not
 	// code.visualstudio.com (an upstream merge silently reverts these, and the wordmark text is a variable so a
 	// name-only sweep misses the URL leak).

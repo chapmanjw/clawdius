@@ -1274,7 +1274,15 @@ configurationRegistry.registerConfiguration({
 				type: 'string',
 			},
 			markdownDescription: nls.localize('chat.plugins.marketplaces', "Plugin marketplaces to query. Entries may be GitHub shorthand (`owner/repo` or `owner/repo#ref`), direct Git repository URIs (`https://...git`, `ssh://...git`, or `git@host:path.git`, each optionally suffixed with `#ref`), or local repository URIs (`file:///...`). Equivalent GitHub shorthand and URI entries are deduplicated."),
-			default: ['github/copilot-plugins', 'github/awesome-copilot#marketplace'],
+			// CLAWDIUS-BEGIN no seeded remote plugin marketplaces
+			// Upstream seeds two GitHub-hosted catalogs here. Once any agent plugin is installed, the marketplace
+			// service polls them on a 24h timer and PluginAutoUpdate silently installs what it finds - a background
+			// request to raw.githubusercontent.com that no user action triggers. The fork's own plugins arrive by a
+			// different route entirely: ClaudeCliAgentPluginDiscovery reads ~/.claude and feeds Options.plugins for
+			// the Claude Agent SDK, untouched by this list. Local `file://` marketplaces, chat.pluginLocations,
+			// extension-contributed plugins, and anything already installed all keep working.
+			default: [],
+			// CLAWDIUS-END
 			scope: ConfigurationScope.APPLICATION,
 			tags: ['experimental'],
 		},

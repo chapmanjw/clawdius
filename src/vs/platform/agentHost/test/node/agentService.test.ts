@@ -5215,7 +5215,11 @@ suite('AgentService (node dispatcher)', () => {
 			lifecycle: SessionLifecycle.Creating,
 			changesets: ['uncommitted'],
 			gitCalls: [workingDirectory.toString()],
-			hasCommit: true,
+			// The fork ships no `commit` changeset operation: agentHostCommitOperationProvider/Handler were
+			// removed alongside the pull-request operation, so the provisional changeset advertises only the
+			// operations that survive. The rest of this test - that a provisional workspace session seeds an
+			// uncommitted changeset before materialization - is the behaviour worth pinning here.
+			hasCommit: false,
 		});
 		localService.unsubscribe(URI.parse(uncommittedUri), 'client-1');
 

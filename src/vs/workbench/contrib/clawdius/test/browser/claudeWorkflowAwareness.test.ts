@@ -9,21 +9,27 @@
 // (in-memory but the genuine `IStorageService` scope/target machinery, never a hand-rolled key-value stub), and a
 // small local RECORDING `IActivityService` fake - the shared `TestActivityService` test util does not record its
 // calls, and this suite specifically needs to inspect which badge (if any) is currently showing.
+//
+// The workspace-SCOPE half of the suite stages runs under TWO `projects/<enc>` dirs - one encoding the open folder,
+// one encoding a different project - because that is the only way to tell a badge that respects the scope from one
+// that ignores it. Both storage writes it exercises (the scope enum) go through the real `IStorageService`, at the
+// same key and scope the Workflows view's own control writes, so the reactivity being proved is the shipped path
+// and not a test-only poke at the service.
 
 import assert from 'assert';
-import { Event } from '../../../../../base/common/event.js';
+import { Emitter, Event } from '../../../../../base/common/event.js';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
 import { Disposable, IDisposable, toDisposable } from '../../../../../base/common/lifecycle.js';
 import { Schemas } from '../../../../../base/common/network.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { FileService } from '../../../../../platform/files/common/fileService.js';
-import { createFileSystemProviderError, FileSystemProviderErrorCode, IFileService, IStat } from '../../../../../platform/files/common/files.js';
+import { createFileSystemProviderError, FileSystemProviderErrorCode, FileType, IFileService, IStat } from '../../../../../platform/files/common/files.js';
 import { InMemoryFileSystemProvider } from '../../../../../platform/files/common/inMemoryFilesystemProvider.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
-import { IStorageService, StorageScope } from '../../../../../platform/storage/common/storage.js';
-import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
+import { IStorageService, StorageScope, StorageTarget } from '../../../../../platform/storage/common/storage.js';
+import { IWorkspaceContextService, IWorkspaceFoldersChangeEvent } from '../../../../../platform/workspace/common/workspace.js';
 import { testWorkspace } from '../../../../../platform/workspace/test/common/testWorkspace.js';
 import { ViewContainer } from '../../../../common/views.js';
 import { IActivity, IActivityService, IBadge, NumberBadge, WarningBadge } from '../../../../services/activity/common/activity.js';
@@ -33,9 +39,12 @@ import { TestContextService, TestStorageService } from '../../../../test/common/
 import { encodeProjectDir } from '../../browser/clawdiusConfigStore.js';
 import {
 	ClaudeWorkflowObservationService, FAILURE_WATERMARK_STORAGE_KEY, IClaudeWorkflowObservationService,
-	WORKFLOWS_VIEW_CONTAINER_ID, WorkflowSnapshot,
+	WORKFLOW_WORKSPACE_SCOPE_STORAGE_KEY, WORKFLOWS_VIEW_CONTAINER_ID, workflowWorkspaceProjectKeys, WorkflowSnapshot,
 } from '../../browser/workflows/claudeWorkflowObservationService.js';
-import { workflowRunIdentity } from '../../common/claudeWorkflowModel.js';
+import { CompletenessState, CoverageLabel, FreshnessLabel } from '../../common/claudeReaderSeam.js';
+import {
+	LiveWorkflowRun, matchesWorkflowWorkspaceScope, workflowRunIdentity, WorkflowWorkspaceScope,
+} from '../../common/claudeWorkflowModel.js';
 
 /** A recording `IActivityService` fake: tracks every LIVE (not-yet-disposed) `showViewContainerActivity`
  *  registration per container, so a test can read back exactly what the container's badge currently is - the
@@ -69,6 +78,46 @@ class RecordingActivityService implements IActivityService {
 	}
 }
 
+/** A `TestContextService` whose open-folder set can CHANGE, firing the real `onDidChangeWorkspaceFolders` the
+ *  workbench fires - what proves the observation service re-badges on a folder add/remove. `TestContextService`
+ *  keeps its own folder-change emitter private and never fires it, so the event is re-declared here rather than
+ *  reaching into it; `setWorkspace` (which it does expose) still supplies the new folder set. */
+class MutableWorkspaceContextService extends TestContextService implements IDisposable {
+
+	private readonly folderChange = new Emitter<IWorkspaceFoldersChangeEvent>();
+	override get onDidChangeWorkspaceFolders(): Event<IWorkspaceFoldersChangeEvent> { return this.folderChange.event; }
+
+	/** Swap the open folders and announce it exactly as the workbench does. The event PAYLOAD is intentionally
+	 *  empty: the service under test re-derives the whole key set from `getWorkspace()` rather than applying a
+	 *  delta, so a faithful added/removed list would prove nothing the swap itself does not. */
+	setFolders(folders: readonly URI[]): void {
+		this.setWorkspace(testWorkspace(...folders));
+		this.folderChange.fire({ added: [], removed: [], changed: [] });
+	}
+
+	dispose(): void {
+		this.folderChange.dispose();
+	}
+}
+
+/** An `InMemoryFileSystemProvider` that counts how many times ONE directory was listed. That directory is the
+ *  config root's `projects` tree, which every whole-corpus enumeration lists exactly once and first - so the count
+ *  is a black-box proxy for "how many enumeration passes have run", measured without reaching into the service's
+ *  private state. It is what lets a test assert that a scope or folder change re-badged from the LAST snapshot
+ *  rather than by re-walking the disk. */
+class ListingCountingFileSystemProvider extends InMemoryFileSystemProvider {
+
+	/** How many times {@link counted} has been listed - i.e. how many enumeration passes have run. */
+	listings = 0;
+
+	constructor(private readonly counted: URI) { super(); }
+
+	override async readdir(resource: URI): Promise<[string, FileType][]> {
+		if (resource.toString() === this.counted.toString()) { this.listings++; }
+		return super.readdir(resource);
+	}
+}
+
 /** An `InMemoryFileSystemProvider` whose `stat()` fails for exactly one URI with a NON-"file not found" error -
  *  the shape `claudeReaderSeamService.ts`'s `resolveChildDirs` needs to distinguish "exists but unreadable" (a
  *  `read-error`/`partial` root envelope) from "genuinely absent" (an honest empty `ok`). Starts `armed: false` so
@@ -90,11 +139,20 @@ suite('Clawdius Claude Code Ultracode Workflows - awareness (failure watermark +
 
 	const HOME = URI.file('/home/tester');
 	const ROOT = URI.joinPath(HOME, '.claude');
+	const PROJECTS = URI.joinPath(ROOT, 'projects');
 	const FOLDER = URI.file('/work/fixture-proj');
+	/** A folder that is NEVER open in these fixtures - the "different project directory" half of the scope tests. */
+	const OTHER_FOLDER = URI.file('/work/other-proj');
+	/** A launch from a SUBDIRECTORY of the open folder: Claude Code records the launching process's cwd, not the
+	 *  folder root, so this is the ordinary case the scope's prefix rule exists for. */
+	const SUBDIR_OF_FOLDER = URI.joinPath(FOLDER, 'packages', 'api');
 	const SESSION = '5c2af930-2a73-4f6b-9011-72fdfa851624';
+	const OTHER_SESSION = 'b71e4d38-9c0a-4f21-8e55-1d3f6a204c7b';
 
-	function sessionDir(): URI {
-		return URI.joinPath(ROOT, 'projects', encodeProjectDir(FOLDER), SESSION);
+	/** The `projects/<enc>/<session>` dir a fixture run is staged under. Defaults to the open folder's own
+	 *  encoding, so every pre-existing test in this suite stages exactly where it did before. */
+	function sessionDir(folder: URI = FOLDER, session: string = SESSION): URI {
+		return URI.joinPath(PROJECTS, encodeProjectDir(folder), session);
 	}
 
 	function makeFs(provider: InMemoryFileSystemProvider = new InMemoryFileSystemProvider()): FileService {
@@ -103,10 +161,13 @@ suite('Clawdius Claude Code Ultracode Workflows - awareness (failure watermark +
 		return fs;
 	}
 
-	function makeService(fs: IFileService, storageService: IStorageService, activityService: IActivityService): ClaudeWorkflowObservationService {
+	function makeService(
+		fs: IFileService, storageService: IStorageService, activityService: IActivityService,
+		workspaceContextService: IWorkspaceContextService = new TestContextService(testWorkspace(FOLDER)),
+	): ClaudeWorkflowObservationService {
 		const instantiationService = store.add(new TestInstantiationService());
 		instantiationService.stub(IFileService, fs);
-		instantiationService.stub(IWorkspaceContextService, new TestContextService(testWorkspace(FOLDER)));
+		instantiationService.stub(IWorkspaceContextService, workspaceContextService);
 		instantiationService.stub(IPathService, new TestPathService(HOME, HOME.scheme));
 		instantiationService.stub(IStorageService, storageService);
 		instantiationService.stub(IActivityService, activityService);
@@ -120,17 +181,59 @@ suite('Clawdius Claude Code Ultracode Workflows - awareness (failure watermark +
 		});
 	}
 
-	async function stageManifest(fs: IFileService, runId: string, manifest: object): Promise<void> {
-		const dir = URI.joinPath(sessionDir(), 'workflows');
+	async function stageManifest(fs: IFileService, runId: string, manifest: object, session: URI = sessionDir()): Promise<void> {
+		const dir = URI.joinPath(session, 'workflows');
 		await fs.createFolder(dir);
 		await fs.writeFile(URI.joinPath(dir, `${runId}.json`), VSBuffer.fromString(JSON.stringify(manifest)));
 	}
 
-	async function stageJournal(fs: IFileService, runId: string, lines: readonly object[]): Promise<void> {
-		const dir = URI.joinPath(sessionDir(), 'subagents', 'workflows', runId);
+	async function stageJournal(fs: IFileService, runId: string, lines: readonly object[], session: URI = sessionDir()): Promise<void> {
+		const dir = URI.joinPath(session, 'subagents', 'workflows', runId);
 		await fs.createFolder(dir);
 		const text = lines.map(l => JSON.stringify(l) + '\n').join('');
 		await fs.writeFile(URI.joinPath(dir, 'journal.jsonl'), VSBuffer.fromString(text));
+	}
+
+	/** A manifest-less journal, i.e. a run the seam reports as `kind: 'live'`. */
+	function liveJournal(): readonly object[] {
+		return [{ type: 'started', agentId: 'a1' }];
+	}
+
+	/** The ONE fixture in this suite built in memory rather than staged on disk, for the single case the seam
+	 *  cannot produce: a run with NO recorded project dir. Every label is the honest default for a freshly-observed
+	 *  live run, matching the sibling fixtures in `claudeWorkflowObservation.test.ts`. */
+	function liveFixtureRun(runId: string, projectDirName: string): LiveWorkflowRun {
+		return {
+			kind: 'live', sessionId: SESSION, runId, identity: workflowRunIdentity(SESSION, runId),
+			startedCount: 1, resultCount: 0, seenCount: 1, landedResults: [], journalLastWriteTime: 0,
+			ownership: 'foreign', coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Live,
+			completeness: CompletenessState.Complete, adapterVersion: { format: 'transcript-jsonl', versionKey: 'v1' },
+			projectDirName,
+		};
+	}
+
+	/** The number on the container's `NumberBadge`, or `undefined` when the badge is absent or is not a number
+	 *  badge - one accessor so the live-count assertions read as a single value rather than an instanceof dance. */
+	function liveBadgeNumber(activity: RecordingActivityService): number | undefined {
+		const badge = activity.currentBadge(WORKFLOWS_VIEW_CONTAINER_ID);
+		return badge instanceof NumberBadge ? badge.number : undefined;
+	}
+
+	/** How many unseen failures the container's `WarningBadge` is announcing, or `undefined` when the showing badge
+	 *  is not a warning badge (including when a live `NumberBadge` outranks it, and when nothing is showing). */
+	function failureBadgeCount(activity: RecordingActivityService): number | undefined {
+		const badge = activity.currentBadge(WORKFLOWS_VIEW_CONTAINER_ID);
+		if (!(badge instanceof WarningBadge)) { return undefined; }
+		// The count is not exposed on `WarningBadge`; its localized description is the only place it survives, and
+		// the two message forms differ only in the leading count.
+		const match = /^(?<count>\d+) Claude Code workflow runs? failed/.exec(badge.getDescription());
+		return match?.groups ? Number(match.groups.count) : undefined;
+	}
+
+	/** Persist a workspace scope exactly as the Workflows view's scope control does - the same key, scope and
+	 *  target - so what the tests exercise is the shipped write path, not a private poke at the service. */
+	function storeWorkspaceScope(storageService: IStorageService, scope: WorkflowWorkspaceScope): void {
+		storageService.store(WORKFLOW_WORKSPACE_SCOPE_STORAGE_KEY, scope, StorageScope.WORKSPACE, StorageTarget.USER);
 	}
 
 	function failedManifest(): object {
@@ -293,6 +396,188 @@ suite('Clawdius Claude Code Ultracode Workflows - awareness (failure watermark +
 		assert.strictEqual(snapshot2.result.state, 'ok');
 		assert.deepStrictEqual(snapshot2.unseenFailures, []);
 		assert.strictEqual(activity2.currentBadge(WORKFLOWS_VIEW_CONTAINER_ID), undefined);
+	});
+
+	// --- the badge respects the workspace scope --------------------------------------------------------------------
+	//
+	// The defect these cover: with the default "This Workspace" scope the pane could correctly report that no runs
+	// were recorded under an open folder while the badge simultaneously advertised live runs from other projects.
+	// Every test below stages the same corpus under two `projects/<enc>` dirs - one the open folder's, one not - and
+	// asserts on the BADGE, which is the surface that was lying.
+
+	test('the live badge counts ONLY the in-scope live runs, while the snapshot keeps publishing the whole enumeration', async () => {
+		const activity = new RecordingActivityService();
+		const fs = makeFs();
+		await stageJournal(fs, 'wf_live-mine', liveJournal());
+		await stageJournal(fs, 'wf_live-theirs-a', liveJournal(), sessionDir(OTHER_FOLDER, OTHER_SESSION));
+		await stageJournal(fs, 'wf_live-theirs-b', liveJournal(), sessionDir(OTHER_FOLDER, OTHER_SESSION));
+		const service = makeService(fs, store.add(new TestStorageService()), activity);
+
+		const snapshot = await nextSnapshot(service);
+
+		// The two halves of the honesty rule in one assertion: `liveCount` still means "how many ENUMERATED runs are
+		// live" (scoping it would make the published snapshot describe a run set it did not publish), and the badge -
+		// the only workspace-relative surface - counts just the one run under the open folder.
+		assert.deepStrictEqual(
+			{ enumeratedLiveCount: snapshot.liveCount, badge: liveBadgeNumber(activity) },
+			{ enumeratedLiveCount: 3, badge: 1 });
+	});
+
+	test('a run launched from a SUBDIRECTORY of the open folder still counts toward the badge; one from a different project does not', async () => {
+		const activity = new RecordingActivityService();
+		const fs = makeFs();
+		await stageJournal(fs, 'wf_live-root', liveJournal());
+		await stageJournal(fs, 'wf_live-subdir', liveJournal(), sessionDir(SUBDIR_OF_FOLDER, OTHER_SESSION));
+		await stageJournal(fs, 'wf_live-theirs', liveJournal(), sessionDir(OTHER_FOLDER, OTHER_SESSION));
+		const service = makeService(fs, store.add(new TestStorageService()), activity);
+
+		await nextSnapshot(service);
+
+		// The badge inherits the scope predicate's prefix rule whole - the badge must not be stricter than the list
+		// it sits above, or a developer who ran `claude` from a package directory would see their own live run
+		// counted in the pane and missing from the badge.
+		assert.strictEqual(liveBadgeNumber(activity), 2);
+	});
+
+	test('an unattributable run - one whose project dir the seam never recorded - is never hidden from the badge', () => {
+		// Deliberately NOT staged on disk: the seam derives `projectDirName` from the BASENAME of a real
+		// `projects/<enc>` directory, which is never empty, so this case is unreachable through the file fixture.
+		// What IS assertable is that the badge applies the shared predicate to the key set the service itself
+		// derives - the two inputs the badge computation is built from - so the widening cannot be lost.
+		const workspaceKeys = workflowWorkspaceProjectKeys(new TestContextService(testWorkspace(FOLDER)));
+		assert.deepStrictEqual({
+			unattributable: matchesWorkflowWorkspaceScope(
+				liveFixtureRun('wf_unattributed', ''), WorkflowWorkspaceScope.ThisWorkspace, workspaceKeys),
+			elsewhere: matchesWorkflowWorkspaceScope(
+				liveFixtureRun('wf_elsewhere', encodeProjectDir(OTHER_FOLDER)), WorkflowWorkspaceScope.ThisWorkspace, workspaceKeys),
+		}, { unattributable: true, elsewhere: false });
+	});
+
+	test('with NO folder open the scope withholds nothing - the SAME corpus that badges 1 with a folder open badges every run', async () => {
+		const fs = makeFs();
+		await stageJournal(fs, 'wf_live-mine', liveJournal());
+		await stageJournal(fs, 'wf_live-theirs', liveJournal(), sessionDir(OTHER_FOLDER, OTHER_SESSION));
+
+		const scopedActivity = new RecordingActivityService();
+		const scoped = makeService(fs, store.add(new TestStorageService()), scopedActivity);
+		await nextSnapshot(scoped);
+
+		// Same corpus, same (default) stored scope - only the folder set differs. With nothing to scope AGAINST the
+		// effective scope is All Workspaces, exactly as `matchesWorkflowWorkspaceScope` documents: a filter must
+		// never delete what there is no basis to narrow.
+		const unscopedActivity = new RecordingActivityService();
+		const unscoped = makeService(fs, store.add(new TestStorageService()), unscopedActivity, new TestContextService(testWorkspace()));
+		await nextSnapshot(unscoped);
+
+		assert.deepStrictEqual(
+			{ withFolderOpen: liveBadgeNumber(scopedActivity), withNoFolderOpen: liveBadgeNumber(unscopedActivity) },
+			{ withFolderOpen: 1, withNoFolderOpen: 2 });
+	});
+
+	test('flipping the persisted scope to All Workspaces re-badges from the last snapshot, with NO re-read of the corpus', async () => {
+		const activity = new RecordingActivityService();
+		const provider = new ListingCountingFileSystemProvider(PROJECTS);
+		const fs = makeFs(provider);
+		await stageJournal(fs, 'wf_live-mine', liveJournal());
+		await stageJournal(fs, 'wf_live-theirs', liveJournal(), sessionDir(OTHER_FOLDER, OTHER_SESSION));
+		const storageService = store.add(new TestStorageService());
+		const service = makeService(fs, storageService, activity);
+		await nextSnapshot(service);
+		const listingsAfterRead = provider.listings;
+		assert.strictEqual(liveBadgeNumber(activity), 1);
+
+		// The shipped write path: the view's scope control stores exactly this. Nothing on disk changed, so a badge
+		// that re-walked the corpus here would be paying a whole-corpus read for data it already holds - and the
+		// service must react with the view never having been constructed at all.
+		storeWorkspaceScope(storageService, WorkflowWorkspaceScope.AllWorkspaces);
+
+		assert.deepStrictEqual(
+			{ badge: liveBadgeNumber(activity), listings: provider.listings },
+			{ badge: 2, listings: listingsAfterRead });
+	});
+
+	test('opening a second folder re-badges from the last snapshot, with NO re-read of the corpus', async () => {
+		const activity = new RecordingActivityService();
+		const provider = new ListingCountingFileSystemProvider(PROJECTS);
+		const fs = makeFs(provider);
+		await stageJournal(fs, 'wf_live-mine', liveJournal());
+		await stageJournal(fs, 'wf_live-theirs', liveJournal(), sessionDir(OTHER_FOLDER, OTHER_SESSION));
+		const workspaceContextService = store.add(new MutableWorkspaceContextService(testWorkspace(FOLDER)));
+		const service = makeService(fs, store.add(new TestStorageService()), activity, workspaceContextService);
+		await nextSnapshot(service);
+		const listingsAfterRead = provider.listings;
+		assert.strictEqual(liveBadgeNumber(activity), 1);
+
+		// The scope enum did not change - the folder set it resolves against did, which moves the same predicate's
+		// answer for every run. No file changed, so again no re-read.
+		workspaceContextService.setFolders([FOLDER, OTHER_FOLDER]);
+
+		assert.deepStrictEqual(
+			{ badge: liveBadgeNumber(activity), listings: provider.listings },
+			{ badge: 2, listings: listingsAfterRead });
+	});
+
+	test('the unseen-failure badge is workspace-scoped: a failure in a different project raises no badge until the scope widens', async () => {
+		const activity = new RecordingActivityService();
+		const storageService = store.add(new TestStorageService());
+		const fs = makeFs();
+		const service = makeService(fs, storageService, activity);
+		await nextSnapshot(service); // an empty corpus, so the cold-start baseline absorbs nothing
+
+		const next = nextSnapshot(service);
+		await stageManifest(fs, 'wf_fail-theirs', failedManifest(), sessionDir(OTHER_FOLDER, OTHER_SESSION));
+		service.readAgain();
+		const snapshot = await next;
+
+		const theirs = workflowRunIdentity(OTHER_SESSION, 'wf_fail-theirs');
+		// The failure is genuinely unseen (the SNAPSHOT says so, unscoped - a failure the scope hides is still a
+		// failure nobody has looked at); it is the BADGE that stays silent, because the pane it sits above would
+		// not list that run either.
+		assert.deepStrictEqual(
+			{ unseen: [...snapshot.unseenFailures], badge: activity.currentBadge(WORKFLOWS_VIEW_CONTAINER_ID) },
+			{ unseen: [theirs], badge: undefined });
+
+		storeWorkspaceScope(storageService, WorkflowWorkspaceScope.AllWorkspaces);
+
+		assert.strictEqual(failureBadgeCount(activity), 1);
+	});
+
+	test('markFailuresSeen() marks ONLY the in-scope failures - an out-of-scope failure is never silently absorbed, and still alarms once the scope widens', async () => {
+		const activity = new RecordingActivityService();
+		const storageService = store.add(new TestStorageService());
+		const fs = makeFs();
+		const service = makeService(fs, storageService, activity);
+		await nextSnapshot(service);
+
+		const next = nextSnapshot(service);
+		await stageManifest(fs, 'wf_fail-mine', failedManifest());
+		await stageManifest(fs, 'wf_fail-theirs', failedManifest(), sessionDir(OTHER_FOLDER, OTHER_SESSION));
+		service.readAgain();
+		await next;
+
+		const mine = workflowRunIdentity(SESSION, 'wf_fail-mine');
+		const theirs = workflowRunIdentity(OTHER_SESSION, 'wf_fail-theirs');
+		assert.strictEqual(failureBadgeCount(activity), 1); // only the in-scope failure was ever shown
+
+		service.markFailuresSeen();
+
+		// THE awareness rule: the watermark means "already surfaced to you", and the badge is the surfacing. Marking
+		// every KNOWN failure seen here would write `theirs` into the watermark having never badged it once - and
+		// widening the scope afterwards would then show nothing for a failure nobody was ever told about.
+		const stored = storageService.get(FAILURE_WATERMARK_STORAGE_KEY, StorageScope.PROFILE);
+		assert.deepStrictEqual({
+			watermark: stored ? JSON.parse(stored) : undefined,
+			badge: activity.currentBadge(WORKFLOWS_VIEW_CONTAINER_ID),
+			stillUnseen: [...service.snapshot.unseenFailures],
+		}, {
+			watermark: { version: 1, seen: [mine] },
+			badge: undefined,
+			stillUnseen: [theirs],
+		});
+
+		storeWorkspaceScope(storageService, WorkflowWorkspaceScope.AllWorkspaces);
+
+		assert.strictEqual(failureBadgeCount(activity), 1);
 	});
 });
 // CLAWDIUS-END

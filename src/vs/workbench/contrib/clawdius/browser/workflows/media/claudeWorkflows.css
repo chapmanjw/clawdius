@@ -28,15 +28,22 @@
 	border-bottom: 1px solid var(--vscode-panel-border);
 }
 
-/* The persistent filter/status-filter/sort toolbar, mounted above the tree/state pair - flex-wrap so it degrades gracefully at the narrowest sidebar widths instead of overflowing. */
+/* The persistent filter toolbar: the always-visible text filter + its disclosure toggle on one row, and the three dropdowns stacked one-per-row beneath it, revealed only while the toolbar carries `expanded`. A COLUMN (never one wrapping row) is what lets each dropdown be full width and the same height as the input beside the toggle. */
 .clawdius-workflows-toolbar {
 	display: flex;
 	flex: 0 0 auto;
-	flex-wrap: wrap;
-	align-items: center;
+	flex-direction: column;
 	gap: 6px;
 	padding: 6px 12px;
 	border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+/* Row 1, always visible. `flex-wrap` lives HERE now (it moved down off the toolbar root, which is a column) so this row still degrades at the narrowest sidebar widths instead of overflowing - the toggle drops under the input rather than squeezing it to nothing. */
+.clawdius-workflows-toolbar-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
 }
 
 .clawdius-workflows-filter {
@@ -44,13 +51,60 @@
 	min-width: 100px;
 }
 
-.clawdius-workflows-status-filter,
-.clawdius-workflows-sort {
-	flex: 1 1 auto;
-	min-width: 90px;
+/* The collapsible dropdown panel: `display: none` while collapsed, so its three controls leave the tab order and the accessibility tree too - a collapsed control a screen reader still announces is a lie. Driven ONLY by the `expanded` class on the toolbar root, so nothing in TS touches these elements' own display. */
+.clawdius-workflows-filters {
+	display: none;
+	flex-direction: column;
+	gap: 6px;
 }
 
-/* The three-state message overlay (empty / read-error / no-match) and the tree are mutually exclusive; the tree is the only one of the two that ever scrolls internally - this one never does. */
+.clawdius-workflows-toolbar.expanded .clawdius-workflows-filters {
+	display: flex;
+}
+
+/* Each dropdown owns a full row of the stack; the `flex: 1 1 auto` / `min-width: 90px` basis these carried while they shared one horizontal row is wrong for a full-width stack. */
+.clawdius-workflows-status-filter,
+.clawdius-workflows-sort,
+.clawdius-workflows-workspace-scope {
+	flex: 0 0 auto;
+	min-width: 0;
+}
+
+/* `.monaco-select-box` ships with width/cursor and NO height; `.monaco-inputbox`'s height is content-driven from its inner padding - which is exactly why the dropdowns read shorter than the input. The only select-height normalization in the tree is scoped to `.monaco-action-bar .action-item`, which this toolbar is not inside, so both need pinning here. The select's right padding is 23px, matching the one shipped rule that pads a `.monaco-select-box`: a `<select>` draws its dropdown arrow inside the border box, and an author `padding-right` replaces the UA default that reserves room for it - at full sidebar width with labels like "Sort: Newest First", text would otherwise run under the arrow.
+
+26px is DERIVED, not chosen: 1px border + 4px padding + a 16px line box + 4px padding + 1px border, the control tier's own rhythm. See the `.ibwrapper > .input` rule below for why the line box has to be pinned along with the height. */
+.clawdius-workflows-toolbar .monaco-inputbox,
+.clawdius-workflows-toolbar .monaco-select-box {
+	height: 26px;
+}
+
+/* Pinning only the OUTER height left the InputBox's inner `<input>` content-sized: `.ibwrapper` has no height, so the input's shipped `height: 100%` resolves to `auto`, i.e. the inherited workbench line box (13px x 1.4em = 18.2px) plus its own 4px/6px padding = 26.2px - taller than the 24px content box the `.monaco-inputbox`'s always-applied 1px border leaves it, with no `overflow: hidden` to contain it. The caret and text selection bled past the bottom border and the text sat low against the select beside it, so the two controls were the same HEIGHT but their type did not agree. Pinning the line box to the tier's 16px closes the arithmetic exactly (16 + 4 + 4 = the 24px content box). */
+.clawdius-workflows-toolbar .monaco-inputbox > .ibwrapper > .input {
+	line-height: 16px;
+}
+
+.clawdius-workflows-toolbar .monaco-select-box {
+	font: inherit;
+	padding: 2px 23px 2px 8px;
+}
+
+/* A DISABLED scope select (no folder is open - see `updateWorkspaceScopeControl`) has to LOOK disabled. `SelectBoxList.styleSelectElement` writes background/color/border as INLINE styles, which beat the UA's own `select:disabled` greying, and there is no `:disabled` rule for `.monaco-select-box` anywhere in the tree - so without this the control keeps full contrast and `.monaco-select-box`'s own `cursor: pointer`, reading as live while silently swallowing every click. The explanation already written into the disabled aria-label gets its visual counterpart here rather than staying assistive-tech-only. Same tier upstream gives the sibling widget (`.monaco-custom-toggle.disabled`, toggle.css). */
+.clawdius-workflows-toolbar .monaco-select-box:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+
+/* `.monaco-custom-toggle` is `float: left` with a `margin-left` - it is built for a find-widget input row, not a flex toolbar - so it needs `float: none` plus an explicit basis to sit beside the input. It keeps its own 20px box; the row's `align-items: center` is what lines it up against the 26px input. */
+.clawdius-workflows-toolbar .clawdius-workflows-filter-toggle {
+	float: none;
+	flex: 0 0 auto;
+	margin-left: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+/* The four-state message overlay (empty / read-error / no-match / out-of-scope) and the tree are mutually exclusive; the tree is the only one of the two that ever scrolls internally - this one never does. */
 .clawdius-workflows-state {
 	display: flex;
 	flex-direction: column;
@@ -436,11 +490,11 @@
 }
 
 /* The record's message body: real transcript content, rendered as sanitized Markdown (never innerHTML - see
- * renderTranscriptSlice) inside the shared `.clawdius-workflow-artifact` container (combined on this same
- * element, not nested) so it reads as the run's own document, not Clawdius's UI chrome. `breaks: true` (threaded
- * through renderMarkdown) is what preserves the author's own line breaks without an ancestor `white-space:
- * pre-wrap`, which would double up on Markdown's own paragraph spacing. `word-break` still guards against a long
- * unbroken token (e.g. a URL) overflowing the pane. */
+* renderTranscriptSlice) inside the shared `.clawdius-workflow-artifact` container (combined on this same
+* element, not nested) so it reads as the run's own document, not Clawdius's UI chrome. `breaks: true` (threaded
+* through renderMarkdown) is what preserves the author's own line breaks without an ancestor `white-space:
+* pre-wrap`, which would double up on Markdown's own paragraph spacing. `word-break` still guards against a long
+* unbroken token (e.g. a URL) overflowing the pane. */
 .clawdius-transcript-record-body {
 	word-break: break-word;
 	color: var(--vscode-foreground);
@@ -587,10 +641,10 @@
 }
 
 /* The shared bordered "artifact" container: wraps rendered result content and transcript message bodies so it is
- * visually obvious the content is the RUN's own document, not Clawdius's UI (claudeWorkflowDetailEditor.ts's
- * `renderResultDetail`, claudeWorkflowTranscriptEditor.ts's `renderTranscriptSlice`). Also gets the shared themed
- * scrollbar (see the block near `.clawdius-workflows-tree`, above).
- */
+* visually obvious the content is the RUN's own document, not Clawdius's UI (claudeWorkflowDetailEditor.ts's
+* `renderResultDetail`, claudeWorkflowTranscriptEditor.ts's `renderTranscriptSlice`). Also gets the shared themed
+* scrollbar (see the block near `.clawdius-workflows-tree`, above).
+*/
 .clawdius-workflow-artifact {
 	border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
 	border-radius: 2px;

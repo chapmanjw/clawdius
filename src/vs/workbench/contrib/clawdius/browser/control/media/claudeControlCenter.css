@@ -34,8 +34,16 @@ rounded "card" chrome. Semantic tones (allow/warn/deny) map to the editor's own 
 }
 .clawdius-control::-webkit-scrollbar-thumb:hover { background-color: var(--vscode-scrollbarSlider-hoverBackground, rgba(100, 100, 100, 0.7)); }
 
+/* No max-width on purpose. This container held a 1080px content-column cap, which is the usual settings-editor
+measure device - but it capped EVERY tab, so on a wide window each capability row stopped mid-pane and left a
+dead band to its right with the row's own trailing controls stranded far from the text they act on. The
+description's own 620px cap was removed for the same reason (see `.clawdius-control-cap-desc`); leaving this
+one in place would have made that removal invisible above ~1080px, since the row can never exceed its
+container - and the description now runs the row's FULL width, so this cap would bound the row's widest element
+directly. Rows stay readable at width because a row is a bounded flex layout rather than a prose column: the
+identity zone floors at 280px and the trailing controls hold their own zone flush right. The long description
+line is the accepted cost of that - a capped one leaves a dead band beside it, which reads worse. */
 .clawdius-control-inner {
-	max-width: 1080px;
 	margin: 0;
 	display: flex;
 	flex-direction: column;
@@ -285,26 +293,127 @@ rounded "card" chrome. Semantic tones (allow/warn/deny) map to the editor's own 
 .clawdius-control-iconbtn.danger:hover { color: var(--vscode-errorForeground); }
 .clawdius-control-iconbtn .codicon { font-size: 14px; }
 
-/* capability rows (Skills / Plugins / Hooks): name + description on the left, a control on the right */
+/* capability rows (Skills / Plugins / Hooks / MCP): name on the left, controls on the right, and the description
+on its own full-width line beneath both */
+/*
+The row REFLOWS rather than starving its text. It used to be a single unbreakable line whose only yielding item was
+the text zone: the four-button mode segment held its full max-content width at every pane width (`flex: none`, see
+`.clawdius-control-seg-sm` below), the chevron and the icon actions are rigid, and `.clawdius-control-cap-info` had
+`min-width: 0` with no basis - so the description was whatever was left over after a ~486px fixed tax and collapsed
+to a ~140px column on a narrow pane. `flex-wrap` gives the row a second axis to spend narrowness on, and the 280px
+flex basis below is the measure floor that decides WHEN to spend it: once the trailing controls no longer fit beside
+a 280px-wide leading zone they step to their own line instead of squeezing it further. Row-gap is smaller than
+column-gap because a wrapped control line reads as part of the same row, not as a new one; it also sets the offset
+of the description line below, which has to read as the same card and not as a detached block under it.
+
+A caprow is built with at most THREE items, in this DOM order: one leading zone (`.clawdius-control-cap-identity`
+where the row has a chevron, `.clawdius-control-cap-info` where it does not), `.clawdius-control-cap-controls`, and
+the optional `.clawdius-control-cap-desc`. The first two share the top line until the controls no longer fit beside
+the 280px floor; the description ALWAYS takes a line of its own, because its `flex: 0 0 100%` basis fills a flex
+line by itself. Both breaks are intended and they are the only two the row can take. `align-items: flex-start` is
+load-bearing (Item 20): the top line pairs a leading zone whose identity line can wrap its origin / validation chips
+against a control zone whose mode segment can fold to a second button line, so those two items are routinely
+different heights and centring floats the shorter one down the card. Do not relax it to `center`.
+*/
 .clawdius-control-caprow {
-	display: flex; align-items: flex-start; gap: 16px; padding: 9px 12px;
+	display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 16px; padding: 9px 12px;
 	border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 2px;
 	background: var(--vscode-editorWidget-background, transparent);
 }
-.clawdius-control-cap-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.clawdius-control-cap-name { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; }
+/* The leading chevron travels WITH the name it expands. Flex lines are collected by each item's outer HYPOTHETICAL
+main size, so a chevron left loose in the row gets a line of its own as soon as `chevron + column-gap + 280px`
+exceeds the row's content box - a lone twisty orphaned above the name, on all four row types that have one (skill
+rows, skill-group headers, MCP servers, installed plugins), from roughly 410px of pane width down. Wrapping the
+chevron and the text zone in one non-wrapping item makes the pair wrap-atomic, which is the whole job of this
+rule; `.clawdius-control-skill-chevron-spacer` takes the chevron's place inside it when a row has none.
+The 280px measure floor lives here, and `.clawdius-control-cap-info` keeps its own copy for the four row types
+built without an identity zone, so both shapes break at the same row width. On a chevron row that floors the text
+itself at 280 - 26 - 16 = 238px - a deliberate trade, because a chevron detached from its row is worse than a
+slightly narrower identity line. Wide widths are unchanged: this zone grows into exactly the free space the text
+zone used to take and spends 26 + 16px of it on the chevron column, as the row itself did before.
+The description is NOT in here (see `.clawdius-control-cap-desc`), so this zone starts at the chevron and the
+description below it starts at the row's own padding edge, running under the chevron column too. */
+.clawdius-control-cap-identity { display: flex; align-items: flex-start; gap: 16px; flex: 1 1 280px; min-width: 0; }
+/* `flex: 1 1 280px` = the measure floor plus ownership of the row's slack, which is what lets the empty spacer the
+builders used to append be dropped entirely: the text zone now grows into the space the spacer used to hold. What
+this basis sizes is the identity line ALONE - the name plus its origin / validation chips - because the
+description is no longer a child here; it moved out to be a row-level item (see `.clawdius-control-cap-desc`
+below). So the basis' remaining job is deciding where the trailing controls wrap, not how wide the prose runs.
+The ROW is not pixel-identical at wide widths though - do not read the above as that claim. Both row types
+that used to carry `.clawdius-control-cap-acts { margin-left: 8px }` lose that 8px, but from different gaps. On a
+HOOK row the action zone holds only `.cap-acts`, so the gap in front of the trailing icons goes from 16 + 8 = 24px
+to the row's own 16px. On a SKILL row the zone holds the mode segment AND `.cap-acts`: those two were row siblings
+24px apart and are now zone siblings 8px apart, so the segment sits closer to the icon cluster, while the
+text-to-controls gap ahead of them is the unchanged 16px. That is the intended alignment - trailing controls at
+the row's own column gap in every row type, with the icon cluster reading as part of the control group. */
+.clawdius-control-cap-info { display: flex; flex-direction: column; gap: 3px; flex: 1 1 280px; min-width: 0; }
+/* The identity line gets its OWN wrap axis. As a flex item of the column above it is only as wide as the text zone,
+and its children cannot collectively shrink (the name floors at its min-content), so without `flex-wrap` the
+origin/validation chips overflowed VISIBLY to the right - across the gap and into the mode-button lane, where the
+buttons paint over them. Wrapping keeps them inside the column at any width; it never fires while they fit, so
+wide rows render exactly as before. `flex-wrap` alone carries this: the column container above stretches this line
+to exactly the text zone's width, and width is that container's CROSS axis, where the automatic-minimum-size rule
+a `min-width: 0` would relax never applied in the first place. */
+.clawdius-control-cap-name { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; font-size: 12.5px; font-weight: 600; }
 /* Item 5: same tinted-fill fix as `.clawdius-control-chip` above - the solid badge-background/foreground pair fails the 4.5:1 normal-text AA bar for this chip's small text. */
+/* This chip is the one on the identity line whose text is UNBOUNDED - joined skill origins, a marketplace id, an
+author - so it cannot borrow the rigidity of its fixed-vocabulary siblings (`.clawdius-control-skill-badge`,
+`.clawdius-control-chip`). Made rigid it overflows the row outright, because `flex-wrap` moves whole items and
+never breaks inside one: a chip that can neither shrink nor break simply hangs past the row's content box, and
+takes the whole pane into horizontal overflow with it. `overflow: hidden` is the declaration that fixes that, and
+it does two jobs: it gives `text-overflow` somewhere to ellipsize, and - per css-flexbox-1 4.5, where the
+automatic minimum size applies only to an item whose overflow is visible in the main axis - it computes this
+item's automatic minimum size to 0, which is what lets the chip shrink below its own text at all. The chip's
+initial `flex: 0 1 auto` then does the shrinking (no flex declaration needed here, and none is written), and
+`white-space: nowrap` is what makes it truncate rather than wrap. `display: block` + `line-height` rather than
+`inline-flex` centering because `text-overflow` needs a block container to ellipsize in. Truncated text stays
+recoverable through the hover every call site attaches - see `capOrigin` in the editor. */
 .clawdius-control-cap-origin {
-	display: inline-flex; align-items: center; height: 16px; box-sizing: border-box; padding: 0 6px;
+	display: block; height: 16px; line-height: 16px; box-sizing: border-box; padding: 0 6px;
+	overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 	font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600;
 	background: color-mix(in srgb, var(--vscode-badge-background) 18%, transparent); color: var(--vscode-badge-background); border-radius: 2px;
 }
 .clawdius-control-cap-origin.muted { background: transparent; color: var(--vscode-descriptionForeground); border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); }
-.clawdius-control-cap-desc { font-size: 11.5px; color: var(--vscode-descriptionForeground); max-width: 620px; overflow-wrap: anywhere; word-break: break-word; }
-.clawdius-control-cap-acts { display: inline-flex; gap: 4px; margin-left: 8px; }
+/* A ROW-level item, not a child of the text zone. `flex: 0 0 100%` gives it a basis of the caprow's entire content
+width, which no sibling can share, so it always lands on a flex line of its own at the full width of the card -
+flowing UNDER the trailing controls rather than stopping beside them. Nested inside `.clawdius-control-cap-info`
+it was bounded by that zone instead, and on a wide Control Center (~1400px) every skill / plugin / hook
+description ended where the buttons began and left the right third of the card empty below them. Same reason the
+earlier `max-width: 620px` measure cap went: a cap near 100 Latin characters per line only moved the dead band
+one column further right, and a row that ends mid-card reads as broken rather than as a comfortable measure.
+Full width is bought with no positioning trick and no width arithmetic - the 100% basis IS the mechanism.
+It is appended AFTER `.clawdius-control-cap-controls` (see `capDescription` in the editor): flex lines are
+collected in DOM order, so ahead of them it would claim the first line and push the controls onto a third.
+That order is also why the editor gives this element an id and points the control zone's `aria-describedby` at
+it - assistive tech reads in DOM order, so the text explaining the row would otherwise come after every button
+it explains. Do NOT "fix" that with the `order` property: `order` moves boxes and leaves reading order exactly
+where it was, so it would break this rule's full-width guarantee and repair nothing.
+`overflow-wrap` / `word-break` are the overflow guard and must stay. `flex-shrink: 0` means this item never gives
+back any of its 100% basis, so nothing else in the row can absorb a single unbreakable token (a long URL or path
+in a description): `overflow-wrap: anywhere` is what collapses its min-content size, and without that
+`min-width: auto` would size it PAST the row and take the whole pane into horizontal overflow. `min-width: 0`
+pins that down explicitly rather than leaving it to the min-content computation. */
+.clawdius-control-cap-desc {
+	flex: 0 0 100%; min-width: 0;
+	font-size: 11.5px; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; word-break: break-word;
+}
+/* Every caprow's trailing controls live in ONE zone (see `capActions`), so this single rule is the whole alignment
+story for the wrapped case: the action zone goes flush right on its own line, whatever the row is made of. Left
+loose in the row flow those controls wrapped wherever the previous item ended, so the same construct resolved
+three different ways across the eight row types - including a destructive Delete Server landing bottom-LEFT under
+the description. `margin-left: auto` and not a spacer element: a zero-width flex item still claims a column gap
+and can wrap to a line of its own. */
+.clawdius-control-cap-controls { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+/* The icon cluster inside that zone (edit / delete), tighter than the zone gap because icon buttons read as one
+control group. Also used directly by the non-caprow skill-file rows. */
+.clawdius-control-cap-acts { display: inline-flex; gap: 4px; }
 
 /* small segmented control (per-skill 4-state) - a denser variant of the default-mode segment */
-.clawdius-control-seg-sm { flex: none; gap: 5px; }
+/* `flex: 0 1 auto` (not `none`): the segment must be able to fold, both onto its own row line and - via the
+`flex-wrap: wrap` it inherits from `.clawdius-control-seg`, which `flex: none` made unreachable because it also
+sized the segment to max-content - onto a second button line when even that is too narrow. */
+.clawdius-control-seg-sm { flex: 0 1 auto; gap: 5px; }
 .clawdius-control-seg-sm .clawdius-control-mode { padding: 3px 9px; border-radius: 2px; }
 .clawdius-control-seg-sm .clawdius-control-mode-name { font-size: 11.5px; }
 
@@ -329,8 +438,6 @@ rounded "card" chrome. Semantic tones (allow/warn/deny) map to the editor's own 
 .clawdius-control-skill-chevron { padding: 2px 4px; }
 .clawdius-control-skill-chevron-spacer { width: 26px; flex: none; }
 .clawdius-control-skill-group .clawdius-control-cap-name > span:first-child { font-weight: 600; }
-/* Item 20: a long/CJK description wraps to multiple lines - center alignment then floats the segmented control mid-card against the wrapped text; top-align both instead. */
-.clawdius-control-caprow.clawdius-control-skill-group { align-items: flex-start; }
 .clawdius-control-skill-group-body { margin-left: 12px; border-left: 1px solid var(--vscode-panel-border); padding-left: 6px; }
 
 .clawdius-control-skill-badge {

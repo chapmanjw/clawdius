@@ -11,8 +11,9 @@
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
 import { ResourceMap } from '../../../../base/common/map.js';
+import { MarshalledId } from '../../../../base/common/marshallingIds.js';
 import { isMacintosh, isWindows } from '../../../../base/common/platform.js';
-import { URI } from '../../../../base/common/uri.js';
+import { URI, UriComponents } from '../../../../base/common/uri.js';
 import { dirname, extUriIgnorePathCase } from '../../../../base/common/resources.js';
 import { parse as parseJsonc } from '../../../../base/common/jsonc.js';
 import { match as globMatch, splitGlobAware } from '../../../../base/common/glob.js';
@@ -24,9 +25,10 @@ import { IPathService } from '../../../services/path/common/pathService.js';
 import {
 	ConfigBacking, ConfigScope, ConfigSection, CONFIG_SECTIONS, ContextInclusion, IClawdiusConfigService,
 	IClawdiusConfigSnapshot, IConfigBudgetImport, IConfigBudgetMeta, IConfigItem, IConfigScopeGroup, IConfigSectionGroup,
-	IConfirmedLoad, IMeasuredPrefix,
+	IConfirmedLoad, IMeasuredPrefix, PLUGIN_REGISTRY_FILES,
 } from '../common/clawdiusConfig.js';
 import { containingFolderOf, estimateTokens, normalizeConfirmedPath } from '../common/clawdiusContextBudget.js';
+import { REMOTE_SETTINGS_JSON } from '../common/clawdiusTierPaths.js';
 
 interface IScopeRoots {
 	readonly scope: ConfigScope;
@@ -297,6 +299,51 @@ export function parseMeasuredPrefix(text: string): IMeasuredPrefix | undefined {
 	return undefined;
 }
 
+/**
+ * A CONTENT signature for a config snapshot - what makes {@link ClawdiusConfigStore.onDidChange} edge-triggered.
+ *
+ * `JSON.stringify` on its own is not usable here, and the reason is not obvious. `URI.toJSON()` emits its memoized
+ * `external` (filled in by `toString()`) and `fsPath` (filled in by `.fsPath`) fields only once something has
+ * actually asked for them, so two byte-identical scans serialize DIFFERENTLY depending on which URIs some consumer
+ * happened to touch in between - and that is a moving target this store does not control. The replacer collapses
+ * every marshalled URI back to its canonical string, which is the only thing about a URI this comparison cares
+ * about, so the signature depends on the configuration and nothing else.
+ *
+ * Comparing content is sound because `IConfigItem` carries no mtime, ctime or size - every field on it is derived
+ * from the file's own content (its frontmatter, its measured budget) - so a real edit always moves the signature
+ * while a touch-only event never does.
+ *
+ * What it deliberately does NOT cover is the reason {@link ClawdiusConfigStore.recordSourceBody} exists: the
+ * snapshot SUMMARISES several JSON files rather than carrying them, and never opens others at all, so a change
+ * confined to a summarised-away key - or to a settings source no section scans - is invisible here and needs its own
+ * contribution to the fired signature.
+ */
+function snapshotSignature(snapshot: IClawdiusConfigSnapshot): string {
+	// `unknown` is unavoidable in a JSON replacer: it visits every value in an arbitrarily-nested structure, and
+	// the narrowing below is exactly what recovers the type.
+	return JSON.stringify(snapshot, (_key: string, value: unknown): unknown => {
+		if (typeof value === 'object' && value !== null && (value as { readonly $mid?: MarshalledId }).$mid === MarshalledId.Uri) {
+			return URI.revive(value as UriComponents).toString();
+		}
+		return value;
+	});
+}
+
+/**
+ * Whether `resource` is Claude Code TRANSCRIPT state under `projectsRoot` (`<claudeDir>/projects`) - runtime data
+ * this store never opens, written continuously while an agent session runs.
+ *
+ * The one exception, and it is a real one both sweeps of this bug initially missed: `scanMemories` reads the
+ * per-project auto memory at `projects/<enc>/memory/MEMORY.md`, so anything inside a `<enc>/memory/` folder is
+ * config, not transcript. The check is on the folder rather than the exact filename deliberately - over-matching
+ * costs one redundant scan, under-matching would silently stop refreshing a file the inspector shows.
+ */
+function isTranscriptPath(resource: URI, projectsRoot: URI): boolean {
+	if (!extUriIgnorePathCase.isEqualOrParent(resource, projectsRoot)) { return false; }
+	const rest = resource.path.slice(projectsRoot.path.length).split('/').filter(segment => segment.length > 0);
+	return !(rest.length >= 2 && rest[1].toLowerCase() === 'memory');
+}
+
 /** Markdown ATX headings (`#`..`######`) with 1-based line numbers. */
 function headings(content: string): { readonly text: string; readonly line: number }[] {
 	const out: { text: string; line: number }[] = [];
@@ -321,6 +368,37 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 	private _hasResolved = false;
 	get hasResolved(): boolean { return this._hasResolved; }
 
+	/**
+	 * {@link snapshotSignature} of {@link _snapshot} as of the last fire - what makes `onDidChange` EDGE-triggered.
+	 * A rescan that produces an identical snapshot describes a configuration that did not change, and firing on it
+	 * made every consumer tear down and rebuild for nothing: the Control Center clears its caches and rebuilds its
+	 * whole tab on this event, which under the transcript-driven refresh storm meant a full rebuild about once a
+	 * second.
+	 *
+	 * The snapshot ALONE is not a sufficient signature, and assuming it was is what an audit of the first cut of
+	 * this caught. Several consumers hang cache invalidation off this event for data the snapshot only summarises:
+	 * the Control Center's Effective tab re-resolves the WHOLE settings chain (every key, including `model`, `env`,
+	 * `statusLine`, which no section scans), and its MCP rows re-read each server's `command`/`args`/`env` (the Mcp
+	 * section models a server by NAME alone). Those caches are dropped only here, with no other invalidation path
+	 * short of a manual Refresh button - so a snapshot-only edge trigger left the tab whose whole purpose is "the
+	 * resolved value of every setting" showing the pre-edit value for the rest of the session. The signature is
+	 * therefore the snapshot PLUS {@link sourceBodySignature}, which carries those summarised-away bodies and the
+	 * sources no section reads at all ({@link recordServerManagedBody}).
+	 */
+	private _signature = '';
+
+	/** Raw bodies of the JSON settings sources the snapshot SUMMARISES rather than carries, or does not read at all,
+	 *  keyed by URI string and gathered during the scan that read them (see {@link recordSourceBody}). Cleared at the
+	 *  start of every scan, and folded into {@link _signature} so an edit no section models still fires `onDidChange`.
+	 *  Raw text, not a hash: these are settings files of a few KB, so an exact comparison needs no collision argument. */
+	private readonly _sourceBodies = new Map<string, string>();
+
+	/** The root set {@link updateWatchers} last built its watch requests for, as a stable key, or undefined before
+	 *  the first build. The watch set is a pure function of the roots, so rebuilding it for an unchanged root set
+	 *  is pure churn - and it was running on EVERY scan, tearing down and re-adding ~15 watch requests per refresh
+	 *  and forcing the file watcher to re-plan a large recursive subtree each time. */
+	private _watchedRootsKey: string | undefined;
+
 	/** Per-refresh memo of readText() so a file imported by several memories (or both auto-scanned and imported)
 	 *  is read once. Cleared at the start of every scan. */
 	private readonly _readCache = new Map<string, Promise<string | undefined>>();
@@ -333,11 +411,22 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 	 *  the Global Skills scan (plugin skills fold in with provenance) and the Plugins scan (attached as children). */
 	private _pluginContents: IPluginContentScan[] = [];
 
+	/** The nested (subtree) CLAUDE.md files {@link nestedMemoriesFor} last probed, as URI strings - the ones a
+	 *  context-budget surface is showing right now. See {@link recordNestedMemoryBodies} for why the store tracks
+	 *  them at all, and why keeping only the most recent call's chain is the right bound. */
+	private _nestedProbed: readonly string[] = [];
+
 	private readonly _watchers = this._register(new DisposableStore());
-	private readonly _refreshScheduler = this._register(new RunOnceScheduler(() => void this.refresh(), 250));
+	/** Coalescing timer for the two events that mean "the files this store scans, or the roots they live under,
+	 *  moved on disk": the file watcher installed by {@link updateWatchers}, and a workspace-folder change (which
+	 *  moves the scan roots themselves). Both drive {@link refreshFromWatcher} and never the public
+	 *  {@link refresh}, which is what stops a change that lands mid-scan from being dropped. */
+	private readonly _refreshScheduler = this._register(new RunOnceScheduler(() => void this.refreshFromWatcher(), 250));
 	/** Coalesces concurrent refreshes: all eight section views call refresh() on first render. */
 	private _refreshInFlight: Promise<void> | undefined;
-	/** Set when a forced refresh arrives mid-scan, so the loop runs one more scan that starts after the write. */
+	/** Set when a request that needs a scan STARTING AFTER IT arrives mid-scan - a caller's `force`, or the watcher
+	 *  via {@link refreshFromWatcher} - so the loop runs one more scan. A boolean rather than a counter on purpose:
+	 *  N such requests during one scan collapse into ONE rerun, because they would all read the same tree. */
 	private _rerunRequested = false;
 
 	constructor(
@@ -370,6 +459,12 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 	 * Re-scan both scopes. Concurrent calls coalesce onto one in-flight scan. Pass `force` after a write
 	 * (create / delete) you need reflected: if a scan is already running it may have begun BEFORE the write, so
 	 * `force` guarantees one more scan that starts after this call resolves.
+	 *
+	 * The default is passive, and that is what a CONSUMER wants: this is also the "give me the configuration" call
+	 * every one of the eight section views issues on first render, and queuing a rerun for each of those would buy
+	 * seven redundant whole startup scans of data nobody changed. A consumer knows only that it wants data, so any
+	 * scan's result will do. The WATCHER knows strictly more than that - see {@link refreshFromWatcher}, which is
+	 * why it does not come through here with `force` left off.
 	 */
 	refresh(force = false): Promise<void> {
 		if (force) { this._rerunRequested = true; }
@@ -377,6 +472,21 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 			this._refreshInFlight = this._refreshLoop().finally(() => { this._refreshInFlight = undefined; });
 		}
 		return this._refreshInFlight;
+	}
+
+	/**
+	 * The watcher's entry point: a file this store scans changed on disk, so ALWAYS queue a rerun rather than
+	 * coalescing onto whatever scan is running.
+	 *
+	 * The difference from a passive {@link refresh} is the whole reason this exists. A running scan may have ALREADY
+	 * READ the file that just changed, and joining it then drops the change outright: the snapshot keeps the pre-edit
+	 * content, the signature does not move, the edge-triggered `onDidChange` never fires, and every consumer serves
+	 * stale config until some unrelated config event happens to start another scan. Queuing the rerun holds the same
+	 * pair of invariants `ClaudeWorkflowObservationService.requestRefresh` states for the transcript corpus - at most
+	 * one pass running with at most one queued behind it, and a change landing mid-pass never lost.
+	 */
+	private refreshFromWatcher(): Promise<void> {
+		return this.refresh(true);
 	}
 
 	private async _refreshLoop(): Promise<void> {
@@ -387,24 +497,90 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 	}
 
 	private async _doRefresh(): Promise<void> {
+		// Assigned only by a scan that ran to completion, which is what makes the error path below honest: a scan
+		// that threw part-way has a HALF-filled `_sourceBodies` and an untouched `_snapshot`, so any signature built
+		// from it would describe nothing real. Leaving it undefined leaves `_signature` alone instead.
+		let signature: string | undefined;
 		try {
 			this._readCache.clear();
+			this._sourceBodies.clear();
 			const roots = await this.scopeRoots();
-			this._claudeMdExcludes = await this.gatherClaudeMdExcludes(roots);
+			// The four pre-scan passes run TOGETHER, for the same reason `enumerateWorkflows` batches its per-manifest
+			// work: awaited one after another they put up to ~70 sequential file round-trips in front of every scan
+			// (the nested chain alone is capped at 64), and in a remote (SSH / WSL) window the round-trip IS the cost.
+			// They are safe to overlap - each reads a disjoint set of files, none reads what another writes, and all
+			// four only add to `_sourceBodies`, which is keyed by URI and sorted by `sourceBodySignature`, so the order
+			// they complete in cannot change the signature. They all have to finish BEFORE `scanScope` runs, because
+			// the scan reads `_claudeMdExcludes` and the signature is built from the recorded bodies.
+			const [claudeMdExcludes] = await Promise.all([
+				this.gatherClaudeMdExcludes(roots),
+				this.recordServerManagedBody(roots),
+				this.recordPluginRegistryBodies(roots),
+				this.recordNestedMemoryBodies(),
+			]);
+			this._claudeMdExcludes = claudeMdExcludes;
 			// Scan installed plugins' bundled contents once (plugins are global); the per-scope scan reads this for
 			// the Global Skills section (plugin skills) and the Plugins section (each plugin's contents).
 			this._pluginContents = await this.scanInstalledPluginContents(await this.pathService.userHome());
 			const scopes = await Promise.all(roots.map(r => this.scanScope(r)));
 			this._snapshot = { scopes };
+			signature = `${snapshotSignature(this._snapshot)}\u0000${this.sourceBodySignature()}`;
 			this.updateWatchers(roots);
 		} catch (err) {
 			this.logService.warn('[Clawdius] config refresh failed', err);
 		} finally {
-			// Mark resolved even on error so surfaces stop showing "scanning..." (they render whatever
-			// snapshot exists), and always fire so they re-render.
+			// Mark resolved even on error so surfaces stop showing "scanning..." - they render whatever snapshot
+			// exists, and `hasResolved` is what releases them from that state.
+			const firstResolve = !this._hasResolved;
 			this._hasResolved = true;
-			this._onDidChange.fire();
+			// EDGE-TRIGGERED from here on (see `_signature`): fire only when the scan actually produced a different
+			// configuration, or on the very first resolve. The first-resolve clause is not redundant with the
+			// comparison - a consumer stuck in "scanning..." must be released even when the snapshot it is about to
+			// render is the empty one it already had, which is exactly what a scan that threw before assigning
+			// leaves behind. A scan that throws never fires and never moves the signature: nothing observable
+			// changed, and the next completed scan must still be compared against the last one that succeeded.
+			const changed = signature !== undefined && signature !== this._signature;
+			if (signature !== undefined) { this._signature = signature; }
+			if (changed || firstResolve) {
+				this._onDidChange.fire();
+			}
 		}
+	}
+
+	/**
+	 * Record the raw body of a settings source the snapshot only summarises (or never opens), so a change no section
+	 * models still moves {@link _signature} and still fires `onDidChange` (see that field for who depends on it).
+	 *
+	 * Called with the SUMMARISED-AWAY surface, not necessarily the whole file, and the difference is load-bearing.
+	 * `~/.claude.json` is rewritten by Claude Code continuously during a session - it carries per-project history
+	 * and cost bookkeeping alongside `mcpServers` - so folding its whole body in would re-arm, through a different
+	 * door, exactly the rebuild-per-write storm the edge trigger exists to stop. Callers pass the part a Control
+	 * Center surface actually re-reads and nothing more.
+	 */
+	private recordSourceBody(uri: URI, body: string | undefined): void {
+		this._sourceBodies.set(uri.toString(), body ?? '');
+	}
+
+	/**
+	 * The recorded source bodies as one deterministic string. Sorted by key because the per-scope scans run
+	 * concurrently (`Promise.all` in `_doRefresh`), so insertion order is not stable between passes.
+	 *
+	 * Sorted with plain relational operators, never `localeCompare` - the same ordinal rule `compareByRunIdentity`
+	 * states in `workflows/claudeWorkflowsView.ts`, and it earns its keep here for a reason of its own. This string
+	 * exists only to be compared against a PRIOR signature, so its order has to be a property of the recorded keys
+	 * alone; `localeCompare` would make it a property of the host locale as well. Both sides of every comparison are
+	 * built in one process today, so no fire is mis-reported now - the point is that a signature which ever crosses a
+	 * process or a machine must not have to re-derive that argument first.
+	 */
+	private sourceBodySignature(): string {
+		return [...this._sourceBodies.entries()]
+			.sort((a, b) => {
+				if (a[0] < b[0]) { return -1; }
+				if (a[0] > b[0]) { return 1; }
+				return 0;
+			})
+			.map(([key, body]) => `${key}\u0000${body}`)
+			.join('\u0001');
 	}
 
 	// --- per-scope scanning ---
@@ -439,19 +615,138 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 		return `${scopeKey}:${section}:${name}`;
 	}
 
-	/** Union the `claudeMdExcludes` arrays from every scope's settings.json (+ project settings.local.json). */
+	/**
+	 * Union the `claudeMdExcludes` arrays from every scope's settings.json (+ project settings.local.json).
+	 *
+	 * Doubles as the one place every user-editable settings file in every scope is already opened, so it is also
+	 * where their raw bodies are recorded for the fired signature ({@link recordSourceBody}). The snapshot mines
+	 * these files for `claudeMdExcludes`, hook event names and permission rules ONLY, while the Control Center's
+	 * Effective tab re-resolves every key in them and re-reads only when `onDidChange` fires - so without the raw
+	 * body an edit to `model` / `env` / `statusLine` would produce a byte-identical snapshot and leave that tab on
+	 * the pre-edit value. The bound: this covers the tiers a person EDITS. The tier that changes by policy push
+	 * instead - the server-managed cache (`remote-settings.json`) - is resolved by that same tab and is recorded by
+	 * {@link recordServerManagedBody}, which also says why the system managed-settings file is not.
+	 */
 	private async gatherClaudeMdExcludes(roots: IScopeRoots[]): Promise<string[]> {
-		const out: string[] = [];
-		for (const r of roots) {
+		// One read per (root, file), all in flight at once: the files are independent and the union below does not
+		// care which arrives first. `Promise.all` still resolves POSITIONALLY, so the returned globs stay in
+		// root-then-file order - the order the sequential version produced.
+		const parsed = await Promise.all(roots.flatMap(r => {
 			const files = r.scope === ConfigScope.Project ? ['settings.json', 'settings.local.json'] : ['settings.json'];
-			for (const file of files) {
-				const json = await this.readJsonc<{ claudeMdExcludes?: unknown }>(URI.joinPath(r.claudeDir, file));
-				if (Array.isArray(json?.claudeMdExcludes)) {
-					out.push(...json.claudeMdExcludes.filter((x: unknown): x is string => typeof x === 'string'));
-				}
+			return files.map(async file => {
+				const uri = URI.joinPath(r.claudeDir, file);
+				const text = await this.readText(uri);
+				this.recordSourceBody(uri, text);
+				return this.parseJsoncBody<{ claudeMdExcludes?: unknown }>(text);
+			});
+		}));
+		const out: string[] = [];
+		for (const json of parsed) {
+			if (Array.isArray(json?.claudeMdExcludes)) {
+				out.push(...json.claudeMdExcludes.filter((x: unknown): x is string => typeof x === 'string'));
 			}
 		}
 		return out;
+	}
+
+	/**
+	 * Record the server-managed settings cache (`~/.claude/remote-settings.json`) into the fired signature.
+	 *
+	 * The one settings source `ClawdiusEffectiveConfigService.resolve()` reads that NO section scans, which is exactly
+	 * how the edge trigger lost it: a policy push rewrites this file, the write is a direct child of the watched
+	 * `~/.claude` so `isRelevant` accepts it and a rescan runs, and then that rescan produces a byte-identical
+	 * signature because nothing in the snapshot models the file - so `onDidChange` stayed silent and the Effective
+	 * tab, whose whole purpose is the resolved value of every setting, kept serving pre-push values until the user
+	 * pressed Refresh. Restoring the unconditional fire would "fix" it by declaring every scan a change, which is the
+	 * ~1Hz Control Center rebuild (and the renderer memory blowup behind it) the edge trigger exists to stop: the
+	 * signature has to cover more sources, not stop discriminating between them. Cost is one extra small-file read
+	 * per scan; the bytes are all this needs, so nothing here parses or models server-managed policy.
+	 *
+	 * The SYSTEM managed-settings file is deliberately NOT recorded even though the resolver reads it too
+	 * (`managed-settings.json` + the `managed-settings.d` drop-ins under {@link IScopeRoots.baseDir} of the Managed
+	 * scope). Nothing would ever compare the recorded body: neither path reaches any branch of `isRelevant`, so an
+	 * admin push schedules no scan in the first place. Note WHERE each one is lost, because the two differ and only
+	 * one of them is a watch gap: `managed-settings.json` is a direct child of the Managed root's `baseDir`, so it IS
+	 * under a watch request and its event is generated and then dropped by the relevance filter, while the drop-in
+	 * directory is under no watch request at all. Recording either would be dead weight that reads like coverage.
+	 * Closing that gap is a watch + relevance change AND this recording together - see the warning on `isRelevant`
+	 * about why half of it is worse than none - and it belongs with the remote-managed-host work the resolver defers.
+	 */
+	private async recordServerManagedBody(roots: IScopeRoots[]): Promise<void> {
+		// Built from the Global root's own `claudeDir` (home + `.claude`) so it is the SAME URI the resolver derives
+		// from `IPathService.userHome()`, including in a remote window where home is not on the file scheme.
+		const claudeDir = roots.find(r => r.scope === ConfigScope.Global)?.claudeDir;
+		if (!claudeDir) { return; }
+		const uri = URI.joinPath(claudeDir, REMOTE_SETTINGS_JSON);
+		this.recordSourceBody(uri, await this.readText(uri));
+	}
+
+	/**
+	 * Record the raw body of every {@link PLUGIN_REGISTRY_FILES} entry under `~/.claude/plugins` into the fired
+	 * signature - the registry indexes the Control Center's Plugins tab re-reads on `onDidChange` and on nothing else
+	 * short of its own Refresh button.
+	 *
+	 * Both entries were live instances of the signature invariant (see `IClawdiusConfigService.onDidChange`), for two
+	 * different reasons. `known_marketplaces.json` reached NO part of the snapshot - no scan opens it - yet the tab's
+	 * own "Add marketplace" button stages `claude plugin marketplace add` in a terminal without re-reading anything,
+	 * so the CLI's write scheduled a scan that came out byte-identical and the new marketplace never appeared;
+	 * `remove` left a dead row whose buttons still staged commands, and `update` left a stale `lastUpdated`.
+	 * `installed_plugins.json` reached it only PARTLY - `scanPlugins` models it by its `plugins` keys and
+	 * `firstInstallPath` - so a rewrite that relabels an entry's `version` in place, without moving the install path
+	 * the version normally rides on, left the installed rows showing the old version.
+	 *
+	 * The loop is over the shared constant on purpose: a name added there is recorded here and walked by the
+	 * regression test in the same change, and the Plugins tab cannot read a registry file that is not in it.
+	 *
+	 * Cost is two small-file reads per scan (a few KB each, against a scan that already reads on the order of a
+	 * megabyte), and neither file is continuously rewritten - the CLI touches them on install / update / marketplace
+	 * change - so unlike `~/.claude.json` they cannot re-arm the per-write rebuild storm {@link recordSourceBody}
+	 * warns about.
+	 */
+	private async recordPluginRegistryBodies(roots: IScopeRoots[]): Promise<void> {
+		// Plugins are global to the CLI (`scanPlugins` returns [] for every other scope), so there is one registry
+		// directory regardless of how many workspace folders are open.
+		const claudeDir = roots.find(r => r.scope === ConfigScope.Global)?.claudeDir;
+		if (!claudeDir) { return; }
+		await Promise.all(PLUGIN_REGISTRY_FILES.map(async file => {
+			const uri = URI.joinPath(claudeDir, 'plugins', file);
+			this.recordSourceBody(uri, await this.readText(uri));
+		}));
+	}
+
+	/**
+	 * Record the raw bodies of the nested (subtree) CLAUDE.md files {@link nestedMemoriesFor} last probed.
+	 *
+	 * These are the one config files no scan reaches: they are found by walking from the ACTIVE FILE up to its
+	 * workspace folder, so the store cannot enumerate them the way it enumerates `~/.claude`, and a blanket recursive
+	 * watch over a workspace folder is exactly the wrong price to pay for them. The context-budget panel and its
+	 * status-bar pill both cache the walk per active file, and each clears that cache in exactly ONE place - its
+	 * `onDidChange` handler (`clawdiusContextBudgetView`, `clawdiusContextBudgetStatusEntry`). So before this, an edit
+	 * to a nested file left its tokens frozen until some UNRELATED config change fired the event. Switching editors
+	 * does not clear the cache and never did; it only selects a different key, and switching back re-serves the same
+	 * stale entry. Under the old unconditional fire this was masked - any `~/.claude` write refreshed them
+	 * incidentally - which made the staleness intermittent rather than permanent.
+	 *
+	 * Bounded by tracking only the MOST RECENT chain rather than every file the user has visited. That is the right
+	 * bound because the chain is what a surface is showing right now (both consumers key on the active editor, and
+	 * both clear their WHOLE cache on a fire), and because `nestedDirChain` already caps a chain at 64 - so this is a
+	 * handful of small reads per scan in practice, and a set that cannot grow with session length.
+	 *
+	 * The tracked chain moving (the user activates an editor in a different directory) grows or shrinks the recorded
+	 * set, so the NEXT scan after that sees a different signature and fires once even if no file changed. That is a
+	 * single event per directory change, it cannot repeat - the consumers re-walk for the same active file and land
+	 * on the same chain - and paying it is what keeps this bounded instead of accumulating every file ever visited.
+	 */
+	private async recordNestedMemoryBodies(): Promise<void> {
+		// All in flight at once, not one after another: this is the longest of the pre-scan passes (`nestedDirChain`
+		// caps a chain at 64) and it sits on the critical path of every scan, so awaiting each read in turn would put
+		// up to 64 sequential round-trips ahead of the scan in a remote window. The reads are independent.
+		await Promise.all(this._nestedProbed.map(async key => {
+			const uri = URI.parse(key);
+			// Recorded even when absent (as ''), so CREATING a nested CLAUDE.md moves the signature too - the panel
+			// has to grow the new file's tokens, not just track edits to one it already listed.
+			this.recordSourceBody(uri, await this.readText(uri));
+		}));
 	}
 
 	/** A CLAUDE.md-family file the `claudeMdExcludes` setting suppresses (never the org-managed policy file). */
@@ -745,6 +1040,12 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 		const resource = r.scope === ConfigScope.Project ? URI.joinPath(r.baseDir, '.mcp.json') : URI.joinPath(r.baseDir, '.claude.json');
 		const json = await this.readJsonc<{ mcpServers?: Record<string, unknown> }>(resource);
 		const servers = json?.mcpServers ?? {};
+		// The item below models a server by NAME alone, but the Control Center's MCP rows render each server's
+		// transport / command / args and prune its discovered-tool list when that def changes - and they drop that
+		// cache only on `onDidChange`. So the `mcpServers` object goes into the fired signature, and ONLY it: the
+		// rest of `~/.claude.json` is per-project history and cost bookkeeping the CLI rewrites throughout a
+		// session, and folding that in would rebuild the whole tab on every message.
+		this.recordSourceBody(resource, JSON.stringify(servers));
 		return Object.keys(servers).sort().map(name => ({
 			id: this.id(r.key, ConfigSection.Mcp, name),
 			scope: r.scope, section: ConfigSection.Mcp, label: name, resource,
@@ -825,15 +1126,23 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 		const home = await this.pathService.userHome();
 		const key = folder.toString();
 		const items: IConfigItem[] = [];
+		const probed: string[] = [];
 		// A CLAUDE.md in any directory between the workspace folder and the active file's dir loads on demand
 		// (load_reason: nested_traversal) when Claude reads files there. nestedDirChain returns them outer-first.
 		for (const d of nestedDirChain(activeFile, folder)) {
 			const uri = URI.joinPath(d, 'CLAUDE.md');
 			if (this.excludedClaudeMd(uri, ConfigScope.Project)) { continue; }
+			// Probed, not found: the URI is remembered whether or not the file exists, because `isRelevant` and
+			// `recordNestedMemoryBodies` both have to cover the file being CREATED, not only edited.
+			probed.push(uri.toString());
 			const rel = extUriIgnorePathCase.relativePath(folder, uri) ?? 'CLAUDE.md';
 			const item = await this.memoryItem(ConfigScope.Project, key, rel, uri, false, home, true);
 			if (item) { items.push(item); }
 		}
+		// Publish the chain so a write to one of these files is both ACCEPTED by `isRelevant` and folded into the
+		// fired signature - the two legs the signature invariant needs, neither of which any scan can supply for a
+		// file whose location depends on which editor is active.
+		this._nestedProbed = probed;
 		return items;
 	}
 
@@ -874,7 +1183,13 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 	}
 
 	private async readJsonc<T>(uri: URI): Promise<T | undefined> {
-		const text = await this.readText(uri);
+		return this.parseJsoncBody<T>(await this.readText(uri));
+	}
+
+	/** Parse an already-read JSONC body; undefined for an absent or unparseable one. Split out of
+	 *  {@link readJsonc} for the callers that need the RAW text as well as the parse (see
+	 *  {@link recordSourceBody}) and must not read the file twice to get both. */
+	private parseJsoncBody<T>(text: string | undefined): T | undefined {
 		if (text === undefined) { return undefined; }
 		try { return parseJsonc<T>(text); } catch { return undefined; }
 	}
@@ -903,9 +1218,28 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 		return out;
 	}
 
-	// --- watching (correlated, non-recursive) ---
+	// --- watching (shared/uncorrelated; recursive only where a scan root nests) ---
 
+	/**
+	 * (Re)build the watch set for `roots`. A NO-OP when the root set is unchanged, which is the normal case: every
+	 * watch request below is derived purely from a root's `claudeDir` / `baseDir`, and those only move when the
+	 * workspace folders do. `_doRefresh` still drives this because it is the one place the resolved roots are in
+	 * hand (they need `pathService.userHome()`), so the guard - not the call site - is what stops the churn; that
+	 * also makes it impossible to lose a watch by forgetting a root transition, since every transition necessarily
+	 * passes through a refresh.
+	 *
+	 * ADDING A WATCH REQUEST HERE IS HALF A CHANGE: the scan has to fold the newly watched file into the fired
+	 * signature too, or the watch buys a scan per write and no refresh at all. See the signature invariant on
+	 * {@link IClawdiusConfigService.onDidChange} for the obligation, and {@link recordSourceBody} for the mechanism.
+	 * Note also that every request below is NON-RECURSIVE except commands / skills / rules: a non-recursive request
+	 * reports direct children only, which is what keeps `plugins/marketplaces/**` and `plugins/cache/**` out of the
+	 * watched set (deliberately - the marketplace catalogs are large and are covered through their sibling
+	 * `known_marketplaces.json` write instead; see {@link PLUGIN_REGISTRY_FILES}).
+	 */
 	private updateWatchers(roots: IScopeRoots[]): void {
+		const key = roots.map(r => r.key).join('\n');
+		if (key === this._watchedRootsKey) { return; }
+		this._watchedRootsKey = key;
 		this._watchers.clear();
 		const watched = new ResourceMap<boolean>();
 		const watch = (uri: URI, recursive: boolean) => {
@@ -913,6 +1247,9 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 			watched.set(uri, true);
 			try { this._watchers.add(this.fileService.watch(uri, { recursive, excludes: [] })); } catch { /* best-effort */ }
 		};
+		// The per-project auto memory lives under the GLOBAL root even for a Project scope, so its watch needs the
+		// global `.claude` directory rather than the project's own (see the loop below).
+		const globalClaudeDir = roots.find(r => r.scope === ConfigScope.Global)?.claudeDir;
 		for (const r of roots) {
 			watch(r.claudeDir, false);
 			watch(URI.joinPath(r.claudeDir, 'agents'), false);
@@ -920,13 +1257,41 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 			// commands + skills + rules nest sub-folders, so watch them recursively to catch edits within.
 			for (const sub of ['commands', 'skills', 'rules']) { watch(URI.joinPath(r.claudeDir, sub), true); }
 			watch(r.baseDir, false); // catches root CLAUDE.md / CLAUDE.local.md / .mcp.json / .claude.json / .claude creation
+			// `scanMemories` reads the per-project auto memory at `~/.claude/projects/<enc>/memory/MEMORY.md`, and
+			// nothing above reaches it: `claudeDir` is non-recursive (so it reports direct children of `~/.claude`
+			// only) and the recursive requests are limited to commands/skills/rules. It used to arrive anyway, as a
+			// side effect of ClaudeWorkflowObservationService installing an UNCORRELATED recursive watch over the
+			// whole `projects` tree - every transcript append in the corpus landed on the global bus and this
+			// store's subtree-prefix filter accepted it, which is precisely the coupling that made the Control
+			// Center rebuild about once a second. That request is correlated now, so its events never reach the
+			// global bus, and the auto memory needs a watch this store owns. ONE non-recursive folder per workspace
+			// folder cannot reinstate the storm: it sees `memory/` and nothing else, never a transcript.
+			if (globalClaudeDir && r.scope === ConfigScope.Project) {
+				watch(URI.joinPath(globalClaudeDir, 'projects', encodeProjectDir(r.baseDir), 'memory'), false);
+			}
 		}
 		this._watchers.add(this.fileService.onDidFilesChange((e: FileChangesEvent) => {
 			if (this.isRelevant(e, roots)) { this._refreshScheduler.schedule(); }
 		}));
 	}
 
+	/**
+	 * Whether `e` touches anything this store's snapshot or fired signature is built from.
+	 *
+	 * From a `baseDir` this accepts EXACTLY the four named files and nothing else, which is why a broad directory
+	 * such as the home dir or the managed-settings root can be watched cheaply without every unrelated write in it
+	 * scheduling a scan. Anything under a `claudeDir` is accepted wholesale (`affects` is a subtree prefix match),
+	 * minus the transcript pre-filter above.
+	 *
+	 * Widening any branch here is half a change, never a whole one: an accepted path that reaches no part of the
+	 * fired signature turns a dead event into a live instance of the signature invariant (see
+	 * {@link IClawdiusConfigService.onDidChange}). `managed-settings.json` is the standing example. It IS watched (it
+	 * is a direct child of the Managed root's `baseDir`) and the Effective tab does resolve it, so its events are
+	 * generated today and dropped right here; accepting them without also recording its body would buy nothing at all
+	 * (see {@link recordServerManagedBody} for why the body is not recorded yet).
+	 */
 	private isRelevant(e: FileChangesEvent, roots: IScopeRoots[]): boolean {
+		if (this.onlyTouchesTranscripts(e, roots)) { return false; }
 		for (const r of roots) {
 			if (e.affects(r.claudeDir)
 				|| e.affects(URI.joinPath(r.baseDir, 'CLAUDE.md'))
@@ -936,7 +1301,36 @@ export class ClawdiusConfigStore extends Disposable implements IClawdiusConfigSe
 				return true;
 			}
 		}
-		return false;
+		// The nested CLAUDE.md files a context-budget surface is showing (see {@link recordNestedMemoryBodies}).
+		// Matched by exact URI rather than by name-under-a-workspace-folder: a subtree CLAUDE.md nobody has asked
+		// about feeds no consumer, so accepting it would schedule a scan for a signature that cannot move. These
+		// events arrive on the workbench's own recursive workspace watch; this store adds no watch request for them.
+		return this._nestedProbed.some(key => e.affects(URI.parse(key)));
+	}
+
+	/**
+	 * Whether every path in `e` is transcript state under some root's `<claudeDir>/projects` (see
+	 * {@link isTranscriptPath} for the one carve-out). It has to be filtered here because
+	 * `FileChangesEvent.affects(claudeDir)` is a subtree prefix match (`doContains` with `includeChildren`), so it
+	 * answers true for ANY descendant of `~/.claude`, transcripts included. During an agent session that corpus is
+	 * appended to continuously, and each append was scheduling a full config rescan whose event then made the
+	 * Control Center rebuild its entire tab - a rebuild roughly once a second, driven by files no scan ever reads.
+	 *
+	 * Rejects only when the WHOLE event is transcript traffic. A batch that coalesces a transcript append with a
+	 * real config write still refreshes: the config write is the fact that matters, and losing it would be a far
+	 * worse failure than one redundant scan. An empty event (no raw paths) is likewise not rejected here - it
+	 * falls through to the `affects` checks exactly as before, which answer false for it anyway.
+	 */
+	private onlyTouchesTranscripts(e: FileChangesEvent, roots: IScopeRoots[]): boolean {
+		const projectsRoots = roots.map(r => URI.joinPath(r.claudeDir, 'projects'));
+		let sawPath = false;
+		for (const group of [e.rawAdded, e.rawUpdated, e.rawDeleted]) {
+			for (const resource of group) {
+				sawPath = true;
+				if (!projectsRoots.some(projectsRoot => isTranscriptPath(resource, projectsRoot))) { return false; }
+			}
+		}
+		return sawPath;
 	}
 }
 // CLAWDIUS-END

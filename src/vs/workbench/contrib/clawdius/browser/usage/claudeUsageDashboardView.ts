@@ -423,7 +423,8 @@ export class ClaudeUsageDashboardView extends Disposable {
 			const err = append(inner, h('.clawdius-usage-empty'));
 			append(err, h('.clawdius-usage-empty-text')).textContent = localize('clawdius.usage.dash.statsError', "Couldn't read your local session stats from the Agent Host.");
 			const retry = append(err, h('button.clawdius-usage-refresh'));
-			retry.textContent = localize('clawdius.usage.dash.retry', "Retry");
+			this.refreshIcon(retry);
+			append(retry, h('span')).textContent = localize('clawdius.usage.dash.retry', "Retry");
 			this.renderStore.add(addDisposableListener(retry, EventType.CLICK, () => void this.refreshOnDemand()));
 		} else {
 			append(inner, h('.clawdius-usage-empty')).textContent = localize('clawdius.usage.dash.statsUnavailable', "No local session stats yet. Start a Claude Code session (with the Agent Host enabled) to see your usage here.");
@@ -434,6 +435,21 @@ export class ClaudeUsageDashboardView extends Disposable {
 		const block = append(parent, h('.clawdius-usage-block'));
 		append(block, h('.clawdius-usage-block-title')).textContent = text;
 		return block;
+	}
+
+	/** Prepends the leading refresh codicon to a `.clawdius-usage-refresh` button, built exactly the way the Control
+	 *  Center's `button()` helper builds its icons (icon span + separate label span) so the Usage tab's Refresh and
+	 *  Retry read as the same affordance as every other Refresh in the pane. The label MUST then be appended as its
+	 *  own span - setting `textContent` on the button would wipe this icon out.
+	 *
+	 *  No `codicon-modifier-spin` while a refresh is in flight: that modifier only animates a whitelist of glyphs
+	 *  (sync / loading / gear / notebook-state-executing, see `codicon-modifiers.css`), and `codicon-refresh` is not
+	 *  one of them, so the class would sit on the element doing nothing. The in-flight state is already carried by
+	 *  the "Refreshing…" label and the disabled attribute, and the Control Center's own Refresh buttons do not spin
+	 *  either - which is the consistency this icon is here to restore. Were it ever wanted, the whole hero is torn
+	 *  down and rebuilt on both edges of `refreshOnDemand`, so a state class applied here could never stick. */
+	private refreshIcon(button: HTMLElement): void {
+		append(button, h('span.clawdius-usage-refresh-ico')).classList.add(...ThemeIcon.asClassNameArray(Codicon.refresh));
 	}
 
 	private renderHero(parent: HTMLElement, account: IClaudeAccount, refreshedAt: Date | undefined): void {
@@ -472,8 +488,9 @@ export class ClaudeUsageDashboardView extends Disposable {
 
 		append(hero, h('.clawdius-usage-hero-spacer'));
 		const refresh = append(hero, h('button.clawdius-usage-refresh')) as HTMLButtonElement;
+		this.refreshIcon(refresh);
 		// In-progress feedback: a cold recompute takes a few seconds, so reflect it instead of a static label.
-		refresh.textContent = this.refreshing
+		append(refresh, h('span')).textContent = this.refreshing
 			? localize('clawdius.usage.dash.refreshing', "Refreshing…")
 			: localize('clawdius.usage.dash.refresh', "Refresh");
 		refresh.disabled = this.refreshing;

@@ -886,37 +886,92 @@ export class WorkflowAgentRowRenderer extends Disposable implements ITreeRendere
 	}
 }
 
-// --- the three distinct display states --------------------------------------------------------------
+// --- the four distinct display states --------------------------------------------------------------
 
 export type WorkflowsDisplayState =
 	| { readonly kind: 'tree'; readonly runs: readonly WorkflowRun[] }
 	| { readonly kind: 'empty' }
 	| { readonly kind: 'read-error'; readonly message: string }
-	| { readonly kind: 'no-match' };
+	/** Runs were read, and a CONTENT filter matched none of them. Carries WHICH of the two content dimensions is
+	 *  narrowing, so the message can name it: with the dropdown panel collapsed the status filter is not on screen
+	 *  at all, and it survives a restart - a message that named no dimension left the developer with an empty pane,
+	 *  an empty text box, and nothing to act on. Carries the one-click "Clear Filters" action for the same reason. */
+	| { readonly kind: 'no-match'; readonly queryActive: boolean; readonly statusFilterActive: boolean }
+	/** Runs were read, and some of them survive every CONTENT filter - but the workspace-scope filter withheld every
+	 *  one of those. Carries the count so the message can say what was withheld, and `contentFilterActive` so the
+	 *  message can never claim "no workflow runs match the open folder" while a text/status filter is what emptied
+	 *  this workspace's own share of them. The only state with the one-click widen action. */
+	| { readonly kind: 'out-of-scope'; readonly matchedElsewhere: number; readonly contentFilterActive: boolean };
+
+/** Why the DISPLAYED run list came back empty - the independent facts {@link resolveWorkflowsDisplayState} needs to
+ *  tell the four empty outcomes apart. Replaces the old bare `filterActive: boolean`, which cannot encode a third
+ *  outcome and, stacked as several booleans, would admit illegal combinations. The two CONTENT dimensions are kept
+ *  apart rather than pre-collapsed into one `contentFilterActive`, because the `no-match` message has to name which
+ *  one is narrowing - the collapsed form is derived where it is needed ({@link workflowsContentFilterActive}). */
+export interface IWorkflowsEmptyDiagnosis {
+	/** Whether the free-text query is non-empty. */
+	readonly queryActive: boolean;
+	/** Whether the status filter is narrower than `all`. */
+	readonly statusFilterActive: boolean;
+	/** How many runs the WORKSPACE-SCOPE stage withheld that pass every content filter - i.e. how many relaxing the
+	 *  scope to All Workspaces would put back on screen. Zero whenever the list is non-empty. */
+	readonly matchedElsewhere: number;
+}
+
+/** Whether ANY content filter is narrowing - the collapsed form of the diagnosis's two content dimensions. The
+ *  workspace scope is deliberately NOT folded in: it is the separate `matchedElsewhere` fact. */
+function workflowsContentFilterActive(empty: IWorkflowsEmptyDiagnosis): boolean {
+	return empty.queryActive || empty.statusFilterActive;
+}
 
 /**
- * Resolve which of the three (or the populated-tree) states the view should show, purely off the seam's envelope
- * plus whether a filter is currently active. `filterActive` distinguishes the two ways a run list can come back
- * empty: nothing was read at all (`empty`) versus runs were read but the active filter matched none of them
- * (`no-match`). The view sets it from the live filter (see `claudeWorkflowsView.ts`), so both are reachable.
+ * Resolve which of the four (or the populated-tree) states the view should show, purely off the seam's envelope
+ * plus the empty-list diagnosis. The diagnosis distinguishes the ways a run list can come back empty: nothing was
+ * read at all (`empty`); runs were read but the active content filter matched none of them (`no-match`); or runs
+ * DO survive the content filters and the workspace scope alone is withholding them (`out-of-scope`).
+ *
+ * `out-of-scope` OUTRANKS `no-match`: it is only reachable when relaxing the scope alone would put runs back on
+ * screen, which makes "No workflow runs match the current filter." not merely vague but false - runs do match, they
+ * are being withheld by scope. The more specific, actionable diagnosis wins.
  */
-export function resolveWorkflowsDisplayState(result: WorkflowRunListResult, filterActive: boolean): WorkflowsDisplayState {
+export function resolveWorkflowsDisplayState(result: WorkflowRunListResult, empty: IWorkflowsEmptyDiagnosis): WorkflowsDisplayState {
 	if (result.state === 'read-error') {
 		return { kind: 'read-error', message: result.message };
 	}
 	if (result.runs.length === 0) {
-		return filterActive ? { kind: 'no-match' } : { kind: 'empty' };
+		const contentFilterActive = workflowsContentFilterActive(empty);
+		if (empty.matchedElsewhere > 0) {
+			return { kind: 'out-of-scope', matchedElsewhere: empty.matchedElsewhere, contentFilterActive };
+		}
+		return contentFilterActive
+			? { kind: 'no-match', queryActive: empty.queryActive, statusFilterActive: empty.statusFilterActive }
+			: { kind: 'empty' };
 	}
 	return { kind: 'tree', runs: result.runs };
 }
 
+/** The affordances the non-tree states can offer. An object, not a bare callback, because three distinct states now
+ *  carry distinct actions and positional callbacks would be trivially transposable at a call site. */
+export interface IWorkflowsStateActions {
+	/** The `read-error` state's "Read Again": the same `listWorkflows` RE-ENUMERATION, never a run control. */
+	readonly onReadAgain: () => void;
+	/** The `out-of-scope` state's "Show All Workspaces": widens the view's OWN workspace-scope filter (and persists
+	 *  it). Never a re-read - the runs are already in hand, only the predicate changes. */
+	readonly onShowAllWorkspaces: () => void;
+	/** The `no-match` state's "Clear Filters": resets BOTH content filters (the persisted status filter and the
+	 *  session-only text query) to their non-narrowing defaults. Never a re-read, and never the workspace scope -
+	 *  that dimension has its own action on its own state. */
+	readonly onClearFilters: () => void;
+}
+
 /**
- * Paint one of the three non-tree states into `container` as a message overlay - distinct icon + distinct text per
- * state, so empty / read-error / no-match are visually distinguishable at a glance. The read-error state carries
- * the "Read again" affordance, wired to `onReadAgain` (the same `listWorkflows` RE-ENUMERATION the view already
- * calls on refresh - never a run control).
+ * Paint one of the four non-tree states into `container` as a message overlay - distinct icon + distinct text per
+ * state, so empty / read-error / no-match / out-of-scope are visually distinguishable at a glance. The read-error
+ * state carries the "Read Again" affordance, wired to `actions.onReadAgain` (the same `listWorkflows`
+ * RE-ENUMERATION the view already calls on refresh - never a run control); `out-of-scope` carries the one-click
+ * "Show All Workspaces" widen, wired to `actions.onShowAllWorkspaces`.
  */
-export function renderWorkflowsStateMessage(container: HTMLElement, state: Exclude<WorkflowsDisplayState, { kind: 'tree' }>, onReadAgain: () => void): IDisposable {
+export function renderWorkflowsStateMessage(container: HTMLElement, state: Exclude<WorkflowsDisplayState, { kind: 'tree' }>, actions: IWorkflowsStateActions): IDisposable {
 	clearNode(container);
 	container.setAttribute('data-clawdius-workflows-state', state.kind);
 	const store = new DisposableStore();
@@ -933,11 +988,16 @@ export function renderWorkflowsStateMessage(container: HTMLElement, state: Exclu
 			append(container, $('.clawdius-workflows-state-text')).textContent =
 				localize('clawdius.workflows.empty', "No Claude Code workflow runs found under your Claude config root.");
 			break;
-		case 'no-match':
+		case 'no-match': {
 			appendStateIcon(Codicon.filter);
 			append(container, $('.clawdius-workflows-state-text')).textContent =
-				localize('clawdius.workflows.noMatch', "No workflow runs match the current filter.");
+				describeNoMatchState(state.queryActive, state.statusFilterActive);
+			const actionContainer = append(container, $('.clawdius-workflows-state-action'));
+			const button = store.add(new Button(actionContainer, { ...defaultButtonStyles }));
+			button.label = localize('clawdius.workflows.clearFilters', "Clear Filters");
+			store.add(button.onDidClick(() => actions.onClearFilters()));
 			break;
+		}
 		case 'read-error': {
 			appendStateIcon(Codicon.error);
 			append(container, $('.clawdius-workflows-state-text')).textContent = state.message.length > 0
@@ -946,10 +1006,70 @@ export function renderWorkflowsStateMessage(container: HTMLElement, state: Exclu
 			const actionContainer = append(container, $('.clawdius-workflows-state-action'));
 			const button = store.add(new Button(actionContainer, { ...defaultButtonStyles }));
 			button.label = localize('clawdius.workflows.readAgain', "Read Again");
-			store.add(button.onDidClick(() => onReadAgain()));
+			store.add(button.onDidClick(() => actions.onReadAgain()));
+			break;
+		}
+		case 'out-of-scope': {
+			// A DIFFERENT icon from `empty`'s inbox and `no-match`'s filter: this is a SCOPE fact, not an emptiness
+			// fact and not a content-filter fact, and the three must stay distinguishable at a glance.
+			appendStateIcon(Codicon.folder);
+			append(container, $('.clawdius-workflows-state-text')).textContent = describeOutOfScopeState(state.matchedElsewhere, state.contentFilterActive);
+			const actionContainer = append(container, $('.clawdius-workflows-state-action'));
+			const button = store.add(new Button(actionContainer, { ...defaultButtonStyles }));
+			button.label = localize('clawdius.workflows.showAllWorkspaces', "Show All Workspaces");
+			store.add(button.onDidClick(() => actions.onShowAllWorkspaces()));
 			break;
 		}
 	}
 	return store;
+}
+
+/**
+ * The `no-match` state's sentence: which CONTENT dimension is actually narrowing, named. "No workflow runs match
+ * the current filter." was true but unactionable - with the dropdown panel collapsed the status filter is not on
+ * screen, and it survives a restart, so the only filter control the developer could SEE was the (demonstrably
+ * empty) text box. Naming the dimension is what turns the pane from "broken" into "over-filtered".
+ *
+ * The no-dimension branch is unreachable through {@link resolveWorkflowsDisplayState} (which only returns
+ * `no-match` when a content filter IS active) and is kept as the honest generic fallback rather than as an
+ * assertion, so a direct caller can never render a blank line.
+ */
+function describeNoMatchState(queryActive: boolean, statusFilterActive: boolean): string {
+	if (queryActive && statusFilterActive) {
+		return localize('clawdius.workflows.noMatch.both', "No workflow runs match the filter text and the selected status.");
+	}
+	if (queryActive) {
+		return localize('clawdius.workflows.noMatch.query', "No workflow runs match the filter text.");
+	}
+	if (statusFilterActive) {
+		return localize('clawdius.workflows.noMatch.status', "No workflow runs match the selected status.");
+	}
+	return localize('clawdius.workflows.noMatch', "No workflow runs match the current filter.");
+}
+
+/**
+ * The `out-of-scope` state's sentence. FOUR distinct strings, not one with a substituted noun: with a content
+ * filter active, the unqualified "No workflow runs were recorded under an open folder." would be flatly FALSE -
+ * an open folder may hold hundreds of runs, none of which match the query - which is the same class of lie the
+ * `no-match` state avoids in the other direction (runs DO match, the scope is withholding them). Singular/plural
+ * are separate keys rather than a pluralized placeholder, matching how every other count string in this file is
+ * written.
+ *
+ * The sentences describe the RECORDED PROJECT DIRECTORY, never workspace membership, because the directory name is
+ * the only fact in hand. `matchesWorkflowWorkspaceScope` compares a lossy, non-invertible encoding of the launching
+ * process's working directory against the open folders' own encodings; a run that failed that compare may still
+ * belong to this project (a symlinked or sibling checkout), and one that passed it may not. Saying "1 run is in
+ * another workspace" asserted membership the model cannot support - the same overclaim the rest of this file is
+ * built to avoid (the `no-match`/`empty` split, the never-fabricated agent count).
+ */
+function describeOutOfScopeState(matchedElsewhere: number, contentFilterActive: boolean): string {
+	if (contentFilterActive) {
+		return matchedElsewhere === 1
+			? localize('clawdius.workflows.outOfScope.filtered.one', "No matching workflow runs were recorded under an open folder. 1 matching run was recorded under a different project directory.")
+			: localize('clawdius.workflows.outOfScope.filtered.many', "No matching workflow runs were recorded under an open folder. {0} matching runs were recorded under different project directories.", matchedElsewhere);
+	}
+	return matchedElsewhere === 1
+		? localize('clawdius.workflows.outOfScope.one', "No workflow runs were recorded under an open folder. 1 run was recorded under a different project directory.")
+		: localize('clawdius.workflows.outOfScope.many', "No workflow runs were recorded under an open folder. {0} runs were recorded under different project directories.", matchedElsewhere);
 }
 // CLAWDIUS-END

@@ -721,6 +721,23 @@ suite('Clawdius Claude Code Ultracode Workflows - validated model + root envelop
 		assert.strictEqual(run.kind, 'live');
 	});
 
+	test('every enumerated run carries the projects/<enc> directory it was walked out of, verbatim - terminal, live, and unknown-shape alike', async () => {
+		// The join key the view's workspace-scope filter compares against. It is bound ONCE per project dir in the
+		// enumeration walk, so a run kind that forgot to carry it would silently drop out of "This Workspace".
+		const fs = makeFs();
+		await stageManifest(fs, 'wf_terminal-run', terminalManifest());
+		await stageManifest(fs, 'wf_unknown-run', { status: 'not-a-terminal-status' });
+		await stageJournal(fs, 'wf_live-run', [{ type: 'started', agentId: 'a1' }]);
+		const res = await makeService(fs).listWorkflows(RESOLVED);
+		assert.strictEqual(res.state, 'ok');
+		assert.deepStrictEqual(res.runs.map(r => ({ runId: r.runId, kind: r.kind, projectDirName: r.projectDirName })), [
+			// Runs sort by sessionId then runId; all three share one session, so live < terminal < unknown.
+			{ runId: 'wf_live-run', kind: 'live', projectDirName: encodeProjectDir(FOLDER) },
+			{ runId: 'wf_terminal-run', kind: 'terminal', projectDirName: encodeProjectDir(FOLDER) },
+			{ runId: 'wf_unknown-run', kind: 'unknown-shape', projectDirName: encodeProjectDir(FOLDER) },
+		]);
+	});
+
 	test('an unrecognized manifest carries kind:"unknown-shape"', async () => {
 		const fs = makeFs();
 		await stageManifest(fs, 'wf_a1b2c3d4-e5f', { totallyDifferent: true });

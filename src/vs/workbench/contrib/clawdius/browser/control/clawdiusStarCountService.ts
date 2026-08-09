@@ -6,11 +6,17 @@
 // CLAWDIUS-BEGIN star-count service (#star)
 // Reads the Clawdius repo's aggregate GitHub star count for the "Star on GitHub" button's count pill. It issues a
 // SINGLE unauthenticated GET https://api.github.com/repos/chapmanjw/clawdius -> stargazers_count - the same call
-// class the update service already ships (clawdiusUpdateService.ts). Zero-egress contract: the request fires ONLY
-// when the user opens the Control Center (renderTabs calls getStarCount), never on a timer, never at startup, and
-// it fails SILENTLY (resolves undefined) so the button always renders - offline just drops the pill. The result is
-// memoized for the session so re-rendering / tab-switching does not re-fetch. Routed through IRequestService, which
-// proxies to the main process, so there is no renderer CORS concern (mirrors the update service).
+// class the update service already ships (clawdiusUpdateService.ts). Zero-egress contract: nothing is requested on
+// a timer or at startup; the ONE request per session is kicked off by the Control Center rendering its tab strip,
+// and it fails SILENTLY (resolves undefined) so the button always renders - offline just drops the pill. Routed
+// through IRequestService, which proxies to the main process, so there is no renderer CORS concern (mirrors the
+// update service).
+//
+// "Once per session" is a property of the memo below, not of the call site, and the distinction is load-bearing:
+// renderTabs runs on EVERY render of the pane, not once per open. A memo that latched only on SUCCESS therefore
+// re-armed the request after every failure and turned an offline machine, or a tripped GitHub rate limit (60/hr
+// unauthenticated - which a request per render trips on its own), into an unbounded request loop for the rest of
+// the session. The attempt is what is remembered here, so a failure is as final as a success.
 
 import { CancellationTokenSource } from '../../../../../base/common/cancellation.js';
 import { createDecorator } from '../../../../../platform/instantiation/common/instantiation.js';
@@ -39,8 +45,10 @@ export interface IClawdiusStarCountService {
 	/** The star count if it has already been fetched this session, else undefined (synchronous, for immediate render). */
 	readonly cachedCount: number | undefined;
 	/**
-	 * Fetch the repo's `stargazers_count` once per session (memoized) and return it, or `undefined` on any error /
-	 * offline. Never throws - the caller renders the button with no pill when this resolves undefined.
+	 * Fetch the repo's `stargazers_count` and return it, or `undefined` on any error / offline. Never throws - the
+	 * caller renders the button with no pill when this resolves undefined. At most ONE request is made per session
+	 * however often this is called: the ATTEMPT is memoized, so a failure resolves `undefined` from then on rather
+	 * than re-issuing the request.
 	 */
 	getStarCount(): Promise<number | undefined>;
 }
@@ -50,6 +58,10 @@ export class ClawdiusStarCountService implements IClawdiusStarCountService {
 	declare readonly _serviceBrand: undefined;
 
 	private _cached: number | undefined;
+	/** Whether the one allowed attempt has already completed - EITHER outcome. Separate from `_cached` because a
+	 *  failed attempt has no count to remember, and `_cached === undefined` alone cannot tell "never asked" from
+	 *  "asked and got nothing"; conflating them is what let a failure re-arm the request on the next render. */
+	private _settled = false;
 	private _inFlight: Promise<number | undefined> | undefined;
 
 	constructor(
@@ -62,7 +74,7 @@ export class ClawdiusStarCountService implements IClawdiusStarCountService {
 	}
 
 	getStarCount(): Promise<number | undefined> {
-		if (this._cached !== undefined) {
+		if (this._settled) {
 			return Promise.resolve(this._cached);
 		}
 		if (!this._inFlight) {
@@ -92,9 +104,12 @@ export class ClawdiusStarCountService implements IClawdiusStarCountService {
 			return count;
 		} catch (err) {
 			// Fail-silent by design: the button renders with no pill. Trace only (never a user-facing error).
+			// `asJson` throws on any non-2xx, so a rate-limit response lands here alongside a genuine network error.
 			this.logService.trace(`[clawdius-star] star-count fetch failed: ${err instanceof Error ? err.message : String(err)}`);
 			return undefined;
 		} finally {
+			// In the `finally`, so the attempt latches on the error path too - that is the whole point (see _settled).
+			this._settled = true;
 			this._inFlight = undefined;
 			source.dispose();
 		}

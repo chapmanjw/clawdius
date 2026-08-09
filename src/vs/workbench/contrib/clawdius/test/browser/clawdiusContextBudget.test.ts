@@ -300,10 +300,13 @@ suite('clawdiusContextBudget', () => {
 	test('encodeProjectDir replaces every non-alphanumeric (matching Claude Code projects/<enc>)', () => {
 		// Verified against real ~/.claude/projects names: a dot flips to '-' too, not just separators (the bug
 		// was replacing only [\\/:], which left '.' intact and mismatched the real dir for any dotted path).
-		// Drive-letter paths make fsPath platform-dependent, so pin the behavior with separator-only paths whose
-		// fsPath is identical on Windows and POSIX.
 		assert.strictEqual(encodeProjectDir(URI.file('/Users/x/my.app')), '-Users-x-my-app');
 		assert.strictEqual(encodeProjectDir(URI.file('/x/.config')), '-x--config'); // separator + dot => two dashes
+		// A DRIVE-LETTER path encodes identically on Windows and POSIX, and the encoded drive letter is LOWER-CASE:
+		// `URI.fsPath` lower-cases it, so this NEVER matches the uppercase `C--...` directories Claude Code actually
+		// writes. That mismatch is why every comparison against a project dir name (the Workflows view's
+		// workspace-scope filter) is case-folded; without this assertion the lower-casing stays invisible in CI.
+		assert.strictEqual(encodeProjectDir(URI.file('C:\\Users\\x\\proj')), 'c--Users-x-proj');
 	});
 
 	test('isClaudeMdExcluded matches an absolute path or a glob, case-insensitively when asked', () => {

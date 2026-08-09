@@ -46,6 +46,19 @@ interface WorkflowRunBase {
 	readonly completeness: CompletenessState;
 	/** Which adapter/shape produced the run, so a schema shift across Claude CLI versions is detectable. */
 	readonly adapterVersion: AdapterVersionStamp;
+	/** The `projects/<dir>` directory this run's artifacts were walked out of, VERBATIM. This is Claude Code's own
+	 *  LOSSY encoding of the launching process's working directory (every non-alphanumeric replaced with '-'), not a
+	 *  path and not invertible - it is never decoded back to a location and never read from. Carried as the raw
+	 *  OBSERVED name so the (fallible, case-variant, many-to-one) comparison against the open workspace folders stays
+	 *  OUT of enumeration and lives in {@link matchesWorkflowWorkspaceScope}, which each surface re-runs against the
+	 *  CURRENT folder set - a set that changes while the pane is open, with no re-walk of the corpus.
+	 *
+	 *  REQUIRED, deliberately: on this model `?` means "the on-disk source did not record it" (see
+	 *  {@link LiveWorkflowRun}'s comment and {@link TerminalWorkflowRun.agentCount}). This is not a READ field - it is
+	 *  a fact about where the seam walked, held in hand at every construction site - so marking it optional would
+	 *  assert a legitimate-absence case that cannot occur, and would make a future seam path that genuinely forgot to
+	 *  set it indistinguishable from an honest gap. A bare `string` also adds no import, so this layer stays pure. */
+	readonly projectDirName: string;
 }
 
 /** One landed result on a still-live run: an agent's `result` journal payload, reduced to a safe preview. A
@@ -239,6 +252,80 @@ export type WorkflowRunListResult =
 	| { readonly state: 'ok'; readonly runs: readonly WorkflowRun[] }
 	| { readonly state: 'partial'; readonly runs: readonly WorkflowRun[]; readonly message: string }
 	| { readonly state: 'read-error'; readonly runs: readonly []; readonly message: string };
+
+// --- workspace scope ---------------------------------------------------------------------------------------------
+//
+// The scope vocabulary + its predicate live HERE, in the pure `common/` layer, rather than beside the SelectBox that
+// drives them. TWO surfaces apply this exact rule to the exact same run set - the Workflows pane's list and the
+// activity-bar badge the observation service registers for the pane's container - and the two must never disagree
+// about what "this workspace" contains. The service cannot import the predicate from the view (the view already
+// imports the snapshot type and the container id FROM the service, so the reverse edge would close an import
+// cycle), and both can reach `common/`. Nothing added here takes an import, so this layer stays pure.
+
+/** Whether the Workflows surface is limited to the runs attributable to the currently-open workspace folder(s), or
+ *  shows every run under the Claude config root. A `const enum` with string values, matching the pane's sibling
+ *  filter/sort enums - the values are what is PERSISTED, so they must stay stable. */
+export const enum WorkflowWorkspaceScope {
+	ThisWorkspace = 'this-workspace',
+	AllWorkspaces = 'all-workspaces',
+}
+
+/** The scope in force when nothing has been persisted yet. `this-workspace`: the config root is machine-global, so
+ *  an unscoped surface is dominated by other projects' runs. Read by BOTH the view's restore-from-storage and the
+ *  observation service's badge computation, so a fresh profile cannot have the badge counting one set of runs while
+ *  the pane lists another. */
+export const DEFAULT_WORKFLOW_WORKSPACE_SCOPE = WorkflowWorkspaceScope.ThisWorkspace;
+
+/** Whether a persisted string is a scope this build actually offers - a stored value from a newer (or corrupt)
+ *  profile reads as "never stored" and falls back to {@link DEFAULT_WORKFLOW_WORKSPACE_SCOPE}, never as a scope
+ *  nothing matches. */
+export function isWorkflowWorkspaceScope(value: string | undefined): value is WorkflowWorkspaceScope {
+	return value === WorkflowWorkspaceScope.ThisWorkspace || value === WorkflowWorkspaceScope.AllWorkspaces;
+}
+
+/**
+ * Whether a run belongs to `scope`. `all-workspaces` matches every run. `this-workspace` matches a run whose
+ * `projectDirName` equals, or sits UNDER, one of `workspaceKeys` - the CASE-FOLDED `encodeProjectDir` (see
+ * `clawdiusConfigStore.ts`) of each open folder.
+ *
+ * Three deliberate widenings, all of which can only SHOW a run, never hide one:
+ *  - The compare is CASE-FOLDED. `URI.fsPath` lower-cases the Windows drive letter, so `encodeProjectDir` always
+ *    yields `c--...` while Claude Code writes `C--...` on disk (measured: 135 of 140 real project dirs on this
+ *    machine). Exact equality would make this filter hide everything on Windows. Mirrors the same tolerance
+ *    `normalizePath` applies in claudeReaderSeamService.ts, for the same stated reason.
+ *  - The compare is a PREFIX match on the encoded path, not set membership. Claude Code records the LAUNCHING
+ *    process's working directory, which is the folder ROOT only when the developer happened to run `claude` from
+ *    the root - running it from `C:\repo\packages\api` in an open `C:\repo` writes `C--repo-packages-api`, and
+ *    Clawdius's OWN worktree isolation guarantees the mismatch (`getWorktreesRoot` locks the agent cwd to
+ *    `<repo>.worktrees/<branch>`, which encodes as `<repoKey>-worktrees-<branch>` and can never equal `<repoKey>`).
+ *    Exact membership dropped every one of those from the shipped default scope. The `-` separator is required, so
+ *    a folder `c--src-claw` cannot match a sibling repo `c--src-clawdius`; a genuine encoding collision
+ *    (`C:\src\claw-dius` under an open `C:\src\claw`) errs toward SURFACING the run.
+ *  - An EMPTY `workspaceKeys` (no folder open) matches every run: there is nothing to scope to, so the effective
+ *    scope is All Workspaces. Diverges DELIBERATELY from the seam's `coverageForEnum`, which labels a cwd-declaring
+ *    run `Foreign` with no folders open. That is right for a LABEL, which still SURFACES the run, and wrong for a
+ *    FILTER, which deletes it - applying a labelling rule to a hiding mechanism turns an honesty signal into data
+ *    loss.
+ *
+ * A run whose `projectDirName` is empty is unattributable and is likewise SHOWN, matching `coverageForEnum`'s
+ * missing-cwd branch: a filter must never hide what the seam itself declines to narrow.
+ *
+ * Deliberately NOT defended against: encoding collisions (`/a/b-c`, `/a-b/c` and `/a/b.c` all encode alike) and a
+ * cwd that is neither the folder nor under it (a symlinked or sibling checkout). The encoding is lossy and
+ * non-invertible; there is no honest way to disambiguate. The answer is that this is a USER-CHOSEN scope with a
+ * one-click escape hatch and an empty state that says how many runs it withheld - never a silent blank pane.
+ */
+export function matchesWorkflowWorkspaceScope(
+	run: WorkflowRun, scope: WorkflowWorkspaceScope, workspaceKeys: ReadonlySet<string>,
+): boolean {
+	if (scope === WorkflowWorkspaceScope.AllWorkspaces) { return true; }
+	if (workspaceKeys.size === 0 || run.projectDirName.length === 0) { return true; }
+	const key = run.projectDirName.toLowerCase();
+	for (const folderKey of workspaceKeys) {
+		if (key === folderKey || key.startsWith(`${folderKey}-`)) { return true; }
+	}
+	return false;
+}
 
 /** The persisted set of failure identities the developer has already seen (the awareness watermark) - a
  *  versioned identity SET, never a max-timestamp (which cannot classify a missing timestamp, a pre-open run, or

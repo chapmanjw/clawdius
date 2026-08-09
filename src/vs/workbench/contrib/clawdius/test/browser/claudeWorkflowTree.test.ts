@@ -6,8 +6,8 @@
 // CLAWDIUS-BEGIN Claude Code Ultracode Workflows - tree model + renderer tests
 // The WorkbenchObjectTree replacement for the manual-DOM row list: the discriminated tree-element union, the
 // 0/1/>1 phase-grouping rule, the fixed-height compact rows (no inline story/live-progress leaf - see
-// claudeWorkflowTree.ts's file header comment), the ownership-chrome split, and the three distinct
-// empty/read-error/no-match states. Renderer tests assert through the DOM the renderer actually produces
+// claudeWorkflowTree.ts's file header comment), the ownership-chrome split, and the four distinct
+// empty/read-error/no-match/out-of-scope states. Renderer tests assert through the DOM the renderer actually produces
 // (querySelector), not through exported-for-test-only template internals - the same posture
 // `claudeWorkflowTranscriptEditor.test.ts` takes with its pure `renderTranscriptSlice` helper.
 
@@ -27,13 +27,15 @@ import {
 	buildRunElement, buildTerminalRunChildren, buildWorkflowTreeChildren, computeUniformlyForeign, describeAgent,
 	describeCompletenessLabel, describeCoverageLabel, describeFreshnessLabel, describeOwnershipLabel,
 	describePhase, describeRunMetaParts, describeRunRow, describeRunStatusForAria, erroredAgentCount, IWorkflowRenderContext,
+	IWorkflowsEmptyDiagnosis, IWorkflowsStateActions,
 	renderWorkflowsStateMessage, resolveWorkflowsDisplayState, runStatusClass, WorkflowAgentRowRenderer,
 	WorkflowPhaseRowRenderer, WorkflowRunRowRenderer, WorkflowsDisplayState,
 	WorkflowTreeAccessibilityProvider, WorkflowTreeElement,
 	WorkflowTreeIdentityProvider, WorkflowTreeVirtualDelegate, workflowTreeElementId,
 } from '../../browser/workflows/claudeWorkflowTree.js';
 import {
-	matchesWorkflowFilter, matchesWorkflowStatusFilter, sortWorkflowRuns, WorkflowSortMode, WorkflowStatusFilter,
+	matchesWorkflowFilter, matchesWorkflowStatusFilter, matchesWorkflowWorkspaceScope, sortWorkflowRuns,
+	workflowFiltersAreNarrowing, WorkflowSortMode, WorkflowStatusFilter, WorkflowWorkspaceScope,
 } from '../../browser/workflows/claudeWorkflowsView.js';
 
 /** A default, inert {@link IWorkflowRenderContext} for a test that does not care about ownership/badges/staleness -
@@ -47,9 +49,14 @@ function fakeContext(overrides: Partial<IWorkflowRenderContext> = {}): IWorkflow
 	};
 }
 
+/** The `projects/<enc>` dir name every fixture run is attributed to, in the shape Claude Code actually writes on
+ *  Windows (an UPPERCASE drive letter - see the workspace-scope suite for why that matters). */
+const PROJECT_DIR = 'C--work-fixture-proj';
+
 const IDENTITY_BASE = {
 	ownership: 'foreign' as const, coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled,
 	completeness: CompletenessState.Complete, adapterVersion: { format: 'transcript-jsonl', versionKey: 'v1' },
+	projectDirName: PROJECT_DIR,
 };
 
 function terminalRun(overrides: Partial<TerminalWorkflowRun> = {}): TerminalWorkflowRun {
@@ -83,6 +90,7 @@ function unknownRun(overrides: Partial<UnrecognizedWorkflowRun> = {}): Unrecogni
 		kind: 'unknown-shape', sessionId, runId, identity: workflowRunIdentity(sessionId, runId),
 		ownership: 'foreign', coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled,
 		completeness: CompletenessState.UnknownShape, adapterVersion: { format: 'transcript-jsonl', versionKey: 'unknown-shape' },
+		projectDirName: PROJECT_DIR,
 		...overrides,
 	};
 }
@@ -609,83 +617,149 @@ suite('Clawdius Claude Code Ultracode Workflows - phase + agent renderers', () =
 	});
 });
 
-suite('Clawdius Claude Code Ultracode Workflows - the three distinct display states', () => {
+suite('Clawdius Claude Code Ultracode Workflows - the four distinct display states', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 	function okResult(runs: readonly WorkflowRun[]): WorkflowRunListResult {
 		return { state: 'ok', runs };
 	}
 
+	/** The empty-list diagnosis with everything at its "nothing is narrowing" default, so each test overrides only
+	 *  the one fact it is about. */
+	function diagnosis(overrides: Partial<IWorkflowsEmptyDiagnosis> = {}): IWorkflowsEmptyDiagnosis {
+		return { queryActive: false, statusFilterActive: false, matchedElsewhere: 0, ...overrides };
+	}
+
+	/** Render one non-tree state and snapshot what a developer would actually see, plus whichever action it wired.
+	 *  Every callback throws by default so a state that fires the WRONG one fails loudly rather than silently. */
+	function rendered(state: Exclude<WorkflowsDisplayState, { kind: 'tree' }>, actions: Partial<IWorkflowsStateActions> = {}) {
+		const container = $('div');
+		const store = renderWorkflowsStateMessage(container, state, {
+			onReadAgain: actions.onReadAgain ?? (() => { throw new Error(`state ${state.kind} must not re-read`); }),
+			onShowAllWorkspaces: actions.onShowAllWorkspaces ?? (() => { throw new Error(`state ${state.kind} must not widen the scope`); }),
+			onClearFilters: actions.onClearFilters ?? (() => { throw new Error(`state ${state.kind} must not clear the filters`); }),
+		});
+		const button = container.querySelector<HTMLElement>('.monaco-button');
+		const snapshot = {
+			iconClass: container.querySelector('.clawdius-workflows-state-icon')!.className,
+			text: container.querySelector('.clawdius-workflows-state-text')!.textContent,
+			buttonLabel: button?.textContent,
+		};
+		button?.click();
+		store.dispose();
+		return snapshot;
+	}
+
 	test('an ok read with runs resolves to the tree state, carrying those runs', () => {
 		const runs: readonly WorkflowRun[] = [terminalRun()];
-		assert.deepStrictEqual(resolveWorkflowsDisplayState(okResult(runs), false), { kind: 'tree', runs });
+		assert.deepStrictEqual(resolveWorkflowsDisplayState(okResult(runs), diagnosis()), { kind: 'tree', runs });
 	});
 
 	test('an ok/partial read with ZERO runs resolves to empty when no filter is active', () => {
-		assert.deepStrictEqual(resolveWorkflowsDisplayState(okResult([]), false), { kind: 'empty' });
-		assert.deepStrictEqual(resolveWorkflowsDisplayState({ state: 'partial', runs: [], message: 'oops' }, false), { kind: 'empty' });
+		assert.deepStrictEqual(resolveWorkflowsDisplayState(okResult([]), diagnosis()), { kind: 'empty' });
+		assert.deepStrictEqual(resolveWorkflowsDisplayState({ state: 'partial', runs: [], message: 'oops' }, diagnosis()), { kind: 'empty' });
 	});
 
 	test('a read-error ALWAYS resolves to read-error, even with a filter active - it is not the same as empty', () => {
-		assert.deepStrictEqual(resolveWorkflowsDisplayState({ state: 'read-error', runs: [], message: 'disk unreadable' }, false),
+		assert.deepStrictEqual(resolveWorkflowsDisplayState({ state: 'read-error', runs: [], message: 'disk unreadable' }, diagnosis()),
 			{ kind: 'read-error', message: 'disk unreadable' });
-		assert.deepStrictEqual(resolveWorkflowsDisplayState({ state: 'read-error', runs: [], message: 'disk unreadable' }, true),
+		assert.deepStrictEqual(resolveWorkflowsDisplayState({ state: 'read-error', runs: [], message: 'disk unreadable' }, diagnosis({ queryActive: true })),
 			{ kind: 'read-error', message: 'disk unreadable' });
 	});
 
-	test('zero runs WITH a filter active resolves to no-match, not empty - the two are opposite facts', () => {
-		assert.deepStrictEqual(resolveWorkflowsDisplayState(okResult([]), true), { kind: 'no-match' });
+	test('zero runs WITH a filter active resolves to no-match carrying WHICH dimension narrowed, not empty - the two are opposite facts', () => {
+		assert.deepStrictEqual([
+			resolveWorkflowsDisplayState(okResult([]), diagnosis({ queryActive: true })),
+			resolveWorkflowsDisplayState(okResult([]), diagnosis({ statusFilterActive: true })),
+			resolveWorkflowsDisplayState(okResult([]), diagnosis({ queryActive: true, statusFilterActive: true })),
+		], [
+			{ kind: 'no-match', queryActive: true, statusFilterActive: false },
+			{ kind: 'no-match', queryActive: false, statusFilterActive: true },
+			{ kind: 'no-match', queryActive: true, statusFilterActive: true },
+		]);
 	});
 
-	test('empty, read-error, and no-match are pairwise distinct icon + text in the rendered DOM', () => {
-		const rendered = (state: Exclude<WorkflowsDisplayState, { kind: 'tree' }>) => {
-			const container = $('div');
-			const store = renderWorkflowsStateMessage(container, state, () => { });
-			const snapshot = {
-				iconClass: container.querySelector('.clawdius-workflows-state-icon')!.className,
-				text: container.querySelector('.clawdius-workflows-state-text')!.textContent,
-			};
-			store.dispose();
-			return snapshot;
-		};
-		const empty = rendered({ kind: 'empty' });
-		const noMatch = rendered({ kind: 'no-match' });
-		const readError = rendered({ kind: 'read-error', message: 'disk unreadable' });
-		assert.notStrictEqual(empty.iconClass, noMatch.iconClass);
-		assert.notStrictEqual(empty.iconClass, readError.iconClass);
-		assert.notStrictEqual(noMatch.iconClass, readError.iconClass);
-		assert.notStrictEqual(empty.text, noMatch.text);
-		assert.notStrictEqual(empty.text, readError.text);
-		assert.notStrictEqual(noMatch.text, readError.text);
+	test('zero runs with matches WITHHELD BY SCOPE resolves to out-of-scope, which outranks no-match - the scope is the honest, actionable diagnosis', () => {
+		const okEmpty: WorkflowRunListResult = { state: 'ok', runs: [] };
+		assert.deepStrictEqual([
+			resolveWorkflowsDisplayState(okEmpty, diagnosis()),
+			resolveWorkflowsDisplayState(okEmpty, diagnosis({ queryActive: true })),
+			resolveWorkflowsDisplayState(okEmpty, diagnosis({ matchedElsewhere: 3 })),
+			resolveWorkflowsDisplayState(okEmpty, diagnosis({ statusFilterActive: true, matchedElsewhere: 3 })),
+		], [
+			{ kind: 'empty' },
+			{ kind: 'no-match', queryActive: true, statusFilterActive: false },
+			{ kind: 'out-of-scope', matchedElsewhere: 3, contentFilterActive: false },
+			{ kind: 'out-of-scope', matchedElsewhere: 3, contentFilterActive: true },
+		]);
 	});
 
-	test('only the read-error state carries the "Read again" affordance, and it calls the RE-ENUMERATION, not a control verb', () => {
+	test('empty, read-error, no-match and out-of-scope are pairwise distinct icon + text in the rendered DOM', () => {
+		const noop = { onReadAgain: () => { }, onShowAllWorkspaces: () => { }, onClearFilters: () => { } };
+		const states = [
+			rendered({ kind: 'empty' }),
+			rendered({ kind: 'no-match', queryActive: true, statusFilterActive: false }, noop),
+			rendered({ kind: 'read-error', message: 'disk unreadable' }, noop),
+			rendered({ kind: 'out-of-scope', matchedElsewhere: 2, contentFilterActive: false }, noop),
+		];
+		assert.deepStrictEqual({
+			distinctIcons: new Set(states.map(s => s.iconClass)).size,
+			distinctTexts: new Set(states.map(s => s.text)).size,
+		}, { distinctIcons: 4, distinctTexts: 4 });
+	});
+
+	test('each actionable state carries its OWN escape hatch and fires only that one - the empty state, which nothing can widen, carries none', () => {
 		let readAgainCalls = 0;
-		const onReadAgain = () => { readAgainCalls++; };
+		let clearCalls = 0;
+		assert.deepStrictEqual({
+			empty: rendered({ kind: 'empty' }).buttonLabel,
+			noMatch: rendered({ kind: 'no-match', queryActive: true, statusFilterActive: true }, { onClearFilters: () => { clearCalls++; } }).buttonLabel,
+			readError: rendered({ kind: 'read-error', message: 'disk unreadable' }, { onReadAgain: () => { readAgainCalls++; } }).buttonLabel,
+			readAgainCalls,
+			clearCalls,
+		}, { empty: undefined, noMatch: 'Clear Filters', readError: 'Read Again', readAgainCalls: 1, clearCalls: 1 });
+	});
 
-		const emptyContainer = $('div');
-		const emptyStore = renderWorkflowsStateMessage(emptyContainer, { kind: 'empty' }, onReadAgain);
-		assert.strictEqual(emptyContainer.querySelector('.monaco-button'), null);
-		emptyStore.dispose();
+	test('the no-match state NAMES the content dimension that is narrowing - the status filter is not even on screen while the dropdown panel is collapsed', () => {
+		const clear = { onClearFilters: () => { } };
+		assert.deepStrictEqual([
+			rendered({ kind: 'no-match', queryActive: true, statusFilterActive: false }, clear).text,
+			rendered({ kind: 'no-match', queryActive: false, statusFilterActive: true }, clear).text,
+			rendered({ kind: 'no-match', queryActive: true, statusFilterActive: true }, clear).text,
+		], [
+			'No workflow runs match the filter text.',
+			'No workflow runs match the selected status.',
+			'No workflow runs match the filter text and the selected status.',
+		]);
+	});
 
-		const noMatchContainer = $('div');
-		const noMatchStore = renderWorkflowsStateMessage(noMatchContainer, { kind: 'no-match' }, onReadAgain);
-		assert.strictEqual(noMatchContainer.querySelector('.monaco-button'), null);
-		noMatchStore.dispose();
-
-		const readErrorContainer = $('div');
-		const store = renderWorkflowsStateMessage(readErrorContainer, { kind: 'read-error', message: 'disk unreadable' }, onReadAgain);
-		const button = readErrorContainer.querySelector<HTMLElement>('.monaco-button')!;
-		assert.strictEqual(button.textContent, 'Read Again');
-		button.click();
-		assert.strictEqual(readAgainCalls, 1);
-		store.dispose();
+	test('the out-of-scope state names how many runs were recorded ELSEWHERE, singular and plural, and asserts only what the recorded project directory proves - never workspace membership', () => {
+		let widened = 0;
+		const widen = { onShowAllWorkspaces: () => { widened++; } };
+		const texts = [
+			rendered({ kind: 'out-of-scope', matchedElsewhere: 1, contentFilterActive: false }, widen),
+			rendered({ kind: 'out-of-scope', matchedElsewhere: 4, contentFilterActive: false }, widen),
+			rendered({ kind: 'out-of-scope', matchedElsewhere: 1, contentFilterActive: true }, widen),
+			rendered({ kind: 'out-of-scope', matchedElsewhere: 4, contentFilterActive: true }, widen),
+		];
+		assert.deepStrictEqual({ texts: texts.map(s => s.text), buttonLabels: texts.map(s => s.buttonLabel), widened }, {
+			texts: [
+				// "1 run is in another workspace" would assert membership a lossy, non-invertible directory encoding
+				// cannot support; what is actually known is the recorded project directory.
+				'No workflow runs were recorded under an open folder. 1 run was recorded under a different project directory.',
+				'No workflow runs were recorded under an open folder. 4 runs were recorded under different project directories.',
+				// With a content filter active the unqualified "No workflow runs were recorded under an open folder."
+				// would be FALSE: an open folder may hold hundreds, none of which match the query.
+				'No matching workflow runs were recorded under an open folder. 1 matching run was recorded under a different project directory.',
+				'No matching workflow runs were recorded under an open folder. 4 matching runs were recorded under different project directories.',
+			],
+			buttonLabels: ['Show All Workspaces', 'Show All Workspaces', 'Show All Workspaces', 'Show All Workspaces'],
+			widened: 4,
+		});
 	});
 
 	test('a read-error with an empty message falls back to an honest generic label, never a blank line', () => {
-		const container = $('div');
-		const store = renderWorkflowsStateMessage(container, { kind: 'read-error', message: '' }, () => { });
-		assert.strictEqual(container.querySelector('.clawdius-workflows-state-text')!.textContent, 'Claude Code workflow runs could not be read.');
-		store.dispose();
+		assert.strictEqual(rendered({ kind: 'read-error', message: '' }, { onReadAgain: () => { } }).text,
+			'Claude Code workflow runs could not be read.');
 	});
 });
 
@@ -748,6 +822,56 @@ suite('Clawdius Claude Code Ultracode Workflows - find/sort: the status-category
 			completed: [false, true, false, false],
 			failed: [false, false, true, false],
 		});
+	});
+});
+
+suite('Clawdius Claude Code Ultracode Workflows - find/sort: the workspace-scope filter', () => {
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('This Workspace matches any OPEN folder case-insensitively; All Workspaces matches everything; an empty folder set and an unattributable run are never hidden', () => {
+		// `encodeProjectDir` lower-cases the Windows drive letter (URI.fsPath does), while Claude Code writes `C--`
+		// on disk - so these keys are the case-FOLDED form the view compares against.
+		const keys = new Set(['c--work-proj-a', 'c--work-proj-b']);
+		const runs = [
+			terminalRun({ runId: 'r-folder-a', projectDirName: 'C--work-proj-a' }),   // the real Windows shape
+			terminalRun({ runId: 'r-folder-b', projectDirName: 'c--work-proj-b' }),   // multi-root: OR across folders
+			terminalRun({ runId: 'r-elsewhere', projectDirName: 'C--work-proj-z' }),
+			terminalRun({ runId: 'r-unattributed', projectDirName: '' }),
+		];
+		assert.deepStrictEqual({
+			thisWorkspace: runs.map(r => matchesWorkflowWorkspaceScope(r, WorkflowWorkspaceScope.ThisWorkspace, keys)),
+			allWorkspaces: runs.map(r => matchesWorkflowWorkspaceScope(r, WorkflowWorkspaceScope.AllWorkspaces, keys)),
+			noFolderOpen: runs.map(r => matchesWorkflowWorkspaceScope(r, WorkflowWorkspaceScope.ThisWorkspace, new Set())),
+		}, {
+			thisWorkspace: [true, true, false, true],
+			allWorkspaces: [true, true, true, true],
+			noFolderOpen: [true, true, true, true],
+		});
+	});
+
+	test('This Workspace matches a run launched from UNDER an open folder - a subdirectory or a `.worktrees` sibling - but never a sibling whose name merely starts the same', () => {
+		// Claude Code records the LAUNCHING process's cwd, which is the folder root only when the developer happened
+		// to run `claude` from the root. Exact set membership dropped every subdirectory launch, and every one of
+		// Clawdius's OWN worktree-isolated sessions (`getWorktreesRoot` locks the agent cwd to
+		// `<repo>.worktrees/<branch>`, which can never equal `<repo>`), from the shipped default scope.
+		const keys = new Set(['c--work-repo']);
+		const runs = [
+			terminalRun({ runId: 'r-root', projectDirName: 'C--work-repo' }),
+			terminalRun({ runId: 'r-subdir', projectDirName: 'C--work-repo-packages-api' }),
+			terminalRun({ runId: 'r-worktree', projectDirName: 'C--work-repo-worktrees-agent-fix' }),
+			terminalRun({ runId: 'r-sibling', projectDirName: 'C--work-repository' }),
+		];
+		assert.deepStrictEqual(
+			runs.map(r => matchesWorkflowWorkspaceScope(r, WorkflowWorkspaceScope.ThisWorkspace, keys)),
+			[true, true, true, false]);
+	});
+
+	test('the collapsed filter button reads NARROWING only when something is actually withheld - never merely because the scope is at its (withholding) default, and never for a sort choice', () => {
+		assert.deepStrictEqual([
+			workflowFiltersAreNarrowing(WorkflowStatusFilter.All, false),
+			workflowFiltersAreNarrowing(WorkflowStatusFilter.Failed, false),
+			workflowFiltersAreNarrowing(WorkflowStatusFilter.All, true),
+		], [false, true, true]);
 	});
 });
 
@@ -840,6 +964,25 @@ suite('Clawdius Claude Code Ultracode Workflows - find/sort: live pin among matc
 		const filtered = [matchingTerminal, nonMatchingLive].filter(r => matchesWorkflowFilter(r, 'audit'));
 		const ordered = sortWorkflowRuns(filtered, WorkflowSortMode.Recency);
 		assert.deepStrictEqual(ordered.map(r => r.runId), ['wf_terminal_match']);
+	});
+
+	test('the view\'s own composition, driven directly: scope, THEN status, THEN text, THEN sort - and an IN-SCOPE live run still pins first through all four stages', () => {
+		const keys = new Set(['c--mine']);
+		const runs = [
+			// Matches the query by runId (the only text-matchable field a live run has) AND is in scope, so it must
+			// survive every stage and still lead - the invariant the new scope stage is most likely to break.
+			liveRun({ runId: 'wf_live_audit_mine', projectDirName: 'C--mine' }),
+			liveRun({ runId: 'wf_live_audit_elsewhere', projectDirName: 'C--theirs' }),   // dropped by scope
+			terminalRun({ runId: 'wf_done_mine', projectDirName: 'C--mine', status: 'completed', workflowName: 'audit', timestamp: 20 }),
+			terminalRun({ runId: 'wf_failed_mine', projectDirName: 'C--mine', status: 'failed', workflowName: 'audit', timestamp: 10 }),
+			terminalRun({ runId: 'wf_done_elsewhere', projectDirName: 'C--theirs', status: 'completed', workflowName: 'audit', timestamp: 30 }),
+			terminalRun({ runId: 'wf_other_mine', projectDirName: 'C--mine', status: 'completed', workflowName: 'refactor', timestamp: 40 }), // dropped by text
+		];
+		const scoped = runs.filter(r => matchesWorkflowWorkspaceScope(r, WorkflowWorkspaceScope.ThisWorkspace, keys));
+		const statused = scoped.filter(r => matchesWorkflowStatusFilter(r, WorkflowStatusFilter.All));
+		const texted = statused.filter(r => matchesWorkflowFilter(r, 'audit'));
+		assert.deepStrictEqual(sortWorkflowRuns(texted, WorkflowSortMode.Recency).map(r => r.runId),
+			['wf_live_audit_mine', 'wf_done_mine', 'wf_failed_mine']);
 	});
 });
 // CLAWDIUS-END

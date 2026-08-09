@@ -204,12 +204,56 @@ export interface IConfirmedLoad {
 	readonly parentFilePath?: string;
 }
 
+/**
+ * A plugin-registry file directly under `~/.claude/plugins` - a small JSON index the Claude Code CLI rewrites on
+ * marketplace add / remove / update and on plugin install / update, and that the Control Center's Plugins tab
+ * re-reads whenever {@link IClawdiusConfigService.onDidChange} fires.
+ *
+ * The type exists to carry the signature invariant on that event (see `onDidChange`) next to the reads it governs
+ * instead of only in a doc comment somewhere else. Every name in {@link PLUGIN_REGISTRY_FILES} is folded into the
+ * store's fired signature by its scan, so a read that goes through the tab's `readPluginRegistry` cannot name a file
+ * the store does not record: the name has to join this union first, and joining it is both what makes the store
+ * record it and what puts it under the regression test that walks the same list.
+ *
+ * Its limit matters as much as its guarantee, because two files had already shipped in the "watched, re-read on the
+ * event, absent from the signature" state and both had to be found by a human. This does not make the third fail to
+ * build. Nothing routes reads through the typed accessor: `readJson` sits beside it in the same class and takes a
+ * bare URI (it is what reads the marketplace catalogs), so a future author who writes
+ * `readJson(URI.joinPath(pluginsDir, 'blocklist.json'))` compiles clean and ships the same defect. Treat the union
+ * as the named landing spot that makes the correct move the nearest one, not as a compiler-enforced gate.
+ *
+ * Deliberately NOT a member: `marketplaces/<name>/.claude-plugin/marketplace.json`, the browseable catalog the same
+ * tab reads. It is ~170KB for the official marketplace alone, so recording its body would push that much text
+ * through every scan's signature comparison. It does not need to be recorded: the CLI stamps `lastUpdated` into
+ * known_marketplaces.json on every marketplace refresh - a manual `claude plugin marketplace update` and a
+ * background `autoUpdate` alike - so a catalog rewrite always arrives with a known_marketplaces.json write beside
+ * it, and that write is what fires the event the tab re-reads every catalog on.
+ */
+export type PluginRegistryFile = 'known_marketplaces.json' | 'installed_plugins.json';
+
+/** Every {@link PluginRegistryFile}, in one place: the config store records each one's raw body into its fired
+ *  signature, and a regression test walks this same list, so a name added here is covered on both sides at once. */
+export const PLUGIN_REGISTRY_FILES: readonly PluginRegistryFile[] = ['known_marketplaces.json', 'installed_plugins.json'];
+
 /** Shared, container-wide config service: one scan + watcher set produces the snapshot the Control Center reads. */
 export const IClawdiusConfigService = createDecorator<IClawdiusConfigService>('clawdiusConfigService');
 
 export interface IClawdiusConfigService {
 	readonly _serviceBrand: undefined;
-	/** Fires whenever the on-disk configuration changes (a watched file is added / removed / edited). */
+	/**
+	 * Fires whenever the on-disk configuration changes (a watched file is added / removed / edited).
+	 *
+	 * EDGE-TRIGGERED, which puts an obligation on every subscriber - THE SIGNATURE INVARIANT: every file a consumer
+	 * re-reads in response to this event must contribute to the store's fired signature. The store fires only when a
+	 * scan produces a signature different from the last one, so a file that is watched and re-read here but reaches
+	 * no part of that signature is refreshed by nothing at all: the write schedules a scan, the scan comes out
+	 * byte-identical, and the consumer keeps serving pre-write data until the user finds a manual Refresh button.
+	 * `remote-settings.json` and `known_marketplaces.json` both shipped in exactly that state, and both were found by
+	 * hand rather than by a test. So before adding a read to a handler on this event, check that the store either
+	 * models that file in the snapshot or records its body (`ClawdiusConfigStore.recordSourceBody`); if it does
+	 * neither, the contribution belongs in the same change. The repair is never to fire unconditionally - that is the
+	 * ~1Hz Control Center rebuild, and the renderer memory blowup behind it, that the edge trigger exists to stop.
+	 */
 	readonly onDidChange: Event<void>;
 	/** The most recent snapshot. Empty until the first `refresh()` resolves. */
 	readonly snapshot: IClawdiusConfigSnapshot;

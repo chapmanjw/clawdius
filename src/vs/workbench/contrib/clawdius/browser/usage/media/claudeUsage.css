@@ -245,8 +245,16 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 	flex: 1 1 auto;
 }
 
+/* Refresh / Retry. `inline-flex` + `gap` rather than margin on the icon, so the leading codicon and the label sit
+on one centred line - the same construction as `.clawdius-control-btn` in the Control Center, which is what these
+two buttons are being made consistent with. `inline-flex` and not `flex`: the stats-error Retry is inline-level
+inside a `text-align: center` block, and blockifying it would stretch it across the full row. As a flex item of
+the hero it blockifies to `flex` anyway, so the hero band is unaffected. */
 .clawdius-usage-refresh {
 	flex: none;
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
 	cursor: pointer;
 	border: 1px solid var(--vscode-button-border, transparent);
 	border-radius: 2px;
@@ -255,6 +263,11 @@ Palette: brand orange (#d97757) for values/heatmap, lavender (#a78bfa) for highl
 	font-size: 12px;
 	color: var(--vscode-button-secondaryForeground, inherit);
 	background: var(--vscode-button-secondaryBackground, transparent);
+}
+
+/* Matches the Control Center's `.clawdius-control-btn .codicon` sizing so the glyph is the same size in both panes. */
+.clawdius-usage-refresh .codicon {
+	font-size: 13px;
 }
 
 .clawdius-usage-refresh:hover {

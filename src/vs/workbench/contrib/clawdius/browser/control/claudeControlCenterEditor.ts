@@ -24,7 +24,7 @@ import './media/claudeControlCenter.css';
 import { $ as h, addDisposableListener, append, clearNode, Dimension, EventType, size } from '../../../../../base/browser/dom.js';
 import { disposableTimeout } from '../../../../../base/common/async.js';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
-import { CancellationToken } from '../../../../../base/common/cancellation.js';
+import { CancellationToken, CancellationTokenSource } from '../../../../../base/common/cancellation.js';
 import { Codicon } from '../../../../../base/common/codicons.js';
 import { DisposableStore, MutableDisposable, toDisposable } from '../../../../../base/common/lifecycle.js';
 import { ThemeIcon } from '../../../../../base/common/themables.js';
@@ -52,7 +52,7 @@ import { IAgentHostService } from '../../../../../platform/agentHost/common/agen
 import { IClaudeMcpTool, IClaudeMcpToolDiscoveryResult } from '../../../../../platform/agentHost/common/claudeMcpToolDiscovery.js';
 import { ICommandService } from '../../../../../platform/commands/common/commands.js';
 import { ITerminalService, ITerminalGroupService } from '../../../terminal/browser/terminal.js';
-import { ConfigScope, ConfigSection, IClawdiusConfigService, IConfigItem } from '../../common/clawdiusConfig.js';
+import { ConfigScope, ConfigSection, IClawdiusConfigService, IConfigItem, PluginRegistryFile } from '../../common/clawdiusConfig.js';
 import { IClawdiusEffectiveConfigService, IEffectiveConfigResult } from './clawdiusEffectiveConfigService.js';
 import { formatStarCount, IClawdiusStarCountService } from './clawdiusStarCountService.js';
 import { IResolvedSetting, JsonValue, SettingsTier, TIER_RANK, isManagedTier } from '../../common/clawdiusEffectiveConfig.js';
@@ -108,6 +108,16 @@ interface IBucketMeta { readonly bucket: PermissionBucket; readonly label: strin
 interface ISkillRow { readonly name: string; readonly description?: string; readonly origins: string[]; readonly items: IConfigItem[] }
 /** A file inside an expanded skill package (the skill folder + one level into its subdirectories). */
 interface ISkillFileEntry { readonly name: string; readonly resource: URI; readonly isDirectory: boolean; readonly relPath: string; readonly isSkillMd: boolean }
+/**
+ * A lazily-read per-row cache entry, tagged with the {@link ClaudeControlCenterEditor.cacheGeneration} it was read
+ * at. The tag is what lets a config change mark the entry STALE instead of deleting it: the row keeps rendering
+ * the value it already has (no flash back to a "checking" / "Loading..." placeholder, and no collapse to a
+ * shorter-than-the-viewport pane that would clamp the scroll offset to the top) while the fresh read runs, and the
+ * fresh read then OVERWRITES it. Per-entry rather than one shared "stale" flag because the reads are issued for
+ * the VISIBLE rows only - a single flag cleared by a batch that covered three filtered-in skills would strand
+ * every other skill on its pre-change value with nothing left to re-arm it.
+ */
+interface IGenerationCached<T> { readonly generation: number; readonly value: T }
 /** A valid `plugin-id@marketplace-id` (no shell metacharacters, so it is safe to put in a terminal command). */
 export const PLUGIN_ID_RE = /^[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+$/;
 type BtnVariant = 'primary' | 'ghost' | 'link' | 'danger' | 'add';
@@ -166,6 +176,107 @@ export function canDeleteSkillFile(file: URI, folder: URI, isDirectory: boolean,
 	return !isDirectory && !isSkillMd && isEqualOrParent(file, folder) && !isEqual(file, folder);
 }
 // CLAWDIUS-END
+
+/**
+ * The scroll-preservation state machine behind the Control Center's full-pane rebuild, kept pure (offsets in,
+ * offsets out - no DOM) so its one hard case can be tested without a laid-out document.
+ *
+ * That hard case is why the obvious `const t = el.scrollTop; rebuild(); el.scrollTop = t;` does NOT work and makes
+ * the bug permanent. Assigning `Element.scrollTop` forces a synchronous layout and CLAMPS to the scroll range that
+ * exists at that instant, so a rebuild that lands momentarily shorter than the viewport (a lazily-loaded tab
+ * painting its "Loading..." state, say) turns the restore into 0 - and the NEXT rebuild then reads that 0 back as
+ * the offset worth preserving and faithfully restores the top of the pane. The fix is to treat the captured offset
+ * as a TARGET that survives a clamped restore: it is kept, not overwritten, until a rebuild tall enough to honour
+ * it actually lands on it.
+ *
+ * The escape hatch is the user, on two paths. Any scroll the pane did not itself cause abandons the target, so a
+ * rebuild can never yank the user back to where they were before they scrolled away - and any interaction with the
+ * pane abandons it too, which is the only way to retire a target stranded by a shortening the user asked for (see
+ * `abandonTarget`).
+ */
+export class ScrollAnchor {
+
+	private desired: number | undefined;
+	/** Where the pane is known to be, absent anything the anchor has not seen: the offset the last restore landed on,
+	 *  or the offset of the last observed user scroll. Any live offset that differs from it is a user scroll the
+	 *  anchor has not been told about yet, which is what makes the synchronous check in `beginRebuild` sound. */
+	private applied = 0;
+
+	/** The offset a rebuild is currently trying to reach, or `undefined` when the pane is simply following the
+	 *  user. Exposed for tests and for reasoning about the state machine; the pane itself does not read it. */
+	get pendingTarget(): number | undefined {
+		return this.desired;
+	}
+
+	/** Call at the START of a rebuild with the scroller's live offset; returns the offset to restore afterwards.
+	 *  A target retained from a previous clamped restore wins over the live offset, which is precisely the value a
+	 *  short intermediate render would otherwise have overwritten with 0.
+	 *
+	 *  The live offset is ALSO the escape hatch's synchronous half. `handleScroll` alone is not enough: scroll events
+	 *  are dispatched by the compositor during the frame's rendering steps, while a rebuild can be driven by a promise
+	 *  callback that runs between frames - so a user scroll can already have happened, and be visible in
+	 *  `currentScrollTop`, before its event fires. An offset that differs from the one the last restore landed on can
+	 *  only be the user (a clamped restore lands on `applied` by definition), so it abandons the target. */
+	beginRebuild(currentScrollTop: number): number {
+		if (this.desired !== undefined && currentScrollTop !== this.applied) { this.desired = undefined; }
+		if (this.desired === undefined) { this.desired = currentScrollTop; }
+		return this.desired;
+	}
+
+	/** Call at the END of a rebuild with the offset the scroller actually LANDED on (read back after assigning the
+	 *  target, so it reflects the browser's clamp). Reaching the target retires it; falling short keeps it for the
+	 *  next rebuild. Sub-pixel offsets make an exact comparison unsafe, hence the 1px tolerance. */
+	endRebuild(landedScrollTop: number): void {
+		this.applied = landedScrollTop;
+		if (this.desired !== undefined && Math.abs(landedScrollTop - this.desired) < 1) { this.desired = undefined; }
+	}
+
+	/** Call from the scroller's `scroll` event. Anything other than the offset the last restore landed on is the
+	 *  user moving the pane, and abandons the pending target.
+	 *
+	 *  The comparison is against the LANDED offset rather than a "we are restoring right now" flag because scroll
+	 *  events are dispatched asynchronously, after the restore's synchronous stack has already unwound - a flag
+	 *  raised and lowered around the assignment is always down by the time the event it was meant to suppress
+	 *  arrives. The one offset this cannot distinguish from a user scroll is the user landing back on exactly the
+	 *  clamped offset, which is unreachable in the case that matters: a restore clamps to 0 only when the content
+	 *  is shorter than the viewport, and then there is nothing to scroll.
+	 *
+	 *  A user scroll also becomes the new baseline, so `applied` keeps meaning "where the pane is". Without that,
+	 *  a `pin` issued after the user has scrolled would be discarded by `beginRebuild`'s check as if it were the
+	 *  user's own offset, and a tab switch would land on the offset of the tab being left. */
+	handleScroll(currentScrollTop: number): void {
+		if (currentScrollTop !== this.applied) {
+			this.desired = undefined;
+			this.applied = currentScrollTop;
+		}
+	}
+
+	/** Call when the USER acts on the pane - a pointer press, a keystroke - BEFORE the handler that acts on it runs.
+	 *  Retires any pending target.
+	 *
+	 *  This is the target's retirement condition, and it has to be an interaction rather than a measurement. A target
+	 *  is worth carrying past a clamped restore only while the shortening is transient (a lazily-loaded tab painting
+	 *  "Loading..." before its content lands). Nothing in the geometry separates that from a shortening the user
+	 *  ASKED for - collapsing an expanded skill, narrowing a list with the search box: both land at 0, both keep the
+	 *  target, and once there is no scroll range left neither `endRebuild` nor `handleScroll` can ever retire it -
+	 *  with nothing to scroll there is no scroll event to fire. The target would then outlive the interaction that
+	 *  stranded it and yank the next taller rebuild to an offset from before it.
+	 *
+	 *  An offset captured before a click cannot be where that click wants to leave the pane, so the click retires it.
+	 *  Only targets armed BEFORE the interaction die: the rebuild the interaction causes arms its own from the live
+	 *  offset, and `pin` re-arms after this (a `click` handler runs after the `pointerdown` that got here), so scroll
+	 *  is still preserved across a Refresh, an expand, and a tab switch. */
+	abandonTarget(): void {
+		this.desired = undefined;
+	}
+
+	/** Force the next rebuild to land on `scrollTop`, discarding any pending target (a tab switch starts at the
+	 *  top). Not the same as clearing the target: clearing it would make the next rebuild capture - and restore -
+	 *  the offset the tab being LEFT was scrolled to. */
+	pin(scrollTop: number): void {
+		this.desired = scrollTop;
+	}
+}
 
 /** The six documented `permissions.defaultMode` values, with a label/icon/tone for the scope-aware default-mode
  *  control. Deliberately distinct from the FOUR-value global session-start pill (clawdiusPermissionModeStatusEntry):
@@ -236,13 +347,33 @@ function legendTierSource(tier: SettingsTier): string {
 	}
 }
 
+/** Discriminates the DOM ids one pane mints from another's (see `capDescription`). Two Control Centers can be open
+ *  at once - a split editor group shows the same tab twice - and both render the same rows in the same order, so a
+ *  pane-local counter alone would mint the SAME id in both. `getElementById` resolves to the first match in the
+ *  document, so every `aria-describedby` in the second pane would then point at the first pane's description.
+ *  Bounded by the number of panes opened in the window, not by how often they re-render. */
+let controlCenterPaneSeq = 0;
+
 export class ClaudeControlCenterEditor extends EditorPane {
 
 	static readonly ID = 'workbench.editor.clawdiusControlCenter';
 
+	/** This pane's half of the description-id namespace; see {@link controlCenterPaneSeq}. */
+	private readonly paneId = controlCenterPaneSeq++;
+	/** The other half: a per-description counter, RESET at the top of every `render()`. Reset rather than
+	 *  monotonic because the pane rebuilds itself in full on every config change, tab switch and keystroke in a
+	 *  search box - a counter that only ever grew would climb without bound across a session. Resetting also makes
+	 *  an id STABLE: an unchanged row set is rebuilt in the same order, so a row keeps the id it had, which is what
+	 *  assistive tech caching accessible relations by id needs. Only `render()` mints ids (the MCP form's in-place
+	 *  subtree rebuild builds no capability rows), so nothing can allocate against a stale sequence. */
+	private capDescSeq = 0;
+
 	private container!: HTMLElement;
 	private content: HTMLElement | undefined;
 	private readonly renderStore = this._register(new DisposableStore());
+	/** Keeps the pane's scroll offset across a full rebuild. See {@link ScrollAnchor} for why the offset is a
+	 *  target that survives a clamped restore rather than a value saved and re-applied. */
+	private readonly scrollAnchor = new ScrollAnchor();
 	/** The horizontally-scrolling tab strip (`.clawdius-control-tabs-row`), tracked so `layout` can refresh the
 	 *  overflow-fade classes when the pane width changes; recreated on every `renderTabs`. */
 	private tabsRow: HTMLElement | undefined;
@@ -260,6 +391,10 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	private effectiveResult: IEffectiveConfigResult | undefined;
 	private effectiveToken = 0;
 	private effectiveLoading = false;
+	/** Set when a config change arrives while a resolve is already running. That resolve read the files BEFORE the
+	 *  change, so its answer is stale on arrival; the flag makes `loadEffective` re-enter instead of dropping the
+	 *  request, which is the difference between "the newest config always wins" and a confidently wrong table. */
+	private effectiveDirty = false;
 	/** A TERMINAL error state for the Effective resolve: while set, the tab shows the error + a Retry button and
 	 *  does NOT auto-reload, so a persistent failure can never loop into a render->load->fail->render storm. */
 	private effectiveError: string | undefined;
@@ -267,21 +402,30 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	private scope: ControlScope = 'global';
 	private tab: ControlTab = 'usage';
 	private snapshot: Snapshot | undefined;
-	/** The Usage tab hosts the shared usage dashboard view; kept alive only while that tab is showing. */
-	private readonly usageView = this._register(new MutableDisposable<ClaudeUsageDashboardView>());
+	/** The Usage tab hosts the shared usage dashboard view. The store holds the view AND the cancellation source
+	 *  driving its load, so leaving the tab (or a re-render remounting it) CANCELS the in-flight transcript
+	 *  aggregation instead of merely discarding its result - that aggregation walks the whole local corpus, and an
+	 *  abandoned one keeps running to completion, allocating all of it, for a pane nobody is looking at. */
+	private readonly usageView = this._register(new MutableDisposable<DisposableStore>());
 
-	// Skills tab package state (keyed by the skill folder fsPath). Caches are cleared on a config change; the
-	// generation counter bumps on every clear so a slower in-flight read never writes a stale result back.
+	// Skills tab package state (keyed by the skill folder fsPath). A config change bumps the generation counter,
+	// which marks every entry stale WITHOUT dropping it (see IGenerationCached) and invalidates any read still in
+	// flight, so a slower in-flight read can never write a stale result back over a fresher one.
 	private expandedSkill: string | undefined;
 	/** Plugin names whose skill group is EXPANDED on the Skills tab (default: collapsed - a plugin can bundle many
 	 *  skills, and an expanded-by-default group read as a wall of rows on first open). */
 	private readonly expandedSkillPlugins = new Set<string>();
 	private cacheGeneration = 0;
 	private isPaneDisposed = false;
-	private readonly skillValidations = new Map<string, ISkillValidation>();
-	private readonly skillValidating = new Set<string>();
-	private readonly skillFiles = new Map<string, readonly ISkillFileEntry[]>();
-	private readonly skillFilesLoading = new Set<string>();
+	private readonly skillValidations = new Map<string, IGenerationCached<ISkillValidation>>();
+	private readonly skillFiles = new Map<string, IGenerationCached<readonly ISkillFileEntry[]>>();
+	/** In-flight reads, keyed by skill folder fsPath and valued by the generation the read was issued for. This is
+	 *  the DEDUPE guard, so it must not be cleared on a config change: emptying it one line before re-rendering is
+	 *  what made every event re-issue a whole duplicate batch of file reads that the completed one then discarded.
+	 *  Comparing generations instead means a read for the current generation suppresses a duplicate, while a read
+	 *  left over from an older one does not block the re-read that generation now needs. */
+	private readonly skillValidating = new Map<string, number>();
+	private readonly skillFilesLoading = new Map<string, number>();
 	/** Expanded subdirectories in an expanded skill's file tree, keyed by directory fsPath. Default: collapsed. */
 	private readonly expandedSkillDirs = new Set<string>();
 	/** Marketplaces the user has expanded in the Browse list (collapsed by default; a search auto-expands matches). */
@@ -317,6 +461,12 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	 *  ~/.claude/plugins. Cleared on a config change; reloads on the next render. */
 	private pluginsData: { marketplaces: IMarketplace[]; catalog: ICatalogPlugin[]; installed: IInstalledPlugin[] } | undefined;
 	private pluginsLoaded = false;
+	/** Whether the Claude Code plugin was installed the last time the extensions service reported a change. The
+	 *  Plugins tab consumes exactly ONE bit from that service - this one, for its "plugin not installed" banner -
+	 *  so remembering the bit turns an "anything in the extension world moved" signal (an unrelated install, a
+	 *  running-extension diff, a gallery metadata sync) into "the banner's answer flipped", which is the only case
+	 *  worth a full pane rebuild for. */
+	private claudeCodePluginInstalled: boolean;
 	/** The Browse-plugins search box (case-insensitive substring over name / description / marketplace). */
 	private pluginFilter = '';
 	/** Live reference to the current Browse search input, re-set on each render so the filter handler can restore
@@ -395,38 +545,61 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			if (this.tab === 'trust') { this.render(); }
 		}));
 		// Refresh when the scanned config changes: the MCP add box's server dropdown, or the Skills list. A skill
-		// folder may have changed on disk, so drop the per-skill validation + file caches (they re-read lazily).
+		// folder may have changed on disk, so the per-skill validation + file caches must be re-read.
 		this._register(this.configService.onDidChange(() => {
 			// Any scanned-config change can affect the lazy per-row caches (skills SKILL.md + files, MCP defs +
-			// discovered tools), and we can't tell from the event which files changed - so drop them all
-			// unconditionally and bump the generation so an in-flight read can't write a stale result back. This
-			// runs regardless of the active tab (e.g. editing .mcp.json while on another tab must not leave stale
-			// MCP defs behind).
+			// discovered tools), and we can't tell from the event which files changed - so INVALIDATE them all and
+			// let each re-read lazily. This runs regardless of the active tab (e.g. editing .mcp.json while on
+			// another tab must not leave stale MCP defs behind).
+			//
+			// Invalidate, not empty. Emptying a cache one line before re-rendering off it makes the pane paint a
+			// placeholder (every skill badge back to "checking", the Marketplaces list back to "Loading...", the
+			// Effective table back to one line of "Resolving...") for the duration of the re-read. That flash is
+			// bad on its own, and it is also what silently destroys the scroll offset: a pane that is momentarily
+			// shorter than its viewport has no scroll range, so the browser clamps the offset to the top and there
+			// is nothing left to restore from. Bumping the generation marks every entry stale while leaving the
+			// value on screen; each re-read then overwrites its own entry. It is also the guard that stops a slower
+			// in-flight read from writing a stale result back over a fresher one.
 			this.cacheGeneration++;
-			this.skillValidations.clear();
-			this.skillValidating.clear();
-			this.skillFiles.clear();
-			this.skillFilesLoading.clear();
-			this.expandedSkillDirs.clear();
-			this.mcpDefs.clear();
+			// The plugins data and the effective resolve are single values rather than per-row caches, so they get
+			// the same treatment through their own re-read helpers, both of which keep the current value on screen.
+			// Both are gated on having read something already: with nothing on screen there is nothing to preserve,
+			// and eagerly re-reading for a tab the user has never opened would trade a flash for real work on every
+			// config change. The tabs' own lazy first loads still cover that case.
+			if (this.pluginsLoaded) { this.refreshPluginsData(); }
+			this.refreshEffective();
+			// Do NOT clear discovered MCP tools here, and do NOT clear the defs either. Discovery RUNS the server
+			// (the spawn touches ~/.claude), which the config watcher catches and turns into a benign onDidChange -
+			// clearing would make a freshly loaded tool list vanish a moment after it appears. The cached tools for
+			// a server are dropped only when that server's def actually CHANGED, which ensureMcpDefs decides by
+			// comparing the fresh read against the previous defs - a comparison that silently degraded to "nothing
+			// ever changed" while this handler emptied the map it compares against.
 			this.mcpDefsLoaded = false;
-			// A marketplace add / update / remove or a plugin install lands as new files under ~/.claude/plugins;
-			// drop the cached plugins data so the next render re-reads it.
-			this.pluginsData = undefined;
-			this.pluginsLoaded = false;
-			// The merged EFFECTIVE view caches its resolved result; drop it (+ any error) so a settings edit anywhere
-			// re-resolves fresh - a stale "truth" view is worse than a brief reload.
-			this.effectiveResult = undefined;
-			this.effectiveError = undefined;
-			// Do NOT clear discovered tools here. Discovery RUNS the server (the spawn touches ~/.claude), which the
-			// config watcher catches and turns into a benign onDidChange - clearing here would make a freshly loaded
-			// tool list vanish a moment after it appears. The cached tools for a server are dropped only when that
-			// server's def actually changes (see ensureMcpDefs, which re-reads defs and prunes the matching tools).
-			if (this.adding?.mode === 'mcp' || this.tab === 'skills' || this.tab === 'plugins' || this.tab === 'mcp' || this.tab === 'hooks' || this.tab === 'effective') { this.render(); }
+			// The pane's OWN settings.json snapshot, which is a different defect from the caches above and must not be
+			// read as part of the same one: settings.json IS in the store's fired signature, so this event already
+			// arrives on an external edit - it was simply never acted on, and the re-render then painted the stale
+			// `this.snapshot`. Everything backed by that field kept pre-edit values (the Permissions buckets, the
+			// Sandbox tab, the per-skill overrides, the MCP approval lists, the plugin enable state). Follows the same
+			// invalidate-don't-empty discipline as the helpers above: the current snapshot stays on screen until the
+			// fresh read lands. Fire-and-forget - one small read, and it starts no scan, so it cannot feed back here.
+			//
+			// THIS CALL IS ALSO THE HANDLER'S ONLY RENDER, and it has to stay the only one. A second, synchronous
+			// render used to run at the end of this handler behind a tab allow-list, so on the Skills / Plugins / MCP
+			// / Hooks / Effective tabs every fire rebuilt the whole pane TWICE - once against the pre-edit snapshot
+			// and again when the read landed - doubling the rebuild cost on exactly the tabs the ~1Hz storm hit.
+			// refreshSnapshot renders every tab except Usage, so it already covers every tab that allow-list named
+			// (including Permissions, where the MCP add box lives), and it paints the fresh snapshot instead of the
+			// stale one. Everything this handler invalidates above is assigned synchronously, so that render is
+			// guaranteed to see it. Adding a render here again means removing that one, not sitting beside it.
+			void this.refreshSnapshot();
 		}));
 		// The Plugins tab leads with a "plugin missing" banner; re-render it when the critical plugin is installed
 		// or removed so the banner appears / disappears live. Presence is read from the installed-on-disk list.
+		this.claudeCodePluginInstalled = isClaudeCodePluginInstalled(this.extensionsWorkbenchService.local);
 		this._register(this.extensionsWorkbenchService.onChange(() => {
+			const installed = isClaudeCodePluginInstalled(this.extensionsWorkbenchService.local);
+			if (installed === this.claudeCodePluginInstalled) { return; }
+			this.claudeCodePluginInstalled = installed;
 			if (this.tab === 'plugins') { this.render(); }
 		}));
 	}
@@ -434,6 +607,20 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	protected override createEditor(parent: HTMLElement): void {
 		this.container = append(parent, h('.clawdius-control'));
 		this.container.tabIndex = -1;
+		// The pane's only scrolling box, created ONCE and never replaced (render() rebuilds the inner child), so this
+		// listener belongs to the pane and NOT to renderStore - re-binding it per render would both churn and, worse,
+		// miss the scroll events that arrive between renders. It is the user's escape hatch from scroll preservation:
+		// any offset other than the one the last restore landed on means the user moved the pane themselves.
+		this._register(addDisposableListener(this.container, EventType.SCROLL, () => {
+			this.scrollAnchor.handleScroll(this.container.scrollTop);
+		}));
+		// The pending target's retirement condition (see ScrollAnchor.abandonTarget): the user's next interaction
+		// with the pane, because geometry cannot tell a transient "still loading" shortening from one the user just
+		// asked for. Bound once here, on the same never-replaced scroller, rather than at each expand / collapse /
+		// search handler: `pointerdown` and `keydown` both precede the `click` that acts, so every control the pane
+		// grows is covered by construction and no future one can forget.
+		this._register(addDisposableListener(this.container, EventType.POINTER_DOWN, () => this.scrollAnchor.abandonTarget()));
+		this._register(addDisposableListener(this.container, EventType.KEY_DOWN, () => this.scrollAnchor.abandonTarget()));
 	}
 
 	override async setInput(input: ClaudeControlCenterInput, options: IEditorOptions | undefined, context: IEditorOpenContext, token: CancellationToken): Promise<void> {
@@ -499,17 +686,37 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		}
 	}
 
-	private async load(): Promise<void> {
+	/** Re-read the active scope's settings.json into {@link snapshot}. Assigns only when the read completes, so the
+	 *  value already on screen stays there until the fresh one is in hand. The caller decides whether to render. */
+	private async readSnapshot(): Promise<void> {
 		const uri = await this.scopeUri(this.scope);
 		if (!uri) {
 			this.snapshot = { kind: 'unavailable' };
-			this.render();
 			return;
 		}
 		const cls = classifySettings(await this.readRaw(uri));
 		this.snapshot = cls.kind === 'malformed'
 			? { kind: 'malformed', uri }
 			: { kind: 'ok', uri, settings: cls.settings };
+	}
+
+	private async load(): Promise<void> {
+		await this.readSnapshot();
+		this.render();
+	}
+
+	/**
+	 * Re-read the settings snapshot after an EXTERNAL edit (the config service fired) and repaint. The ONE render the
+	 * config-change handler performs, for every tab it repaints - see that handler for why there must not be a second.
+	 *
+	 * Separate from {@link load} for one reason: the tab gate. A full render on the Usage tab tears down and restarts
+	 * the dashboard's transcript aggregation, which walks the whole local corpus, and nothing on that tab reads the
+	 * snapshot - so it is the one tab an external settings edit must not repaint. Every other tab either reads the
+	 * snapshot (Permissions, Sandbox, Skills, MCP, Hooks, Plugins) or is cheap to rebuild.
+	 */
+	private async refreshSnapshot(): Promise<void> {
+		await this.readSnapshot();
+		if (this.isPaneDisposed || this.tab === 'usage') { return; }
 		this.render();
 	}
 
@@ -595,7 +802,19 @@ export class ClaudeControlCenterEditor extends EditorPane {
 
 	private render(): void {
 		if (!this.container || this.isPaneDisposed) { return; }
+		// Usage always starts at the top. Its content is painted asynchronously by the dashboard view, which draws
+		// into its host WITHOUT calling back into render(), so this render only ever lays out an empty host: the
+		// restore always clamps to 0 and the anchor's "re-apply on the next content-bearing render" never gets that
+		// render. Pinning is what today's behaviour already looks like to the user; what it stops is the leak, a
+		// target left armed on a pane-global anchor for whichever tab is opened next.
+		if (this.tab === 'usage') { this.scrollAnchor.pin(0); }
+		// Capture the offset to land on BEFORE the teardown, while the old content still defines the scroll range.
+		// See ScrollAnchor for why this is a target carried across renders rather than a value saved and restored.
+		const scrollTarget = this.scrollAnchor.beginRebuild(this.container.scrollTop);
 		this.renderStore.clear();
+		// Every description id this render hands out is minted from here down (see `capDescription`). Reset before
+		// the first row is built, not after, so the ids belong to the DOM about to be created.
+		this.capDescSeq = 0;
 		// The MCP form owns a separate subtree + listener store for in-place rebuilds. A full render detaches that
 		// subtree, so drop its listeners and the stale container here; renderMcpForm rebuilds both if the form is
 		// still open (otherwise they stay cleared until the next form opens).
@@ -623,6 +842,10 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			case 'hooks': this.renderHooksTab(inner); break;
 			default: this.renderPermissionsTab(inner); break;
 		}
+		// Assigning scrollTop forces a synchronous layout, so the read-back is the offset the browser actually
+		// settled on - and the difference between the two is exactly the clamp the anchor has to survive.
+		this.container.scrollTop = scrollTarget;
+		this.scrollAnchor.endRebuild(this.container.scrollTop);
 	}
 
 	/** Switch to a tab (used by the open command so account/usage entry points can land on Usage). Usage always
@@ -632,6 +855,9 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		if (this.tab !== tab || tab === 'usage') {
 			this.tab = tab;
 			this.clearTransientForms();
+			// A new tab starts at the top: pin the target to 0 rather than clearing it, or the render below would
+			// capture - and faithfully restore - however far down the tab being LEFT happened to be scrolled.
+			this.scrollAnchor.pin(0);
 			this.render();
 		}
 	}
@@ -686,8 +912,11 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			const active = def.tab === this.tab;
 			if (active) { btn.classList.add('active'); }
 			btn.setAttribute('aria-selected', active ? 'true' : 'false');
+			// Go through showTab so the strip and the open command share ONE tab-switch path. The anchor is
+			// pane-global, not per-tab, so every path that swaps tab content must pin it: switching with a target
+			// still armed from the previous tab applies that offset to the tab just opened.
 			this.renderStore.add(addDisposableListener(btn, EventType.CLICK, () => {
-				if (this.tab !== def.tab) { this.tab = def.tab; this.clearTransientForms(); this.render(); }
+				if (this.tab !== def.tab) { this.showTab(def.tab); }
 			}));
 		}
 
@@ -730,9 +959,8 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	}
 
 	// CLAWDIUS-BEGIN "Star on GitHub" count pill (#star)
-	/** Fill the star-count pill: synchronously from the session cache, else via one fail-silent GitHub request kicked
-	 *  off by this Control Center open. `undefined` (offline / error / not-yet-fetched) leaves the pill hidden. The
-	 *  isConnected guard means a late fetch never writes into a pill discarded by a tab-switch re-render. */
+	/** Fill the star-count pill: synchronously from the session cache, else via the one fail-silent GitHub request
+	 *  the service makes per session. `undefined` (offline / error / not-yet-fetched) leaves the pill hidden. */
 	private fillStarCount(pill: HTMLSpanElement): void {
 		const show = (count: number | undefined): void => {
 			if (count === undefined || !pill.isConnected) { return; }
@@ -745,6 +973,12 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			show(cached);
 			return;
 		}
+		// The service's promise is SESSION-scoped and shared, so this callback outlives the render that created the
+		// pill and can resolve against a pane that has since rebuilt. `isConnected` is the whole gate, and it is a
+		// sound one: render() rebuilds by clearing `this.content`, so a pill from a superseded render is detached by
+		// the time any later resolve arrives. Do not remove that check - there is no second one behind it. (A
+		// render-scoped flag would not buy anything either: the closure would keep retaining the pill regardless,
+		// since the promise is shared and cannot be cancelled from here.)
 		this.starCountService.getStarCount().then(show, () => { /* fail-silent: no pill */ });
 	}
 	// CLAWDIUS-END
@@ -768,9 +1002,19 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		// .clawdius-usage-dashboard-inner into this host and owns its own range tabs + Refresh; we keep it alive
 		// while this tab shows and dispose it on tab switch. load() reads only local files (no startup egress).
 		const host = append(parent, h('.clawdius-control-usage'));
-		const view = new ClaudeUsageDashboardView(host, this.fileService, this.pathService, this.capacityRefresh, this.agentHostService, this.jsonEditing, this.dialogService, this.notificationService, this.quickInputService, this.hoverService);
-		this.usageView.value = view;
-		void view.load(CancellationToken.None);
+		// The view and the token driving its load go into ONE store, so replacing it (a re-render, or leaving the
+		// tab) really stops the load rather than just discarding what it returns. The distinction is expensive
+		// here: the load aggregates the entire local transcript corpus and starts a one-shot `/usage` session, and
+		// a CancellationToken.None load runs both to completion for a dashboard already torn off the DOM. Usage is
+		// the default tab, so every abandoned load stacks another full aggregation on the same renderer.
+		const store = new DisposableStore();
+		// `dispose(true)` = cancel, then dispose - a plain DisposableStore dispose of a CancellationTokenSource does
+		// NOT cancel it (the `cancel` parameter defaults to false), which would leave the token silently inert.
+		const cts = new CancellationTokenSource();
+		store.add(toDisposable(() => cts.dispose(true)));
+		const view = store.add(new ClaudeUsageDashboardView(host, this.fileService, this.pathService, this.capacityRefresh, this.agentHostService, this.jsonEditing, this.dialogService, this.notificationService, this.quickInputService, this.hoverService));
+		this.usageView.value = store;
+		void view.load(cts.token);
 	}
 
 	// --- Permissions tab ---
@@ -941,7 +1185,10 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			this.filter = input.value;
 			const caret = input.selectionStart ?? input.value.length;
 			this.render();
-			this.filterInput?.focus();
+			// preventScroll: the re-render replaces this input, and focusing the replacement scrolls every ancestor
+			// scrolling box to reveal it - so a keystroke in a search box the user had scrolled past would drag the
+			// whole pane back to it. Focus is still moved and the caret still restored; only the reveal is skipped.
+			this.filterInput?.focus({ preventScroll: true });
 			this.filterInput?.setSelectionRange(caret, caret);
 		}));
 		return (shown, total) => {
@@ -957,6 +1204,27 @@ export class ClaudeControlCenterEditor extends EditorPane {
 
 	// --- Effective configuration tab (the merged, precedence-resolved view of every setting) ---
 
+	/** Re-resolve the effective configuration in the background, leaving the CURRENT table on screen until the
+	 *  fresh one lands. Dropping `effectiveResult` first would collapse the tab to a single line of
+	 *  "Resolving effective configuration...", which flashes and - being far shorter than the viewport - takes the
+	 *  pane's scroll offset with it. Only the error is cleared, so a previous failure does not suppress the retry;
+	 *  `loadEffective`'s token bump already invalidates whatever resolve is in flight. A no-op until the tab has
+	 *  produced something once OR has a resolve in flight: resolving the whole precedence stack for a tab nobody has
+	 *  opened is real work, and `renderEffectiveTab` already resolves lazily on first show. The in-flight case has to
+	 *  be excluded from that no-op explicitly - "nothing published yet" is also the state of the FIRST resolve, and of
+	 *  every Refresh / Retry (both drop `effectiveResult` before the resolve they start), so a guard that asks only
+	 *  what is on screen would drop the very changes the `effectiveLoading` branch below exists to catch. */
+	private refreshEffective(): void {
+		if (this.effectiveResult === undefined && this.effectiveError === undefined && !this.effectiveLoading) { return; }
+		this.effectiveError = undefined;
+		// A resolve already in flight read the settings files before this change landed, so coalescing into it would
+		// publish the pre-change values as "the resolved truth" - the one thing this tab exists to be right about -
+		// and nothing would be scheduled to correct them. Record the dropped request; loadEffective re-enters.
+		if (this.effectiveLoading) { this.effectiveDirty = true; return; }
+		this.effectiveLoading = true;
+		void this.loadEffective();
+	}
+
 	private async loadEffective(): Promise<void> {
 		const token = ++this.effectiveToken;
 		const folder = this.workspaceService.getWorkspace().folders[0]?.uri;
@@ -970,7 +1238,15 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			this.effectiveError = err instanceof Error ? err.message : String(err);
 		} finally {
 			this.effectiveLoading = false;
-			if (this.tab === 'effective') { this.render(); }
+			if (this.effectiveDirty) {
+				// Config moved under this resolve: go again rather than paint a value already known to be stale.
+				// The token bump on re-entry retires whatever this pass wrote, so the newest read is the one shown.
+				this.effectiveDirty = false;
+				this.effectiveLoading = true;
+				void this.loadEffective();
+			} else if (this.tab === 'effective') {
+				this.render();
+			}
 		}
 	}
 
@@ -1481,7 +1757,10 @@ export class ClaudeControlCenterEditor extends EditorPane {
 
 		refreshPreview();
 		const fe = focusEl;
-		if (fe) { this.renderStore.add(disposableTimeout(() => fe.focus(), 0)); }
+		// preventScroll: this timeout is registered on renderStore, so it re-arms on EVERY render while the add box
+		// is open, and each of those focus calls would otherwise scroll the pane to reveal the box. The focus itself
+		// has to stay - the render just destroyed the element focus was in, and this is what puts it back.
+		if (fe) { this.renderStore.add(disposableTimeout(() => fe.focus({ preventScroll: true }), 0)); }
 	}
 
 	/** The rule string the open add box would produce right now (for the live preview). */
@@ -1650,19 +1929,18 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			const group = byPlugin.get(plugin)!;
 			const collapsed = !this.expandedSkillPlugins.has(plugin);
 			const header = append(block, h('.clawdius-control-caprow.clawdius-control-skill-group'));
-			const chevron = this.iconButton(header,
+			const identity = this.capIdentity(header);
+			const chevron = this.iconButton(identity,
 				collapsed ? Codicon.chevronRight : Codicon.chevronDown,
 				collapsed ? localize('clawdius.control.skills.groupExpand', "Show skills from {0}", plugin) : localize('clawdius.control.skills.groupCollapse', "Hide skills from {0}", plugin),
 				() => this.toggleSkillPluginCollapse(plugin));
 			chevron.classList.add('clawdius-control-skill-chevron');
-			const info = append(header, h('.clawdius-control-cap-info'));
+			const info = append(identity, h('.clawdius-control-cap-info'));
 			const nameEl = append(info, h('.clawdius-control-cap-name'));
 			append(nameEl, h('span')).textContent = plugin;
-			const count = append(nameEl, h('span.clawdius-control-cap-origin'));
-			count.classList.add('muted');
-			count.textContent = group.length === 1
+			this.capOrigin(nameEl, group.length === 1
 				? localize('clawdius.control.skills.groupOne', "1 skill")
-				: localize('clawdius.control.skills.groupN', "{0} skills", group.length);
+				: localize('clawdius.control.skills.groupN', "{0} skills", group.length), true);
 			if (!collapsed) {
 				const body = append(block, h('.clawdius-control-skill-group-body'));
 				for (const skill of group) {
@@ -1718,40 +1996,36 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const expanded = !!folder && this.expandedSkill === folder.fsPath;
 
 		const row = append(parent, h('.clawdius-control-caprow'));
+		const identity = this.capIdentity(row);
 		// Expand chevron (on-disk skills only - override-only rows have no package to inspect).
 		if (folder) {
-			const chevron = this.iconButton(row,
+			const chevron = this.iconButton(identity,
 				expanded ? Codicon.chevronDown : Codicon.chevronRight,
 				expanded ? localize('clawdius.control.skills.collapse', "Hide files") : localize('clawdius.control.skills.expand', "Show files"),
 				() => this.toggleSkillExpand(folder));
 			chevron.classList.add('clawdius-control-skill-chevron');
 		} else {
-			append(row, h('.clawdius-control-skill-chevron-spacer'));
+			append(identity, h('.clawdius-control-skill-chevron-spacer'));
 		}
 
-		const info = append(row, h('.clawdius-control-cap-info'));
+		const info = append(identity, h('.clawdius-control-cap-info'));
 		const nameEl = append(info, h('.clawdius-control-cap-name'));
 		append(nameEl, h('span')).textContent = skill.name;
-		const origin = append(nameEl, h('span.clawdius-control-cap-origin'));
 		if (skill.origins.length > 0) {
-			origin.textContent = skill.origins.join(', ');
+			this.capOrigin(nameEl, skill.origins.join(', '));
 		} else {
-			origin.classList.add('muted');
-			origin.textContent = localize('clawdius.control.skills.overrideOnly', "override only");
+			this.capOrigin(nameEl, localize('clawdius.control.skills.overrideOnly', "override only"), true);
 		}
 		if (folder) { this.renderSkillBadge(nameEl, folder.fsPath); }
-		if (skill.description) {
-			append(info, h('.clawdius-control-cap-desc')).textContent = skill.description;
-		}
-		append(row, h('.clawdius-control-spacer'));
+		const controls = this.capActions(row);
 		// A plugin-only skill is read-only: the plugin owns it, and the on/off override is keyed by bare name
 		// (which does not reliably apply to plugin skills), so it is display-only - no toggle. A name that also
 		// has a standalone/user skill, or an override-only key with no backing item, keeps its working toggle.
 		const isPluginOnlySkill = skill.items.length > 0 && skill.items.every(i => !!i.sourcePlugin);
 		if (!isPluginOnlySkill) {
-			this.renderSkillStateControl(row, skill.name, current);
+			this.renderSkillStateControl(controls, skill.name, current);
 		}
-		const acts = append(row, h('.clawdius-control-cap-acts'));
+		const acts = append(controls, h('.clawdius-control-cap-acts'));
 		if (item) {
 			this.iconButton(acts, Codicon.edit, localize('clawdius.control.skills.open', "Open SKILL.md"), () => void this.openSkill(item));
 			// A plugin-bundled skill is read-only (canDelete === false): the plugin owns it, so offer Open but not Delete.
@@ -1759,13 +2033,16 @@ export class ClaudeControlCenterEditor extends EditorPane {
 				this.iconButton(acts, Codicon.trash, localize('clawdius.control.skills.delete', "Delete skill"), () => void this.deleteSkill(item), true);
 			}
 		}
+		if (skill.description) { this.capDescription(row, skill.description, controls, skill.name); }
 
 		if (expanded && folder) { this.renderSkillPanel(parent, folder); }
 	}
 
-	/** A compact spec-validation badge for a skill row (from the cache, or 'checking' until the read lands). */
+	/** A compact spec-validation badge for a skill row. 'checking' only until the FIRST read lands: a re-read after
+	 *  a config change keeps showing the previous verdict rather than regressing every badge on the tab to
+	 *  'checking' for the duration of the batch. */
 	private renderSkillBadge(parent: HTMLElement, folderPath: string): void {
-		const v = this.skillValidations.get(folderPath);
+		const v = this.skillValidations.get(folderPath)?.value;
 		const badge = append(parent, h('span.clawdius-control-skill-badge'));
 		if (!v) {
 			badge.classList.add('checking');
@@ -1785,30 +2062,51 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		}
 	}
 
-	/** Validate every on-disk skill's SKILL.md (off the paint path); re-render once when the batch lands. The
-	 *  generation guard drops results if the caches were cleared (a config change) or the pane was disposed mid
-	 *  read, so a slow read never writes a stale badge back into a now-empty cache. */
+	/**
+	 * Validate every on-disk skill's SKILL.md (off the paint path); re-render once when the batch lands.
+	 *
+	 * `todo` is the folders whose cached verdict is not from the CURRENT generation and that no read for this
+	 * generation is already covering. Both halves matter: the generation half is what makes a config change
+	 * re-read, and the in-flight half is what stops an ordinary re-render - a filter keystroke, a toggle, a badge
+	 * batch landing - from re-issuing a duplicate read of every visible SKILL.md, whose results the completed batch
+	 * would then throw away. The in-flight marks are released in a `finally`: a stale batch that bails still has to
+	 * release them, or the skills it covered stay wedged on 'checking' with nothing left to re-arm them.
+	 */
 	private async ensureSkillValidations(folders: readonly URI[]): Promise<void> {
-		const todo = folders.filter(f => !this.skillValidations.has(f.fsPath) && !this.skillValidating.has(f.fsPath));
-		if (todo.length === 0) { return; }
 		const gen = this.cacheGeneration;
-		for (const f of todo) { this.skillValidating.add(f.fsPath); }
-		const results = await Promise.all(todo.map(async folder => {
-			let content: string | undefined;
-			try { content = (await this.fileService.readFile(URI.joinPath(folder, 'SKILL.md'))).value.toString(); } catch { content = undefined; }
-			return { key: folder.fsPath, validation: validateSkillPackage({ directoryName: basename(folder), skillMdContent: content }) };
-		}));
-		if (this.isPaneDisposed || gen !== this.cacheGeneration) { return; } // stale: caches were cleared / pane gone
-		for (const r of results) { this.skillValidations.set(r.key, r.validation); }
-		for (const f of todo) { this.skillValidating.delete(f.fsPath); }
-		if (this.tab === 'skills') { this.render(); }
+		const todo = folders.filter(f => this.skillValidations.get(f.fsPath)?.generation !== gen && this.skillValidating.get(f.fsPath) !== gen);
+		if (todo.length === 0) { return; }
+		for (const f of todo) { this.skillValidating.set(f.fsPath, gen); }
+		try {
+			const results = await Promise.all(todo.map(async folder => {
+				let content: string | undefined;
+				try { content = (await this.fileService.readFile(URI.joinPath(folder, 'SKILL.md'))).value.toString(); } catch { content = undefined; }
+				return { key: folder.fsPath, validation: validateSkillPackage({ directoryName: basename(folder), skillMdContent: content }) };
+			}));
+			if (this.isPaneDisposed || gen !== this.cacheGeneration) { return; } // stale: config moved on / pane gone
+			for (const r of results) { this.skillValidations.set(r.key, { generation: gen, value: r.validation }); }
+			if (this.tab === 'skills') { this.render(); }
+		} finally {
+			for (const f of todo) {
+				if (this.skillValidating.get(f.fsPath) === gen) { this.skillValidating.delete(f.fsPath); }
+			}
+		}
 	}
 
 	private toggleSkillExpand(folder: URI): void {
 		const fp = folder.fsPath;
 		this.expandedSkill = this.expandedSkill === fp ? undefined : fp;
 		this.skillFileForm = undefined;
-		if (this.expandedSkill === fp) { void this.ensureSkillFiles(folder); }
+		if (this.expandedSkill === fp) {
+			// Re-list on every open rather than trusting the cache. `configService.onDidChange` is edge-triggered on
+			// the config snapshot, and that snapshot models a skill package by its SKILL.md alone - so a file added
+			// or deleted anywhere else inside the package (references/, scripts/) rescans to a byte-identical
+			// snapshot, fires nothing, and leaves this map holding a listing that no longer matches the folder. One
+			// directory listing per open is a fair price for a file list that is never a lie, and `skillFilesLoading`
+			// still collapses the duplicate loads a re-render would otherwise start.
+			this.skillFiles.delete(fp);
+			void this.ensureSkillFiles(folder);
+		}
 		this.render();
 	}
 
@@ -1822,7 +2120,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 	/** The expanded skill package: validation issues, the file list (open/delete), and a new-file form. */
 	private renderSkillPanel(parent: HTMLElement, folder: URI): void {
 		const panel = append(parent, h('.clawdius-control-skill-panel'));
-		const v = this.skillValidations.get(folder.fsPath);
+		const v = this.skillValidations.get(folder.fsPath)?.value;
 		if (v && (v.errors.length > 0 || v.warnings.length > 0)) {
 			const issues = append(panel, h('.clawdius-control-skill-issues'));
 			for (const e of v.errors) { this.renderSkillIssue(issues, e); }
@@ -1844,10 +2142,13 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			newFileOpen ? 'ghost' : 'add',
 			newFileOpen ? Codicon.close : Codicon.add);
 
-		const files = this.skillFiles.get(folder.fsPath);
+		// "Loading files..." only while there is genuinely nothing to show. A listing left over from an older
+		// generation stays on screen and is re-read underneath (ensureSkillFiles decides that from the generation
+		// tag), so a config change does not blank an expanded package's file tree and take the scroll offset with it.
+		const files = this.skillFiles.get(folder.fsPath)?.value;
+		void this.ensureSkillFiles(folder);
 		if (!files) {
 			append(panel, h('.clawdius-control-skill-loading')).textContent = localize('clawdius.control.skills.loadingFiles', "Loading files...");
-			void this.ensureSkillFiles(folder); // (re)start the load if the cache was cleared while expanded
 		} else {
 			this.renderSkillFileList(panel, folder, files);
 		}
@@ -1963,7 +2264,9 @@ export class ClaudeControlCenterEditor extends EditorPane {
 
 		this.button(row, localize('clawdius.control.skills.createFile', "Create"), () => void this.createSkillFile(folder), 'primary');
 		this.button(row, localize('clawdius.control.cancel', "Cancel"), () => { this.skillFileForm = undefined; this.render(); }, 'ghost');
-		this.renderStore.add(disposableTimeout(() => input.focus(), 0));
+		// preventScroll, for the same reason as the permission add box: renderStore re-arms this on every render
+		// while the form is open, and an expanded skill package is usually well down a long pane.
+		this.renderStore.add(disposableTimeout(() => input.focus({ preventScroll: true }), 0));
 	}
 
 	/** A minimal starter body for a new supporting file (a heading for markdown, else empty). */
@@ -2026,18 +2329,24 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		this.render();
 	}
 
-	/** List a skill package's files: SKILL.md first, then other root files, then one level into each subdir. The
-	 *  loading-set guard prevents duplicate loads across re-renders; the generation guard drops stale results. */
+	/** List a skill package's files: SKILL.md first, then other root files, then one level into each subdir. A
+	 *  listing already read for the CURRENT generation is left alone (that is what collapses the duplicate loads a
+	 *  re-render would otherwise start); one from an older generation is re-read and overwritten in place, so the
+	 *  panel never has to blank itself to show that it is refreshing. The in-flight mark is released in a `finally`
+	 *  so a listing that bailed as stale still leaves the key loadable. */
 	private async ensureSkillFiles(folder: URI): Promise<void> {
 		const key = folder.fsPath;
-		if (this.skillFiles.has(key) || this.skillFilesLoading.has(key)) { return; }
 		const gen = this.cacheGeneration;
-		this.skillFilesLoading.add(key);
-		const files = await this.loadSkillFiles(folder);
-		this.skillFilesLoading.delete(key);
-		if (this.isPaneDisposed || gen !== this.cacheGeneration) { return; }
-		this.skillFiles.set(key, files);
-		if (this.tab === 'skills' && this.expandedSkill === key) { this.render(); }
+		if (this.skillFiles.get(key)?.generation === gen || this.skillFilesLoading.get(key) === gen) { return; }
+		this.skillFilesLoading.set(key, gen);
+		try {
+			const files = await this.loadSkillFiles(folder);
+			if (this.isPaneDisposed || gen !== this.cacheGeneration) { return; }
+			this.skillFiles.set(key, { generation: gen, value: files });
+			if (this.tab === 'skills' && this.expandedSkill === key) { this.render(); }
+		} finally {
+			if (this.skillFilesLoading.get(key) === gen) { this.skillFilesLoading.delete(key); }
+		}
 	}
 
 	private async loadSkillFiles(folder: URI): Promise<ISkillFileEntry[]> {
@@ -2077,6 +2386,9 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		await this.commandService.executeCommand(CONFIG_DELETE_COMMAND_ID, item);
 	}
 
+	/** The per-skill On / Name Only / Manual Only / Off segment. It gets no `role="group"` of its own: the action zone
+	 *  it is appended to already IS a group named for the row (see `capDescription`), and nesting a second grouping
+	 *  inside it only makes assistive tech announce a boundary twice on the way to the same four buttons. */
 	private renderSkillStateControl(parent: HTMLElement, name: string, current: SkillOverride): void {
 		const seg = append(parent, h('.clawdius-control-seg.clawdius-control-seg-sm'));
 		for (const opt of this.skillStateOptions()) {
@@ -2085,7 +2397,11 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			if (active) { b.classList.add('active'); }
 			append(b, h('span.clawdius-control-mode-name')).textContent = opt.label;
 			b.title = opt.detail;
-			b.setAttribute('aria-label', `${name}: ${opt.label} - ${opt.detail}`);
+			// Placeholders, not a template literal: this is user-visible text, so it has to be one externalized
+			// string a translator can reorder. The row name stays on the button as well as on the enclosing group -
+			// group boundaries are announced on ENTRY, so a user arrowing straight between these four buttons never
+			// hears one, and "On" alone does not say what it turns on.
+			b.setAttribute('aria-label', localize('clawdius.control.skills.modeLabel', "{0}: {1} - {2}", name, opt.label, opt.detail));
 			b.setAttribute('aria-pressed', active ? 'true' : 'false');
 			this.renderStore.add(addDisposableListener(b, EventType.CLICK, () => void this.setSkillOverride(name, current, opt.value)));
 		}
@@ -2123,9 +2439,9 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const row = append(parent, h('.clawdius-control-caprow'));
 		const info = append(row, h('.clawdius-control-cap-info'));
 		append(info, h('.clawdius-control-cap-name')).textContent = label;
-		append(info, h('.clawdius-control-cap-desc')).textContent = hint;
-		append(row, h('.clawdius-control-spacer'));
-		this.appendToggle(row, value, label, onChange);
+		const controls = this.capActions(row);
+		this.appendToggle(controls, value, label, onChange);
+		this.capDescription(row, hint, controls, label);
 	}
 
 	/** Append an On/Off switch control to a row. Shared by renderToggleRow and the catalog rows (which carry extra
@@ -2206,14 +2522,14 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const info = append(row, h('.clawdius-control-cap-info'));
 		const nameEl = append(info, h('.clawdius-control-cap-name'));
 		append(nameEl, h('span')).textContent = item.label;
-		append(nameEl, h('span.clawdius-control-cap-origin')).textContent = origin;
-		if (item.description) { append(info, h('.clawdius-control-cap-desc')).textContent = item.description; }
-		append(row, h('.clawdius-control-spacer'));
-		const acts = append(row, h('.clawdius-control-cap-acts'));
+		this.capOrigin(nameEl, origin);
+		const controls = this.capActions(row);
+		const acts = append(controls, h('.clawdius-control-cap-acts'));
 		if (item.resource) {
 			this.iconButton(acts, Codicon.edit, localize('clawdius.control.hooks.open', "Open in settings.json"),
 				() => void this.editorService.openEditor({ resource: item.resource!, options: { pinned: true } }));
 		}
+		if (item.description) { this.capDescription(row, item.description, controls, item.label); }
 	}
 
 	private async createHook(): Promise<void> {
@@ -2754,24 +3070,24 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const def = this.mcpDefs.get(server.id);
 
 		const row = append(parent, h('.clawdius-control-caprow'));
-		const chevron = this.iconButton(row, expanded ? Codicon.chevronDown : Codicon.chevronRight,
+		const identity = this.capIdentity(row);
+		const chevron = this.iconButton(identity, expanded ? Codicon.chevronDown : Codicon.chevronRight,
 			expanded ? localize('clawdius.control.mcp.hide', "Hide details") : localize('clawdius.control.mcp.show', "Show details"),
 			() => this.toggleMcpExpand(server.id));
 		chevron.classList.add('clawdius-control-skill-chevron');
 
-		const info = append(row, h('.clawdius-control-cap-info'));
+		const info = append(identity, h('.clawdius-control-cap-info'));
 		const nameEl = append(info, h('.clawdius-control-cap-name'));
 		append(nameEl, h('span')).textContent = server.name;
 		if (def && def.transport !== 'unknown') {
-			append(nameEl, h('span.clawdius-control-cap-origin.muted')).textContent = def.transport;
+			this.capOrigin(nameEl, def.transport, true);
 		}
-		if (def?.detail) { append(info, h('.clawdius-control-cap-desc')).textContent = def.detail; }
 
-		append(row, h('.clawdius-control-spacer'));
+		const controls = this.capActions(row);
 		if (isProject) {
-			this.renderMcpApprovalControl(row, server.name, mcpState);
+			this.renderMcpApprovalControl(controls, server.name, mcpState);
 		} else {
-			append(row, h('span.clawdius-control-skill-badge.checking')).textContent = localize('clawdius.control.mcp.configured', "configured");
+			append(controls, h('span.clawdius-control-skill-badge.checking')).textContent = localize('clawdius.control.mcp.configured', "configured");
 		}
 
 		// Edit / delete only when this server lives in the writable backing file for its scope. The global tab
@@ -2779,9 +3095,11 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const formScope: 'global' | 'project' = isProject ? 'project' : 'global';
 		const writable = isProject ? this.mcpWritableProject : this.mcpWritableGlobal;
 		if (writable && isEqual(server.resource, writable)) {
-			this.iconButton(row, Codicon.edit, localize('clawdius.control.mcp.editServer', "Edit server"), () => void this.openMcpEditForm(formScope, server.name));
-			this.iconButton(row, Codicon.trash, localize('clawdius.control.mcp.deleteServer', "Delete server"), () => void this.deleteMcpServer(formScope, server.name), true);
+			const acts = append(controls, h('.clawdius-control-cap-acts'));
+			this.iconButton(acts, Codicon.edit, localize('clawdius.control.mcp.editServer', "Edit server"), () => void this.openMcpEditForm(formScope, server.name));
+			this.iconButton(acts, Codicon.trash, localize('clawdius.control.mcp.deleteServer', "Delete server"), () => void this.deleteMcpServer(formScope, server.name), true);
 		}
+		if (def?.detail) { this.capDescription(row, def.detail, controls, server.name); }
 
 		// Inline edit form opens directly under the row it edits.
 		if (this.mcpForm?.mode === 'edit' && this.mcpForm.scope === formScope && this.mcpForm.name === server.name) {
@@ -2804,6 +3122,9 @@ export class ClaudeControlCenterEditor extends EditorPane {
 			const b = append(seg, h('button.clawdius-control-mode')) as HTMLButtonElement;
 			if (opt.value === current) { b.classList.add('active'); }
 			append(b, h('span.clawdius-control-mode-name')).textContent = opt.label;
+			// Named for the server, like the skill segment: arrowing between these three never crosses the enclosing
+			// group's boundary, so the visible text alone would announce "Approved" without saying approved WHAT.
+			b.setAttribute('aria-label', localize('clawdius.control.mcp.approvalLabel', "{0}: {1}", name, opt.label));
 			b.setAttribute('aria-pressed', opt.value === current ? 'true' : 'false');
 			this.renderStore.add(addDisposableListener(b, EventType.CLICK, () => void this.applyMcpApproval(name, opt.value)));
 		}
@@ -3010,11 +3331,15 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		// Only keep marketplaces whose name is shell/path-safe: the name is used both in the catalog file path
 		// below and in the Update/Remove terminal commands, so an unsafe name would read an unintended path or
 		// render rows whose actions can never run. Real `claude plugin marketplace add` names are slugs.
-		const marketplaces = parseKnownMarketplaces(await this.readJson(URI.joinPath(pluginsDir, 'known_marketplaces.json')))
+		const marketplaces = parseKnownMarketplaces(await this.readPluginRegistry(pluginsDir, 'known_marketplaces.json'))
 			.filter(m => MARKETPLACE_NAME_RE.test(m.name));
-		const installed = parseInstalledPlugins(await this.readJson(URI.joinPath(pluginsDir, 'installed_plugins.json')));
+		const installed = parseInstalledPlugins(await this.readPluginRegistry(pluginsDir, 'installed_plugins.json'));
 		const catalog: ICatalogPlugin[] = [];
 		await Promise.all(marketplaces.map(async m => {
+			// The catalogs go through the plain reader, not readPluginRegistry, and that is the documented exception
+			// to the signature invariant rather than an oversight: they are far too large to record (see
+			// PluginRegistryFile) and are covered by the known_marketplaces.json `lastUpdated` write that accompanies
+			// every marketplace refresh, which fires the event this whole load re-runs on.
 			const catalogUri = URI.joinPath(pluginsDir, 'marketplaces', m.name, '.claude-plugin', 'marketplace.json');
 			catalog.push(...parseMarketplaceCatalog(await this.readJson(catalogUri), m.name));
 		}));
@@ -3024,14 +3349,33 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		if (this.tab === 'plugins') { this.render(); }
 	}
 
-	/** Re-read the local plugin sources (e.g. after a `claude plugin marketplace update` in the terminal). Keeps the
-	 *  current data visible until the fresh read lands (no Loading flash). */
+	/** Re-read the local plugin sources (after a `claude plugin marketplace update` in the terminal, or a config
+	 *  change - a marketplace add / remove or a plugin install lands as new files under ~/.claude/plugins). Keeps
+	 *  the current data visible until the fresh read lands (no Loading flash). */
 	private refreshPluginsData(): void {
 		// Bump the generation so any load still in flight (e.g. from a config-change refresh) is invalidated and
 		// cannot finish out of order and overwrite this fresh read with stale data.
 		this.cacheGeneration++;
 		this.pluginsLoaded = false;
 		void this.loadPluginsData();
+	}
+
+	/**
+	 * Read one plugin-registry index out of `pluginsDir`. Identical to {@link readJson} at runtime; the point is the
+	 * PARAMETER TYPE. This tab re-reads its registry files whenever the config service fires, so every one of them is
+	 * subject to the signature invariant on {@link IClawdiusConfigService.onDidChange}. What the type buys, exactly: a
+	 * read that comes through HERE cannot name a file the store does not record, because {@link PluginRegistryFile}
+	 * admits only names on the shared list the store records from, and the regression test walks that same list.
+	 *
+	 * What it does NOT do is force a new read to come through here, and it should not be read as if it did.
+	 * {@link readJson} is the next method down and takes a bare URI - it is what reads the marketplace catalogs, at
+	 * the documented exception to the invariant - so `readJson(URI.joinPath(pluginsDir, 'blocklist.json'))` compiles
+	 * clean, is accepted by the store's relevance filter as a direct child of the watched plugins dir, and refreshes
+	 * on nothing. Any new read under `plugins/` still has to be checked against that invariant by the person adding
+	 * it; this helper only puts the compliant path within reach and names the list to add to.
+	 */
+	private readPluginRegistry(pluginsDir: URI, file: PluginRegistryFile): Promise<unknown> {
+		return this.readJson(URI.joinPath(pluginsDir, file));
 	}
 
 	/** Read + JSON.parse a local file, or undefined if it is missing / unreadable / not valid JSON. */
@@ -3088,7 +3432,7 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const nameEl = append(info, h('.clawdius-control-cap-name'));
 		append(nameEl, h('span')).textContent = marketplace.name;
 		if (marketplace.autoUpdate) {
-			append(nameEl, h('span.clawdius-control-cap-origin.muted')).textContent = localize('clawdius.control.plugins.autoUpdate', "auto-update");
+			this.capOrigin(nameEl, localize('clawdius.control.plugins.autoUpdate', "auto-update"), true);
 		}
 		// Date is shown as a raw YYYY-MM-DD slice (no locale formatting) to stay stable + ASCII.
 		const updated = marketplace.lastUpdated ? marketplace.lastUpdated.slice(0, 10) : undefined;
@@ -3100,10 +3444,10 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		} else if (updated) {
 			desc = localize('clawdius.control.plugins.updatedOnly', "updated {0}", updated);
 		}
-		if (desc) { append(info, h('.clawdius-control-cap-desc')).textContent = desc; }
-		append(row, h('.clawdius-control-spacer'));
-		this.button(row, localize('clawdius.control.plugins.update', "Update"), () => void this.marketplaceCmdInTerminal('update', marketplace.name), 'ghost');
-		this.button(row, localize('clawdius.control.plugins.remove', "Remove"), () => void this.marketplaceCmdInTerminal('remove', marketplace.name), 'danger');
+		const controls = this.capActions(row);
+		this.button(controls, localize('clawdius.control.plugins.update', "Update"), () => void this.marketplaceCmdInTerminal('update', marketplace.name), 'ghost');
+		this.button(controls, localize('clawdius.control.plugins.remove', "Remove"), () => void this.marketplaceCmdInTerminal('remove', marketplace.name), 'danger');
+		if (desc) { this.capDescription(row, desc, controls, marketplace.name); }
 	}
 
 	/** Browse-the-marketplaces list (rendered inline inside the Add-plugin panel): a search box over every marketplace
@@ -3131,12 +3475,12 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		this.pluginSearchInput = input;
 		// Filtering re-renders the whole tab, which replaces this input element. render() is synchronous and re-runs
 		// this method, re-setting pluginSearchInput to the fresh input - re-focus it and restore the caret so typing
-		// is not interrupted.
+		// is not interrupted. preventScroll keeps that refocus from dragging the pane back to the search box.
 		this.renderStore.add(addDisposableListener(input, EventType.INPUT, () => {
 			this.pluginFilter = input.value;
 			const caret = input.selectionStart ?? input.value.length;
 			this.render();
-			this.pluginSearchInput?.focus();
+			this.pluginSearchInput?.focus({ preventScroll: true });
 			this.pluginSearchInput?.setSelectionRange(caret, caret);
 		}));
 
@@ -3203,21 +3547,21 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const info = append(row, h('.clawdius-control-cap-info'));
 		const nameEl = append(info, h('.clawdius-control-cap-name'));
 		append(nameEl, h('span')).textContent = plugin.name;
-		if (plugin.category) { append(nameEl, h('span.clawdius-control-cap-origin')).textContent = plugin.category; }
-		if (plugin.author) { append(nameEl, h('span.clawdius-control-cap-origin.muted')).textContent = localize('clawdius.control.plugins.byAuthor', "by {0}", plugin.author); }
+		if (plugin.category) { this.capOrigin(nameEl, plugin.category); }
+		if (plugin.author) { this.capOrigin(nameEl, localize('clawdius.control.plugins.byAuthor', "by {0}", plugin.author), true); }
 		const desc = this.truncate(plugin.description, 160);
-		if (desc) { append(info, h('.clawdius-control-cap-desc')).textContent = desc; }
-		append(row, h('.clawdius-control-spacer'));
+		const controls = this.capActions(row);
 		if (plugin.homepage) {
 			const homepage = plugin.homepage;
-			this.button(row, localize('clawdius.control.plugins.homepage', "Homepage"), () => void this.openPluginHomepage(homepage), 'link', Codicon.linkExternal);
+			this.button(controls, localize('clawdius.control.plugins.homepage', "Homepage"), () => void this.openPluginHomepage(homepage), 'link', Codicon.linkExternal);
 		}
-		this.button(row, localize('clawdius.control.plugins.details', "Details"), () => void this.pluginDetailsInTerminal(plugin.id), 'link', Codicon.info);
+		this.button(controls, localize('clawdius.control.plugins.details', "Details"), () => void this.pluginDetailsInTerminal(plugin.id), 'link', Codicon.info);
 		if (installed) {
-			this.appendToggle(row, status !== 'disabled', plugin.name, next => void this.setPluginEnabled(plugin.id, next));
+			this.appendToggle(controls, status !== 'disabled', plugin.name, next => void this.setPluginEnabled(plugin.id, next));
 		} else {
-			this.button(row, localize('clawdius.control.plugins.installBtn', "Install"), () => void this.installCatalogPlugin(plugin.id), 'primary', Codicon.cloudDownload);
+			this.button(controls, localize('clawdius.control.plugins.installBtn', "Install"), () => void this.installCatalogPlugin(plugin.id), 'primary', Codicon.cloudDownload);
 		}
+		if (desc) { this.capDescription(row, desc, controls, plugin.name); }
 	}
 
 	/** Open a plugin's homepage in the external browser. Only http(s) URLs reach here (the catalog parser drops the
@@ -3357,29 +3701,30 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		const expanded = hasContents && this.expandedPlugin === plugin.id;
 
 		const row = append(parent, h('.clawdius-control-caprow'));
+		const identity = this.capIdentity(row);
 		// Expand chevron reveals the bundled contents; plugins with no scanned contents get an aligning spacer.
 		if (hasContents) {
-			const chevron = this.iconButton(row,
+			const chevron = this.iconButton(identity,
 				expanded ? Codicon.chevronDown : Codicon.chevronRight,
 				expanded ? localize('clawdius.control.plugins.hideContents', "Hide contents") : localize('clawdius.control.plugins.showContents', "Show contents"),
 				() => this.togglePluginExpand(plugin.id));
 			chevron.classList.add('clawdius-control-skill-chevron');
 		} else {
-			append(row, h('.clawdius-control-skill-chevron-spacer'));
+			append(identity, h('.clawdius-control-skill-chevron-spacer'));
 		}
 
-		const info = append(row, h('.clawdius-control-cap-info'));
+		const info = append(identity, h('.clawdius-control-cap-info'));
 		const nameEl = append(info, h('.clawdius-control-cap-name'));
 		append(nameEl, h('span')).textContent = name;
-		if (marketplace) { append(nameEl, h('span.clawdius-control-cap-origin.muted')).textContent = marketplace; }
+		if (marketplace) { this.capOrigin(nameEl, marketplace, true); }
 		const summary = this.pluginContentsSummary(plugin.contents);
-		append(info, h('.clawdius-control-cap-desc')).textContent = summary
-			? localize('clawdius.control.plugins.statusContents', "{0} - {1}", statusLabel, summary)
-			: statusLabel;
 
-		append(row, h('.clawdius-control-spacer'));
 		// 'installed' (no explicit enabledPlugins entry) and 'enabled' both read as on; only 'disabled' is off.
-		this.appendToggle(row, plugin.status !== 'disabled', name, next => void this.setPluginEnabled(plugin.id, next));
+		const controls = this.capActions(row);
+		this.appendToggle(controls, plugin.status !== 'disabled', name, next => void this.setPluginEnabled(plugin.id, next));
+		this.capDescription(row, summary
+			? localize('clawdius.control.plugins.statusContents', "{0} - {1}", statusLabel, summary)
+			: statusLabel, controls, name);
 
 		if (expanded) { this.renderPluginContentsPanel(parent, plugin.contents); }
 	}
@@ -3518,6 +3863,86 @@ export class ClaudeControlCenterEditor extends EditorPane {
 		append(btn, h('span')).textContent = label;
 		store.add(addDisposableListener(btn, EventType.CLICK, () => onClick()));
 		return btn;
+	}
+
+	/** The trailing action zone of a capability row (`.clawdius-control-caprow`): every control that belongs at the
+	 *  END of the row goes in here, whatever the row is. It is ONE element per row so one CSS rule can align it -
+	 *  a caprow reflows, and controls left loose in the row flow wrap wherever the previous item ended, which is how
+	 *  the same visual construct ended up resolving three different ways (flush right, flush left under the
+	 *  description, or mid-row). Equivalent rows have to look equivalent.
+	 *
+	 *  Being one element per row is also what lets `capDescription` turn it into a single `role="group"` named for
+	 *  the row and described by the row's description, instead of decorating each control separately. */
+	private capActions(row: HTMLElement): HTMLElement {
+		return append(row, h('.clawdius-control-cap-controls'));
+	}
+
+	/** The provenance chip on a capability row's identity line (`.clawdius-control-cap-origin`): a scope, a joined
+	 *  list of origins, a marketplace id, a category, an author. `muted` picks the outlined variant used for the
+	 *  secondary ones.
+	 *
+	 *  Always built here so the hover is never forgotten: the chip's text is unbounded, so the CSS truncates it with
+	 *  an ellipsis rather than let it overflow the row, and a truncation the user cannot read back is worse than the
+	 *  overflow it replaced. Whether a given chip truncates is a layout outcome no builder can know, so every chip
+	 *  carries the full text - matching the raw-value hovers the permission rule rows already use. */
+	private capOrigin(parent: HTMLElement, text: string, muted?: boolean): HTMLElement {
+		const chip = append(parent, h(`span.clawdius-control-cap-origin${muted ? '.muted' : ''}`));
+		chip.textContent = text;
+		this.renderStore.add(this.hoverService.setupDelayedHover(chip, { content: text }));
+		return chip;
+	}
+
+	/** The leading zone of a capability row: the expand chevron (or its aligning spacer) plus the row's text zone.
+	 *  Only the four row types that HAVE a chevron need it. A caprow wraps, and flex lines are collected per item,
+	 *  so a chevron appended straight to the row is a wrap candidate of its own and orphans itself onto a line above
+	 *  the name it expands on a narrow pane. Keeping the pair inside one non-wrapping item is what makes them wrap
+	 *  together; see `.clawdius-control-cap-identity`. */
+	private capIdentity(row: HTMLElement): HTMLElement {
+		return append(row, h('.clawdius-control-cap-identity'));
+	}
+
+	/** The description line of a capability row. Appended to the ROW, not to the row's text zone, so it is a flex
+	 *  item of the caprow in its own right: `flex: 0 0 100%` then makes it unable to share a flex line, and it lands
+	 *  on a line of its own spanning the card's full content width. Nested in the text zone it stopped where the
+	 *  trailing controls began, leaving the right third of a wide card empty below them.
+	 *
+	 *  Call this AFTER `capActions`, because flex lines are collected in DOM order: a description appended ahead of
+	 *  the action zone fills line one by itself and pushes those controls down to a third line.
+	 *
+	 *  That DOM order is exactly what makes the ARIA wiring below mandatory. Sighted reading order is name ->
+	 *  controls -> description, and the description sits UNDER the controls, so it reads as their caption. Reading
+	 *  order for assistive tech is DOM order: name, then every button, and only then the sentence saying what the
+	 *  row is and what those buttons act on. Neither CSS `order` nor a DOM reorder can fix that - `order` does not
+	 *  affect the accessibility tree at all, and moving the description back in front of the controls would undo
+	 *  the full-width layout, which is achieved precisely BY being the flex item collected last. So the description
+	 *  is re-attached to the controls semantically instead: `controls` (`.clawdius-control-cap-controls`) becomes a
+	 *  `role="group"` NAMED by the row and DESCRIBED by this element, and a user landing on any control inside it
+	 *  hears "Controls for <row>" plus the description before the button's own label, wherever the text sits in the
+	 *  DOM.
+	 *
+	 *  The group is the target rather than the individual buttons: the description describes the ROW, once, and a
+	 *  row can carry up to six controls - repeating a whole sentence on each of them while tabbing is worse than
+	 *  the problem being fixed. It is also not the row itself: the description is a CHILD of the row, so a row-level
+	 *  `aria-describedby` would make the row describe itself with text already in its own subtree. The `role`
+	 *  matters as much as the attributes - name and description are only computed for an element that HAS a role,
+	 *  so on the bare `<div>` this zone used to be, both would have been inert.
+	 *
+	 *  Skipped when the zone holds no button (a hook row with no backing file): a labelled group with nothing to
+	 *  focus is announced on entry and carries no control to give context to, so it is pure noise. */
+	private capDescription(row: HTMLElement, text: string, controls: HTMLElement, name: string): HTMLElement {
+		const desc = append(row, h('.clawdius-control-cap-desc'));
+		desc.textContent = text;
+		// Emptiness, not a button search: hygiene bans selector lookups here (they are fragile), and the zone is
+		// built by `capActions` for this row alone - a builder appends its controls into it or appends nothing at
+		// all. So "has any child" is exactly "has something to focus", without asking the DOM to find it.
+		if (controls.childElementCount > 0) {
+			// Unique per row within a render (capDescSeq) and per pane within the window (paneId); see both fields.
+			desc.id = `clawdius-capdesc-${this.paneId}-${this.capDescSeq++}`;
+			controls.setAttribute('role', 'group');
+			controls.setAttribute('aria-label', localize('clawdius.control.cap.controlsGroup', "Controls for {0}", name));
+			controls.setAttribute('aria-describedby', desc.id);
+		}
+		return desc;
 	}
 
 	/** A compact icon-only button; aria-label + tooltip carry the meaning. `store` defaults to the pane-wide

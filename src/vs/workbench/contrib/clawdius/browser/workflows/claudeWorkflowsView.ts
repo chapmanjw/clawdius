@@ -21,15 +21,16 @@
 // (a grouping node) never open an editor.
 //
 // The ownership-chrome rule is split across this file and `claudeWorkflowTree.ts`: `refreshDisplay()` below
-// computes `uniformlyForeign` ONCE per re-render (never per-row, off the DISPLAYED runs after the status/text
-// filter) and paints the single SURFACE ownership label above the tree ONLY while every displayed run is foreign;
+// computes `uniformlyForeign` ONCE per re-render (never per-row, off the DISPLAYED runs after the workspace scope
+// and the status/text filters) and paints the single SURFACE ownership label above the tree ONLY while every displayed run is foreign;
 // the tree's row renderer reads that already-computed signal off a shared mutable context and paints NO per-run
 // ownership chrome in the common (uniformly-foreign) case, falling back to a per-run label the instant ownership
 // can differ. The view's data source is the `IClaudeWorkflowObservationService` singleton
 // (`claudeWorkflowObservationService.ts`), which owns the config-root resolution and the seam read - the view
 // itself no longer touches either directly; `refreshDisplay()` re-derives from the last snapshot it HELD
-// (`lastResult`) both on a fresh snapshot and on a filter/sort/status-filter change, so the latter never waits on
-// a new one (the persistent find/sort view state - see the "find/sort" block below the view id exports).
+// (`lastResult`) both on a fresh snapshot and on a filter/sort/status/scope change (including a workspace-folder
+// add or remove), so none of the latter ever waits on a new one (the persistent find/sort view state - see the
+// "find/sort" block below the view id exports).
 //
 // READ-ONLY BY CONSTRUCTION, not by policy. The view observes; it cannot act on a workflow run. Clawdius holds a
 // live `Query` only for a session IT launched, so a run launched by the Claude Code CLI - which today is every
@@ -39,11 +40,13 @@
 // enumeration (`observationService.readAgain()`), never a run control.
 
 import './media/claudeWorkflows.css';
-import { $, append } from '../../../../../base/browser/dom.js';
+import { $, append, Dimension } from '../../../../../base/browser/dom.js';
 import { InputBox } from '../../../../../base/browser/ui/inputbox/inputBox.js';
 import { ISelectOptionItem, SelectBox } from '../../../../../base/browser/ui/selectBox/selectBox.js';
+import { Toggle } from '../../../../../base/browser/ui/toggle/toggle.js';
 import { RenderIndentGuides } from '../../../../../base/browser/ui/tree/abstractTree.js';
 import { disposableTimeout, RunOnceScheduler } from '../../../../../base/common/async.js';
+import { Codicon } from '../../../../../base/common/codicons.js';
 import { FuzzyScore } from '../../../../../base/common/filters.js';
 import { DisposableStore, MutableDisposable } from '../../../../../base/common/lifecycle.js';
 import { IAgentHostService } from '../../../../../platform/agentHost/common/agentService.js';
@@ -57,21 +60,28 @@ import { IInstantiationService } from '../../../../../platform/instantiation/com
 import { IKeybindingService } from '../../../../../platform/keybinding/common/keybinding.js';
 import { WorkbenchObjectTree } from '../../../../../platform/list/browser/listService.js';
 import { IOpenerService } from '../../../../../platform/opener/common/opener.js';
-import { defaultInputBoxStyles, defaultSelectBoxStyles } from '../../../../../platform/theme/browser/defaultStyles.js';
+import { IStorageService, StorageScope, StorageTarget } from '../../../../../platform/storage/common/storage.js';
+import { defaultInputBoxStyles, defaultSelectBoxStyles, defaultToggleStyles } from '../../../../../platform/theme/browser/defaultStyles.js';
 import { IThemeService } from '../../../../../platform/theme/common/themeService.js';
+import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { IViewPaneOptions, ViewPane } from '../../../../browser/parts/views/viewPane.js';
 import { IViewDescriptorService } from '../../../../common/views.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import {
-	LiveWorkflowRun, TerminalWorkflowAgent, TerminalWorkflowRun, UnrecognizedWorkflowRun, WorkflowRun, WorkflowRunListResult,
+	DEFAULT_WORKFLOW_WORKSPACE_SCOPE, isWorkflowWorkspaceScope, LiveWorkflowRun, matchesWorkflowWorkspaceScope,
+	TerminalWorkflowAgent, TerminalWorkflowRun, UnrecognizedWorkflowRun, WorkflowRun, WorkflowRunListResult,
+	WorkflowWorkspaceScope,
 } from '../../common/claudeWorkflowModel.js';
 import { BadgeSignal, ClaudeWorkflowBadgeFeed } from './claudeWorkflowBadges.js';
 import { boundResultText, ClaudeWorkflowAgentDetailPayload, ClaudeWorkflowDetailInput, ClaudeWorkflowResultDetailPayload } from './claudeWorkflowDetailInput.js';
-import { IClaudeWorkflowObservationService, WORKFLOWS_VIEW_CONTAINER_ID, WorkflowSnapshot } from './claudeWorkflowObservationService.js';
+import {
+	IClaudeWorkflowObservationService, WORKFLOW_WORKSPACE_SCOPE_STORAGE_KEY, WORKFLOWS_VIEW_CONTAINER_ID,
+	workflowWorkspaceProjectKeys, WorkflowSnapshot,
+} from './claudeWorkflowObservationService.js';
 import { ownedSessionIdsFromHost } from './claudeWorkflowOwnership.js';
 import {
-	computeUniformlyForeign, IWorkflowRenderContext, reconcileWorkflowTree, renderWorkflowsStateMessage,
-	resolveTrackedElements, resolveWorkflowsDisplayState, WorkflowAgentRowRenderer,
+	computeUniformlyForeign, IWorkflowRenderContext, IWorkflowsEmptyDiagnosis, reconcileWorkflowTree,
+	renderWorkflowsStateMessage, resolveTrackedElements, resolveWorkflowsDisplayState, WorkflowAgentRowRenderer,
 	WorkflowPhaseRowRenderer, WorkflowRunRowRenderer,
 	WorkflowTreeAccessibilityProvider, WorkflowTreeElement, WorkflowTreeIdentityProvider,
 	WorkflowTreeKeyboardNavigationLabelProvider, WorkflowTreeVirtualDelegate, workflowTreeElementId,
@@ -86,19 +96,29 @@ const GRADUATION_HIGHLIGHT_MS = 1500;
 // module for its snapshot type, never the reverse. See that module's own PRESERVED-for-backward-compat comment
 // on the constant itself.
 export { WORKFLOWS_VIEW_CONTAINER_ID };
+// The workspace-scope vocabulary and its predicate now live in the pure `common/` read model (see the "workspace
+// scope" block in claudeWorkflowModel.ts for why: the observation service scopes the container's activity badge
+// with the SAME predicate and cannot import it from here). Re-exported so the existing callers that reach for them
+// through this module - the view's own filter/sort unit tests - keep working unchanged.
+export { matchesWorkflowWorkspaceScope, WorkflowWorkspaceScope };
 // PRESERVED for backward compat: this is the view id VS Code persists (panel/sidebar placement, visibility,
 // size) across restarts. It must NOT change with the rename, or a pre-rename user's restored view state for
 // this view would fail to restore - the same backward-compat rationale as the transcript editor-input-serializer
 // typeId.
 export const WORKFLOWS_VIEW_ID = 'clawdius.missions';
 
-// --- find/sort: the persistent text filter, the status-category filter, and the deterministic sort modes --------
+// --- find/sort: the workspace scope, the text filter, the status-category filter, and the sort modes ------------
 //
 // EXPORTED as pure functions (never methods) so a unit test drives them directly, without constructing the view.
-// The view composes them in `refreshDisplay()`: status filter -> text filter -> sort, in that order - a LIVE run is
-// therefore pinned first only AMONG MATCHES (`sortWorkflowRuns` never even sees a run either filter already
-// dropped) and is excluded outright the moment its own runId fails the text filter; there is no separate
-// "force-show a live run" path layered on top.
+// The view composes them in `refreshDisplay()`: WORKSPACE SCOPE -> status filter -> text filter -> sort, in that
+// order. All four are pure predicates, so the RESULT SET is order-independent; the order is a statement about
+// meaning and cost. Scope runs first because it is the only stage that asks whether a run is in the developer's
+// world at ALL, rather than whether its content matches - so the two content filters, the sort's live-pin,
+// `computeUniformlyForeign`, and the surface-ownership label all operate on exactly the set the developer considers
+// theirs. It is also the cheapest (one lowercased `Set.has` per run, versus `matchesWorkflowFilter`'s walk over
+// name/summary/error/every agent label). Sort stays LAST: a LIVE run is therefore pinned first only AMONG MATCHES
+// (`sortWorkflowRuns` never even sees a run any filter already dropped) and is excluded outright the moment its own
+// runId fails the text filter; there is no separate "force-show a live run" path layered on top.
 
 /** How long after the filter input's last keystroke the (debounced) re-render fires, so typing does not re-render
  *  the tree once per character - comfortably inside the "narrows the list ... within 300 ms" budget once the
@@ -122,6 +142,24 @@ export const enum WorkflowStatusFilter {
 	Failed = 'failed',
 }
 
+/** The status control's option ORDER - the single source both the control's index-aligned options array and every
+ *  value->index lookup read (the restore-from-storage seed, and the "Clear Filters" action's resync), so a selected
+ *  index can never mean two things. Same shape as {@link WORKFLOW_WORKSPACE_SCOPE_ORDER}. */
+const WORKFLOW_STATUS_FILTER_ORDER: readonly WorkflowStatusFilter[] = [
+	WorkflowStatusFilter.All, WorkflowStatusFilter.Live, WorkflowStatusFilter.Completed, WorkflowStatusFilter.Failed,
+];
+
+/** The localized label for one status-filter option. EXHAUSTIVE over the enum, so adding a category is a compile
+ *  error here rather than a silently unlabeled option. */
+function workflowStatusFilterLabel(filter: WorkflowStatusFilter): string {
+	switch (filter) {
+		case WorkflowStatusFilter.All: return localize('clawdius.workflows.statusFilter.all', "All Statuses");
+		case WorkflowStatusFilter.Live: return localize('clawdius.workflows.statusFilter.live', "Live");
+		case WorkflowStatusFilter.Completed: return localize('clawdius.workflows.statusFilter.completed', "Completed");
+		case WorkflowStatusFilter.Failed: return localize('clawdius.workflows.statusFilter.failed', "Failed");
+	}
+}
+
 /**
  * Whether `run` belongs to the `filter` category: `all` matches every run; `live` matches only a `kind: 'live'`
  * run; `completed`/`failed` match only a TERMINAL run with that exact status. An `unknown-shape` run matches none
@@ -135,6 +173,104 @@ export function matchesWorkflowStatusFilter(run: WorkflowRun, filter: WorkflowSt
 		case WorkflowStatusFilter.Failed: return run.kind === 'terminal' && run.status === 'failed';
 	}
 }
+
+/** The scope control's option ORDER - the single source both the control's index-aligned options array and
+ *  `updateWorkspaceScopeControl`'s value->index lookup read, so a selected index can never mean two things. */
+const WORKFLOW_WORKSPACE_SCOPE_ORDER: readonly WorkflowWorkspaceScope[] = [
+	WorkflowWorkspaceScope.ThisWorkspace, WorkflowWorkspaceScope.AllWorkspaces,
+];
+
+/** The localized label for one workspace-scope option. EXHAUSTIVE over the enum, so adding a scope is a compile
+ *  error here rather than a silently unlabeled option. */
+function workflowWorkspaceScopeLabel(scope: WorkflowWorkspaceScope): string {
+	switch (scope) {
+		case WorkflowWorkspaceScope.ThisWorkspace: return localize('clawdius.workflows.scope.this', "This Workspace");
+		case WorkflowWorkspaceScope.AllWorkspaces: return localize('clawdius.workflows.scope.all', "All Workspaces");
+	}
+}
+
+/**
+ * Whether a control HIDDEN behind the collapsed filter button is currently NARROWING the list - what drives the
+ * button's filled-vs-outline icon, so a narrowed list is never silently narrowed.
+ *
+ * The two dimensions are probed ASYMMETRICALLY, and deliberately so. The STATUS filter is probed by
+ * non-default-ness: its default (`all`) hides nothing, so any other value is the developer's own explicit
+ * narrowing. The WORKSPACE SCOPE cannot be probed that way, because its DEFAULT (`this-workspace`) is the value
+ * that withholds - lighting the icon for `all-workspaces` would light it on the one setting that hides nothing and
+ * leave it dark on the shipped default that does. So the caller passes `scopeIsWithholding`: whether the scope
+ * stage actually dropped a run this render.
+ *
+ * The SORT MODE is excluded entirely: sorting reorders and never hides, and an indicator that lit up for a sort
+ * choice would claim runs are being withheld when none are.
+ */
+export function workflowFiltersAreNarrowing(statusFilter: WorkflowStatusFilter, scopeIsWithholding: boolean): boolean {
+	return statusFilter !== WorkflowStatusFilter.All || scopeIsWithholding;
+}
+
+/**
+ * The filter button's accessible NAME (and its hover text - `Toggle.setTitle` writes both), carrying the narrowing
+ * fact as a WORD rather than only as the filled-vs-outline glyph.
+ *
+ * The glyph alone cannot carry it: while the panel is collapsed its three SelectBoxes are `display: none`, so they
+ * are gone from the accessibility tree entirely (by design - see claudeWorkflows.css) and this button is the only
+ * surviving trace of a status filter or a workspace scope that is withholding runs. An icon swap is a CSS class
+ * change and touches no ARIA, so without this the button would announce identically whether it hides three runs or
+ * three hundred - strictly less than the always-visible dropdowns it replaced told a screen-reader user.
+ *
+ * DISCLOSURE state is deliberately NOT in here: expanded/collapsed belongs in `aria-expanded` (see
+ * `applyFiltersExpansion`), and the two are independent facts.
+ */
+function workflowFiltersToggleTitle(narrowing: boolean): string {
+	return narrowing
+		? localize('clawdius.workflows.filters.toggle.narrowing', "Filter Options (Filters Applied)")
+		: localize('clawdius.workflows.filters.toggle', "Filter Options");
+}
+
+// --- persisted view state ---------------------------------------------------------------------------------------
+//
+// Four keys, named after the in-feature precedent (`FAILURE_WATERMARK_STORAGE_KEY` in
+// claudeWorkflowObservationService.ts). Each is written on CHANGE, never from `saveState()`: `ViewPane.saveState()`
+// fires only from its container's `onWillSaveState`, so a crash or hard kill loses the setting, and a container the
+// developer never opened never writes at all. Store-on-change is the shipped shape.
+//
+// The free-text query is deliberately NOT among them: it stays session-only, exactly as today.
+
+/** The persisted expanded/collapsed state of the toolbar's dropdown panel. PROFILE/USER: a chrome preference about
+ *  how this pane is read, identical in every window, and worth roaming with settings sync. */
+const WORKFLOW_FILTERS_EXPANDED_STORAGE_KEY = 'clawdius.ultracodeWorkflows.filtersExpanded.v1';
+/** The persisted status-category filter. PROFILE/USER, for the same reason: "show me only failures" is a reading
+ *  habit, not a fact about one project. */
+const WORKFLOW_STATUS_FILTER_STORAGE_KEY = 'clawdius.ultracodeWorkflows.statusFilter.v1';
+/** The persisted sort mode. PROFILE/USER, same reasoning. */
+const WORKFLOW_SORT_MODE_STORAGE_KEY = 'clawdius.ultracodeWorkflows.sortMode.v1';
+//
+// The FOURTH key - the persisted workspace scope - is `WORKFLOW_WORKSPACE_SCOPE_STORAGE_KEY`, defined in
+// claudeWorkflowObservationService.ts and imported above. It is the only one of the four the service also reads
+// (it scopes the container's activity badge by the same value this pane scopes its list by), and a storage key is
+// not pure enough for `common/`, so it follows the same placement precedent as `WORKFLOWS_VIEW_CONTAINER_ID`:
+// defined in the service, consumed here, never the reverse edge. See its own doc comment there for the
+// WORKSPACE/USER scope-and-target reasoning.
+
+/** The collapsible dropdown panel's DOM id, referenced by the disclosure toggle's `aria-controls`. There is exactly
+ *  one instance of this view per window, so a stable literal id is unambiguous. */
+const WORKFLOW_FILTERS_PANEL_DOM_ID = 'clawdius-workflows-filters';
+
+/** Whether a persisted string is a value this build's status filter actually offers - a stored value from a newer
+ *  (or corrupt) profile reads as "never stored" and falls back to the default, never as a filter nothing matches. */
+function isWorkflowStatusFilter(value: string | undefined): value is WorkflowStatusFilter {
+	return value === WorkflowStatusFilter.All || value === WorkflowStatusFilter.Live
+		|| value === WorkflowStatusFilter.Completed || value === WorkflowStatusFilter.Failed;
+}
+
+/** As {@link isWorkflowStatusFilter}, for the sort mode. */
+function isWorkflowSortMode(value: string | undefined): value is WorkflowSortMode {
+	return value === WorkflowSortMode.Recency || value === WorkflowSortMode.Cost || value === WorkflowSortMode.Status;
+}
+
+// The third member of that family - `isWorkflowWorkspaceScope` - lives beside the scope enum in
+// claudeWorkflowModel.ts and is imported above: the observation service validates the SAME stored value with it
+// before scoping the badge, and one shared guard is what keeps the two from ever disagreeing about whether a
+// stored string is a scope at all.
 
 /**
  * The text-filter corpus: a case-insensitive substring match against a terminal run's `workflowName`, `summary`,
@@ -259,35 +395,49 @@ export class ClawdiusWorkflowsView extends ViewPane {
 
 	static readonly ID = WORKFLOWS_VIEW_ID;
 
-	/** The RAW runs from the last applied snapshot (before the status-filter/text-filter/sort derivation below) -
-	 *  correlated against by the live badge feed, so a badge for a run the current filter happens to hide is still
-	 *  tracked and ready the instant that run becomes visible again. See `currentDisplayedRuns` for what the tree
-	 *  actually shows. */
+	/** The RAW runs from the last applied snapshot (before the scope/status-filter/text-filter/sort derivation
+	 *  below) - correlated against by the live badge feed, so a badge for a run the current filter or workspace
+	 *  scope happens to hide is still tracked and ready the instant that run becomes visible again. See
+	 *  `currentDisplayedRuns` for what the tree actually shows. */
 	private currentRuns: readonly WorkflowRun[] = [];
 	/** The authoritative live badges per run; read by the run-row renderer at render time via `renderContext`. */
 	private readonly badges = new Map<string, BadgeSignal>();
 	/** The live needs-input/completion badge feed (created in renderBody, disposed with the view). */
 	private badgeFeed: ClaudeWorkflowBadgeFeed | undefined;
-	/** Whether the CURRENT filter (a non-empty text query, or a status filter narrower than `all`) is active and
-	 *  matches zero of the last held snapshot's runs - drives the `no-match` display state via
-	 *  `resolveWorkflowsDisplayState`. Recomputed on every `refreshDisplay()` call; never toggled directly. */
-	private filterActive = false;
-	/** The persistent free-text filter query (see `matchesWorkflowFilter`), updated on every InputBox keystroke;
-	 *  the (debounced) re-render it drives runs through `filterDebounceScheduler`, never per-keystroke. */
+	/** The SESSION-ONLY free-text filter query (see `matchesWorkflowFilter`), updated on every InputBox keystroke;
+	 *  the (debounced) re-render it drives runs through `filterDebounceScheduler`, never per-keystroke. Deliberately
+	 *  not persisted - a restored query would silently narrow the pane with no visible cause on the next launch. */
 	private filterQuery = '';
-	/** The persistent status-category filter (see `matchesWorkflowStatusFilter`) driven by the toolbar's status
+	/** The PERSISTED status-category filter (see `matchesWorkflowStatusFilter`) driven by the toolbar's status
 	 *  SelectBox - applied immediately on change (a discrete selection, not something to debounce). */
 	private statusFilter: WorkflowStatusFilter = WorkflowStatusFilter.All;
-	/** The persistent sort mode (see `sortWorkflowRuns`) driven by the toolbar's sort SelectBox. Newest-first is
+	/** The PERSISTED sort mode (see `sortWorkflowRuns`) driven by the toolbar's sort SelectBox. Newest-first is
 	 *  the default: with hundreds of runs, the most recently active ones are the most likely starting point. */
 	private sortMode: WorkflowSortMode = WorkflowSortMode.Recency;
-	/** The raw envelope from the LAST applied observation-service snapshot - held so a filter/sort/status-filter
-	 *  change alone can re-derive the displayed runs and re-render WITHOUT waiting for the next snapshot (the
-	 *  find/sort surface's persistent-view-state requirement). `undefined` until the view's first snapshot arrives. */
+	/** The PERSISTED workspace scope (see `matchesWorkflowWorkspaceScope`), driven by the toolbar's scope SelectBox
+	 *  and by the out-of-scope state's one-click widen. Seeded from the SHARED default the observation service also
+	 *  falls back to, so a fresh profile cannot have the badge counting one set of runs while this pane lists
+	 *  another. */
+	private workspaceScope: WorkflowWorkspaceScope = DEFAULT_WORKFLOW_WORKSPACE_SCOPE;
+	/** Whether the toolbar's dropdown panel is expanded. Restored from storage in the constructor; COLLAPSED is the
+	 *  default on a fresh profile - the free-text filter is the everyday control, the three dropdowns are not. */
+	private filtersExpanded = false;
+	/** Whether the workspace-scope stage ACTUALLY dropped a run on the last `refreshDisplay()` - the honest input to
+	 *  `workflowFiltersAreNarrowing` (see that function for why the scope cannot be probed by non-default-ness).
+	 *  Recomputed on every refresh; never toggled directly. */
+	private scopeIsWithholding = false;
+	/** The LAST dimension the split view handed `layoutBody` - held so expanding/collapsing the filter panel (a
+	 *  chrome-height change the split view never observes) can re-run the body sizing on demand. */
+	private lastBodyDimension: Dimension | undefined;
+	/** The raw envelope from the LAST applied observation-service snapshot - held so a filter/sort/status/scope
+	 *  change alone (or a workspace-folder add or remove) can re-derive the displayed runs and re-render WITHOUT
+	 *  waiting for the next snapshot (the find/sort surface's persistent-view-state requirement). `undefined` until
+	 *  the view's first snapshot arrives. */
 	private lastResult: WorkflowRunListResult | undefined;
-	/** The runs actually shown on the last render, AFTER the status filter, text filter, and sort mode all
-	 *  applied - distinct from `currentRuns` (see that field's doc comment). Used by `updateSurfaceOwnershipLabel`
-	 *  to gate the surface label on what is actually visible, not on the full unfiltered snapshot. */
+	/** The runs actually shown on the last render, AFTER the workspace scope, status filter, text filter, and sort
+	 *  mode all applied - distinct from `currentRuns` (see that field's doc comment). Used by
+	 *  `updateSurfaceOwnershipLabel` to gate the surface label on what is actually visible, not on the full
+	 *  unfiltered snapshot. */
 	private currentDisplayedRuns: readonly WorkflowRun[] = [];
 
 	/** The mutable, view-owned ownership signal every row renderer reads at render time (never recomputed by a
@@ -326,12 +476,16 @@ export class ClawdiusWorkflowsView extends ViewPane {
 
 	private purposeLabelEl!: HTMLElement;
 	private surfaceLabelEl!: HTMLElement;
+	private toolbarEl!: HTMLElement;
+	private filtersPanelEl!: HTMLElement;
 	private stateContainer!: HTMLElement;
 	private treeContainer!: HTMLElement;
 	private tree!: WorkbenchObjectTree<WorkflowTreeElement, FuzzyScore>;
 	private filterInput!: InputBox;
+	private filtersToggle!: Toggle;
 	private statusFilterSelect!: SelectBox;
 	private sortModeSelect!: SelectBox;
+	private workspaceScopeSelect!: SelectBox;
 
 	constructor(
 		options: IViewPaneOptions,
@@ -349,8 +503,22 @@ export class ClawdiusWorkflowsView extends ViewPane {
 		@IClaudeWorkflowObservationService private readonly observationService: IClaudeWorkflowObservationService,
 		@IAccessibilityService private readonly accessibilityService: IAccessibilityService,
 		@IContextViewService private readonly contextViewService: IContextViewService,
+		// APPENDED at the end of the decorated list, deliberately: VS Code's DI records dependency indices
+		// POSITIONALLY, so inserting a service mid-list would misbind every parameter after it.
+		@IStorageService private readonly storageService: IStorageService,
+		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
+		// Restore the persisted view state HERE, before `renderBody`: `renderToolbar` seeds each control's selected
+		// index from these fields, and the first `refreshDisplay()` (driven by `applySnapshot` inside `renderBody`)
+		// must already be filtering by the restored values rather than by the declared defaults.
+		this.filtersExpanded = this.storageService.getBoolean(WORKFLOW_FILTERS_EXPANDED_STORAGE_KEY, StorageScope.PROFILE, false);
+		const storedStatus = this.storageService.get(WORKFLOW_STATUS_FILTER_STORAGE_KEY, StorageScope.PROFILE);
+		if (isWorkflowStatusFilter(storedStatus)) { this.statusFilter = storedStatus; }
+		const storedSort = this.storageService.get(WORKFLOW_SORT_MODE_STORAGE_KEY, StorageScope.PROFILE);
+		if (isWorkflowSortMode(storedSort)) { this.sortMode = storedSort; }
+		const storedScope = this.storageService.get(WORKFLOW_WORKSPACE_SCOPE_STORAGE_KEY, StorageScope.WORKSPACE);
+		if (isWorkflowWorkspaceScope(storedScope)) { this.workspaceScope = storedScope; }
 		this.renderContext = {
 			uniformlyForeign: true, ownedSessionIds: new Set(), badgeOf: runId => this.badges.get(runId),
 			runOf: identity => this.latestRunByIdentity.get(identity),
@@ -378,7 +546,7 @@ export class ClawdiusWorkflowsView extends ViewPane {
 		// so a filter that produced the `no-match` state stays reachable to clear or change.
 		this.renderToolbar(container);
 
-		// The three-state message overlay and the tree container are mutually exclusive - exactly one of
+		// The four-state message overlay and the tree container are mutually exclusive - exactly one of
 		// them is visible at a time, and the TREE is the only one of the two that ever scrolls internally.
 		this.stateContainer = append(container, $('.clawdius-workflows-state'));
 		this.stateContainer.style.display = 'none';
@@ -448,6 +616,16 @@ export class ClawdiusWorkflowsView extends ViewPane {
 		this._register(this.observationService.onDidChangeSnapshot(snapshot => this.applySnapshot(snapshot)));
 		this.applySnapshot(this.observationService.snapshot);
 
+		// A folder add/remove changes only the workspace-scope PREDICATE, never the runs on disk - so re-derive from
+		// the snapshot already held (`refreshDisplay`), never `observationService.readAgain()`, which would re-walk
+		// the whole config root for data that did not change. Resyncing the control first also covers the
+		// last-folder-closed case, where the effective scope falls back to All Workspaces. Nothing is persisted here:
+		// the stored value is the developer's chosen enum, never a resolved folder set.
+		this._register(this.workspaceContextService.onDidChangeWorkspaceFolders(() => {
+			this.updateWorkspaceScopeControl();
+			this.refreshDisplay();
+		}));
+
 		// Awareness: mark known failures seen whenever the developer actually looks at this surface - on focus,
 		// and whenever the view's body becomes visible (opened, expanded, or brought to the foreground), never on
 		// becoming hidden. Clears the container's unseen-failure badge without waiting for a fresh read.
@@ -458,17 +636,22 @@ export class ClawdiusWorkflowsView extends ViewPane {
 	}
 
 	/**
-	 * The persistent filter InputBox + the status-filter and sort-mode SelectBoxes, mounted in one toolbar row
-	 * above the tree. All three are PERSISTENT view state (`filterQuery`/`statusFilter`/`sortMode`): a change to
-	 * any of them re-derives the displayed runs from `lastResult` (the last-HELD snapshot) via `refreshDisplay()`
-	 * immediately - never waiting for the next observation-service snapshot. Only the free-text input is debounced
-	 * (`filterDebounceScheduler`); the two SelectBoxes fire a discrete selection event, not a keystroke stream, so
-	 * they re-render immediately.
+	 * The toolbar: an ALWAYS-VISIBLE row carrying the free-text filter InputBox plus the disclosure toggle, and a
+	 * COLLAPSIBLE panel beneath it holding the status-filter, sort-mode and workspace-scope SelectBoxes stacked one
+	 * per row. Only the dropdowns collapse - a hidden text box would hide a filter that is actively narrowing the
+	 * list with no way to see or clear it.
+	 *
+	 * All four controls drive PERSISTED view state except the query (`filtersExpanded`/`statusFilter`/`sortMode`/
+	 * `workspaceScope` persist; `filterQuery` is session-only). A change to any of them re-derives the displayed
+	 * runs from `lastResult` (the last-HELD snapshot) via `refreshDisplay()` immediately - never waiting for the
+	 * next observation-service snapshot. Only the free-text input is debounced (`filterDebounceScheduler`); a
+	 * SelectBox fires a discrete selection event, not a keystroke stream, so it re-renders immediately.
 	 */
 	private renderToolbar(container: HTMLElement): void {
-		const toolbar = append(container, $('.clawdius-workflows-toolbar'));
+		this.toolbarEl = append(container, $('.clawdius-workflows-toolbar'));
 
-		const filterContainer = append(toolbar, $('.clawdius-workflows-filter'));
+		const row = append(this.toolbarEl, $('.clawdius-workflows-toolbar-row'));
+		const filterContainer = append(row, $('.clawdius-workflows-filter'));
 		this.filterInput = this._register(new InputBox(filterContainer, this.contextViewService, {
 			// Item 16: kept SHORT (never the full "name, summary, agent, or error" corpus this filter actually
 			// searches - see matchesWorkflowFilter/the ariaLabel below) so it never clips mid-word at the sidebar's
@@ -482,53 +665,233 @@ export class ClawdiusWorkflowsView extends ViewPane {
 			this.filterDebounceScheduler.schedule();
 		}));
 
-		// The status-category filter: index-aligned with `WorkflowStatusFilter`'s declaration order, built as one
-		// array so the SelectBox's `ISelectOptionItem[]` labels and the enum values driven by its `onDidSelect`
-		// index can never drift apart.
-		const statusFilterOptions: readonly { readonly value: WorkflowStatusFilter; readonly label: string }[] = [
-			{ value: WorkflowStatusFilter.All, label: localize('clawdius.workflows.statusFilter.all', "All Statuses") },
-			{ value: WorkflowStatusFilter.Live, label: localize('clawdius.workflows.statusFilter.live', "Live") },
-			{ value: WorkflowStatusFilter.Completed, label: localize('clawdius.workflows.statusFilter.completed', "Completed") },
-			{ value: WorkflowStatusFilter.Failed, label: localize('clawdius.workflows.statusFilter.failed', "Failed") },
-		];
-		const statusFilterContainer = append(toolbar, $('.clawdius-workflows-status-filter'));
+		// The collapsible panel is built (and its three controls rendered into it) BEFORE the toggle references it
+		// by id, and stays MOUNTED whether expanded or not: `SelectBox.render()` APPENDS its `<select>` on every
+		// call, so disposing and re-rendering on collapse would stack duplicate elements. CSS alone hides it - see
+		// `applyFiltersExpansion`.
+		this.filtersPanelEl = append(this.toolbarEl, $('.clawdius-workflows-filters'));
+		this.filtersPanelEl.id = WORKFLOW_FILTERS_PANEL_DOM_ID;
+
+		this.filtersToggle = this._register(new Toggle({
+			icon: Codicon.filter,
+			// Doubles as the accessible NAME (`Toggle.setTitle` writes aria-label) and the hover tooltip (wired
+			// inside the widget through the base-layer hover delegate - never a second IHoverService call). Seeded
+			// with the not-narrowing wording; `applyFiltersExpansion()` at the end of this method immediately
+			// re-derives it (and the icon) from the restored filter state - see `updateFiltersToggleNarrowing`.
+			title: workflowFiltersToggleTitle(false),
+			isChecked: this.filtersExpanded,
+			actionClassName: 'clawdius-workflows-filter-toggle',
+			...defaultToggleStyles,
+		}));
+		append(row, this.filtersToggle.domNode);
+		this.filtersToggle.domNode.setAttribute('aria-controls', WORKFLOW_FILTERS_PANEL_DOM_ID);
+		this._register(this.filtersToggle.onChange(() => {
+			this.filtersExpanded = this.filtersToggle.checked;
+			this.storageService.store(WORKFLOW_FILTERS_EXPANDED_STORAGE_KEY, this.filtersExpanded, StorageScope.PROFILE, StorageTarget.USER);
+			this.applyFiltersExpansion();
+			// The toolbar just grew or shrank by three rows and NOTHING outside the pane body observes that -
+			// `layoutBody` is reachable only from the split view's own `Pane.layout`. Re-run the sizing ourselves.
+			this.relayoutBodyContent();
+		}));
+
+		// The status-category filter - index-aligned with `WORKFLOW_STATUS_FILTER_ORDER`, the single source both this
+		// options array and every value->index lookup read, so a selected index can never mean two things.
+		const statusFilterContainer = append(this.filtersPanelEl, $('.clawdius-workflows-status-filter'));
 		this.statusFilterSelect = this._register(new SelectBox(
-			statusFilterOptions.map((option): ISelectOptionItem => ({ text: option.label })),
-			0, this.contextViewService, defaultSelectBoxStyles,
-			{ ariaLabel: localize('clawdius.workflows.statusFilter.ariaLabel', "Filter workflow runs by status") },
+			WORKFLOW_STATUS_FILTER_ORDER.map((filter): ISelectOptionItem => ({ text: workflowStatusFilterLabel(filter) })),
+			Math.max(0, WORKFLOW_STATUS_FILTER_ORDER.indexOf(this.statusFilter)),
+			this.contextViewService, defaultSelectBoxStyles,
+			{ ariaLabel: localize('clawdius.workflows.statusFilter.ariaLabel', "Filter workflow runs by status"), useCustomDrawn: true },
 		));
 		this.statusFilterSelect.render(statusFilterContainer);
 		this._register(this.statusFilterSelect.onDidSelect(e => {
-			this.statusFilter = statusFilterOptions[e.index]?.value ?? WorkflowStatusFilter.All;
+			this.persistStatusFilter(WORKFLOW_STATUS_FILTER_ORDER[e.index] ?? WorkflowStatusFilter.All);
 			this.refreshDisplay();
 		}));
 
-		// The sort mode - same index-aligned-array shape as the status filter above.
+		// The sort mode - same index-aligned-array shape as the status filter above. No toggle-icon update on
+		// change: sorting reorders and never hides (see `workflowFiltersAreNarrowing`).
 		const sortModeOptions: readonly { readonly value: WorkflowSortMode; readonly label: string }[] = [
 			{ value: WorkflowSortMode.Recency, label: localize('clawdius.workflows.sort.recency', "Sort: Newest First") },
 			{ value: WorkflowSortMode.Cost, label: localize('clawdius.workflows.sort.cost', "Sort: Highest Cost") },
 			{ value: WorkflowSortMode.Status, label: localize('clawdius.workflows.sort.status', "Sort: Failed First") },
 		];
-		const sortContainer = append(toolbar, $('.clawdius-workflows-sort'));
+		const sortContainer = append(this.filtersPanelEl, $('.clawdius-workflows-sort'));
 		this.sortModeSelect = this._register(new SelectBox(
 			sortModeOptions.map((option): ISelectOptionItem => ({ text: option.label })),
-			0, this.contextViewService, defaultSelectBoxStyles,
-			{ ariaLabel: localize('clawdius.workflows.sort.ariaLabel', "Sort workflow runs") },
+			Math.max(0, sortModeOptions.findIndex(option => option.value === this.sortMode)),
+			this.contextViewService, defaultSelectBoxStyles,
+			{ ariaLabel: localize('clawdius.workflows.sort.ariaLabel', "Sort workflow runs"), useCustomDrawn: true },
 		));
 		this.sortModeSelect.render(sortContainer);
 		this._register(this.sortModeSelect.onDidSelect(e => {
 			this.sortMode = sortModeOptions[e.index]?.value ?? WorkflowSortMode.Recency;
+			this.storageService.store(WORKFLOW_SORT_MODE_STORAGE_KEY, this.sortMode, StorageScope.PROFILE, StorageTarget.USER);
 			this.refreshDisplay();
 		}));
+
+		// The workspace scope - index-aligned with `WORKFLOW_WORKSPACE_SCOPE_ORDER`, the single source both this
+		// options array and `updateWorkspaceScopeControl`'s value->index lookup read.
+		const scopeContainer = append(this.filtersPanelEl, $('.clawdius-workflows-workspace-scope'));
+		this.workspaceScopeSelect = this._register(new SelectBox(
+			WORKFLOW_WORKSPACE_SCOPE_ORDER.map((scope): ISelectOptionItem => ({ text: workflowWorkspaceScopeLabel(scope) })),
+			Math.max(0, WORKFLOW_WORKSPACE_SCOPE_ORDER.indexOf(this.workspaceScope)),
+			this.contextViewService, defaultSelectBoxStyles,
+			{
+				ariaLabel: localize('clawdius.workflows.scope.ariaLabel', "Limit workflow runs to the open workspace"),
+				// `useCustomDrawn: true` UNCONDITIONALLY on all three, not the `!hasNativeContextMenu(...)` idiom
+				// used for context-menu parity elsewhere: that flag resolves FALSE on a default macOS install, which
+				// would put macOS on the NATIVE `<select>` - and a native select does not reliably honor an author
+				// `height`, which is exactly what makes these three the same height as the InputBox beside them in a
+				// stacked panel. Uniform control height in this panel is the requirement; a themed dropdown that
+				// matches the rest of the pane is the bonus.
+				useCustomDrawn: true,
+			},
+		));
+		this.workspaceScopeSelect.render(scopeContainer);
+		this._register(this.workspaceScopeSelect.onDidSelect(e => {
+			this.setWorkspaceScope(WORKFLOW_WORKSPACE_SCOPE_ORDER[e.index] ?? WorkflowWorkspaceScope.ThisWorkspace);
+		}));
+
+		this.applyFiltersExpansion();
+		this.updateWorkspaceScopeControl();
+	}
+
+	/** Paint the expansion state: ONE `expanded` class on the toolbar root drives the panel's own display (in CSS),
+	 *  and the toggle is re-declared as a DISCLOSURE. `Toggle` ships the CHECKBOX contract - `role="checkbox"` plus
+	 *  an `aria-checked` that its own `checked` setter re-writes on every flip - which is the wrong pattern for a
+	 *  show/hide panel, so the role becomes `button` with `aria-expanded`, and the stale `aria-checked` is removed
+	 *  on every pass (the setter will have just put it back). */
+	private applyFiltersExpansion(): void {
+		this.toolbarEl.classList.toggle('expanded', this.filtersExpanded);
+		const node = this.filtersToggle.domNode;
+		node.setAttribute('role', 'button');
+		node.setAttribute('aria-expanded', String(this.filtersExpanded));
+		node.removeAttribute('aria-checked');
+		this.updateFiltersToggleNarrowing();
+	}
+
+	/** The filter button's two INDEPENDENT signals, deliberately kept apart. `Toggle.checked` (and the themed active
+	 *  background it paints) tracks EXPANDED - the ordinary pressed-disclosure affordance. The NARROWING signal
+	 *  tracks whether a control behind the button is actually withholding runs (`workflowFiltersAreNarrowing`), so a
+	 *  COLLAPSED panel can still say "I am hiding runs from you". The two therefore diverge by design: a filled icon
+	 *  on an unpressed button is the important case, not a rendering bug - it is the whole reason the indicator
+	 *  exists.
+	 *
+	 *  The narrowing signal is painted TWICE, in two different channels, because neither reaches everyone: the glyph
+	 *  (`setIcon`, a CSS class swap that touches no ARIA) for sighted users, and the accessible NAME
+	 *  (`setTitle`, which writes `aria-label` and the hover text) for everyone else - see
+	 *  `workflowFiltersToggleTitle` for why the glyph alone would leave a screen-reader user with no signal at all. */
+	private updateFiltersToggleNarrowing(): void {
+		const narrowing = workflowFiltersAreNarrowing(this.statusFilter, this.scopeIsWithholding);
+		this.filtersToggle.setIcon(narrowing ? Codicon.filterFilled : Codicon.filter);
+		this.filtersToggle.setTitle(workflowFiltersToggleTitle(narrowing));
+	}
+
+	/** Adopt a new workspace scope from EITHER the dropdown or the out-of-scope state's one-click widen action, so
+	 *  both routes persist, resync the control, and re-derive identically. Re-entrant by construction on the widen
+	 *  path (the button lives inside the state message this `refreshDisplay` then replaces): the message is fully
+	 *  built before the old `DisposableStore` is disposed, and the emitter tolerates listener removal mid-delivery. */
+	private setWorkspaceScope(scope: WorkflowWorkspaceScope): void {
+		this.workspaceScope = scope;
+		this.storageService.store(WORKFLOW_WORKSPACE_SCOPE_STORAGE_KEY, scope, StorageScope.WORKSPACE, StorageTarget.USER);
+		this.updateWorkspaceScopeControl();
+		this.refreshDisplay();
+	}
+
+	/** Adopt (and persist) a new status filter. The RE-DERIVE is the caller's, not this method's: the dropdown path
+	 *  re-derives immediately, while `clearContentFilters` defers until it has also cleared the query, so those two
+	 *  changes produce ONE render instead of two. The control resync is likewise the caller's - the dropdown is
+	 *  already showing its own new value. */
+	private persistStatusFilter(filter: WorkflowStatusFilter): void {
+		this.statusFilter = filter;
+		this.storageService.store(WORKFLOW_STATUS_FILTER_STORAGE_KEY, filter, StorageScope.PROFILE, StorageTarget.USER);
+	}
+
+	/** The `no-match` state's one-click escape: reset BOTH content filters (the persisted status filter and the
+	 *  session-only query) and re-derive once. Without it that state is a dead end - the status filter it blames
+	 *  survives a restart and, with the panel collapsed, is not on screen at all to be seen or cleared. */
+	private clearContentFilters(): void {
+		this.persistStatusFilter(WorkflowStatusFilter.All);
+		this.statusFilterSelect.select(Math.max(0, WORKFLOW_STATUS_FILTER_ORDER.indexOf(WorkflowStatusFilter.All)));
+		// Assigning `InputBox.value` fires its own `onDidChange`, which schedules the debounced refresh - so clear
+		// the field FIRST, then cancel that pending timer, so this method's own single re-derive is the only one.
+		this.filterInput.value = '';
+		this.filterQuery = '';
+		this.filterDebounceScheduler.cancel();
+		this.refreshDisplay();
+		this.focusAfterStateAction();
+	}
+
+	/** Move focus deliberately after a state-message action RESOLVED the state that carried its button.
+	 *
+	 *  `refreshDisplay` -> `applyTreeSnapshot` sets `stateContainer.style.display = 'none'` synchronously in this
+	 *  same call stack, while the activating Button is still inside it - and a `display: none` subtree cannot hold
+	 *  focus, so the browser silently resets `activeElement` to `<body>` and the keyboard user's next Tab restarts
+	 *  from the top of the whole workbench. The tree that replaced the message is the right landing place; a message
+	 *  that merely became a DIFFERENT message (the tree is still hidden) hands focus back to the filter toggle. The
+	 *  `alert` is what makes the OUTCOME perceivable without sight - the list silently repopulating is exactly what
+	 *  a screen-reader user cannot see. */
+	private focusAfterStateAction(): void {
+		if (this.treeContainer.style.display === 'none') {
+			this.filtersToggle.focus();
+			return;
+		}
+		this.tree.domFocus();
+		this.accessibilityService.alert(this.currentDisplayedRuns.length === 1
+			? localize('clawdius.workflows.nowShowing.one', "Showing 1 workflow run.")
+			: localize('clawdius.workflows.nowShowing.many', "Showing {0} workflow runs.", this.currentDisplayedRuns.length));
+	}
+
+	/** Sync the scope control with BOTH the stored preference and the runtime fact that there may be no folder to
+	 *  scope to. With zero folders the control switches to All Workspaces and is DISABLED: the effective scope
+	 *  really is All Workspaces (see `matchesWorkflowWorkspaceScope`), and a control still reading "This Workspace"
+	 *  while every run is shown would be a lie on screen. The stored preference is never written here, so opening a
+	 *  folder restores whatever the developer actually chose. */
+	private updateWorkspaceScopeControl(): void {
+		const scoped = workflowWorkspaceProjectKeys(this.workspaceContextService).size > 0;
+		const effective = scoped ? this.workspaceScope : WorkflowWorkspaceScope.AllWorkspaces;
+		this.workspaceScopeSelect.select(Math.max(0, WORKFLOW_WORKSPACE_SCOPE_ORDER.indexOf(effective)));
+		this.workspaceScopeSelect.setEnabled(scoped);
+		this.workspaceScopeSelect.setAriaLabel(scoped
+			? localize('clawdius.workflows.scope.ariaLabel', "Limit workflow runs to the open workspace")
+			: localize('clawdius.workflows.scope.ariaLabelNoFolder', "Workspace scope is unavailable. No folder is open, so runs from every workspace are shown."));
 	}
 
 	protected override layoutBody(height: number, width: number): void {
 		super.layoutBody(height, width);
-		const boundedHeight = Math.max(0, height);
-		this.stateContainer.style.height = `${boundedHeight}px`;
-		this.treeContainer.style.height = `${boundedHeight}px`;
+		this.lastBodyDimension = new Dimension(width, height);
+		this.sizeBodyContent(width, height);
+	}
+
+	/**
+	 * Size the tree/state pair to the body height MINUS the chrome stacked above them. The three chrome elements are
+	 * all `flex: 0 0 auto` inside a `height: 100%` flex column, so handing `tree.layout()` the FULL body height told
+	 * the virtual list it was taller than its own DOM box - its last rows rendered below that box and were clipped
+	 * by `.pane-body { overflow: hidden }`, unreachable by scrolling. That was already true of the single-row
+	 * toolbar; three stacked dropdowns make it far worse. `offsetHeight` is 0 for a `display: none` element, so a
+	 * hidden surface label and a collapsed dropdown panel each correctly contribute nothing. Measured rather than
+	 * hardcoded, because this chrome's height is not fixed.
+	 *
+	 * Named `sizeBodyContent`, NOT `layoutBodyContent`: `FilterViewPane` declares an abstract
+	 * `layoutBodyContent(height, width)` with the opposite argument order, and a same-name/swapped-args method would
+	 * be a silent-breakage trap if this view were ever re-parented onto that base class.
+	 */
+	private sizeBodyContent(width: number, height: number): void {
+		const chromeHeight = this.purposeLabelEl.offsetHeight + this.surfaceLabelEl.offsetHeight + this.toolbarEl.offsetHeight;
+		const contentHeight = Math.max(0, height - chromeHeight);
+		this.stateContainer.style.height = `${contentHeight}px`;
+		this.treeContainer.style.height = `${contentHeight}px`;
 		this.treeContainer.style.width = `${width}px`;
-		this.tree.layout(height, width);
+		this.tree.layout(contentHeight, width);
+	}
+
+	/** Re-run the body sizing against the LAST dimension the split view gave us - for the chrome-height changes the
+	 *  split view never sees: expanding/collapsing the dropdown panel, and swapping the purpose line for the taller
+	 *  surface-ownership label. No-ops before the first layout. */
+	private relayoutBodyContent(): void {
+		const dimension = this.lastBodyDimension;
+		if (dimension) { this.sizeBodyContent(dimension.width, dimension.height); }
 	}
 
 	/**
@@ -546,12 +909,13 @@ export class ClawdiusWorkflowsView extends ViewPane {
 
 	/**
 	 * Re-derive the DISPLAYED runs from `lastResult` (the last-HELD read result - a fresh snapshot from
-	 * `applySnapshot`, or simply whatever snapshot preceded a filter/sort/status-filter change) and re-render. This
-	 * is the ONE place the status filter, text filter, and sort mode are actually applied - status filter narrows
-	 * the category first, the text filter narrows further within it, and the sort orders what remains, so a LIVE
-	 * run is pinned first only AMONG MATCHES and is excluded outright the moment its own runId fails the text
-	 * filter (there is no separate "force-show a live run" path). Renders the tree when runs remain after
-	 * filtering, one of the three distinct message states otherwise. No-ops until the first snapshot has arrived
+	 * `applySnapshot`, or simply whatever snapshot preceded a filter/sort/scope change) and re-render. This is the
+	 * ONE place the workspace scope, status filter, text filter, and sort mode are actually applied, in that order
+	 * (see the find/sort block comment for why): scope decides whether a run is in the developer's world at all,
+	 * the status filter narrows the category within that, the text filter narrows further, and the sort orders what
+	 * remains - so a LIVE run is pinned first only AMONG MATCHES and is excluded outright the moment any filter
+	 * drops it (there is no separate "force-show a live run" path). Renders the tree when runs remain after
+	 * filtering, one of the four distinct message states otherwise. No-ops until the first snapshot has arrived
 	 * (`lastResult` still `undefined`).
 	 */
 	private refreshDisplay(): void {
@@ -577,7 +941,21 @@ export class ClawdiusWorkflowsView extends ViewPane {
 		for (const run of rawRuns) { this.latestRunByIdentity.set(run.identity, run); }
 
 		const query = this.filterQuery.trim();
-		const statusFiltered = rawRuns.filter(run => matchesWorkflowStatusFilter(run, this.statusFilter));
+		const workspaceKeys = workflowWorkspaceProjectKeys(this.workspaceContextService);
+		// The scope-DROPPED runs are kept, not discarded: the toggle's narrowing indicator and the honest empty
+		// state below both have to know how many runs this stage withheld.
+		const scopeMatched: WorkflowRun[] = [];
+		const scopeDropped: WorkflowRun[] = [];
+		for (const run of rawRuns) {
+			(matchesWorkflowWorkspaceScope(run, this.workspaceScope, workspaceKeys) ? scopeMatched : scopeDropped).push(run);
+		}
+		// Whether the scope stage ACTUALLY withheld something, not merely whether it is set to a non-default value -
+		// the shipped default is the narrowing one, so non-default-ness is the wrong probe here (see
+		// `workflowFiltersAreNarrowing`). Repainted before the state branch below, which can return early.
+		this.scopeIsWithholding = scopeDropped.length > 0;
+		this.updateFiltersToggleNarrowing();
+
+		const statusFiltered = scopeMatched.filter(run => matchesWorkflowStatusFilter(run, this.statusFilter));
 		const textFiltered = query.length === 0 ? statusFiltered : statusFiltered.filter(run => matchesWorkflowFilter(run, query));
 		const displayedRuns = sortWorkflowRuns(textFiltered, this.sortMode);
 		this.currentDisplayedRuns = displayedRuns;
@@ -586,18 +964,24 @@ export class ClawdiusWorkflowsView extends ViewPane {
 		// what the tree currently shows.
 		this.renderContext.uniformlyForeign = computeUniformlyForeign(displayedRuns, ownedSessionIds);
 
-		// A NON-DEFAULT filter (a non-empty text query, or a status filter narrower than `all`) that matches zero
-		// runs drives the existing `no-match` state; a genuinely empty read with no filter applied still reads as
-		// `empty` - the two are opposite facts (see `resolveWorkflowsDisplayState`'s own doc comment).
-		const filterIsActive = query.length > 0 || this.statusFilter !== WorkflowStatusFilter.All;
-		this.filterActive = filterIsActive && displayedRuns.length === 0;
+		// The empty-list diagnosis, whose costly half is computed only when the list IS empty (zero cost on the
+		// common path): how many runs the SCOPE stage alone withheld that pass every CONTENT filter - i.e. how many
+		// relaxing the scope would put back on screen. A non-zero count is what makes "no runs here, N elsewhere"
+		// sayable instead of the flatly false "no runs found under your Claude config root".
+		const emptyDiagnosis: IWorkflowsEmptyDiagnosis = {
+			queryActive: query.length > 0,
+			statusFilterActive: this.statusFilter !== WorkflowStatusFilter.All,
+			matchedElsewhere: displayedRuns.length > 0 ? 0 : scopeDropped.filter(run =>
+				matchesWorkflowStatusFilter(run, this.statusFilter)
+				&& (query.length === 0 || matchesWorkflowFilter(run, query))).length,
+		};
 
 		const displayResult: WorkflowRunListResult = result.state === 'read-error'
 			? result
 			: result.state === 'partial'
 				? { state: 'partial', runs: displayedRuns, message: result.message }
 				: { state: 'ok', runs: displayedRuns };
-		const state = resolveWorkflowsDisplayState(displayResult, this.filterActive);
+		const state = resolveWorkflowsDisplayState(displayResult, emptyDiagnosis);
 		if (state.kind !== 'tree') {
 			this.liveIdentities.clear();
 			this.runElementsByRunId.clear();
@@ -616,7 +1000,19 @@ export class ClawdiusWorkflowsView extends ViewPane {
 			this.purposeLabelEl.style.display = '';
 			this.treeContainer.style.display = 'none';
 			this.stateContainer.style.display = '';
-			this.stateMessageStore.value = renderWorkflowsStateMessage(this.stateContainer, state, () => this.observationService.readAgain());
+			// The purpose line just came back and the surface label just went away, so the chrome above the
+			// tree/state pair changed height - re-run the sizing the split view cannot know it needs.
+			this.relayoutBodyContent();
+			this.stateMessageStore.value = renderWorkflowsStateMessage(this.stateContainer, state, {
+				onReadAgain: () => this.observationService.readAgain(),
+				// Both widening actions move focus AFTER re-deriving: the button they were activated from is inside
+				// the state container this same call stack is about to hide - see `focusAfterStateAction`.
+				onShowAllWorkspaces: () => {
+					this.setWorkspaceScope(WorkflowWorkspaceScope.AllWorkspaces);
+					this.focusAfterStateAction();
+				},
+				onClearFilters: () => this.clearContentFilters(),
+			});
 			return;
 		}
 		this.applyTreeSnapshot(state.runs);
@@ -710,6 +1106,9 @@ export class ClawdiusWorkflowsView extends ViewPane {
 		// the always-on purpose line the instant the more specific surface label takes over, rather than stacking
 		// two near-duplicate sentences.
 		this.purposeLabelEl.style.display = show ? 'none' : '';
+		// Swapping a one-line purpose caption for the taller two-line surface label changes the chrome height above
+		// the tree, and nothing outside the pane body observes that - re-run the sizing (see `sizeBodyContent`).
+		this.relayoutBodyContent();
 	}
 
 	/** Open the RESULT detail editor for a terminal run row's activation - a SNAPSHOT off the same in-memory

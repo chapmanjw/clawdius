@@ -16,6 +16,7 @@
 
 import { Limiter } from '../../../../../base/common/async.js';
 import { streamToBuffer, VSBuffer } from '../../../../../base/common/buffer.js';
+import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { basename } from '../../../../../base/common/resources.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { FileOperationResult, IFileService, toFileOperationResult } from '../../../../../platform/files/common/files.js';
@@ -51,6 +52,12 @@ const KNOWN_RECORD_TYPES: ReadonlySet<string> = new Set(['user', 'assistant', 's
 
 /** The ledger file the launcher appends to DURING a workflow run (one `started`/`result` per agent). */
 const JOURNAL_NAME = 'journal.jsonl';
+
+/** What a CANCELLED {@link TranscriptJsonlAdapter.enumerateWorkflows} walk returns. Deliberately the inert empty
+ *  `ok` envelope and never `read-error`/`partial`: an abandoned walk is not a failed read and must never be able
+ *  to paint an error or a degraded-data warning on a surface (see that method's cancellation note). The caller
+ *  owns the token and discards this outright; the inert shape only bounds the damage if one ever forgets. */
+const CANCELLED_WORKFLOW_ENUMERATION: WorkflowRunListResult = { state: 'ok', runs: [] };
 
 /** A workflow run id, matching the launcher's own `wf_`-prefixed id contract. Guards against stray files. */
 const RUN_ID_RE = /^wf_[a-z0-9-]{6,}$/;
@@ -748,8 +755,18 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 	 * the way is `partial` (real data, known gap). Never reads a transcript up front - zero transcript reads
 	 * during enumeration, only small manifest/journal files and directory listings. Deterministically ordered.
 	 * Read-only.
+	 *
+	 * CANCELLATION. `token` lets a caller that has already superseded this walk stop it paying for the rest of the
+	 * corpus: every sequential loop below checks it before starting its next directory, and every read queued on
+	 * {@link readLimiter} checks it again at the moment the limiter finally dequeues it (which is where a queued
+	 * read spends most of its life on a large corpus). A cancelled walk returns the INERT EMPTY `ok` envelope -
+	 * deliberately never `read-error` and never `partial`. Cancellation is not a read failure, and a walk the
+	 * caller itself abandoned must not be able to paint an error or a degraded-data warning on a surface. The
+	 * caller owns the token, so it knows to discard the envelope outright; the inert shape only bounds the damage
+	 * if some future caller forgets, in which case the worst case is a momentarily-empty list that the pass which
+	 * superseded this one immediately corrects.
 	 */
-	async enumerateWorkflows(root: URI): Promise<WorkflowRunListResult> {
+	async enumerateWorkflows(root: URI, token: CancellationToken = CancellationToken.None): Promise<WorkflowRunListResult> {
 		const projects = await this.resolveChildDirs(URI.joinPath(root, 'projects'));
 		if (projects.outcome === 'not-found') { return { state: 'ok', runs: [] }; }
 		if (projects.outcome === 'error') {
@@ -763,12 +780,20 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		// There is therefore no run-level identity collision to guard against here (a duplicate `agentId` WITHIN one
 		// manifest is a separate, real case, handled in `workflowFromManifest`).
 		for (const projectDir of projects.dirs) {
+			if (token.isCancellationRequested) { return CANCELLED_WORKFLOW_ENUMERATION; }
+			// The join key for the view's workspace-scope filter, bound HERE (the only place it is known) and carried
+			// verbatim on every run built below. Never COMPARED here: coverage stays workspace-INDEPENDENT at
+			// enumeration time (see the three `CoverageLabel.InScope` literals below), so a workspace-folder add or
+			// remove is a cheap re-derive in the view rather than a full re-walk of the config root. See
+			// `matchesWorkflowWorkspaceScope` in common/claudeWorkflowModel.ts for why the comparison belongs there.
+			const projectDirName = basename(projectDir);
 			const sessions = await this.resolveChildDirs(projectDir);
 			if (sessions.outcome === 'error') { degraded = true; continue; }
 			for (const sessionDir of sessions.dirs) {
+				if (token.isCancellationRequested) { return CANCELLED_WORKFLOW_ENUMERATION; }
 				const sessionId = basename(sessionDir);
 				if (sessionId === 'memory') { continue; }
-				const { manifests, outcome: manifestsOutcome } = await this.readMissionManifests(sessionDir);
+				const { manifests, outcome: manifestsOutcome } = await this.readMissionManifests(sessionDir, token);
 				if (manifestsOutcome === 'error') { degraded = true; }
 				// Build every manifest's WorkflowRun CONCURRENTLY - each is independent (see `readMissionManifests`'s
 				// own doc comment for the same reasoning); the final list is sorted below, so the order these resolve
@@ -779,16 +804,17 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 				// every slot with outer tasks that are each awaiting an inner task which can then never start - a
 				// self-deadlock that only appears once a corpus has more runs than the limiter has slots.
 				const manifestRuns = await Promise.all([...manifests].map(([runId, manifest]) =>
-					this.workflowFromManifest(sessionDir, sessionId, runId, manifest)));
+					this.workflowFromManifest(sessionDir, projectDirName, sessionId, runId, manifest, token)));
 				out.push(...manifestRuns);
-				const { journals, outcome: journalsOutcome } = await this.listMissionJournals(sessionDir);
+				const { journals, outcome: journalsOutcome } = await this.listMissionJournals(sessionDir, token);
 				if (journalsOutcome === 'error') { degraded = true; }
 				// A manifest is the terminal record of the same run; only a manifest-less journal is live.
 				const journalRuns = await Promise.all([...journals].filter(([runId]) => !manifests.has(runId)).map(([runId, journal]) =>
-					this.workflowFromJournal(sessionId, runId, journal)));
+					this.workflowFromJournal(projectDirName, sessionId, runId, journal, token)));
 				out.push(...journalRuns);
 			}
 		}
+		if (token.isCancellationRequested) { return CANCELLED_WORKFLOW_ENUMERATION; }
 		out.sort((a, b) => a.sessionId.localeCompare(b.sessionId) || a.runId.localeCompare(b.runId));
 		if (degraded) {
 			return { state: 'partial', runs: out, message: localize('clawdius.workflows.partialEnumeration', "Some Claude workflow sessions could not be read; this list may be incomplete.") };
@@ -799,12 +825,16 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 	/** The distinct agent ids with a `started` journal record for one run, used to satisfy the transcript join's
 	 *  "present in journal" condition once per run rather than re-reading the journal per agent. An absent
 	 *  journal (a terminal run whose journal was pruned) yields an empty set - the join simply cannot succeed. */
-	private async startedAgentIdsFor(dir: URI): Promise<ReadonlySet<string>> {
+	private async startedAgentIdsFor(dir: URI, token: CancellationToken): Promise<ReadonlySet<string>> {
 		const journal = URI.joinPath(dir, JOURNAL_NAME);
 		// A leaf read (the existence check plus the journal itself) held as ONE slot under the shared bound - this
 		// runs once per terminal run, so an unbounded corpus would otherwise put one of these per run in flight at
 		// once. Safe to queue: nothing inside it is itself queued (see `readLimiter`).
 		return this.queueRead(async () => {
+			// Checked HERE rather than before queueing: on a large corpus a queued read waits for a slot far longer
+			// than it runs, so the moment the limiter dequeues it is the last point at which the work can still be
+			// skipped. An empty set is the same shape an absent journal yields, so nothing downstream needs to know.
+			if (token.isCancellationRequested) { return new Set<string>(); }
 			if (!(await this.fileService.exists(journal))) { return new Set<string>(); }
 			const { records } = await this.readJournal(journal, false); // terminal run: not live, an unterminated tail is damage
 			return new Set(records.filter(r => r.type === 'started' && isAgentId(r.agentId)).map(r => r.agentId as string));
@@ -818,7 +848,11 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 	 * dir. Never a heuristic (positional / label / timing) fallback - a failure of any condition withholds the
 	 * ref rather than guessing. Read-only (an existence check only; the transcript body is never read here).
 	 */
-	private async resolveTranscriptRef(dir: URI, sessionId: string, runId: string, agentId: string, unique: boolean, startedIds: ReadonlySet<string>): Promise<WorkflowTranscriptRef | undefined> {
+	private async resolveTranscriptRef(dir: URI, sessionId: string, runId: string, agentId: string, unique: boolean, startedIds: ReadonlySet<string>, token: CancellationToken): Promise<WorkflowTranscriptRef | undefined> {
+		// This whole call IS the caller's queued task, so this runs at the moment the limiter dequeues it - the last
+		// point the existence probe can still be skipped. Withholding the ref is already this method's answer for
+		// "cannot prove the join", so a cancelled walk needs no extra shape.
+		if (token.isCancellationRequested) { return undefined; }
 		if (!isAgentId(agentId) || !unique || !startedIds.has(agentId)) { return undefined; }
 		const file = URI.joinPath(dir, `agent-${agentId}.jsonl`);
 		// Defense-in-depth: the AGENT_ID_RE charset guard above already makes this true by construction (no `/`,
@@ -848,15 +882,18 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 	 * tallies are DERIVED from the validated agents (the manifest carries no such counts). Computes the
 	 * deterministic transcript join per agent (the identity-join rule) - the only I/O beyond the manifest itself, and never a
 	 * transcript body read.
+	 *
+	 * `projectDirName` is passed EXPLICITLY, never re-derived from `sessionDir`: the caller's loop already holds the
+	 * value, and re-deriving it here would re-parse a URI per run for a fact the walk knows for free.
 	 */
-	private async workflowFromManifest(sessionDir: URI, sessionId: string, runId: string, m: IWorkflowManifest): Promise<WorkflowRun> {
+	private async workflowFromManifest(sessionDir: URI, projectDirName: string, sessionId: string, runId: string, m: IWorkflowManifest, token: CancellationToken): Promise<WorkflowRun> {
 		const raw = m as unknown as Record<string, unknown>;
 		const identity = workflowRunIdentity(sessionId, runId);
 		const statusRaw = raw['status'];
 		const status = typeof statusRaw === 'string' ? statusRaw : undefined;
 		if (!isTerminalStatus(status)) {
 			const unrecognized: UnrecognizedWorkflowRun = {
-				kind: 'unknown-shape', sessionId, runId, identity,
+				kind: 'unknown-shape', sessionId, runId, identity, projectDirName,
 				ownership: 'foreign', coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled,
 				completeness: CompletenessState.UnknownShape, adapterVersion: this.canaryStamp,
 			};
@@ -977,7 +1014,7 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		}
 
 		const dir = URI.joinPath(sessionDir, 'subagents', 'workflows', runId);
-		const startedIds = await this.startedAgentIdsFor(dir);
+		const startedIds = await this.startedAgentIdsFor(dir, token);
 
 		// Every agentId LISTED so far - the duplicate-id guard below. A manifest that names the SAME agentId twice
 		// (a launcher bug, not a read gap) would otherwise hand the tree two rows sharing one `workflowTreeElementId`
@@ -1050,7 +1087,7 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		// validation pass above required. `Promise.all` keeps its results index-aligned with `pendingAgents`
 		// regardless of completion order, so declared order is preserved exactly as before.
 		const transcriptRefs = await Promise.all(pendingAgents.map((agent, index) =>
-			this.queueRead(() => this.resolveTranscriptRef(dir, sessionId, runId, agent.agentId, pendingUnique[index], startedIds))));
+			this.queueRead(() => this.resolveTranscriptRef(dir, sessionId, runId, agent.agentId, pendingUnique[index], startedIds, token))));
 		const agents: TerminalWorkflowAgent[] = pendingAgents.map((agent, index) => ({ ...agent, transcriptRef: transcriptRefs[index] }));
 
 		// First-match assignment (shared with the tree's nesting via `assignAgentsToPhases`): an agent whose title-only
@@ -1063,7 +1100,7 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		});
 
 		const workflow: TerminalWorkflowRun = {
-			kind: 'terminal', sessionId, runId, identity,
+			kind: 'terminal', sessionId, runId, identity, projectDirName,
 			workflowName, summary, status, startTime, timestamp, durationMs, totalTokens, totalToolCalls,
 			// NEVER derived from `agents.length`: a missing manifest agentCount stays absent (renders as a dash),
 			// which is a different fact from "this run had zero agents" - the validated agent list already carries
@@ -1083,11 +1120,19 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 	 * disk. Carries only what the journal actually proves (started/result counts, landed results, last-write
 	 * time); a torn line degrades `degradation`/`completeness` to `partial`, and a journal with content but NO
 	 * recognizable record at all degrades to `unknown-shape` rather than being silently treated as empty.
+	 *
+	 * `projectDirName` is passed EXPLICITLY rather than walked back out of `journal`: the journal sits FOUR levels
+	 * below its project dir (`<proj>/<session>/subagents/workflows/<runId>/journal.jsonl`), so a `'..'` climb would
+	 * be both fragile and a per-run re-parse of a value the caller's loop already holds.
 	 */
-	private async workflowFromJournal(sessionId: string, runId: string, journal: URI): Promise<LiveWorkflowRun> {
+	private async workflowFromJournal(projectDirName: string, sessionId: string, runId: string, journal: URI, token: CancellationToken): Promise<LiveWorkflowRun> {
 		// A leaf read, held under the shared bound - one of these runs per manifest-less run, so an unbounded corpus
-		// would otherwise put one per live run in flight at once (see `readLimiter`).
-		const { records, sawTorn } = await this.queueRead(() => this.readJournal(journal, true)); // manifest-less: in flight, an unterminated tail is the live tail
+		// would otherwise put one per live run in flight at once (see `readLimiter`). The cancellation check sits
+		// INSIDE the queued task, at the moment the limiter dequeues it: on a large corpus that is where the read
+		// has been waiting, and the whole-journal read it guards is the single largest allocation of the walk. The
+		// empty parse is exactly what an unreadable journal already yields, so no downstream shape changes.
+		const { records, sawTorn }: IParsedJournal = await this.queueRead(() =>
+			token.isCancellationRequested ? Promise.resolve({ records: [], sawTorn: false }) : this.readJournal(journal, true)); // manifest-less: in flight, an unterminated tail is the live tail
 		const startedIds = new Set(records.filter(r => r.type === 'started' && isAgentId(r.agentId)).map(r => r.agentId as string));
 		const resultRecords = records.filter(r => r.type === 'result' && isAgentId(r.agentId));
 		const resultIds = new Set(resultRecords.map(r => r.agentId as string));
@@ -1105,11 +1150,14 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		})).sort((a, b) => a.agentId.localeCompare(b.agentId));
 		let mtime = 0;
 		let mtimeUnreadable = false;
-		try { mtime = (await this.queueRead(() => this.fileService.stat(journal))).mtime; } catch { mtimeUnreadable = true; /* best-effort 0, and the missing write-time is a known gap */ }
+		// Not queued at all once cancelled - this sits AFTER the journal read above, so by here the token has already
+		// been re-read at the limiter, and never taking the slot is strictly better than taking it to no-op. Skipped
+		// SILENTLY (never `mtimeUnreadable`): an abandoned walk must not report a gap it never actually looked for.
+		try { mtime = token.isCancellationRequested ? 0 : (await this.queueRead(() => this.fileService.stat(journal))).mtime; } catch { mtimeUnreadable = true; /* best-effort 0, and the missing write-time is a known gap */ }
 		const degradation: 'partial' | 'unknown-shape' | undefined =
 			records.length === 0 && sawTorn ? 'unknown-shape' : (sawTorn || mtimeUnreadable) ? 'partial' : undefined;
 		return {
-			kind: 'live', sessionId, runId, identity: workflowRunIdentity(sessionId, runId),
+			kind: 'live', sessionId, runId, identity: workflowRunIdentity(sessionId, runId), projectDirName,
 			startedCount: startedIds.size, resultCount: resultIds.size, seenCount: seenIds.size,
 			landedResults, journalLastWriteTime: mtime, degradation,
 			ownership: 'foreign', coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Live,
@@ -1312,7 +1360,7 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 	 * FILE stays tolerated and is simply skipped - that per-file leniency is unrelated to whether the directory
 	 * itself was readable, and one bad manifest must not blank out its siblings.
 	 */
-	private async readMissionManifests(sessionDir: URI): Promise<{ readonly manifests: Map<string, IWorkflowManifest>; readonly outcome: 'ok' | 'not-found' | 'error' }> {
+	private async readMissionManifests(sessionDir: URI, token: CancellationToken = CancellationToken.None): Promise<{ readonly manifests: Map<string, IWorkflowManifest>; readonly outcome: 'ok' | 'not-found' | 'error' }> {
 		const out = new Map<string, IWorkflowManifest>();
 		let files: readonly URI[];
 		try {
@@ -1327,6 +1375,11 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 		// hundreds of runs made this loop's own per-file round-trip latency the dominant cost of a first read when
 		// run one file at a time.
 		const entries = await Promise.all(files.map(file => this.queueRead(async (): Promise<readonly [string, IWorkflowManifest] | undefined> => {
+			// Checked at the moment the limiter dequeues this task, not before it was queued: on a corpus with
+			// hundreds of manifests almost every one of these reads is sitting in the queue rather than running, and
+			// this read plus its `JSON.parse` is the bulk of a whole-corpus pass's allocation. `undefined` is the
+			// same answer an unreadable manifest already gives, so the skip needs no new shape.
+			if (token.isCancellationRequested) { return undefined; }
 			const runId = basename(file).slice(0, -'.json'.length);
 			if (!isRunId(runId)) { return undefined; }
 			try {
@@ -1345,7 +1398,7 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 	/** The run journals under a session's `subagents/workflows/` dir, keyed by run id, plus whether the dir itself
 	 *  could be listed - the same `not-found` vs `error` distinction {@link readMissionManifests} draws for its
 	 *  sibling `workflows/` dir. */
-	private async listMissionJournals(sessionDir: URI): Promise<{ readonly journals: Map<string, URI>; readonly outcome: 'ok' | 'not-found' | 'error' }> {
+	private async listMissionJournals(sessionDir: URI, token: CancellationToken = CancellationToken.None): Promise<{ readonly journals: Map<string, URI>; readonly outcome: 'ok' | 'not-found' | 'error' }> {
 		const out = new Map<string, URI>();
 		let runDirs: readonly URI[];
 		try {
@@ -1355,6 +1408,11 @@ export class TranscriptJsonlAdapter extends VersionKeyedAdapter {
 			return { journals: out, outcome: toFileOperationResult(e) === FileOperationResult.FILE_NOT_FOUND ? 'not-found' : 'error' };
 		}
 		for (const dir of runDirs) {
+			// The per-run existence probe below is unqueued and SEQUENTIAL (see `readLimiter`'s note on why), so on a
+			// corpus with thousands of runs this loop is one of the walk's longest uninterruptible stretches. Stopping
+			// here reports `ok` with a short map rather than a gap, because the caller already discards the whole
+			// envelope on cancellation - a truthful `error` here would be worse: it would look like a real read gap.
+			if (token.isCancellationRequested) { break; }
 			const runId = basename(dir);
 			if (!isRunId(runId)) { continue; }
 			const journal = URI.joinPath(dir, JOURNAL_NAME);
@@ -1856,10 +1914,14 @@ export class ClawdiusReaderSeamService implements IReaderSeam {
 	 * {@link WorkflowRunListResult} - the Workflows view's PRIMARY read. Replaces a bare array so an enumeration
 	 * failure is never indistinguishable from a successful empty read. Re-callable as the data re-read
 	 * entry point (never a run control): calling it again simply re-enumerates fresh state. Read-only.
+	 *
+	 * Pass `token` to abandon a read whose result is already superseded; see
+	 * {@link TranscriptJsonlAdapter.enumerateWorkflows} for what a cancelled walk returns and why it is deliberately
+	 * inert rather than an error. The caller owns the token, so it is the caller's job to discard the envelope.
 	 */
-	async listWorkflows(root: ReaderConfigRoot): Promise<WorkflowRunListResult> {
+	async listWorkflows(root: ReaderConfigRoot, token: CancellationToken = CancellationToken.None): Promise<WorkflowRunListResult> {
 		if (root.kind === 'no-config') { return { state: 'ok', runs: [] }; }
-		return this.transcript.enumerateWorkflows(root.root);
+		return this.transcript.enumerateWorkflows(root.root, token);
 	}
 
 	/**

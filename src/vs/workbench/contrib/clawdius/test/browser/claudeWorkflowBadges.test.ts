@@ -41,7 +41,7 @@ function run(runId: string, sessionId: string): TerminalWorkflowRun {
 		kind: 'terminal', runId, sessionId, identity: workflowRunIdentity(sessionId, runId),
 		workflowName: runId, status: 'completed', phases: [], agents: [], ownership: 'foreign',
 		coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled, completeness: CompletenessState.Complete,
-		adapterVersion: { format: 'transcript-jsonl', versionKey: 'v1' },
+		adapterVersion: { format: 'transcript-jsonl', versionKey: 'v1' }, projectDirName: 'C--work-fixture-proj',
 	};
 }
 

@@ -17,14 +17,17 @@
 import assert from 'assert';
 import { ObjectTree } from '../../../../../base/browser/ui/tree/objectTree.js';
 import { ITreeNode, ITreeRenderer } from '../../../../../base/browser/ui/tree/tree.js';
+import { timeout } from '../../../../../base/common/async.js';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
-import { DisposableStore } from '../../../../../base/common/lifecycle.js';
+import { Emitter, Event } from '../../../../../base/common/event.js';
+import { DisposableStore, IDisposable, toDisposable } from '../../../../../base/common/lifecycle.js';
 import { FuzzyScore } from '../../../../../base/common/filters.js';
 import { Schemas } from '../../../../../base/common/network.js';
+import { extUriIgnorePathCase } from '../../../../../base/common/resources.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { FileService } from '../../../../../platform/files/common/fileService.js';
-import { IFileService } from '../../../../../platform/files/common/files.js';
+import { FileType, IFileChange, IFileService, IWatchOptions } from '../../../../../platform/files/common/files.js';
 import { InMemoryFileSystemProvider } from '../../../../../platform/files/common/inMemoryFilesystemProvider.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import { NullLogService } from '../../../../../platform/log/common/log.js';
@@ -51,13 +54,16 @@ import {
 
 const STAMP = { format: 'transcript-jsonl', versionKey: 'v1' };
 
+/** The `projects/<enc>` dir name every fixture run is attributed to (see `WorkflowRunBase.projectDirName`). */
+const PROJECT_DIR = 'C--work-fixture-proj';
+
 /** A minimally-labeled live run - every honesty label is the honest default for a freshly-observed run. */
 function liveRun(sessionId: string, runId: string, overrides: Partial<LiveWorkflowRun> = {}): LiveWorkflowRun {
 	return {
 		kind: 'live', sessionId, runId, identity: workflowRunIdentity(sessionId, runId),
 		startedCount: 1, resultCount: 0, seenCount: 1, landedResults: [], journalLastWriteTime: 1_700_000_000_000,
 		ownership: 'foreign', coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Live,
-		completeness: CompletenessState.Complete, adapterVersion: STAMP,
+		completeness: CompletenessState.Complete, adapterVersion: STAMP, projectDirName: PROJECT_DIR,
 		...overrides,
 	};
 }
@@ -72,9 +78,102 @@ function terminalRun(sessionId: string, runId: string, overrides: Partial<Termin
 		kind: 'terminal', sessionId, runId, identity: workflowRunIdentity(sessionId, runId),
 		status: 'completed', phases: [], agents: [terminalAgent('a1')],
 		ownership: 'foreign', coverage: CoverageLabel.InScope, freshness: FreshnessLabel.Polled,
-		completeness: CompletenessState.Complete, adapterVersion: STAMP,
+		completeness: CompletenessState.Complete, adapterVersion: STAMP, projectDirName: PROJECT_DIR,
 		...overrides,
 	};
+}
+
+/**
+ * An in-memory provider that makes the listing of ONE directory artificially slow, and records how many listings
+ * of it were ever in flight at the same moment.
+ *
+ * That directory is the config root's `projects` tree, which every whole-corpus enumeration lists FIRST and
+ * exactly once - so "simultaneous listings of the gate" is a faithful, black-box proxy for "simultaneous
+ * enumeration passes", measured without reaching into the service's private state or stubbing the seam. The delay
+ * is what gives a test a window in which to ask for more refreshes while a pass is demonstrably still running.
+ */
+class GatedInMemoryFileSystemProvider extends InMemoryFileSystemProvider {
+
+	private inFlight = 0;
+	/** The most listings of the gated directory that were ever in flight at once - 1 iff passes never overlapped. */
+	maxConcurrentListings = 0;
+
+	constructor(private readonly gate: URI, private readonly delayMs: number) { super(); }
+
+	override async readdir(resource: URI): Promise<[string, FileType][]> {
+		if (resource.toString() !== this.gate.toString()) {
+			return super.readdir(resource);
+		}
+		this.inFlight++;
+		this.maxConcurrentListings = Math.max(this.maxConcurrentListings, this.inFlight);
+		try {
+			await timeout(this.delayMs);
+			return await super.readdir(resource);
+		} finally {
+			this.inFlight--;
+		}
+	}
+}
+
+/**
+ * An in-memory provider that STAMPS a correlation id on the changes under a correlated watch request, the way the
+ * real disk watcher does (`parcelWatcher.ts` sets `cId: watcher.request.correlationId` on every event it emits).
+ *
+ * Without it, no test in this file exercises the path the shipped app actually runs. `FileService` routes a change
+ * event to exactly ONE consumer: the correlated watcher when the event correlates, the global `onDidFilesChange`
+ * bus when it carries no correlation at all. The observation service's `projects` watch request is correlated, so
+ * on disk 100% of its events arrive on `handle.onDidChange` and none on the bus - while the stock
+ * `InMemoryFileSystemProvider` never sets `cId`, so in a test 100% arrive on the bus and the correlated wiring
+ * could be deleted outright with every test still green.
+ *
+ * The re-declared `onDidChangeFile` is how the stamping is spliced in. `useDefineForClassFields` is false in this
+ * repo, so a field re-declaration with no initializer emits nothing and the base class's own event is still in
+ * place when the constructor body runs - which is exactly the moment it is captured and replaced. The definite-
+ * assignment `!` records that: the compiler sees a field it believes is unassigned when the constructor reads it,
+ * and the base class assigning it is the fact the compiler cannot see.
+ */
+class CorrelatingInMemoryFileSystemProvider extends InMemoryFileSystemProvider {
+
+	/** Live correlated watch requests: the watched root and the id its events must carry. */
+	private readonly correlated: { readonly root: URI; readonly id: number }[] = [];
+
+	private readonly _onDidChangeStampedFile = this._register(new Emitter<readonly IFileChange[]>());
+
+	override readonly onDidChangeFile!: Event<readonly IFileChange[]>;
+
+	/** Emitted batches whose every change carried a correlation id - the ones `FileService` keeps OFF the global
+	 *  bus and delivers only to the matching watcher. */
+	private _correlatedBatches = 0;
+	/** Emitted batches carrying at least one uncorrelated change, which therefore still reach the global bus. */
+	private _uncorrelatedBatches = 0;
+	get batches(): { readonly correlated: number; readonly uncorrelated: number } {
+		return { correlated: this._correlatedBatches, uncorrelated: this._uncorrelatedBatches };
+	}
+
+	constructor() {
+		super();
+		const unstamped = this.onDidChangeFile;
+		this.onDidChangeFile = this._onDidChangeStampedFile.event;
+		this._register(unstamped(changes => {
+			const stamped = changes.map(change => ({ ...change, cId: this.correlationFor(change.resource) }));
+			if (stamped.every(change => typeof change.cId === 'number')) { this._correlatedBatches++; } else { this._uncorrelatedBatches++; }
+			this._onDidChangeStampedFile.fire(stamped);
+		}));
+	}
+
+	override watch(resource: URI, opts: IWatchOptions): IDisposable {
+		if (typeof opts.correlationId !== 'number') { return super.watch(resource, opts); }
+		const request = { root: resource, id: opts.correlationId };
+		this.correlated.push(request);
+		return toDisposable(() => {
+			const at = this.correlated.indexOf(request);
+			if (at >= 0) { this.correlated.splice(at, 1); }
+		});
+	}
+
+	private correlationFor(resource: URI): number | undefined {
+		return this.correlated.find(request => extUriIgnorePathCase.isEqualOrParent(resource, request.root))?.id;
+	}
 }
 
 // --- observation service: real watcher + real seam re-read -----------------------------------------------------
@@ -201,6 +300,73 @@ suite('Clawdius Claude Code Ultracode Workflows - observation service', () => {
 
 		assert.strictEqual(fired, 1);
 		assert.strictEqual(service.snapshot.liveCount, 3);
+	});
+
+	test('refreshes requested while a pass is running never overlap it - at most ONE enumeration at a time', async function () {
+		// The renderer-OOM regression: `RunOnceScheduler.schedule()` only cancel-and-rearms a timer and knows
+		// nothing about an in-flight async runner, so before the in-flight guard every quiet gap during a pass
+		// started ANOTHER whole-corpus read on top of the one still running. Against a real corpus each pass reads
+		// tens of megabytes, so the passes diverged instead of plateauing and the renderer ran out of heap. This
+		// drives that exact shape - four refresh requests landing inside one deliberately-slow pass - and asserts
+		// the concurrency never exceeds one, while the final snapshot still reflects the staged run (a cancelled
+		// pass must produce NOTHING, never an error state and never a blank list that sticks).
+		this.timeout(15000);
+		const projects = URI.joinPath(ROOT, 'projects');
+		const provider = store.add(new GatedInMemoryFileSystemProvider(projects, 200));
+		const fs = store.add(new FileService(new NullLogService()));
+		store.add(fs.registerProvider(Schemas.file, provider));
+		await stageJournal(fs, 'wf_88888888-hhh', [{ type: 'started', agentId: 'a1' }]);
+
+		const service = makeService(fs);
+		for (let i = 0; i < 4; i++) {
+			await timeout(20);
+			service.readAgain();
+		}
+		// Long enough for every queued pass to drain (each is gated at 200ms), well past the 250ms coalescing delay.
+		await timeout(1500);
+
+		assert.deepStrictEqual(
+			{
+				maxConcurrentListings: provider.maxConcurrentListings,
+				state: service.snapshot.result.state,
+				liveCount: service.snapshot.liveCount,
+			},
+			{ maxConcurrentListings: 1, state: 'ok', liveCount: 1 },
+		);
+	});
+
+	test('the CORRELATED watcher drives the live update - the only event path this service has on a real filesystem', async function () {
+		this.timeout(5000);
+		const provider = store.add(new CorrelatingInMemoryFileSystemProvider());
+		const fs = store.add(new FileService(new NullLogService()));
+		store.add(fs.registerProvider(Schemas.file, provider));
+		// Stage the whole directory chain BEFORE the measured write. Creating it also emits ADDED for `/home/tester`
+		// and `~/.claude`, which sit OUTSIDE the watched `projects` root: those changes carry no correlation, the
+		// batch is therefore mixed, and `FileChangesEvent` reports a mixed batch as uncorrelated - which would put
+		// it on the global bus and quietly measure the fallback path instead of the one under test.
+		await stageJournal(fs, 'wf_aaaaaaaa-iii', [{ type: 'started', agentId: 'a1' }]);
+
+		const service = makeService(fs);
+		await nextSnapshot(service);
+		// The provider buffers changes behind a 5ms timer that RE-ARMS on every new change, so the staging batch is
+		// still unflushed here and the measured write would simply extend it - which is how the mixed batch above
+		// would sneak into the measurement anyway. Drain it, past that timer and the service's own 250ms coalescing
+		// window, before taking the baseline.
+		await timeout(400);
+		const before = provider.batches;
+
+		const next = nextSnapshot(service);
+		await stageJournal(fs, 'wf_bbbbbbbb-jjj', [{ type: 'started', agentId: 'a1' }]);
+		const snapshot = await next;
+
+		assert.deepStrictEqual(
+			{
+				liveCount: snapshot.liveCount,
+				correlatedBatches: provider.batches.correlated - before.correlated,
+				uncorrelatedBatches: provider.batches.uncorrelated - before.uncorrelated,
+			},
+			{ liveCount: 2, correlatedBatches: 1, uncorrelatedBatches: 0 },
+		);
 	});
 
 	test('readAgain() re-runs the enumeration immediately, without waiting out the coalescing delay', async () => {

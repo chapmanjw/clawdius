@@ -324,7 +324,7 @@ const brandSites: { file: string; present: RegExp; absent: RegExp; what: string 
 	// marketplace service then background-polls (and PluginAutoUpdate silently installs from) once any plugin
 	// is installed. An upstream merge re-seeds this default silently, so pin the empty list here.
 	{ file: 'src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts',
-		present: /no seeded remote plugin marketplaces/, absent: /'github\/copilot-plugins'/, what: 'seeded plugin marketplaces' },
+		present: /default: \[\],\s*\/\/ CLAWDIUS-END/, absent: /'github\/(copilot-plugins|awesome-copilot)/, what: 'seeded plugin marketplaces' },
 	// The OAuth/loopback sign-in pages: the `class="branding"` wordmark link must point at the fork, not
 	// code.visualstudio.com (an upstream merge silently reverts these, and the wordmark text is a variable so a
 	// name-only sweep misses the URL leak).

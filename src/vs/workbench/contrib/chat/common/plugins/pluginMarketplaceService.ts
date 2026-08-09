@@ -28,6 +28,7 @@ import { IAgentPluginRepositoryService } from './agentPluginRepositoryService.js
 import { FileBackedInstalledPluginsStore, IStoredInstalledPlugin } from './fileBackedInstalledPluginsStore.js';
 import { IWorkspacePluginSettingsService } from './workspacePluginSettingsService.js';
 import { IWorkspaceTrustManagementService } from '../../../../../platform/workspace/common/workspaceTrust.js';
+import { IProductService } from '../../../../../platform/product/common/productService.js';
 import { readAgentPluginManifest } from '../../../../../platform/agentPlugins/common/agentPluginParser.js';
 import { type IMarketplaceReference, deduplicateMarketplaceReferences, MarketplaceReferenceKind, parseMarketplaceObjectEntry, parseMarketplaceReference, parseMarketplaceReferences, readConfiguredMarketplaces } from './marketplaceReference.js';
 import { getStrictKnownMarketplaces, isMarketplaceReferenceAllowed } from './strictKnownMarketplaces.js';
@@ -320,6 +321,7 @@ export class PluginMarketplaceService extends Disposable implements IPluginMarke
 		@IWorkspacePluginSettingsService private readonly _workspacePluginSettingsService: IWorkspacePluginSettingsService,
 		@IWorkspaceTrustManagementService private readonly _workspaceTrustService: IWorkspaceTrustManagementService,
 		@IExtensionsWorkbenchService private readonly _extensionsWorkbenchService: IExtensionsWorkbenchService,
+		@IProductService private readonly _productService: IProductService,
 	) {
 		super();
 
@@ -797,6 +799,17 @@ export class PluginMarketplaceService extends Disposable implements IPluginMarke
 	 * construction and whenever the auto-update config changes.
 	 */
 	private _scheduleUpdateCheck(): void {
+		// CLAWDIUS-BEGIN no background plugin update poll
+		// Emptying the seeded marketplace default stops NEW profiles discovering the GitHub catalogs, but it
+		// does not stop this timer: the check walks each INSTALLED plugin's own stored marketplaceReference
+		// and fetches it, gated only on global extension auto-update. A profile that installed a remote plugin
+		// earlier would still reach that repository every 24h and silently install what it found. Neither the
+		// request nor the install follows a user action, so the fork does not schedule it at all; checking and
+		// installing on demand still work.
+		if (!this._productService.defaultChatAgent?.entitlementUrl) {
+			return;
+		}
+		// CLAWDIUS-END
 		if (this._updateCheckTimer !== undefined) {
 			clearTimeout(this._updateCheckTimer);
 			this._updateCheckTimer = undefined;

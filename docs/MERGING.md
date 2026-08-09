@@ -174,6 +174,24 @@ re-introduced `extensions/copilot`. After a merge, run it and `git rm` the leake
 upstream `discarded`-tier features). Same class: a new `build/lib/test/copilot.test.ts` can arrive testing
 the copilot packaging helpers the fork removed from `build/lib/copilot.ts` — delete it.
 
+### Built-in extension pins are Marketplace hashes, but the fork downloads from Open VSX
+`product.json` `builtInExtensions[]` carries upstream's `sha256` for each built-in, computed against the
+**Microsoft Marketplace** artifact. The fork fetches from **Open VSX**, which normally serves
+byte-identical packages, so the upstream hashes verify and the fork keeps them verbatim. That is not
+guaranteed per version: a merge that bumps a built-in can land a version whose Open VSX bytes differ,
+and `preLaunch.ts` then dies with `Checksum mismatch for https://open-vsx.org/...` partway through
+"Synchronizing built-in extensions".
+
+When that happens, do NOT record the hash the download produced - that replaces a publisher-verified pin
+with one minted from whatever the server sent, in the one file whose job is to be auditable. Instead
+confirm the split is real (fetch the previous version too and check it still matches its pin, so you know
+Open VSX is not repackaging wholesale), then hold the built-in at the last version whose Marketplace hash
+matches the Open VSX bytes and note it here. 1.132.0 bumped
+`ms-vscode.vscode-js-profile-table` 1.0.10 -> 1.0.11; Open VSX's 1.0.10 hashes exactly to the pinned
+`7361748d...` while its 1.0.11 hashes to `50d00270...` against upstream's `a962a1e6...`, so the fork holds
+that one extension at 1.0.10. Re-check on the next bump - if Open VSX and the Marketplace reconverge,
+take the newer version.
+
 ### Native-module build on Windows needs the MSVC Spectre libraries
 The fork's native deps (`native-keymap`, `@vscode/windows-registry`, `@vscode/spdlog`, ...) set
 `SpectreMitigation: Spectre` in their `binding.gyp`, so MSBuild fails with `error MSB8040: Spectre-mitigated

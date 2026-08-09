@@ -29,7 +29,7 @@ export interface IAgentHostNetworkServices {
  * Used by both entry points (`agentHostMain.ts` and `agentHostServerMain.ts`)
  * to avoid drift between them. The order of registration matters because
  * `RequestService` injects `IConfigurationService`; consumers (the downloader
- * itself, and through it `ClaudeAgentSdkService` / `CodexAgent`) must be
+ * itself, and through it `ClaudeAgentSdkService`) must be
  * constructed AFTER this call.
  *
  * Reads the default profile's `settings.json` from `<userRoamingDataHome>` —

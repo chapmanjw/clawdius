@@ -227,7 +227,8 @@ import './contrib/providers/remoteAgentHost/browser/remoteAgentHost.contribution
 import './contrib/providers/remoteAgentHost/browser/remoteAgentHostTerminal.contribution.js';
 import './contrib/providers/remoteAgentHost/browser/tunnelAgentHost.contribution.js';
 import './contrib/providers/remoteAgentHost/browser/wslAgentHost.contribution.js';
-// Copilot cloud sandbox connections (copilot-developer-cli) over a Web PubSub AHP relay
+// CLAWDIUS: the cloud sandbox agent host and its Web PubSub relay are removed - no account-backed
+// remote session hosting, so there is no contribution to register here.
 // Chat
 import './contrib/agentFeedback/browser/agentFeedback.contribution.js';
 import './contrib/chat/electron-browser/chat.contribution.js';

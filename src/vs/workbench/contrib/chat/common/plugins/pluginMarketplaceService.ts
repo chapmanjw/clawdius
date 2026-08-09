@@ -806,6 +806,7 @@ export class PluginMarketplaceService extends Disposable implements IPluginMarke
 		// earlier would still reach that repository every 24h and silently install what it found. Neither the
 		// request nor the install follows a user action, so the fork does not schedule it at all; checking and
 		// installing on demand still work.
+		// An empty `entitlementUrl` is the repo-wide Clawdius-mode signal, not a statement about chat entitlement.
 		if (!this._productService.defaultChatAgent?.entitlementUrl) {
 			return;
 		}

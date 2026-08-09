@@ -376,7 +376,7 @@
 		"src/vs/workbench/contrib/chat/browser/aiCustomization/media/aiCustomizationManagement.css": 3,
 		"src/vs/workbench/contrib/chat/browser/aiCustomization/promptsServiceCustomizationItemProvider.ts": 2,
 		"src/vs/workbench/contrib/chat/browser/aiCustomization/toolsListWidget.ts": 12,
-		"src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts": 51,
+		"src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts": 49,
 		"src/vs/workbench/contrib/chat/browser/chatDebug/agentHostChatDebugProvider.ts": 15,
 		"src/vs/workbench/contrib/chat/browser/chatDebug/agentHostLogSources.ts": 13,
 		"src/vs/workbench/contrib/chat/browser/chatDebug/agentHostUsageSidecar.ts": 7,

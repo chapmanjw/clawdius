@@ -582,7 +582,11 @@
 # Disposition 2026-08-09 (+2 files, +24 insertions): replace two dangling comments that survived the
 # cloud-sandbox removal (the import went, the explanation stayed) with ones stating why nothing registers
 # there, and drop a doc-comment naming the removed Codex agent. Comment-only; no behaviour change.
+# Disposition 2026-08-09 (+2 files): stop seeding the two GitHub-hosted plugin marketplaces (the
+# marketplace service background-polls them and auto-installs once any plugin is installed; the fork's own
+# plugins arrive via the Claude CLI discovery instead), pinned by a falsifiable branding-guard probe; and
+# teach the local UX harness to open the Workflows filter disclosure before driving the sort control.
 upstream_version: 1.132.0
 upstream_commit: df53daabb18cd157bdb08c7f01c34df936cf12f4
 recorded: 2026-08-09
-baseline: 5873 files changed, 57008 insertions(+), 1509210 deletions(-)
+baseline: 5873 files changed, 57047 insertions(+), 1509211 deletions(-)

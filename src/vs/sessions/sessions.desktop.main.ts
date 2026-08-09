@@ -228,7 +228,6 @@ import './contrib/providers/remoteAgentHost/browser/remoteAgentHostTerminal.cont
 import './contrib/providers/remoteAgentHost/browser/tunnelAgentHost.contribution.js';
 import './contrib/providers/remoteAgentHost/browser/wslAgentHost.contribution.js';
 // Copilot cloud sandbox connections (copilot-developer-cli) over a Web PubSub AHP relay
-import './contrib/providers/remoteAgentHost/browser/cloudSandboxAgentHost.contribution.js';
 // Chat
 import './contrib/agentFeedback/browser/agentFeedback.contribution.js';
 import './contrib/chat/electron-browser/chat.contribution.js';

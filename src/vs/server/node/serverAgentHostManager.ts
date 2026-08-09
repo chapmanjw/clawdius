@@ -7,12 +7,10 @@ import { Event } from '../../base/common/event.js';
 import { Disposable, MutableDisposable, toDisposable } from '../../base/common/lifecycle.js';
 import { ProxyChannel } from '../../base/parts/ipc/common/ipc.js';
 import { IAgentHostConnection, IAgentHostStarter } from '../../platform/agentHost/common/agent.js';
-import { reportAgentHostProcessError } from '../../platform/agentHost/common/agentHostProcessTelemetry.js';
 import { AgentHostIpcChannels, IAgentService } from '../../platform/agentHost/common/agentService.js';
 import { createDecorator } from '../../platform/instantiation/common/instantiation.js';
 import { ILogService, ILoggerService } from '../../platform/log/common/log.js';
 import { RemoteLoggerChannelClient } from '../../platform/log/common/logIpc.js';
-import { ITelemetryService } from '../../platform/telemetry/common/telemetry.js';
 import { IServerLifetimeService } from './serverLifetimeService.js';
 
 export const IServerAgentHostManager = createDecorator<IServerAgentHostManager>('serverAgentHostManager');
@@ -59,7 +57,6 @@ export class ServerAgentHostManager extends Disposable implements IServerAgentHo
 		@ILogService private readonly _logService: ILogService,
 		@ILoggerService private readonly _loggerService: ILoggerService,
 		@IServerLifetimeService private readonly _serverLifetimeService: IServerLifetimeService,
-		@ITelemetryService private readonly _telemetryService: ITelemetryService,
 	) {
 		super();
 		this._register(this._starter);
@@ -91,12 +88,9 @@ export class ServerAgentHostManager extends Disposable implements IServerAgentHo
 					this._lifetimeToken.clear();
 
 					const willRestart = this._restartCount <= Constants.MaxRestarts;
-					reportAgentHostProcessError(this._telemetryService, {
-						kind: 'unexpectedExit',
-						code: e.code,
-						restartCount: this._restartCount,
-						willRestart,
-					});
+					// CLAWDIUS: upstream reports an `agentHost.processError` telemetry event here (kind, exit
+					// code, restart count, callstack). The fork removes the reporter; the local log line below
+					// keeps the diagnostic on-box.
 					if (willRestart) {
 						this._logService.error(`ServerAgentHostManager: agent host terminated unexpectedly with code ${e.code}`);
 						this._restartCount++;
@@ -115,11 +109,8 @@ export class ServerAgentHostManager extends Disposable implements IServerAgentHo
 			}
 
 			const willRestart = this._restartCount <= Constants.MaxRestarts;
-			reportAgentHostProcessError(this._telemetryService, {
-				kind: 'startFailed',
-				restartCount: this._restartCount,
-				willRestart,
-			}, error);
+			// CLAWDIUS: upstream reports an `agentHost.processError` telemetry event here; the fork removes
+			// the reporter and keeps the failure on-box in the log line alongside.
 			if (willRestart) {
 				this._logService.error('ServerAgentHostManager: agent host failed to start', error);
 				this._restartCount++;

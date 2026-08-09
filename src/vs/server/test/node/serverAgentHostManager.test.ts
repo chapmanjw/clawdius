@@ -11,7 +11,6 @@ import { IChannel, IChannelClient } from '../../../base/parts/ipc/common/ipc.js'
 import { IAgentHostConnection, IAgentHostStarter } from '../../../platform/agentHost/common/agent.js';
 import { AgentHostIpcChannels } from '../../../platform/agentHost/common/agentService.js';
 import { NullLogService, NullLoggerService } from '../../../platform/log/common/log.js';
-import { NullTelemetryServiceShape } from '../../../platform/telemetry/common/telemetryUtils.js';
 import { ServerAgentHostManager } from '../../node/serverAgentHostManager.js';
 import { IServerLifetimeService } from '../../node/serverLifetimeService.js';
 
@@ -53,6 +52,7 @@ class MockChannel implements IChannel {
 class MockAgentHostStarter implements IAgentHostStarter {
 	private readonly _onDidProcessExit = new Emitter<{ code: number; signal: string }>();
 	private _startError: Error | undefined;
+	startCount = 0;
 
 	readonly agentHostChannel = new MockChannel();
 	readonly loggerChannel: MockChannel;
@@ -64,6 +64,7 @@ class MockAgentHostStarter implements IAgentHostStarter {
 	}
 
 	async start(): Promise<IAgentHostConnection> {
+		this.startCount++;
 		if (this._startError) {
 			const error = this._startError;
 			this._startError = undefined;
@@ -125,27 +126,15 @@ class MockServerLifetimeService implements IServerLifetimeService {
 	delay(): void { }
 }
 
-class TestTelemetryService extends NullTelemetryServiceShape {
-	readonly errorEvents: { eventName: string; data: unknown }[] = [];
-
-	override publicLogError2(eventName?: string, data?: unknown): void {
-		if (eventName) {
-			this.errorEvents.push({ eventName, data });
-		}
-	}
-}
-
 suite('ServerAgentHostManager', () => {
 	const ds = ensureNoDisposablesAreLeakedInTestSuite();
 
 	let starter: MockAgentHostStarter;
 	let lifetimeService: MockServerLifetimeService;
-	let telemetryService: TestTelemetryService;
 
 	setup(() => {
 		starter = new MockAgentHostStarter();
 		lifetimeService = new MockServerLifetimeService();
-		telemetryService = new TestTelemetryService();
 	});
 
 	function createManager(): ServerAgentHostManager {
@@ -154,7 +143,6 @@ suite('ServerAgentHostManager', () => {
 			new NullLogService(),
 			ds.add(new NullLoggerService()),
 			lifetimeService,
-			telemetryService,
 		));
 	}
 
@@ -224,25 +212,20 @@ suite('ServerAgentHostManager', () => {
 		assert.strictEqual(lifetimeService.hasActiveConsumers, false);
 	});
 
-	test('reports unexpected process exit', async () => {
+	// The fork removes upstream's `agentHost.processError` reporter, so there is no telemetry to assert.
+	// The surviving contract is the restart itself.
+	test('restarts after an unexpected process exit', async () => {
 		createManager();
 		await waitForStart();
+		assert.strictEqual(starter.startCount, 1);
 
 		starter.fireProcessExit(17);
+		await waitForStart();
 
-		assert.deepStrictEqual(telemetryService.errorEvents, [{
-			eventName: 'agentHost.processError',
-			data: {
-				kind: 'unexpectedExit',
-				code: 17,
-				restartCount: 0,
-				willRestart: true,
-				isError: true,
-			},
-		}]);
+		assert.strictEqual(starter.startCount, 2);
 	});
 
-	test('reports process start failure', async () => {
+	test('restarts after a start failure', async () => {
 		const error = new Error('test start failure');
 		error.stack = 'test start failure stack';
 		starter.failNextStart(error);
@@ -250,16 +233,6 @@ suite('ServerAgentHostManager', () => {
 		await waitForStart();
 		await waitForStart();
 
-		assert.deepStrictEqual(telemetryService.errorEvents, [{
-			eventName: 'agentHost.processError',
-			data: {
-				kind: 'startFailed',
-				restartCount: 0,
-				willRestart: true,
-				isError: true,
-				callstack: 'test start failure stack',
-				msg: 'test start failure',
-			},
-		}]);
+		assert.strictEqual(starter.startCount, 2);
 	});
 });

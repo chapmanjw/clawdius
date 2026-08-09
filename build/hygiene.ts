@@ -38,6 +38,11 @@ const clawdiusAuthoredDirs = [
 	'clawdius/',
 	'script/clawdius/',
 ];
+// Clawdius-authored files that sit INSIDE an otherwise upstream-derived tree, so a directory prefix would
+// wrongly claim their neighbours. Listed individually rather than widening clawdiusAuthoredDirs.
+const clawdiusAuthoredFiles = [
+	'src/vs/platform/agentHost/common/clawdiusAgentHost.config.contribution.ts',
+];
 // CLAWDIUS-END
 
 interface VinylFileWithLines extends VinylFile {
@@ -206,7 +211,8 @@ export function hygiene(some: NodeJS.ReadWriteStream | string[] | undefined, run
 	const copyrights = es.through(function (file: VinylFileWithLines) {
 		const lines = file.__lines;
 		const relPath = file.relative.replace(/\\/g, '/');
-		const expectedHeader = clawdiusAuthoredDirs.some(dir => relPath.startsWith(dir)) ? clawdiusHeaderLines : copyrightHeaderLines;
+		const clawdiusAuthored = clawdiusAuthoredDirs.some(dir => relPath.startsWith(dir)) || clawdiusAuthoredFiles.includes(relPath);
+		const expectedHeader = clawdiusAuthored ? clawdiusHeaderLines : copyrightHeaderLines;
 
 		for (let i = 0; i < expectedHeader.length; i++) {
 			if (lines[i] !== expectedHeader[i]) {

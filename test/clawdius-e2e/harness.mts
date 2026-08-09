@@ -85,6 +85,25 @@ async function runCommand(title) {
 	await win.waitForTimeout(1200);
 }
 
+/**
+ * Open the Workflows filter panel if it is collapsed.
+ *
+ * The status/sort/scope controls live in `.clawdius-workflows-filters`, which the view keeps behind a
+ * funnel toggle and starts COLLAPSED (`filtersExpanded = false`, persisted per profile). The panel stays
+ * mounted while hidden, so `$('.clawdius-workflows-sort select')` still resolves - only interaction
+ * fails, with "element is not visible". Any scenario that drives those controls must disclose them first.
+ */
+async function openWorkflowFilters() {
+	const expanded = await win.$$eval('.clawdius-workflows-toolbar', els => els.some(el => el.classList.contains('expanded')));
+	if (!expanded) {
+		const toggle = await win.$('.clawdius-workflows-filter-toggle');
+		assert(toggle, 'the Workflows filter toggle did not render (.clawdius-workflows-filter-toggle)');
+		await toggle.click();
+	}
+	await win.waitForSelector('.clawdius-workflows-sort select', { state: 'visible', timeout: 8000 });
+	await win.waitForTimeout(150);
+}
+
 async function setTheme(themeLabel) {
 	await win.keyboard.press('Control+Shift+P');
 	await win.waitForSelector('.quick-input-widget', { state: 'visible', timeout: 8000 });
@@ -3049,6 +3068,7 @@ try {
 		const beforeSortIds = await win.$$eval('.clawdius-workflow-run-row', els => els.map(el => el.getAttribute('data-run-id')));
 
 		// --- sort: switch to "status" (failed before completed, live always first) and prove a REAL reorder --------
+		await openWorkflowFilters();
 		const sortSelect = await win.$('.clawdius-workflows-sort select');
 		assert(sortSelect, 'the sort SelectBox did not render (.clawdius-workflows-sort select)');
 		const readVisible = () => win.$$eval('.clawdius-workflow-run-row', els => els.map(el => ({
@@ -3188,6 +3208,7 @@ try {
 
 			// Hard-assert rather than skip-if-absent: sorting is part of the surface this scenario claims to have
 			// exercised, so a sort control that failed to render must fail the scenario, not quietly narrow it.
+			await openWorkflowFilters();
 			const sortSelect = await win.$('.clawdius-workflows-sort select');
 			assert(sortSelect, 'the sort control did not render (.clawdius-workflows-sort select) - the surface was not fully exercised, so "no requests" would be an incomplete claim');
 			{

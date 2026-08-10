@@ -10,7 +10,11 @@ import { isUndefinedOrNull } from '../../../../../../base/common/types.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../../base/test/common/utils.js';
 import * as Adapt from '../../../common/model/objectMutationLog.js';
 
-const enablePerf = process.env.VSCODE_PERF_CHAT_OBJECT_MUTATION_LOG === 'true';
+// CLAWDIUS: read `process` defensively. This file lives under test/common, so the browser test runner picks
+// it up, and a bare `process.env` at module scope threw ReferenceError there - which the runner reported as
+// an unexplained failed import rather than a failure, silently dropping the module. The suite is opt-in and
+// node-only either way; the heap measurements inside it only run when this is true.
+const enablePerf = typeof process !== 'undefined' && process.env?.VSCODE_PERF_CHAT_OBJECT_MUTATION_LOG === 'true';
 
 function perfSuite(name: string, callback: (this: Mocha.Suite) => void): void {
 	if (enablePerf) {

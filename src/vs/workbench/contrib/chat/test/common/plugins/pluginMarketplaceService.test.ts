@@ -18,6 +18,8 @@ import { TestConfigurationService } from '../../../../../../platform/configurati
 import { IFileService, IFileSystemWatcher } from '../../../../../../platform/files/common/files.js';
 import { TestInstantiationService } from '../../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import { ILogService, NullLogService } from '../../../../../../platform/log/common/log.js';
+import { TestProductService } from '../../../../../test/common/workbenchTestServices.js';
+import { IProductService } from '../../../../../../platform/product/common/productService.js';
 import { IRequestService } from '../../../../../../platform/request/common/request.js';
 import { IStorageService, InMemoryStorageService, StorageScope, StorageTarget } from '../../../../../../platform/storage/common/storage.js';
 import { IWorkspaceTrustManagementService } from '../../../../../../platform/workspace/common/workspaceTrust.js';
@@ -413,6 +415,10 @@ suite('PluginMarketplaceService - GitHub marketplace refs', () => {
 			},
 		} as Partial<IAgentPluginRepositoryService> as IAgentPluginRepositoryService);
 		instantiationService.stub(ILogService, new NullLogService());
+		// CLAWDIUS: the marketplace update-check reads productService.defaultChatAgent to decide whether to
+		// poll at all. Without this stub the service is constructed with an undefined product service and
+		// the scheduled check throws inside a timer.
+		instantiationService.stub(IProductService, TestProductService);
 		instantiationService.stub(IRequestService, {
 			request: async (options: { url: string }) => {
 				requestUrls.push(options.url);
@@ -474,6 +480,10 @@ suite('PluginMarketplaceService - Agent Plugin direct install probes', () => {
 		instantiationService.stub(IFileService, fileService as unknown as IFileService);
 		instantiationService.stub(IAgentPluginRepositoryService, { agentPluginsHome: URI.file('/agent-plugins') } as unknown as IAgentPluginRepositoryService);
 		instantiationService.stub(ILogService, new NullLogService());
+		// CLAWDIUS: the marketplace update-check reads productService.defaultChatAgent to decide whether to
+		// poll at all. Without this stub the service is constructed with an undefined product service and
+		// the scheduled check throws inside a timer.
+		instantiationService.stub(IProductService, TestProductService);
 		instantiationService.stub(IRequestService, {} as unknown as IRequestService);
 		instantiationService.stub(IStorageService, store.add(new InMemoryStorageService()));
 		instantiationService.stub(IWorkspacePluginSettingsService, {
@@ -537,6 +547,10 @@ suite('PluginMarketplaceService - getMarketplacePluginMetadata', () => {
 		instantiationService.stub(IFileService, {} as unknown as IFileService);
 		instantiationService.stub(IAgentPluginRepositoryService, { agentPluginsHome: URI.file('/agent-plugins') } as unknown as IAgentPluginRepositoryService);
 		instantiationService.stub(ILogService, new NullLogService());
+		// CLAWDIUS: the marketplace update-check reads productService.defaultChatAgent to decide whether to
+		// poll at all. Without this stub the service is constructed with an undefined product service and
+		// the scheduled check throws inside a timer.
+		instantiationService.stub(IProductService, TestProductService);
 		instantiationService.stub(IRequestService, {} as unknown as IRequestService);
 		instantiationService.stub(IStorageService, store.add(new InMemoryStorageService()));
 		instantiationService.stub(IWorkspacePluginSettingsService, {
@@ -636,6 +650,10 @@ suite('PluginMarketplaceService - installed plugins lifecycle', () => {
 		instantiationService.stub(IFileService, {} as unknown as IFileService);
 		instantiationService.stub(IAgentPluginRepositoryService, { agentPluginsHome: URI.file('/agent-plugins') } as unknown as IAgentPluginRepositoryService);
 		instantiationService.stub(ILogService, new NullLogService());
+		// CLAWDIUS: the marketplace update-check reads productService.defaultChatAgent to decide whether to
+		// poll at all. Without this stub the service is constructed with an undefined product service and
+		// the scheduled check throws inside a timer.
+		instantiationService.stub(IProductService, TestProductService);
 		instantiationService.stub(IRequestService, {} as unknown as IRequestService);
 		instantiationService.stub(IStorageService, store.add(new InMemoryStorageService()));
 		instantiationService.stub(IWorkspacePluginSettingsService, {
@@ -856,6 +874,10 @@ suite('PluginMarketplaceService - hydration after restart', () => {
 		instantiationService.stub(IFileService, fileService as unknown as IFileService);
 		instantiationService.stub(IAgentPluginRepositoryService, createPluginRepositoryStub());
 		instantiationService.stub(ILogService, new NullLogService());
+		// CLAWDIUS: the marketplace update-check reads productService.defaultChatAgent to decide whether to
+		// poll at all. Without this stub the service is constructed with an undefined product service and
+		// the scheduled check throws inside a timer.
+		instantiationService.stub(IProductService, TestProductService);
 		instantiationService.stub(IRequestService, {} as unknown as IRequestService);
 		instantiationService.stub(IStorageService, storageService);
 		instantiationService.stub(IWorkspacePluginSettingsService, {
@@ -909,6 +931,10 @@ suite('PluginMarketplaceService - hydration after restart', () => {
 			instantiationService.stub(IFileService, fileService as unknown as IFileService);
 			instantiationService.stub(IAgentPluginRepositoryService, createPluginRepositoryStub());
 			instantiationService.stub(ILogService, new NullLogService());
+			// CLAWDIUS: the marketplace update-check reads productService.defaultChatAgent to decide whether to
+			// poll at all. Without this stub the service is constructed with an undefined product service and
+			// the scheduled check throws inside a timer.
+			instantiationService.stub(IProductService, TestProductService);
 			instantiationService.stub(IRequestService, {} as unknown as IRequestService);
 			instantiationService.stub(IStorageService, storageService);
 			instantiationService.stub(IWorkspacePluginSettingsService, {

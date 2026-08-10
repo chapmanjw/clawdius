@@ -353,6 +353,28 @@ jobs:
             echo "ok: $t"
           done
           echo "Clawdius agent-host node tests passed"
+      - name: Full unit tier (node)
+        # The steps above name individual files, which is good for attribution but means a failure anywhere
+        # else in the tree is invisible. That gap let 36 browser-tier failures sit unnoticed through a whole
+        # upstream merge, four of them real defects. This runs everything the node runner covers.
+        # `| tee` masks the runner's exit code, so the greps are the gate.
+        run: |
+          node test/unit/node/index.js 2>&1 | tee full-node.log
+          if grep -qE "^\s*[1-9][0-9]* failing" full-node.log; then echo "::error::full node unit tier has failures"; exit 1; fi
+          if ! grep -qE "^\s*[1-9][0-9]* passing" full-node.log; then echo "::error::full node unit tier ran no tests"; exit 1; fi
+          echo "full node unit tier passed"
+      - name: Full unit tier (browser)
+        # Same, for the browser tier — the one that was never run in CI. The node runner EXCLUDES
+        # **/{browser,electron-browser,...}/**, which is where most of this fork's own code lives, so
+        # without this step the majority of the workbench is untested here.
+        # Not covered by either runner: electron-browser / electron-main / electron-utility, which need a
+        # real Electron host. Those run in the e2e smoke job below.
+        run: |
+          node test/unit/browser/index.js --browser chromium 2>&1 | tee full-browser.log
+          if grep -q "BAD " full-browser.log; then echo "::error::browser harness failed to load a test module"; exit 1; fi
+          if grep -qE "^\s*[1-9][0-9]* failing" full-browser.log; then echo "::error::full browser unit tier has failures"; exit 1; fi
+          if ! grep -qE "^\s*[1-9][0-9]* passing" full-browser.log; then echo "::error::full browser unit tier ran no tests"; exit 1; fi
+          echo "full browser unit tier passed"
 
   clawdius-e2e-smoke:
     # Layer-2 e2e: drives the shipped Clawdius surfaces (status bar, Control Center, usage dashboard) through the

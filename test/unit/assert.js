@@ -506,8 +506,21 @@ const create = Object.create || function (p) {
 		}
 	};
 
+  // CLAWDIUS: node's assert exposes `assert.strict`, whose loose comparisons behave like the strict ones.
+  // This shim omitted it, so `import { strict as assert } from 'assert'` failed to resolve and the browser
+  // runner dropped the whole module as an unexplained bad import instead of failing it.
+  const strict = Object.assign(function strict(value, message) { ok(value, message); }, assert, {
+	equal: assert.strictEqual,
+	notEqual: assert.notStrictEqual,
+	deepEqual: assert.deepStrictEqual,
+	notDeepEqual: notDeepStrictEqual,
+  });
+  assert.strict = strict;
+  strict.strict = strict;
+
   // ESM export
   export default assert;
+  export { strict };
   export const AssertionError = assert.AssertionError
   // export const fail = assert.fail
   // export const ok = assert.ok

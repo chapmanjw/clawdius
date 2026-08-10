@@ -24,9 +24,6 @@ export const CLAWDIUS_HIDDEN_UPSTREAM_SETTINGS: readonly string[] = [
 	// registerActions() never registers the sign-in title-bar action; and ChatStatusBarEntry early-returns its
 	// constructor before it reads this key. There is no IDE sign-in in Clawdius.
 	'chat.titleBar.signIn.enabled',
-	// The setup "growth" nudge shown in the sessions view. Its sole reader is ChatSetupContribution's
-	// registerGrowthSession(), which never runs once ChatSetupContribution short-circuits in Clawdius mode.
-	'chat.growthNotification.enabled',
 	// Toggle to hide the "Extension Host CLI" entry from the Agents-window picker. In Clawdius that entry
 	// is unconditionally absent - copilotChatSessionsProvider._isCopilotCliAvailable() returns false before this
 	// toggle is ever consulted - so the toggle can never change anything.

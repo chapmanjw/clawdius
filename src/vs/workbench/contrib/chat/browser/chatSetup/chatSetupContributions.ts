@@ -50,7 +50,6 @@ import { ILifecycleService } from '../../../../services/lifecycle/common/lifecyc
 import { IPreferencesService } from '../../../../services/preferences/common/preferences.js';
 import { IExtension, IExtensionsWorkbenchService } from '../../../extensions/common/extensions.js';
 import { ChatContextKeys } from '../../common/actions/chatContextKeys.js';
-import { IChatSessionsService } from '../../common/chatSessionsService.js';
 import { ChatAIDisabledSettingId, ChatAgentLocation, ChatConfiguration, ChatModeKind } from '../../common/constants.js';
 import { CHAT_CATEGORY, CHAT_SETUP_ACTION_ID, CHAT_SETUP_SUPPORT_ANONYMOUS_ACTION_ID } from '../actions/chatActions.js';
 import { ChatViewContainerId, IChatWidget, IChatWidgetService } from '../chat.js';
@@ -58,7 +57,6 @@ import { ChatInputNotificationSeverity, IChatInputNotificationService } from '..
 import { chatViewsWelcomeRegistry } from '../viewsWelcome/chatViewsWelcome.js';
 import { buildUpgradeUrlWithRedirect, ChatSetupAnonymous, ChatSetupStrategy, IChatSetupCommandOptions, IChatSetupResult, refreshTokens } from './chatSetup.js';
 import { ChatSetupController } from './chatSetupController.js';
-import { GrowthSessionController, registerGrowthSession } from './chatSetupGrowthSession.js';
 import { AICodeActionsHelper, AINewSymbolNamesProvider, ChatCodeActionsProvider, SetupAgent } from './chatSetupProviders.js';
 import { ChatSetup } from './chatSetupRunner.js';
 
@@ -82,8 +80,6 @@ export class ChatSetupContribution extends Disposable implements IWorkbenchContr
 		@IExtensionsWorkbenchService private readonly extensionsWorkbenchService: IExtensionsWorkbenchService,
 		@IExtensionService private readonly extensionService: IExtensionService,
 		@IEnvironmentService private readonly environmentService: IEnvironmentService,
-		@IChatSessionsService private readonly chatSessionsService: IChatSessionsService,
-		@IConfigurationService private readonly configurationService: IConfigurationService,
 	) {
 		super();
 
@@ -96,7 +92,6 @@ export class ChatSetupContribution extends Disposable implements IWorkbenchContr
 		const controller = new Lazy(() => this._register(this.instantiationService.createInstance(ChatSetupController, context, requests)));
 
 		this.registerSetupAgents(context, controller);
-		this.registerGrowthSession(chatEntitlementService);
 		this.registerActions(context, requests, controller);
 		this.registerSignInTitleBarEntry(actionViewItemService);
 		this.registerUrlLinkHandler();
@@ -184,37 +179,6 @@ export class ChatSetupContribution extends Disposable implements IWorkbenchContr
 		};
 
 		this._register(Event.runAndSubscribe(context.onDidChange, () => updateRegistration()));
-	}
-
-	private registerGrowthSession(chatEntitlementService: ChatEntitlementService): void {
-		const growthSessionDisposables = markAsSingleton(new MutableDisposable());
-
-		const updateGrowthSession = () => {
-			const experimentEnabled = this.configurationService.getValue<boolean>(ChatConfiguration.GrowthNotificationEnabled) === true;
-			// Show for users who don't have completed the Chat setup yet.
-			// Additional conditions (e.g., anonymous, entitlement) can be layered here.
-			const shouldShow = experimentEnabled && !chatEntitlementService.sentiment.completed;
-			if (shouldShow && !growthSessionDisposables.value) {
-				const disposables = new DisposableStore();
-				const controller = disposables.add(this.instantiationService.createInstance(GrowthSessionController));
-				if (!controller.isDismissed) {
-					disposables.add(registerGrowthSession(this.chatSessionsService, controller));
-					// Fully unregister when dismissed to prevent cached session from
-					// appearing during filtered model updates from other providers.
-					disposables.add(controller.onDidDismiss(() => {
-						growthSessionDisposables.clear();
-					}));
-					growthSessionDisposables.value = disposables;
-				} else {
-					disposables.dispose();
-				}
-			} else if (!shouldShow) {
-				growthSessionDisposables.clear();
-			}
-		};
-
-		this._register(chatEntitlementService.onDidChangeSentiment(() => updateGrowthSession()));
-		updateGrowthSession();
 	}
 
 	private registerActions(context: ChatEntitlementContext, requests: ChatEntitlementRequests, controller: Lazy<ChatSetupController>): void {

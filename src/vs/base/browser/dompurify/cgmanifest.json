@@ -6,12 +6,12 @@
 				"git": {
 					"name": "dompurify",
 					"repositoryUrl": "https://github.com/cure53/DOMPurify",
-					"commitHash": "c74ee8e0e1434f6f8ed756d8a5bd940c819e0376",
-					"tag": "3.4.8"
+					"commitHash": "3067f774676975de12306effd6db6ad7a9a8c17f",
+					"tag": "3.4.13"
 				}
 			},
 			"license": "Apache 2.0",
-			"version": "3.4.8"
+			"version": "3.4.13"
 		}
 	],
 	"version": 1

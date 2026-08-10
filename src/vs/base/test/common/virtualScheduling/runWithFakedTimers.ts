@@ -73,10 +73,16 @@ export async function runWithFakedTimers<T>(
 	const cts = new CancellationTokenSource();
 	const runPromise = processor.run({ until: untilToken(cts.token) });
 
+	// If the processor fails while `fn` is still pending — the max-event overflow is the common case — that
+	// failure has to become the failure of this call. Awaiting `fn()` alone would park here forever: the
+	// `finally` below would never run, `restoreGlobals` would never be disposed, and every test that follows
+	// would keep talking to a dead virtual clock. Resolution stays with `fn`; only rejection is raced.
+	const runFailure = runPromise.then(() => new Promise<never>(() => { /* let `fn` decide when we are done */ }));
+
 	let didThrow = true;
 	let result: T;
 	try {
-		result = await fn();
+		result = await Promise.race([fn(), runFailure]);
 		didThrow = false;
 	} finally {
 		// Stop intercepting real-time scheduling before draining: any tasks

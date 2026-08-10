@@ -325,6 +325,21 @@ suite('virtualScheduling - runWithFakedTimers', () => {
 		});
 	});
 
+	test('a processor overflow rejects out of a never-settling fn and restores the global time API', async () => {
+		// Regression: when `fn` never settles (a mocha timeout, or a test waiting on something the product no
+		// longer does) the helper used to park on `await fn()`, so its `finally` never ran and every following
+		// test inherited a dead virtual clock through `globalThis.setTimeout`.
+		const realDate = globalThis.Date;
+		await assert.rejects(runWithFakedTimers({ maxTaskCount: 10 }, () => new Promise<void>(() => {
+			const reschedule = () => setTimeout(reschedule, 1000);
+			reschedule();
+		})));
+		// `setTimeout` is re-bound on capture, so identity cannot be compared; check the un-bound `Date` and
+		// then prove a real timer still fires — under a leaked virtual clock this await would never return.
+		assert.strictEqual(globalThis.Date, realDate);
+		await new Promise<void>(resolve => setTimeout(resolve, 0));
+	});
+
 	test('promise chains awaited inside fn() resolve deterministically', async () => {
 		const log: string[] = [];
 		await runWithFakedTimers({}, async () => {

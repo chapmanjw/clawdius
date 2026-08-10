@@ -10,7 +10,7 @@ import { ExtensionIdentifier } from '../../../../../platform/extensions/common/e
 import { NullLogService } from '../../../../../platform/log/common/log.js';
 import { createDefaultModelArrays, DefaultModelArrays, DefaultModelContribution } from '../../browser/defaultModelContribution.js';
 import { UtilityModelContribution, UtilitySmallModelContribution } from '../../browser/utilityModelContribution.js';
-import { ILanguageModelChatMetadata, ILanguageModelProviderDescriptor, ILanguageModelsService } from '../../common/languageModels.js';
+import { COPILOT_VENDOR_ID, ILanguageModelChatMetadata, ILanguageModelProviderDescriptor, ILanguageModelsService } from '../../common/languageModels.js';
 
 class TestLanguageModelsService implements Partial<ILanguageModelsService> {
 	private readonly _models = new Map<string, ILanguageModelChatMetadata>();
@@ -189,12 +189,12 @@ suite('DefaultModelContribution', () => {
 		);
 	});
 
-	test('utility model settings exclude Copilot vendor models', () => {
+	test('utility model settings exclude the default vendor\'s models', () => {
 		const service = new TestLanguageModelsService();
 		store.add({ dispose: () => service.dispose() });
-		service.addVendor({ vendor: 'copilot', displayName: 'Copilot', isDefault: true, configuration: undefined, managementCommand: undefined, when: undefined });
+		service.addVendor({ vendor: COPILOT_VENDOR_ID, displayName: 'Clawdius', isDefault: true, configuration: undefined, managementCommand: undefined, when: undefined });
 		service.addVendor({ vendor: 'anthropic', displayName: 'Anthropic', isDefault: false, configuration: undefined, managementCommand: undefined, when: undefined });
-		service.addModel(makeMetadata({ id: 'gpt-4o-mini', name: 'GPT 4o mini', vendor: 'copilot' }));
+		service.addModel(makeMetadata({ id: 'gpt-4o-mini', name: 'GPT 4o mini', vendor: COPILOT_VENDOR_ID }));
 		service.addModel(makeMetadata({ id: 'claude-haiku-4.5', name: 'Claude Haiku 4.5', vendor: 'anthropic' }));
 
 		store.add(new UtilityModelContribution(service as unknown as ILanguageModelsService, new NullLogService()));

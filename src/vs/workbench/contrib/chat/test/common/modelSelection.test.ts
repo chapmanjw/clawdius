@@ -6,7 +6,7 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { ExtensionIdentifier } from '../../../../../platform/extensions/common/extensions.js';
-import { ILanguageModelChatMetadataAndIdentifier } from '../../common/languageModels.js';
+import { COPILOT_VENDOR_ID, ILanguageModelChatMetadataAndIdentifier } from '../../common/languageModels.js';
 import { IModelSelectionMemory, IModelSelectionModelsContext, IModelSelectionSessionContext, ModelSelectionReason, resolveConfiguredModel, resolveInitialModelSelection, resolveModelIdentifier, resolveModelIdentifierFromCatalog, resolveModelIdentifierFromLanguageModels, transitionModelSelection } from '../../common/modelSelection.js';
 
 function model(identifier: string, metadataId = identifier, family = identifier, version = '1.0'): ILanguageModelChatMetadataAndIdentifier {
@@ -92,21 +92,21 @@ suite('ModelSelection', () => {
 	});
 
 	test('uses shared vendor readiness for empty and live catalogs', () => {
-		const resolvedVendors = new Set(['copilot', 'ollama']);
+		const resolvedVendors = new Set([COPILOT_VENDOR_ID, 'ollama']);
 		const liveVendors = new Set<string>();
 		const vendorResolution = {
 			hasLiveModels: (vendor: string) => liveVendors.has(vendor),
 			hasResolved: (vendor: string) => resolvedVendors.has(vendor),
 		};
-		const emptyCopilot = resolveModelIdentifierFromCatalog([], 'copilot/remembered', vendorResolution);
+		const emptyDefault = resolveModelIdentifierFromCatalog([], `${COPILOT_VENDOR_ID}/remembered`, vendorResolution);
 		const emptyByok = resolveModelIdentifierFromCatalog([], 'ollama/remembered', vendorResolution);
-		liveVendors.add('copilot');
-		const liveCopilot = resolveModelIdentifierFromCatalog([], 'copilot/remembered', vendorResolution);
+		liveVendors.add(COPILOT_VENDOR_ID);
+		const liveDefault = resolveModelIdentifierFromCatalog([], `${COPILOT_VENDOR_ID}/remembered`, vendorResolution);
 
-		assert.deepStrictEqual({ emptyCopilot, emptyByok, liveCopilot }, {
-			emptyCopilot: { kind: 'pending', identifier: 'copilot/remembered' },
+		assert.deepStrictEqual({ emptyDefault, emptyByok, liveDefault }, {
+			emptyDefault: { kind: 'pending', identifier: `${COPILOT_VENDOR_ID}/remembered` },
 			emptyByok: { kind: 'unavailable', identifier: 'ollama/remembered' },
-			liveCopilot: { kind: 'unavailable', identifier: 'copilot/remembered' },
+			liveDefault: { kind: 'unavailable', identifier: `${COPILOT_VENDOR_ID}/remembered` },
 		});
 	});
 

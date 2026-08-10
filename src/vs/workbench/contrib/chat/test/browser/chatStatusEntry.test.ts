@@ -9,10 +9,12 @@ import { Emitter, Event } from '../../../../../base/common/event.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { IInlineCompletionsService } from '../../../../../editor/browser/services/inlineCompletionsService.js';
 import { IMarkdownRendererService } from '../../../../../platform/markdown/browser/markdownRenderer.js';
+import { IProductService } from '../../../../../platform/product/common/productService.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../../platform/storage/common/storage.js';
 import { ChatEntitlement, IChatEntitlementService, IChatSentiment } from '../../../../services/chat/common/chatEntitlementService.js';
 import { IStatusbarEntry, IStatusbarEntryAccessor, IStatusbarService } from '../../../../services/statusbar/browser/statusbar.js';
 import { workbenchInstantiationService } from '../../../../test/browser/workbenchTestServices.js';
+import { TestProductService } from '../../../../test/common/workbenchTestServices.js';
 import { ChatQuotaResumeState, ChatStatusBarEntry, computeQuotaResumeState } from '../../browser/chatStatus/chatStatusEntry.js';
 import { IChatStatusItemService } from '../../browser/chatStatus/chatStatusItemService.js';
 
@@ -140,6 +142,10 @@ suite('ChatStatusBarEntry', () => {
 			deleteEntry: () => { },
 		});
 		instantiationService.stub(IMarkdownRendererService, { _serviceBrand: undefined });
+		// Clawdius ships `defaultChatAgent.entitlementUrl: ""`, which makes ChatStatusBarEntry's constructor
+		// return before it registers anything (see chatStatusEntry.ts, "no copilot status entry" block). Give the
+		// test a product with an entitlement URL so the retained quota code under test is actually reachable.
+		instantiationService.stub(IProductService, { ...TestProductService, defaultChatAgent: { ...TestProductService.defaultChatAgent, entitlementUrl: 'https://example.com/entitlement' } });
 
 		const storageService = instantiationService.get(IStorageService);
 		if (opts.persisted) {

@@ -392,10 +392,30 @@ suite('ExtensionRecommendationsService Test', () => {
 	}));
 
 	test('ExtensionRecommendationsService: Prompt for valid workspace recommendations', () => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {
+		// The workspace prompt is gated on `defaultChatAgent.entitlementUrl` being set (see the "no install
+		// recommended extensions for this repository" block in extensionRecommendationsService.ts). Clawdius
+		// ships that empty, so opt this test into the prompting branch explicitly.
+		instantiationService.stub(IProductService, 'defaultChatAgent', { entitlementUrl: 'https://example.com/entitlement' });
 		await setUpFolderWorkspace('myFolder', mockTestData.recommendedExtensions);
 		testObject = disposableStore.add(instantiationService.createInstance(ExtensionRecommendationsService));
 
 		await Event.toPromise(promptedEmitter.event);
+		const recommendations = Object.keys(testObject.getAllRecommendationsWithReason());
+		const expected = [...mockTestData.validRecommendedExtensions, 'unknown.extension'];
+		assert.strictEqual(recommendations.length, expected.length);
+		expected.forEach(x => {
+			assert.strictEqual(recommendations.indexOf(x.toLowerCase()) > -1, true);
+		});
+	}));
+
+	test('ExtensionRecommendationsService: No prompt for valid workspace recommendations without a chat entitlement URL, but they are still recommended', () => runWithFakedTimers<void>({ useFakeTimers: true }, async () => {
+		// Clawdius ships `defaultChatAgent.entitlementUrl: ""`, which suppresses the workspace prompt while
+		// leaving the recommendations themselves in place for the Extensions view.
+		await setUpFolderWorkspace('myFolder', mockTestData.recommendedExtensions);
+		testObject = disposableStore.add(instantiationService.createInstance(ExtensionRecommendationsService));
+
+		await testObject.activationPromise;
+		assert.ok(!prompted);
 		const recommendations = Object.keys(testObject.getAllRecommendationsWithReason());
 		const expected = [...mockTestData.validRecommendedExtensions, 'unknown.extension'];
 		assert.strictEqual(recommendations.length, expected.length);

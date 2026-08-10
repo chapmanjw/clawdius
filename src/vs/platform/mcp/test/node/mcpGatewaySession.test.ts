@@ -239,7 +239,7 @@ suite('McpGatewaySession', () => {
 				resources: { listChanged: true },
 			},
 			serverInfo: {
-				name: 'VS Code MCP Gateway',
+				name: 'Clawdius MCP Gateway',
 				version: '1.0.0',
 			},
 		});

@@ -38,6 +38,23 @@ const MIN_PREFETCH_DISTANCE = 2400;
 const PREFETCH_VIEWPORT_MULTIPLIER = 4;
 
 /**
+ * Frame-aligned scheduling used by {@link MobileMultiDiffView}. Injectable so tests can drive
+ * incremental loading one frame at a time instead of depending on the host window's frame rate,
+ * which a hidden test window throttles to roughly 1 Hz.
+ */
+export interface IMobileFrameScheduler {
+	requestAnimationFrame(callback: () => void): number;
+	cancelAnimationFrame(handle: number): void;
+}
+
+function windowFrameScheduler(element: HTMLElement): IMobileFrameScheduler {
+	return {
+		requestAnimationFrame: callback => DOM.getWindow(element).requestAnimationFrame(callback),
+		cancelAnimationFrame: handle => DOM.getWindow(element).cancelAnimationFrame(handle),
+	};
+}
+
+/**
  * Data passed to {@link MobileMultiDiffView}.
  */
 export interface IMobileMultiDiffViewData {
@@ -127,6 +144,7 @@ export class MobileMultiDiffView extends Disposable {
 	private currentLayout: ReturnType<typeof computeMobileMultiDiffVirtualLayout> | undefined;
 	private readonly mountedIndexes = new Set<number>();
 	private readonly fileStates: IMobileMultiDiffFileState[];
+	private readonly frameScheduler: IMobileFrameScheduler;
 
 	constructor(
 		workbenchContainer: HTMLElement,
@@ -134,6 +152,7 @@ export class MobileMultiDiffView extends Disposable {
 		private readonly textFileService: ITextFileService,
 		private readonly fileService: IFileService,
 		private readonly languageService: ILanguageService,
+		frameScheduler?: IMobileFrameScheduler,
 	) {
 		super();
 		this.fileStates = data.diffs.map((diff, index) => ({
@@ -160,6 +179,7 @@ export class MobileMultiDiffView extends Disposable {
 			renderedBodyEndIndex: undefined,
 		}));
 		this.render(workbenchContainer);
+		this.frameScheduler = frameScheduler ?? windowFrameScheduler(this.scrollWrapper);
 		this.renderGeneration++;
 		this.updateVirtualLayout();
 		this.scrollToInitialIndex();
@@ -202,7 +222,7 @@ export class MobileMultiDiffView extends Disposable {
 			return;
 		}
 
-		DOM.getWindow(this.scrollWrapper).requestAnimationFrame(() => {
+		this.frameScheduler.requestAnimationFrame(() => {
 			if (this.disposed) {
 				return;
 			}
@@ -328,8 +348,7 @@ export class MobileMultiDiffView extends Disposable {
 			return;
 		}
 
-		const targetWindow = DOM.getWindow(this.scrollWrapper);
-		this.layoutAnimationFrame = targetWindow.requestAnimationFrame(() => {
+		this.layoutAnimationFrame = this.frameScheduler.requestAnimationFrame(() => {
 			this.layoutAnimationFrame = undefined;
 			this.updateVirtualLayout();
 		});
@@ -511,8 +530,7 @@ export class MobileMultiDiffView extends Disposable {
 			return;
 		}
 
-		const targetWindow = DOM.getWindow(this.scrollWrapper);
-		this.loadVisibleAnimationFrame = targetWindow.requestAnimationFrame(() => {
+		this.loadVisibleAnimationFrame = this.frameScheduler.requestAnimationFrame(() => {
 			this.loadVisibleAnimationFrame = undefined;
 			this.loadVisibleFiles();
 			this.schedulePrefetchFile();
@@ -521,7 +539,7 @@ export class MobileMultiDiffView extends Disposable {
 
 	private cancelScheduledLoadVisibleFiles(): void {
 		if (this.loadVisibleAnimationFrame !== undefined) {
-			DOM.getWindow(this.scrollWrapper).cancelAnimationFrame(this.loadVisibleAnimationFrame);
+			this.frameScheduler.cancelAnimationFrame(this.loadVisibleAnimationFrame);
 			this.loadVisibleAnimationFrame = undefined;
 		}
 	}
@@ -531,8 +549,7 @@ export class MobileMultiDiffView extends Disposable {
 			return;
 		}
 
-		const targetWindow = DOM.getWindow(this.scrollWrapper);
-		this.prefetchAnimationFrame = targetWindow.requestAnimationFrame(() => {
+		this.prefetchAnimationFrame = this.frameScheduler.requestAnimationFrame(() => {
 			this.prefetchAnimationFrame = undefined;
 			this.prefetchNearFile();
 		});
@@ -540,7 +557,7 @@ export class MobileMultiDiffView extends Disposable {
 
 	private cancelScheduledPrefetchFile(): void {
 		if (this.prefetchAnimationFrame !== undefined) {
-			DOM.getWindow(this.scrollWrapper).cancelAnimationFrame(this.prefetchAnimationFrame);
+			this.frameScheduler.cancelAnimationFrame(this.prefetchAnimationFrame);
 			this.prefetchAnimationFrame = undefined;
 		}
 	}
@@ -1002,7 +1019,7 @@ export class MobileMultiDiffView extends Disposable {
 	override dispose(): void {
 		this.disposed = true;
 		if (this.layoutAnimationFrame !== undefined) {
-			DOM.getWindow(this.scrollWrapper).cancelAnimationFrame(this.layoutAnimationFrame);
+			this.frameScheduler.cancelAnimationFrame(this.layoutAnimationFrame);
 			this.layoutAnimationFrame = undefined;
 		}
 		if (this.loadVisibleAnimationFrame !== undefined) {

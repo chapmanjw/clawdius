@@ -12,7 +12,7 @@ import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/comm
 import { IFileService } from '../../../platform/files/common/files.js';
 import { ILanguageService } from '../../../editor/common/languages/language.js';
 import { ITextFileService } from '../../../workbench/services/textfile/common/textfiles.js';
-import { MobileMultiDiffView } from '../../browser/parts/mobile/contributions/mobileMultiDiffView.js';
+import { IMobileFrameScheduler, MobileMultiDiffView } from '../../browser/parts/mobile/contributions/mobileMultiDiffView.js';
 import { IFileDiffViewData } from '../../browser/parts/mobile/contributions/mobileDiffView.js';
 
 suite('MobileMultiDiffView', () => {
@@ -56,8 +56,9 @@ suite('MobileMultiDiffView', () => {
 		document.body.appendChild(container);
 		store.add(toDisposable(() => container.remove()));
 
-		const view = store.add(new MobileMultiDiffView(container, { diffs }, textFileService, fileService, languageService));
-		await animationFrames(2);
+		const scheduler = new TestFrameScheduler();
+		const view = store.add(new MobileMultiDiffView(container, { diffs }, textFileService, fileService, languageService, scheduler));
+		await animationFrames(scheduler, 2);
 
 		const initialReadCount = readUris.length;
 		assert.strictEqual(initialReadCount, 2, 'opening the view should load one visible file pair');
@@ -82,7 +83,7 @@ suite('MobileMultiDiffView', () => {
 
 		scrollWrapper.scrollTop = scrollWrapper.scrollHeight;
 		scrollWrapper.dispatchEvent(new Event('scroll'));
-		await animationFrames(2);
+		await animationFrames(scheduler, 2);
 
 		assert.ok(readUris.length > initialReadCount, 'scrolling should load more files');
 		assert.ok(readUris.length <= initialReadCount + 4, 'scrolling should load at most one additional file pair per frame');
@@ -92,7 +93,7 @@ suite('MobileMultiDiffView', () => {
 
 		scrollWrapper.scrollTop = 0;
 		scrollWrapper.dispatchEvent(new Event('scroll'));
-		await animationFrames(2);
+		await animationFrames(scheduler, 2);
 
 		assert.strictEqual(new Set(readUris).size, readUris.length, 'remounting loaded files should not reread resources');
 		assert.strictEqual(appendChildCount, 0, 'scrolling should not reappend mounted file sections');
@@ -133,7 +134,7 @@ suite('MobileMultiDiffView', () => {
 				added: 1,
 				removed: 1,
 			}]
-		}, textFileService, fileService, languageService));
+		}, textFileService, fileService, languageService, new TestFrameScheduler()));
 
 		const section = container.querySelector('.mobile-multi-diff-file-section') as HTMLElement | null;
 		assert.ok(section, 'file section should exist');
@@ -186,6 +187,7 @@ suite('MobileMultiDiffView', () => {
 		document.body.appendChild(container);
 		store.add(toDisposable(() => container.remove()));
 
+		const scheduler = new TestFrameScheduler();
 		const view = store.add(new MobileMultiDiffView(container, {
 			diffs: [{
 				originalURI,
@@ -194,8 +196,8 @@ suite('MobileMultiDiffView', () => {
 				added: lineCount,
 				removed: lineCount,
 			}]
-		}, textFileService, fileService, languageService));
-		await waitForCondition(() => container.querySelectorAll('.mobile-diff-line').length > 0, 'loaded file should render visible rows');
+		}, textFileService, fileService, languageService, scheduler));
+		await waitForCondition(scheduler, () => container.querySelectorAll('.mobile-diff-line').length > 0, 'loaded file should render visible rows');
 
 		const renderedRows = container.querySelectorAll('.mobile-diff-line').length;
 		assert.ok(renderedRows < lineCount * 2, 'loaded file should not render every diff row');
@@ -208,7 +210,7 @@ suite('MobileMultiDiffView', () => {
 		assert.ok(scrollWrapper, 'scroll wrapper should exist');
 		scrollWrapper.scrollTop = 1200;
 		scrollWrapper.dispatchEvent(new Event('scroll'));
-		await waitForCondition(() => container.querySelector('.mobile-multi-diff-file-content-inner') === bodyInner, 'scrolling should keep the same body wrapper');
+		await waitForCondition(scheduler, () => container.querySelector('.mobile-multi-diff-file-content-inner') === bodyInner, 'scrolling should keep the same body wrapper');
 
 		const renderedRowsAfterScroll = container.querySelectorAll('.mobile-diff-line').length;
 		assert.ok(renderedRowsAfterScroll < lineCount * 2, 'scrolling should keep rendering only the visible diff rows');
@@ -256,8 +258,9 @@ suite('MobileMultiDiffView', () => {
 		document.body.appendChild(container);
 		store.add(toDisposable(() => container.remove()));
 
-		const view = store.add(new MobileMultiDiffView(container, { diffs }, textFileService, fileService, languageService));
-		await waitForCondition(() => container.querySelectorAll('.mobile-diff-line').length > 0, 'first file should load before prefetching near its boundary');
+		const scheduler = new TestFrameScheduler();
+		const view = store.add(new MobileMultiDiffView(container, { diffs }, textFileService, fileService, languageService, scheduler));
+		await waitForCondition(scheduler, () => container.querySelectorAll('.mobile-diff-line').length > 0, 'first file should load before prefetching near its boundary');
 
 		assert.ok(readUris.some(uri => uri.includes('prefetch0.ts')), 'opening should read the first file');
 		assert.ok(!readUris.some(uri => uri.includes('prefetch1.ts')), 'opening should not immediately prefetch the next large file');
@@ -267,7 +270,7 @@ suite('MobileMultiDiffView', () => {
 		scrollWrapper.scrollTop = 5000;
 		scrollWrapper.dispatchEvent(new Event('scroll'));
 
-		await waitForCondition(() => readUris.some(uri => uri.includes('prefetch1.ts')), 'approaching a file boundary should prefetch the next file');
+		await waitForCondition(scheduler, () => readUris.some(uri => uri.includes('prefetch1.ts')), 'approaching a file boundary should prefetch the next file');
 		assert.strictEqual(container.querySelector('.mobile-multi-diff-file-section[data-index="1"]'), null, 'prefetching should not mount the next file section');
 		assert.ok(!readUris.some(uri => uri.includes('prefetch2.ts')), 'prefetching should stay bounded to the near file');
 
@@ -315,8 +318,9 @@ suite('MobileMultiDiffView', () => {
 		document.body.appendChild(container);
 		store.add(toDisposable(() => container.remove()));
 
-		const view = store.add(new MobileMultiDiffView(container, { diffs }, textFileService, fileService, languageService));
-		await animationFrames(2);
+		const scheduler = new TestFrameScheduler();
+		const view = store.add(new MobileMultiDiffView(container, { diffs }, textFileService, fileService, languageService, scheduler));
+		await animationFrames(scheduler, 2);
 
 		assert.ok(readUris.some(uri => uri.includes('file0.ts')), 'opening the view should start loading the first file');
 
@@ -324,7 +328,7 @@ suite('MobileMultiDiffView', () => {
 		assert.ok(scrollWrapper, 'scroll wrapper should exist');
 		scrollWrapper.scrollTop = scrollWrapper.scrollHeight;
 		scrollWrapper.dispatchEvent(new Event('scroll'));
-		await animationFrames(3);
+		await animationFrames(scheduler, 3);
 
 		assert.ok(readUris.some(uri => uri.includes(`file${fileCount - 1}.ts`)), 'scrolling should start loading the newly visible file even while the first file is pending');
 
@@ -371,14 +375,15 @@ suite('MobileMultiDiffView', () => {
 		document.body.appendChild(container);
 		store.add(toDisposable(() => container.remove()));
 
-		const view = store.add(new MobileMultiDiffView(container, { diffs }, textFileService, fileService, languageService));
-		await animationFrames(2);
+		const scheduler = new TestFrameScheduler();
+		const view = store.add(new MobileMultiDiffView(container, { diffs }, textFileService, fileService, languageService, scheduler));
+		await animationFrames(scheduler, 2);
 
 		const scrollWrapper = container.querySelector('.mobile-overlay-scroll') as HTMLElement | null;
 		assert.ok(scrollWrapper, 'scroll wrapper should exist');
 		scrollWrapper.scrollTop = scrollWrapper.scrollHeight;
 		scrollWrapper.dispatchEvent(new Event('scroll'));
-		await animationFrames(2);
+		await animationFrames(scheduler, 2);
 
 		const placeholderContent = Array.from(container.querySelectorAll('.mobile-multi-diff-file-content-placeholder')) as HTMLElement[];
 		const bottomFileContent = placeholderContent.find(content => Number((content.parentElement as HTMLElement).dataset.index) === fileCount - 1);
@@ -397,22 +402,56 @@ suite('MobileMultiDiffView', () => {
 	});
 });
 
-function animationFrame(): Promise<void> {
-	return new Promise(resolve => mainWindow.requestAnimationFrame(() => resolve()));
-}
+/**
+ * Drives {@link MobileMultiDiffView}'s frame-aligned work by hand. The Electron unit-test window is never
+ * shown, so Chromium throttles its real `requestAnimationFrame` to roughly 1 Hz; a test that needs five or
+ * six frames blows the 5s mocha timeout before reaching its first assertion.
+ */
+class TestFrameScheduler implements IMobileFrameScheduler {
 
-async function animationFrames(count: number): Promise<void> {
-	for (let i = 0; i < count; i++) {
-		await animationFrame();
+	private nextHandle = 1;
+	private readonly callbacks = new Map<number, () => void>();
+
+	requestAnimationFrame(callback: () => void): number {
+		const handle = this.nextHandle++;
+		this.callbacks.set(handle, callback);
+		return handle;
+	}
+
+	cancelAnimationFrame(handle: number): void {
+		this.callbacks.delete(handle);
+	}
+
+	/**
+	 * Runs the callbacks registered before this frame — anything registered *during* it lands in the next
+	 * frame, as it would in a browser — then yields a few times so the loads those callbacks started can
+	 * settle, which is what the ~1s gap between real frames used to provide. Each yield drains the whole
+	 * microtask queue, so the extra turns only matter for work that chains a real timer.
+	 */
+	async frame(): Promise<void> {
+		const pending = Array.from(this.callbacks.values());
+		this.callbacks.clear();
+		for (const callback of pending) {
+			callback();
+		}
+		for (let i = 0; i < 4; i++) {
+			await new Promise<void>(resolve => mainWindow.setTimeout(resolve, 0));
+		}
 	}
 }
 
-async function waitForCondition(condition: () => boolean, message: string): Promise<void> {
+async function animationFrames(scheduler: TestFrameScheduler, count: number): Promise<void> {
+	for (let i = 0; i < count; i++) {
+		await scheduler.frame();
+	}
+}
+
+async function waitForCondition(scheduler: TestFrameScheduler, condition: () => boolean, message: string): Promise<void> {
 	for (let i = 0; i < 60; i++) {
 		if (condition()) {
 			return;
 		}
-		await animationFrame();
+		await scheduler.frame();
 	}
 	assert.fail(message);
 }

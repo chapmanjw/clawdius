@@ -646,9 +646,12 @@ suite('ChatListRenderer', () => {
 	});
 
 	suite('shouldHideChatUserIdentity', () => {
-		test('hides local Copilot and Agent Host Copilot response identity', () => {
+		test('hides the default agent and Agent Host CLI response identity', () => {
 			assert.deepStrictEqual([
-				shouldHideChatUserIdentity('GitHub Copilot', URI.from({ scheme: 'vscode-chat-editor' }), true, false, false),
+				// The default participant that ships here is vscode.clawdius-chat.default, whose fullName is
+				// "Clawdius" - not upstream's "GitHub Copilot". The renderer matches that name to suppress the
+				// redundant responder username; branding-guard asserts the two stay in lockstep.
+				shouldHideChatUserIdentity('Clawdius', URI.from({ scheme: 'vscode-chat-editor' }), true, false, false),
 				shouldHideChatUserIdentity('Copilot', URI.from({ scheme: 'agent-host-copilotcli' }), true, false, false),
 				shouldHideChatUserIdentity('Copilot', URI.from({ scheme: 'agent-host-copilotcli' }), false, false, false),
 				shouldHideChatUserIdentity('Copilot', URI.from({ scheme: 'remote-test-authority-copilotcli' }), true, false, false),

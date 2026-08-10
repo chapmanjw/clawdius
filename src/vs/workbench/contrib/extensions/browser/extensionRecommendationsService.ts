@@ -29,7 +29,7 @@ import { RemoteRecommendations } from './remoteRecommendations.js';
 import { IRemoteExtensionsScannerService } from '../../../../platform/remote/common/remoteExtensionsScanner.js';
 import { IUserDataInitializationService } from '../../../services/userData/browser/userDataInit.js';
 import { isString } from '../../../../base/common/types.js';
-import product from '../../../../platform/product/common/product.js';
+import { IProductService } from '../../../../platform/product/common/productService.js';
 
 export class ExtensionRecommendationsService extends Disposable implements IExtensionRecommendationsService {
 
@@ -63,6 +63,7 @@ export class ExtensionRecommendationsService extends Disposable implements IExte
 		@IExtensionsWorkbenchService private readonly extensionsWorkbenchService: IExtensionsWorkbenchService,
 		@IRemoteExtensionsScannerService private readonly remoteExtensionsScannerService: IRemoteExtensionsScannerService,
 		@IUserDataInitializationService private readonly userDataInitializationService: IUserDataInitializationService,
+		@IProductService private readonly productService: IProductService,
 	) {
 		super();
 
@@ -265,7 +266,7 @@ export class ExtensionRecommendationsService extends Disposable implements IExte
 		// official Claude Code plugin + the jeanp413 remotes via first-run setup) and leaves any further extension
 		// choices to the user, who can still browse Recommended in the Extensions view. Only the workspace prompt
 		// is suppressed; file/keymap/exe-based recommendation surfaces are unchanged.
-		if (!product.defaultChatAgent?.entitlementUrl) {
+		if (!this.productService.defaultChatAgent?.entitlementUrl) {
 			return;
 		}
 		// CLAWDIUS-END

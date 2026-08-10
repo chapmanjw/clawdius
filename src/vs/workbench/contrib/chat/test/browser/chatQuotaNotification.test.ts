@@ -20,7 +20,7 @@ import { IAssignmentFilter, IWorkbenchAssignmentService } from '../../../../serv
 import { ChatEntitlement, IChatEntitlementService, IChatSentiment, IQuotaSnapshot, IRateLimitSnapshot } from '../../../../services/chat/common/chatEntitlementService.js';
 import { ChatQuotaNotificationContribution } from '../../browser/chatQuotaNotification.js';
 import { ChatContextKeys } from '../../common/actions/chatContextKeys.js';
-import { ILanguageModelChatMetadata, ILanguageModelsService } from '../../common/languageModels.js';
+import { COPILOT_VENDOR_ID, ILanguageModelChatMetadata, ILanguageModelsService } from '../../common/languageModels.js';
 import { ChatInputNotificationActionKind, ChatInputNotificationSeverity, IChatInputNotification, IChatInputNotificationCommandAction, IChatInputNotificationService } from '../../browser/widget/input/chatInputNotificationService.js';
 
 const CREDIT_EFFICIENCY_LEARN_MORE_COMMAND_ID = 'workbench.action.chat.learnMoreAboutCreditUsage';
@@ -1213,7 +1213,7 @@ suite('ChatQuotaNotificationContribution', () => {
 			assert.strictEqual(notificationMock.getNotification()?.message, 'Credit Limit Reached');
 		});
 
-		test('shows notification when switching from BYOK to Copilot model', () => {
+		test('shows notification when switching from BYOK to a default-vendor model', () => {
 			const entitlementMock = createMockEntitlementService({
 				quotas: { usageBasedBilling: true, premiumChat: makeQuotaSnapshot(0) },
 			});
@@ -1252,8 +1252,8 @@ suite('ChatQuotaNotificationContribution', () => {
 			// Initially deferred — BYOK model
 			assert.strictEqual(notificationMock.getNotification(), undefined);
 
-			// Switch to Copilot model via storage — triggers storage listener
-			storageService.store('chat.currentLanguageModel.panel', 'copilot/gpt-4.1', StorageScope.PROFILE, StorageTarget.USER);
+			// Switch to a default-vendor model via storage — triggers storage listener
+			storageService.store('chat.currentLanguageModel.panel', `${COPILOT_VENDOR_ID}/gpt-4.1`, StorageScope.PROFILE, StorageTarget.USER);
 
 			assert.strictEqual(notificationMock.getNotification()?.message, 'Credit Limit Reached');
 		});

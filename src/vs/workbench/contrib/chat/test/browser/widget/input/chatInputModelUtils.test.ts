@@ -8,7 +8,7 @@ import { URI } from '../../../../../../../base/common/uri.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../../../base/test/common/utils.js';
 import { ExtensionIdentifier } from '../../../../../../../platform/extensions/common/extensions.js';
 import { ChatAgentLocation, ChatModeKind } from '../../../../common/constants.js';
-import { ILanguageModelChatMetadata, ILanguageModelChatMetadataAndIdentifier } from '../../../../common/languageModels.js';
+import { COPILOT_VENDOR_ID, ILanguageModelChatMetadata, ILanguageModelChatMetadataAndIdentifier } from '../../../../common/languageModels.js';
 import { LocalChatSessionUri } from '../../../../common/model/chatUri.js';
 import {
 	filterModelsForSession,
@@ -1302,8 +1302,8 @@ suite('ChatInputModelUtils', () => {
 		});
 
 		test('mode forces model — copilot vendor shorthand works', () => {
-			const gpt = createModel('gpt-4o', 'GPT-4o');
-			// For copilot vendor, just the name works
+			const gpt = createModel('gpt-4o', 'GPT-4o', { vendor: COPILOT_VENDOR_ID });
+			// For the privileged default vendor, just the name works
 			const match = [gpt].find(m => ILanguageModelChatMetadata.matchesQualifiedName('GPT-4o', m.metadata));
 			assert.strictEqual(match?.metadata.id, 'gpt-4o');
 		});
@@ -1541,10 +1541,10 @@ suite('ChatInputModelUtils', () => {
 		test('startup race #321037: Copilot vendor resolves empty before BYOK, restored selection must survive', () => {
 			// The user's persisted choice (a Copilot model) and its siblings, seeded into the cache from the previous
 			// session.
-			const persistedId = 'copilot/claude-opus-4.6-1m';
+			const persistedId = `${COPILOT_VENDOR_ID}/claude-opus-4.6-1m`;
 			const cachedCopilot = [
-				createModel('claude-opus-4.6-1m', 'Claude Opus 4.6 (1M)'),
-				createModel('gpt-5.5', 'GPT-5.5'),
+				createVendorModel(COPILOT_VENDOR_ID, 'claude-opus-4.6-1m', 'Claude Opus 4.6 (1M)', { isBYOK: false }),
+				createVendorModel(COPILOT_VENDOR_ID, 'gpt-5.5', 'GPT-5.5', { isBYOK: false }),
 			];
 
 			// Fast/local BYOK providers that publish live models immediately.
@@ -1555,8 +1555,8 @@ suite('ChatInputModelUtils', () => {
 
 			// Copilot contributed a vendor but resolved an EMPTY live list (token not ready yet); the BYOK vendors
 			// resolved with models. All three are therefore "resolved".
-			const contributedVendors = new Set(['copilot', 'ollama', 'cerebras']);
-			const resolvedVendors = new Set(['copilot', 'ollama', 'cerebras']);
+			const contributedVendors = new Set([COPILOT_VENDOR_ID, 'ollama', 'cerebras']);
+			const resolvedVendors = new Set([COPILOT_VENDOR_ID, 'ollama', 'cerebras']);
 
 			const available = computeAvailableModels(
 				liveByok,

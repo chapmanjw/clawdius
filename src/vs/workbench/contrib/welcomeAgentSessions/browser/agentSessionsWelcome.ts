@@ -51,8 +51,6 @@ import { AgentSessionsListDelegate } from '../../chat/browser/agentSessions/agen
 import { HoverPosition } from '../../../../base/browser/ui/hover/hoverWidget.js';
 import { IResolvedWalkthrough, IWalkthroughsService } from '../../welcomeGettingStarted/browser/gettingStartedService.js';
 import { GettingStartedEditorOptions, GettingStartedInput } from '../../welcomeGettingStarted/browser/gettingStartedInput.js';
-import { IMarkdownRendererService } from '../../../../platform/markdown/browser/markdownRenderer.js';
-import { MarkdownString } from '../../../../base/common/htmlContent.js';
 import { IWorkspaceContextService, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
 import { IWorkspacesService, IRecentFolder, IRecentWorkspace, isRecentFolder, isRecentWorkspace } from '../../../../platform/workspaces/common/workspaces.js';
 import { IHostService } from '../../../services/host/browser/host.js';
@@ -166,7 +164,6 @@ export class AgentSessionsWelcomePage extends EditorPane {
 		@IWalkthroughsService private readonly walkthroughsService: IWalkthroughsService,
 		@IChatService private readonly chatService: IChatService,
 		@IChatEntitlementService private readonly chatEntitlementService: IChatEntitlementService,
-		@IMarkdownRendererService private readonly markdownRendererService: IMarkdownRendererService,
 		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
 		@IWorkspacesService private readonly workspacesService: IWorkspacesService,
 		@IHostService private readonly hostService: IHostService,
@@ -700,71 +697,7 @@ export class AgentSessionsWelcomePage extends EditorPane {
 		};
 	}
 
-	private static readonly PRIVACY_NOTICE_DISMISSED_KEY = 'agentSessionsWelcome.privacyNoticeDismissed';
-
-	private buildPrivacyNotice(container: HTMLElement): void {
-		// TOS/Privacy notice for users who are not signed in - reusing walkthrough card design
-		if (!this.chatEntitlementService.anonymous) {
-			return;
-		}
-
-		// Check if user has dismissed the notice
-		if (this.storageService.getBoolean(AgentSessionsWelcomePage.PRIVACY_NOTICE_DISMISSED_KEY, StorageScope.APPLICATION, false)) {
-			return;
-		}
-
-		const providers = this.productService.defaultChatAgent?.provider;
-		if (!providers || !providers.default || !this.productService.defaultChatAgent?.termsStatementUrl || !this.productService.defaultChatAgent?.privacyStatementUrl) {
-			return;
-		}
-
-		const tosCard = append(container, $('.agentSessionsWelcome-walkthroughCard.agentSessionsWelcome-tosCard'));
-
-		const dismissNotice = () => {
-			this.storageService.store(AgentSessionsWelcomePage.PRIVACY_NOTICE_DISMISSED_KEY, true, StorageScope.APPLICATION, StorageTarget.USER);
-			tosCard.remove();
-		};
-
-		// Dismiss the notice when a chat request is sent
-		this.contentDisposables.add(this.chatService.onDidSubmitRequest(() => dismissNotice()));
-
-		// Icon
-		const iconContainer = append(tosCard, $('.agentSessionsWelcome-walkthroughCard-icon'));
-		iconContainer.appendChild(renderIcon(Codicon.chatSparkle));
-
-		// Content
-		const content = append(tosCard, $('.agentSessionsWelcome-walkthroughCard-content'));
-		const title = append(content, $('.agentSessionsWelcome-walkthroughCard-title'));
-		title.textContent = localize('tosTitle', "Try GitHub Copilot for free, no sign-in required!");
-
-		const desc = append(content, $('.agentSessionsWelcome-walkthroughCard-description'));
-		const descriptionMarkdown = new MarkdownString(
-			localize(
-				{ key: 'tosDescription', comment: ['{Locked="]({1})"}', '{Locked="]({2})"}'] },
-				"By continuing, you agree to {0}'s [Terms]({1}) and [Privacy Statement]({2}).",
-				providers.default.name,
-				this.productService.defaultChatAgent.termsStatementUrl,
-				this.productService.defaultChatAgent.privacyStatementUrl
-			),
-			{ isTrusted: true }
-		);
-		const renderedMarkdown = this.markdownRendererService.render(descriptionMarkdown);
-		desc.appendChild(renderedMarkdown.element);
-
-		// Dismiss button
-		const dismissButton = append(tosCard, $('button.agentSessionsWelcome-tosCard-dismiss'));
-		dismissButton.appendChild(renderIcon(Codicon.close));
-		dismissButton.title = localize('dismissPrivacyNotice', "Dismiss");
-		dismissButton.onclick = (e) => {
-			e.stopPropagation();
-			dismissNotice();
-		};
-	}
-
 	private buildFooter(container: HTMLElement): void {
-		// Privacy notice
-		this.buildPrivacyNotice(container);
-
 		// Show on startup checkbox
 		const showOnStartupContainer = append(container, $('.agentSessionsWelcome-showOnStartup'));
 		const showOnStartupCheckbox = this.contentDisposables.add(new Toggle({

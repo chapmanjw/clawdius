@@ -29,7 +29,7 @@ import { Codicon } from '../../../../base/common/codicons.js';
 import { IHoverService } from '../../../../platform/hover/browser/hover.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { registerUpdateTitleBarMenuPlacement } from '../../../../workbench/contrib/update/browser/updateTitleBarEntry.js';
-import { ChatEntitlement, ChatEntitlementService, IChatEntitlementService } from '../../../../workbench/services/chat/common/chatEntitlementService.js';
+import { ChatEntitlementService, IChatEntitlementService } from '../../../../workbench/services/chat/common/chatEntitlementService.js';
 import { ChatStatusDashboard, IChatStatusDashboardOptions } from '../../../../workbench/contrib/chat/browser/chatStatus/chatStatusDashboard.js';
 import { HoverPosition } from '../../../../base/browser/ui/hover/hoverWidget.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
@@ -184,17 +184,13 @@ class TitleBarAccountWidget extends BaseActionViewItem {
 		super(undefined, action, options);
 		this.lastState = getAccountTitleBarState({
 			isAccountLoading: true,
-			entitlement: this.chatEntitlementService.entitlement,
-			sentiment: this.chatEntitlementService.sentiment,
-			quotas: this.chatEntitlementService.quotas,
 		});
 
 		this._register(this.defaultAccountService.onDidChangeDefaultAccount(() => this.refreshAccount()));
 		this._register(this.authenticationService.onDidChangeSessions(() => this.refreshAccount()));
-		this._register(this.chatEntitlementService.onDidChangeEntitlement(() => this.renderState()));
-		this._register(this.chatEntitlementService.onDidChangeSentiment(() => this.renderState()));
-		this._register(this.chatEntitlementService.onDidChangeQuotaExceeded(() => this.renderState()));
-		this._register(this.chatEntitlementService.onDidChangeQuotaRemaining(() => this.renderState()));
+		// CLAWDIUS: the entitlement-change subscriptions that used to re-render here are gone with the
+		// Copilot presentation they drove. `renderState()` now derives only from the account, and the
+		// entitlement service bails before emitting anything when `entitlementUrl` is empty.
 		this.refreshAccount();
 	}
 
@@ -262,17 +258,10 @@ class TitleBarAccountWidget extends BaseActionViewItem {
 
 		// When we have a session but entitlement hasn't resolved yet,
 		// treat as Unresolved to avoid showing "Agents Signed Out".
-		const entitlement = this.accountName && this.chatEntitlementService.entitlement === ChatEntitlement.Unknown
-			? ChatEntitlement.Unresolved
-			: this.chatEntitlementService.entitlement;
-
 		const state = getAccountTitleBarState({
 			isAccountLoading: this.isAccountLoading,
 			accountName: this.accountName,
 			accountProviderLabel: this.accountProviderLabel,
-			entitlement,
-			sentiment: this.chatEntitlementService.sentiment,
-			quotas: this.chatEntitlementService.quotas,
 		});
 		this.lastState = state;
 

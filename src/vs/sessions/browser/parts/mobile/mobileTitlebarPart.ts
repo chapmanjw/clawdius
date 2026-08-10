@@ -332,17 +332,10 @@ export class MobileTitlebarPart extends Disposable {
 		// service hasn't resolved yet (still Unknown), treat it as the
 		// account being available rather than signed out. This avoids
 		// showing "Sign In" right after the walkthrough completes.
-		const entitlement = this.accountName && this.chatEntitlementService.entitlement === ChatEntitlement.Unknown
-			? ChatEntitlement.Unresolved
-			: this.chatEntitlementService.entitlement;
-
 		const state = getAccountTitleBarState({
 			isAccountLoading: this.isAccountLoading,
 			accountName: this.accountName,
 			accountProviderLabel: this.accountProviderLabel,
-			entitlement,
-			sentiment: this.chatEntitlementService.sentiment,
-			quotas: this.chatEntitlementService.quotas,
 		});
 
 		// Avatar
@@ -426,9 +419,6 @@ export class MobileTitlebarPart extends Disposable {
 			isAccountLoading: this.isAccountLoading,
 			accountName: this.accountName,
 			accountProviderLabel: this.accountProviderLabel,
-			entitlement: this.chatEntitlementService.entitlement,
-			sentiment: this.chatEntitlementService.sentiment,
-			quotas: this.chatEntitlementService.quotas,
 		}));
 		if (badgeKey) {
 			this.dismissedBadgeKey = badgeKey;

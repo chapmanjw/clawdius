@@ -604,7 +604,12 @@
 # walk can fail to advance and never terminate, and no published version fixes it, so the format is
 # declined at all three call sites by the same four-byte check the reader uses. First divergence in
 # extensions/emmet, taken because the alternative is shipping a reachable hang in a built-in extension.
+# Disposition 2026-08-09 (vendored sanitizer bump): replace the checked-in DOMPurify 3.4.8 with 3.4.13.
+# It has no lockfile entry so no scanner reports it, and it backs the sanitizer eight call sites use for
+# untrusted HTML. Not exploitable - nothing passes IN_PLACE and the helper never returns the live tree -
+# but one half of the precondition was already met by the fork's node-detaching hook. Same build artifact,
+# no local edits lost, tracking manifest moved to the tag's real commit, sanitizer suite passes.
 upstream_version: 1.132.0
 upstream_commit: df53daabb18cd157bdb08c7f01c34df936cf12f4
 recorded: 2026-08-09
-baseline: 5878 files changed, 57235 insertions(+), 1509619 deletions(-)
+baseline: 5882 files changed, 58415 insertions(+), 1510268 deletions(-)

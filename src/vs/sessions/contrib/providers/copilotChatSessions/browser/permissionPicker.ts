@@ -120,10 +120,8 @@ export function getPermissionLevelMeta(level: ChatPermissionLevel): IPermissionL
 		case ChatPermissionLevel.Default:
 		default:
 			return {
-				label: localize('permissions.default', "Default approvals"),
-				// CLAWDIUS-BEGIN claude branding
-				detail: localize('permissions.default.subtext', "Claude uses your configured settings"),
-				// CLAWDIUS-END
+				label: localize('permissions.default', "Default permissions"),
+				detail: localize('permissions.default.subtext', "Asks when approval settings don't apply"),
 				icon: Codicon.shield,
 			};
 	}

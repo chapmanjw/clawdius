@@ -3,7 +3,6 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { alert } from '../../../../base/browser/ui/aria/aria.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import product from '../../../../platform/product/common/product.js';
 import { localize, localize2 } from '../../../../nls.js';
@@ -90,22 +89,10 @@ export class ToggleAuxiliaryBarAction extends Action2 {
 	}
 
 	override async run(accessor: ServicesAccessor): Promise<void> {
-		// CLAWDIUS-BEGIN Claude chat-bubble toggle label
-		// Upstream delegates to IWorkbenchLayoutService.toggleSecondarySideBar(), which hard-codes the
-		// "Secondary Side Bar shown/hidden" screen-reader announcement. Clawdius keeps the toggle inline so the
-		// announcement can name the surface the user actually sees (the native Claude chat) without editing
-		// layout.ts, which every other secondary-side-bar caller shares.
-		const layoutService = accessor.get(IWorkbenchLayoutService);
-		const isCurrentlyVisible = layoutService.isVisible(Parts.AUXILIARYBAR_PART);
-
-		layoutService.setPartHidden(isCurrentlyVisible, Parts.AUXILIARYBAR_PART);
-
-		// Announce visibility change to screen readers
-		const alertMessage = isCurrentlyVisible
-			? (clawdiusChatToggle ? localize('claudeChatHidden', "Claude Code Chat hidden") : localize('auxiliaryBarHidden', "Secondary Side Bar hidden"))
-			: (clawdiusChatToggle ? localize('claudeChatShown', "Claude Code Chat shown") : localize('auxiliaryBarVisible', "Secondary Side Bar shown"));
-		alert(alertMessage);
-		// CLAWDIUS-END
+		// Delegate to the layout service: each workbench (classic, sessions, single-pane) decides which part
+		// its secondary side bar maps to and announces the change itself. The Clawdius-specific screen-reader
+		// wording lives with those implementations, not here.
+		accessor.get(IWorkbenchLayoutService).toggleSecondarySideBar();
 	}
 }
 

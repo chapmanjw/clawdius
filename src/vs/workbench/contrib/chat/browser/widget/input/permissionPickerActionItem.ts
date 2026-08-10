@@ -125,11 +125,9 @@ function getPermissionLevelMeta(level: ChatPermissionLevel): IPermissionLevelMet
 		default:
 			return {
 				id: 'chat.permissions.default',
-				label: localize('permissions.default', "Default Approvals"),
-				shortLabel: localize('permissions.default.label', "Default Approvals"),
-				// CLAWDIUS-BEGIN claude branding
-				detail: localize('permissions.default.subtext', "Claude uses your configured settings"),
-				// CLAWDIUS-END
+				label: localize('permissions.default', "Default permissions"),
+				shortLabel: localize('permissions.default.label', "Default permissions"),
+				detail: localize('permissions.default.subtext', "Asks when approval settings don't apply"),
 				icon: ThemeIcon.fromId(Codicon.shield.id),
 				description: localize('permissions.default.description', "Use configured approval settings"),
 				elevated: false,

@@ -23,7 +23,7 @@ import { ChatContextKeys, ChatContextKeyExprs } from '../../../common/actions/ch
  *   0.7  OpenAgentHostModePickerAction        (NEW — Mode)
  *   0.8  OpenAgentHostAutoApprovePickerAction (NEW — Auto-Approve)
  *   0.9  OpenAgentHostPermissionModePickerAction (NEW — Claude Approvals)
- *   1    OpenPermissionPickerAction           (Default Approvals)
+ *   1    OpenPermissionPickerAction           (Default permissions)
  *   1.1  OpenAgentHostFolderPickerAction      (NEW — Folder, multi-root only;
  *                                              ordered last to match the
  *                                              extension-host Copilot CLI)

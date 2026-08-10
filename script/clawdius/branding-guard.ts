@@ -310,8 +310,10 @@ const brandSites: { file: string; present: RegExp; absent: RegExp; what: string 
 		present: /localize2\('openSessionEventsFile', "Open Agent Session State File"\)/, absent: /localize2\('openSessionEventsFile', "Open Copilot CLI State File"\)/, what: 'open-session-state command title' },
 	{ file: 'src/vs/workbench/contrib/chat/browser/actions/openCopilotCliStateFileAction.ts',
 		present: /"No agent session is active\."/, absent: /"No Copilot CLI session is active\."/, what: 'open-session-state no-session toast' },
+	// The approvals subtext is upstream's own brand-free wording (it dropped the vendor name), so the fork just
+	// tracks it; the absent pattern still blocks a merge that reverts to the older vendor-named string.
 	{ file: 'src/vs/workbench/contrib/chat/browser/widget/input/permissionPickerActionItem.ts',
-		present: /"Claude uses your configured settings"/, absent: /"Copilot uses your configured settings"/, what: 'approvals picker subtext' },
+		present: /"Asks when approval settings don't apply"/, absent: /"(Copilot|Claude) uses your configured settings"/, what: 'approvals picker subtext' },
 	{ file: 'src/vs/workbench/contrib/chat/common/languageModelStats.ts',
 		present: /localize\('Language Models', "Claude"\)/, absent: /localize\('Language Models', "Copilot"\)/, what: 'extension Features-tab label' },
 	{ file: 'src/vs/workbench/contrib/chat/browser/actions/createPluginAction.ts',

@@ -317,9 +317,7 @@ export const platformSessionSchema = createSchema({
 			localize('agentHost.sessionConfig.autoApprove.bypass', "Allow all"),
 		],
 		enumDescriptions: [
-			// CLAWDIUS-BEGIN claude branding
-			localize('agentHost.sessionConfig.autoApprove.defaultDescription', "Claude uses your configured settings"),
-			// CLAWDIUS-END
+			localize('agentHost.sessionConfig.autoApprove.defaultDescription', "Asks when approval settings don't apply"),
 			localize('agentHost.sessionConfig.autoApprove.assistedDescription', "Evaluates risk before running tools"),
 			localize('agentHost.sessionConfig.autoApprove.bypassDescription', "Runs tool calls without asking"),
 		],

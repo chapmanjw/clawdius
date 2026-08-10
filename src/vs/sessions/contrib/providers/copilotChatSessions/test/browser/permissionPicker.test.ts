@@ -19,10 +19,8 @@ suite('Copilot PermissionPicker', () => {
 		})), [
 			{
 				level: ChatPermissionLevel.Default,
-				label: 'Default approvals',
-				// CLAWDIUS: fork branding (permissionPicker.ts CLAWDIUS-BEGIN claude
-				// branding block) replaces upstream's generic copy.
-				detail: 'Claude uses your configured settings',
+				label: 'Default permissions',
+				detail: 'Asks when approval settings don\'t apply',
 			},
 			{
 				level: ChatPermissionLevel.AutoApprove,

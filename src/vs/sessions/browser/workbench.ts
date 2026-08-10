@@ -85,6 +85,14 @@ import { ICustomViewService } from '../services/customView/browser/customViewSer
 import { ICustomViewGridPartService } from '../services/customView/browser/customViewGridPartService.js';
 import { ICustomViewDescriptor } from '../services/customView/browser/customView.js';
 import { ISessionsSetUpService } from './sessionsSetUpService.js';
+import product from '../../platform/product/common/product.js';
+
+// CLAWDIUS-BEGIN Claude chat-bubble toggle label
+// In Clawdius the secondary side bar IS the native Claude chat, so its toggle names that surface everywhere it
+// surfaces (see auxiliaryBarActions.ts) - including the screen-reader announcement in toggleSecondarySideBar().
+// Upstream (entitlementUrl present) keeps the generic "Secondary Side Bar" wording.
+const clawdiusChatToggle = !product.defaultChatAgent?.entitlementUrl;
+// CLAWDIUS-END
 
 //#region Workbench Options
 
@@ -2103,9 +2111,15 @@ export class Workbench extends Disposable implements IAgentWorkbenchLayoutServic
 
 		const visible = !this.isSecondarySideBarVisible();
 		this.setAuxiliaryBarHidden(!visible);
-		alert(visible
-			? localize('auxiliaryBarVisible', "Secondary Side Bar shown")
-			: localize('auxiliaryBarHidden', "Secondary Side Bar hidden"));
+		// CLAWDIUS-BEGIN Claude chat-bubble toggle label
+		alert(clawdiusChatToggle
+			? (visible
+				? localize('claudeChatShown', "Claude Code Chat shown")
+				: localize('claudeChatHidden', "Claude Code Chat hidden"))
+			: (visible
+				? localize('auxiliaryBarVisible', "Secondary Side Bar shown")
+				: localize('auxiliaryBarHidden', "Secondary Side Bar hidden")));
+		// CLAWDIUS-END
 	}
 
 	isSecondarySideBarVisible(): boolean {

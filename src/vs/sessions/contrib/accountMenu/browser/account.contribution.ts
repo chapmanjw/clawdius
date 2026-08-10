@@ -189,7 +189,7 @@ class TitleBarAccountWidget extends BaseActionViewItem {
 		this._register(this.defaultAccountService.onDidChangeDefaultAccount(() => this.refreshAccount()));
 		this._register(this.authenticationService.onDidChangeSessions(() => this.refreshAccount()));
 		// CLAWDIUS: the entitlement-change subscriptions that used to re-render here are gone with the
-		// Copilot presentation they drove. `renderState()` now derives only from the account, and the
+		// entitlement presentation they drove. `renderState()` now derives only from the account, and the
 		// entitlement service bails before emitting anything when `entitlementUrl` is empty.
 		this.refreshAccount();
 	}

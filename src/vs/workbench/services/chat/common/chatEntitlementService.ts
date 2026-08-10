@@ -14,7 +14,6 @@ import { localize } from '../../../../nls.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { ChatAIDisabledSettingId } from '../../../../platform/chat/common/chatSettings.js';
 import { IContextKey, IContextKeyService, RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
-import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { createDecorator, IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService, LogLevel } from '../../../../platform/log/common/log.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
@@ -22,12 +21,8 @@ import { asText, IRequestService } from '../../../../platform/request/common/req
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { ITelemetryService, TelemetryLevel } from '../../../../platform/telemetry/common/telemetry.js';
 import { AuthenticationSession, IAuthenticationService } from '../../authentication/common/authentication.js';
-import { IOpenerService } from '../../../../platform/opener/common/opener.js';
-import { URI } from '../../../../base/common/uri.js';
-import Severity from '../../../../base/common/severity.js';
 import { IWorkbenchEnvironmentService } from '../../environment/common/environmentService.js';
 import { isWeb } from '../../../../base/common/platform.js';
-import { ILifecycleService } from '../../lifecycle/common/lifecycle.js';
 import { Mutable } from '../../../../base/common/types.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { IObservable, observableFromEvent } from '../../../../base/common/observable.js';
@@ -300,7 +295,6 @@ export function getChatPlanName(chatEntitlement: ChatEntitlement): string {
 //#region Service Implementation
 
 const defaultChatAgent = {
-	upgradePlanUrl: product.defaultChatAgent?.upgradePlanUrl ?? '',
 	providerUriSetting: product.defaultChatAgent?.providerUriSetting ?? '',
 	entitlementSignupLimitedUrl: product.defaultChatAgent?.entitlementSignupLimitedUrl ?? '',
 	chatQuotaExceededContext: product.defaultChatAgent?.chatQuotaExceededContext ?? '',
@@ -939,9 +933,6 @@ export class ChatEntitlementRequests extends Disposable {
 		@ITelemetryService private readonly telemetryService: ITelemetryService,
 		@ILogService private readonly logService: ILogService,
 		@IRequestService private readonly requestService: IRequestService,
-		@IDialogService private readonly dialogService: IDialogService,
-		@IOpenerService private readonly openerService: IOpenerService,
-		@ILifecycleService private readonly lifecycleService: ILifecycleService,
 		@IDefaultAccountService private readonly defaultAccountService: IDefaultAccountService,
 		@IAuthenticationService private readonly authenticationService: IAuthenticationService,
 	) {
@@ -1151,8 +1142,7 @@ export class ChatEntitlementRequests extends Disposable {
 
 		const response = await this.request(defaultChatAgent.entitlementSignupLimitedUrl, 'POST', body, sessions, CancellationToken.None, 'chatEntitlementService.signUpFree');
 		if (!response) {
-			const retry = await this.onUnknownSignUpError(localize('signUpNoResponseError', "No response received."), '[chat entitlement] sign-up: no response');
-			return retry ? this.doSignUpFree(sessions) : { errorCode: 1 };
+			return { errorCode: 1 };
 		}
 
 		if (response.res.statusCode && response.res.statusCode !== 200) {
@@ -1162,7 +1152,6 @@ export class ChatEntitlementRequests extends Disposable {
 					if (responseText) {
 						const responseError: { message: string } = JSON.parse(responseText);
 						if (typeof responseError.message === 'string' && responseError.message) {
-							this.onUnprocessableSignUpError(`[chat entitlement] sign-up: unprocessable entity (${responseError.message})`, responseError.message);
 							return { errorCode: response.res.statusCode };
 						}
 					}
@@ -1170,8 +1159,7 @@ export class ChatEntitlementRequests extends Disposable {
 					// ignore - handled below
 				}
 			}
-			const retry = await this.onUnknownSignUpError(localize('signUpUnexpectedStatusError', "Unexpected status code {0}.", response.res.statusCode), `[chat entitlement] sign-up: unexpected status code ${response.res.statusCode}`);
-			return retry ? this.doSignUpFree(sessions) : { errorCode: response.res.statusCode };
+			return { errorCode: response.res.statusCode };
 		}
 
 		let responseText: string | null = null;
@@ -1182,8 +1170,7 @@ export class ChatEntitlementRequests extends Disposable {
 		}
 
 		if (!responseText) {
-			const retry = await this.onUnknownSignUpError(localize('signUpNoResponseContentsError', "Response has no contents."), '[chat entitlement] sign-up: response has no content');
-			return retry ? this.doSignUpFree(sessions) : { errorCode: 2 };
+			return { errorCode: 2 };
 		}
 
 		let parsedResult: { subscribed: boolean } | undefined = undefined;
@@ -1191,8 +1178,7 @@ export class ChatEntitlementRequests extends Disposable {
 			parsedResult = JSON.parse(responseText);
 			this.logService.trace(`[chat entitlement] sign-up: response is ${responseText}`);
 		} catch (err) {
-			const retry = await this.onUnknownSignUpError(localize('signUpInvalidResponseError', "Invalid response contents."), `[chat entitlement] sign-up: error parsing response (${err})`);
-			return retry ? this.doSignUpFree(sessions) : { errorCode: 3 };
+			return { errorCode: 3 };
 		}
 
 		// We have made it this far, so the user either did sign-up or was signed-up already.
@@ -1212,45 +1198,6 @@ export class ChatEntitlementRequests extends Disposable {
 			}
 		}
 		return [...(await this.authenticationService.getSessions(this.defaultAccountService.getDefaultAccountAuthenticationProvider().id))];
-	}
-
-	private async onUnknownSignUpError(detail: string, logMessage: string): Promise<boolean> {
-		this.logService.error(logMessage);
-
-		if (!this.lifecycleService.willShutdown) {
-			const { confirmed } = await this.dialogService.confirm({
-				type: Severity.Error,
-				message: localize('unknownSignUpError', "An error occurred while signing up for the GitHub Copilot Free plan. Would you like to try again?"),
-				detail,
-				primaryButton: localize('retry', "Retry")
-			});
-
-			return confirmed;
-		}
-
-		return false;
-	}
-
-	private onUnprocessableSignUpError(logMessage: string, logDetails: string): void {
-		this.logService.error(logMessage);
-
-		if (!this.lifecycleService.willShutdown) {
-			this.dialogService.prompt({
-				type: Severity.Error,
-				message: localize('unprocessableSignUpError', "An error occurred while signing up for the GitHub Copilot Free plan."),
-				detail: logDetails,
-				buttons: [
-					{
-						label: localize('ok', "OK"),
-						run: () => { /* noop */ }
-					},
-					{
-						label: localize('learnMore', "Learn More"),
-						run: () => this.openerService.open(URI.parse(defaultChatAgent.upgradePlanUrl))
-					}
-				]
-			});
-		}
 	}
 
 	async signIn(options?: { useSocialProvider?: string; additionalScopes?: readonly string[] }): Promise<{ defaultAccount?: IDefaultAccount; entitlements?: IEntitlements }> {

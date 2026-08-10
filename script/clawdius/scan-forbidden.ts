@@ -45,7 +45,11 @@ const BRAND_EXEMPT = [/^clawdius\/SECURITY-SCANNING\.md$/, /^clawdius\/PRIVACY\.
   /^docs\/(BUILD|MERGING|CHANGES_AGAINST_UPSTREAM|CONTRIBUTING|SECURITY)\.md$/,
   /^src\/vs\/workbench\/contrib\/clawdius\/common\/claudeClaimsRegistry\.ts$/,
   /(^|\/)script\/clawdius\/branding-guard\.ts$/,
-  /(^|\/)script\/clawdius\/brand-ratchet\.ts$/, /(^|\/)script\/clawdius\/brand-ratchet-baseline\.json$/]
+  /(^|\/)script\/clawdius\/brand-ratchet\.ts$/, /(^|\/)script\/clawdius\/brand-ratchet-baseline\.json$/,
+  // The fork-diff ratchet baseline is a ledger too: each disposition records WHY the fork surface moved,
+  // and a disposition about removing the brand cannot be written without naming it. Same treatment as the
+  // other ledgers - brand mentions allowed, telemetry keys and internal terms still flagged.
+  /(^|\/)script\/clawdius\/fork-diff-baseline\.txt$/]
 const BRANDING_IDS = new Set(['copilot-brand', 'github-copilot-brand'])
 
 const FORBIDDEN = [

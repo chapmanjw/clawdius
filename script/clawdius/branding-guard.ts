@@ -286,6 +286,13 @@ ok(fs.existsSync('extensions/clawdius-chat/package.json'), 'the clawdius-chat ex
 // `absent` patterns target the rebranded VALUE precisely (not the localize key or internal id), so the
 // deliberately-left gated strings (e.g. chat.sessionSync) and Copilot-suffixed command ids don't trip it.
 const brandSites: { file: string; present: RegExp; absent: RegExp; what: string }[] = [
+	// The transcript hides the responder username only when it equals the default participant's fullName.
+	// These two must agree or every assistant turn grows a redundant username + avatar. A comment did not
+	// hold them together - they drifted apart during de-Copiloting and shipped broken - so assert both ends.
+	{ file: 'src/vs/workbench/contrib/chat/browser/widget/chatListRenderer.ts',
+		present: /const DEFAULT_AGENT_USERNAME = 'Clawdius';/, absent: /'Clawdius Copilot'/, what: 'default-agent username' },
+	{ file: 'extensions/clawdius-chat/package.json',
+		present: /"fullName":\s*"Clawdius"/, absent: /"fullName":\s*"Clawdius Copilot"/, what: 'default chat participant fullName' },
 	{ file: 'src/vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent.ts',
 		present: /"Use AI features with Claude"/, absent: /Use AI features with Copilot for free/, what: 'welcome walkthrough title' },
 	{ file: 'src/vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent.ts',

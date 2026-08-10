@@ -127,11 +127,15 @@ import { AgentSessionProviders, isAgentHostTarget } from '../agentSessions/agent
 
 const $ = dom.$;
 
-// CLAWDIUS-BEGIN brand username: MUST stay in lockstep with the default agent's display name, which is
-// `${product.defaultChatAgent.provider.default.name} Copilot` (chatSetupProviders.ts, marked "Do NOT
-// change"). If they differ, the redundant username + avatar stop being hidden in the chat transcript.
-// Provider name is "Clawdius" (product.json defaultChatAgent.provider.default.name), so this is "Clawdius Copilot".
-const COPILOT_USERNAME = 'Clawdius Copilot';
+// CLAWDIUS-BEGIN default-agent username: MUST stay in lockstep with the `fullName` of the default chat
+// participant that actually ships - `vscode.clawdius-chat.default` in extensions/clawdius-chat/package.json.
+// If they differ, every assistant turn renders a redundant username + avatar in the transcript.
+//
+// This previously tracked SetupAgent's `${provider.default.name} Copilot` instead. That agent registers from
+// ChatSetupContribution's constructor, which returns before registerSetupAgents() whenever the entitlement
+// context is absent - always, on an empty entitlementUrl - so it never registers here and the name never
+// matched anything. The lockstep is asserted by a test rather than left to this comment.
+const DEFAULT_AGENT_USERNAME = 'Clawdius';
 // CLAWDIUS-END
 const WORKING_CAUGHT_UP_DEBOUNCE_MS = 750;
 const DEFAULT_CHAT_ITEM_HORIZONTAL_PADDING = 40;
@@ -464,7 +468,7 @@ const mostRecentResponseClassName = 'chat-most-recent-response';
 
 export function shouldHideChatUserIdentity(username: string, sessionResource: URI, isResponse: boolean, isSessionsWindow: boolean, isSystemInitiatedRequest: boolean): boolean {
 	const sessionType = getChatSessionType(sessionResource);
-	return username === COPILOT_USERNAME ||
+	return username === DEFAULT_AGENT_USERNAME ||
 		(isResponse && isAgentHostCopilotSessionType(sessionType)) ||
 		isSessionsWindow ||
 		isSystemInitiatedRequest;

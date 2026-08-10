@@ -618,7 +618,7 @@ configurationRegistry.registerConfiguration({
 		[ChatConfiguration.DefaultModel]: {
 			type: 'string',
 			default: '',
-			markdownDescription: nls.localize('chat.defaultModel.description', "The default model for new chat conversations. Use \"auto\" to let Copilot pick a model, a model family name (such as \"opus\" or \"gemini\") to use the latest available model in that family, or a full model id. You can still switch the model within a conversation; each new conversation starts at this model."),
+			markdownDescription: nls.localize('chat.defaultModel.description', "The default model for new chat conversations. Use \"auto\" to let the provider pick a model, a model family name (such as \"opus\" or \"gemini\") to use the latest available model in that family, or a full model id. You can still switch the model within a conversation; each new conversation starts at this model."),
 			experiment: {
 				mode: 'auto'
 			},
@@ -662,7 +662,7 @@ configurationRegistry.registerConfiguration({
 		},
 		[ChatConfiguration.SessionSyncEnabled]: {
 			default: false,
-			markdownDescription: nls.localize('chat.sessionSync.enabled', "Enable session sync to GitHub.com. When enabled, Copilot session data is synced to your GitHub account for cross-device access and richer insights. Requires `#github.copilot.chat.localIndex.enabled#` to also be enabled."),
+			markdownDescription: nls.localize('chat.sessionSync.enabled', "Enable session sync to GitHub.com for Copilot CLI agent sessions. When enabled, Copilot CLI session data is synced to your GitHub account for cross-device access. Has no effect on other agent providers."),
 			type: 'boolean',
 			tags: ['experimental'],
 			experiment: {
@@ -868,7 +868,7 @@ configurationRegistry.registerConfiguration({
 		},
 		[ClaudePreferAgentHostAgentsSettingId]: {
 			type: 'boolean',
-			markdownDescription: nls.localize('chat.agents.claude.preferAgentHost', "When enabled, Claude sessions opened from the Agents Window run inside the agent host process instead of the GitHub Copilot Chat extension. Only one Claude implementation surfaces per window. Requires `#chat.agentHost.enabled#`."),
+			markdownDescription: nls.localize('chat.agents.claude.preferAgentHost', "When enabled, Claude sessions opened from the Agents Window run inside the agent host process. Only one Claude implementation surfaces per window. Requires `#chat.agentHost.enabled#`."),
 			// CLAWDIUS-BEGIN prefer agent-host claude
 			// Clawdius has no Copilot extension; the agent-host Claude is the only Claude, so default it on (it
 			// surfaces the AH provider and stands the EH provider down). Upstream keeps default: false.
@@ -879,7 +879,7 @@ configurationRegistry.registerConfiguration({
 		},
 		[ClaudePreferAgentHostEditorSettingId]: {
 			type: 'boolean',
-			description: nls.localize('chat.editor.claude.preferAgentHost', "When enabled, Claude sessions opened from the regular workbench (sidebar chat) run inside the agent host process instead of the GitHub Copilot Chat extension. Only one Claude implementation surfaces per window."),
+			description: nls.localize('chat.editor.claude.preferAgentHost', "When enabled, Claude sessions opened from the regular workbench (sidebar chat) run inside the agent host process. Only one Claude implementation surfaces per window."),
 			// CLAWDIUS-BEGIN prefer agent-host claude
 			default: !product.defaultChatAgent?.entitlementUrl,
 			// CLAWDIUS-END
@@ -1622,17 +1622,17 @@ configurationRegistry.registerConfiguration({
 		},
 		[ChatConfiguration.BYOKUtilityModelDefault]: {
 			type: 'string',
-			markdownDescription: nls.localize('chat.byokUtilityModelDefault.description', "Controls the default model used by built-in utility flows when the selected main agent model is a bring your own key (BYOK) model. This setting has no effect when the selected main agent model is provided by GitHub Copilot. A specific model configured in {0} or {1} takes precedence.", '`#chat.utilityModel#`', '`#chat.utilitySmallModel#`'),
+			markdownDescription: nls.localize('chat.byokUtilityModelDefault.description', "Controls the default model used by built-in utility flows when the selected main agent model is a bring your own key (BYOK) model. This setting has no effect when the selected main agent model is provided by the built-in model provider. A specific model configured in {0} or {1} takes precedence.", '`#chat.utilityModel#`', '`#chat.utilitySmallModel#`'),
 			enum: [BYOKUtilityModelDefault.None, BYOKUtilityModelDefault.MainAgent, BYOKUtilityModelDefault.Copilot],
 			enumItemLabels: [
 				nls.localize('chat.byokUtilityModelDefault.none.label', "None"),
 				nls.localize('chat.byokUtilityModelDefault.mainAgent.label', "Main Agent Model"),
-				nls.localize('chat.byokUtilityModelDefault.copilot.label', "GitHub Copilot"),
+				nls.localize('chat.byokUtilityModelDefault.copilot.label', "Built-in Default"),
 			],
 			markdownEnumDescriptions: [
 				nls.localize('chat.byokUtilityModelDefault.none.description', "Do not use a default utility model."),
 				nls.localize('chat.byokUtilityModelDefault.mainAgent.description', "Use the selected BYOK main agent model."),
-				nls.localize('chat.byokUtilityModelDefault.copilot.description', "Use the default GitHub Copilot utility models."),
+				nls.localize('chat.byokUtilityModelDefault.copilot.description', "Use the built-in default utility models."),
 			],
 			default: BYOKUtilityModelDefault.Copilot,
 		},
@@ -2180,7 +2180,7 @@ configurationRegistry.registerConfiguration({
 		},
 		'chat.extensionUnification.enabled': {
 			type: 'boolean',
-			description: nls.localize('chat.extensionUnification.enabled', "Enables the unification of GitHub Copilot extensions. When enabled, all GitHub Copilot functionality is served from the GitHub Copilot Chat extension. When disabled, the GitHub Copilot and GitHub Copilot Chat extensions operate independently."),
+			description: nls.localize('chat.extensionUnification.enabled', "Enables chat extension unification. When enabled, the completions extension is folded into the default chat extension and disabled independently. Leave this off in Clawdius: enabling it disables the built-in Clawdius chat extension."),
 			// CLAWDIUS-BEGIN no copilot unification
 			// Copilot is eliminated in Clawdius, so its completions+chat "unification" is irrelevant - and
 			// harmful: ExtensionEnablementService._isDisabledByUnification force-disables the extension whose
@@ -2211,7 +2211,7 @@ configurationRegistry.registerConfiguration({
 		},
 		[ChatConfiguration.CollectInstructionsInExtension]: {
 			type: 'boolean',
-			description: nls.localize('chat.experimental.collectInstructionsInExtension', "When enabled, automatic instruction collection (.instructions.md, agent instructions, customizations index) is performed by the GitHub Copilot Chat extension instead of the core workbench."),
+			description: nls.localize('chat.experimental.collectInstructionsInExtension', "When enabled, automatic instruction collection (.instructions.md, agent instructions, customizations index) is delegated to a chat extension instead of the core workbench."),
 			default: false,
 			tags: ['experimental'],
 		},

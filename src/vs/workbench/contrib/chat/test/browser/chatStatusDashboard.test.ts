@@ -888,7 +888,7 @@ suite('ChatStatusDashboard', () => {
 			entitlement: ChatEntitlement.Pro,
 		}));
 
-		assert.strictEqual(getCalloutText(dashboard.element), 'Copilot is paused until the limit resets.');
+		assert.strictEqual(getCalloutText(dashboard.element), 'Chat is paused until the limit resets.');
 	});
 
 	test('Callout: Free — no paused message when only inline suggestions limit is reached', () => {
@@ -910,7 +910,7 @@ suite('ChatStatusDashboard', () => {
 			entitlement: ChatEntitlement.Free,
 		}));
 
-		assert.strictEqual(getCalloutText(dashboard.element), 'Copilot is paused until the limit resets.');
+		assert.strictEqual(getCalloutText(dashboard.element), 'Chat is paused until the limit resets.');
 	});
 
 	test('Callout: shows budget active when quota exhausted and overage permitted but no overage used yet', () => {
@@ -957,7 +957,7 @@ suite('ChatStatusDashboard', () => {
 			entitlement: ChatEntitlement.Pro,
 		}));
 
-		assert.strictEqual(getCalloutText(dashboard.element), 'Copilot will pause when the limit is reached.');
+		assert.strictEqual(getCalloutText(dashboard.element), 'Chat will pause when the limit is reached.');
 	});
 
 	test('Callout: shows paused for enterprise when quota exhausted', () => {
@@ -1100,7 +1100,7 @@ suite('ChatStatusDashboard', () => {
 		};
 		svc.fireQuotaExceeded();
 
-		assert.strictEqual(getCalloutText(dashboard.element), 'Copilot is paused until the limit resets.');
+		assert.strictEqual(getCalloutText(dashboard.element), 'Chat is paused until the limit resets.');
 	});
 
 	test('Live update: header button visibility updates when quota changes', () => {

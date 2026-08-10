@@ -340,7 +340,7 @@ suite('buildModelPickerItems', () => {
 	test('setupRequired shows an explanatory header and a Sign In action instead of auto', () => {
 		const items = callBuild([], { setupRequired: true, onRequestSetup: () => { } });
 		const actions = getActionItems(items);
-		assert.ok(items.some(i => i.kind === ActionListItemKind.Header && i.label === 'Sign in to use Copilot'));
+		assert.ok(items.some(i => i.kind === ActionListItemKind.Header && i.label === 'No models are available'));
 		assert.strictEqual(actions.length, 1);
 		assert.strictEqual(actions[0].item?.id, 'setupRequiredSignIn');
 		assert.strictEqual(actions[0].item?.enabled, true);

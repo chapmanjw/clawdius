@@ -954,14 +954,14 @@ export class ChatStatusDashboard extends DomWidget {
 				calloutIcon.className = `callout-icon ${ThemeIcon.asClassName(Codicon.info)}`;
 				calloutText.textContent = isEnterpriseUser
 					? localize('quotaPausedEnterprise', "Copilot is paused until the limit resets. Contact your administrator for more information.")
-					: localize('quotaPaused', "Copilot is paused until the limit resets.");
+					: localize('quotaPaused', "Chat is paused until the limit resets.");
 			} else if (maxUsedPercentage >= 75 && !additionalUsageEnabled) {
 				quotaCallout.style.display = '';
 				quotaCallout.className = 'quota-callout info';
 				calloutIcon.className = `callout-icon ${ThemeIcon.asClassName(Codicon.info)}`;
 				calloutText.textContent = isEnterpriseUser
 					? localize('quotaWarningEnterprise', "Copilot will pause when the limit is reached. Contact your administrator for more information.")
-					: localize('quotaWarning', "Copilot will pause when the limit is reached.");
+					: localize('quotaWarning', "Chat will pause when the limit is reached.");
 			} else {
 				quotaCallout.style.display = 'none';
 			}

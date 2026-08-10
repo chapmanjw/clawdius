@@ -1023,7 +1023,7 @@ suite('VoiceSessionController', () => {
 					'options: Terrain maps; Weather readings; a custom response is also available',
 					'4. What visual style should Mars use?',
 					'options: Photorealistic; Illustrated; a custom response is also available',
-					'The questionnaire is open in GitHub Copilot.',
+					'The questionnaire is open in chat.',
 				].join('\n'),
 			},
 			immediateRequestCount: 1,
@@ -1042,7 +1042,7 @@ suite('VoiceSessionController', () => {
 					'options: Terrain maps; Weather readings; a custom response is also available',
 					'4. What visual style should Mars use?',
 					'options: Photorealistic; Illustrated; a custom response is also available',
-					'The questionnaire is open in GitHub Copilot.',
+					'The questionnaire is open in chat.',
 				].join('\n'),
 			}],
 			containsInternalIds: false,
@@ -1300,7 +1300,7 @@ suite('VoiceSessionController', () => {
 					'questionnaire: 1 question',
 					'1. Which Mars scope should GitHub Copilot use?',
 					'options: Comparison view - Show Earth and Mars side-by-side; a custom response is also available',
-					'The questionnaire is open in GitHub Copilot.',
+					'The questionnaire is open in chat.',
 				].join('\n'),
 			},
 			containsHiddenMetadata: false,
@@ -1368,7 +1368,7 @@ suite('VoiceSessionController', () => {
 					'questionnaire: 1 question',
 					'1. Which deployment should GitHub Copilot use?',
 					'options: Preview deployment; a custom response is also available',
-					'The questionnaire is open in GitHub Copilot.',
+					'The questionnaire is open in chat.',
 				].join('\n'),
 				confirmation_type: 'questionnaire',
 				pending: {
@@ -1526,7 +1526,7 @@ suite('VoiceSessionController', () => {
 					fromDetail: [
 						'plan approval: Review the implementation plan',
 						'choices: Implement Plan',
-						'The plan is open in GitHub Copilot.',
+						'The plan is open in chat.',
 					].join('\n'),
 					fromType: 'plan',
 					expectedType: 'generic',
@@ -1904,8 +1904,8 @@ suite('VoiceSessionController', () => {
 				detail: [
 					'questionnaire: 1 question',
 					'1. What should we call the Mars explorer?',
-					'response: enter a free-form answer in GitHub Copilot',
-					'The questionnaire is open in GitHub Copilot.',
+					'response: enter a free-form answer in chat',
+					'The questionnaire is open in chat.',
 				].join('\n'),
 			},
 			{
@@ -1918,8 +1918,8 @@ suite('VoiceSessionController', () => {
 				detail: [
 					'questionnaire: 1 question',
 					'1. I need your input in the open questionnaire.',
-					'response: enter a free-form answer in GitHub Copilot',
-					'The questionnaire is open in GitHub Copilot.',
+					'response: enter a free-form answer in chat',
+					'The questionnaire is open in chat.',
 				].join('\n'),
 			},
 			{
@@ -1929,7 +1929,7 @@ suite('VoiceSessionController', () => {
 					'questionnaire: 1 question',
 					'1. Choose a navigation mode.',
 					'options: Guided route',
-					'The questionnaire is open in GitHub Copilot.',
+					'The questionnaire is open in chat.',
 				].join('\n'),
 			},
 		]);
@@ -1954,7 +1954,7 @@ suite('VoiceSessionController', () => {
 		assert.deepStrictEqual({
 			withinLimit: detail.length <= 2_400,
 			includesOptionOmission: detail.includes('3 more options'),
-			includesQuestionOmission: detail.includes('2 more questions are open in GitHub Copilot.'),
+			includesQuestionOmission: detail.includes('2 more questions are open in chat.'),
 			containsInternalIds: detail.includes('internal_question_') || detail.includes('internal_option_') || detail.includes('hidden_value_'),
 		}, {
 			withinLimit: true,
@@ -1998,7 +1998,7 @@ suite('VoiceSessionController', () => {
 				detail: [
 					'plan approval: Review the Mars implementation plan',
 					'choices: Implement Plan - Start making the changes; Continue in Autopilot - Proceed automatically',
-					'The plan is open in GitHub Copilot.',
+					'The plan is open in chat.',
 				].join('\n'),
 			},
 			{

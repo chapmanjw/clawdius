@@ -149,7 +149,7 @@ export class PromptValidator {
 			const skillToolEnabled = this.configurationService.getValue<boolean>('github.copilot.chat.skillTool.enabled');
 			if (!skillToolEnabled) {
 				report(toMarker(
-					localize('promptValidator.contextForkNotSupported', "The 'context: fork' attribute requires the skill tool to be enabled (github.copilot.chat.skillTool.enabled)."),
+					localize('promptValidator.contextForkNotSupported', "The 'context: fork' attribute requires the skill tool, which is not available in this build."),
 					contextAttribute.value.range,
 					MarkerSeverity.Warning
 				));
@@ -627,7 +627,7 @@ export class PromptValidator {
 		return toMarker(
 			localize(
 				'promptValidator.missingGithubMcpServer',
-				"Tool alias '{0}' requires the GitHub MCP server. Enable the built-in server with setting 'github.copilot.chat.githubMcpServer.enabled' or install extension 'io.github.github/github-mcp-server' from Extensions (`@mcp github`).",
+				"Tool alias '{0}' requires the GitHub MCP server. Install extension 'io.github.github/github-mcp-server' from Extensions (`@mcp github`).",
 				toolReferenceName
 			),
 			range,

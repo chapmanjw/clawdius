@@ -183,7 +183,7 @@ suite('ChatErrorMessages', () => {
 			assert.deepStrictEqual(messages, [
 				'Sorry, you have exceeded the agent mode rate limit. Please switch to ask mode and try again in 30 seconds. [Learn More](https://aka.ms/github-copilot-rate-limit-error)',
 				'Sorry, the upstream model provider is currently experiencing high demand. Please try again in 30 seconds. [Learn More](https://aka.ms/github-copilot-rate-limit-error)',
-				'Sorry, GitHub Copilot Chat is currently experiencing high demand. Please try again in 30 seconds. [Learn More](https://aka.ms/github-copilot-rate-limit-error)',
+				'Sorry, the model service is currently experiencing high demand. Please try again in 30 seconds. [Learn More](https://aka.ms/github-copilot-rate-limit-error)',
 				'Sorry, your request was rate-limited. Please wait 30 seconds before trying again or consider switching to Auto. [Learn More](https://aka.ms/github-copilot-rate-limit-error)',
 			]);
 		});
@@ -214,7 +214,7 @@ suite('ChatErrorMessages', () => {
 		test('default plan, no usage-based billing', () => {
 			assert.strictEqual(
 				getQuotaMessageForPlan(undefined),
-				'You\'ve exhausted your premium model quota. For additional paid premium requests, please reach out to your organization\'s Copilot admin or wait for your allowance to renew.',
+				'You\'ve exhausted your premium model quota. For additional paid premium requests, please reach out to your organization\'s administrator or wait for your allowance to renew.',
 			);
 		});
 

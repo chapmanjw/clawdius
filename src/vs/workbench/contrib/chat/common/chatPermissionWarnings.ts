@@ -97,7 +97,7 @@ function getElevatedWarningCopy(level: ChatPermissionLevel, defaultSettingKey: s
 				title: localize('permissions.assisted.warning.title', "Enable {0}?", levelLabel),
 				confirm: localize('permissions.assisted.warning.confirm', "Enable"),
 				icon: Codicon.sparkle,
-				detail: localize('permissions.assisted.warning.detail', "{0} uses model recommendations to approve tool calls. Copilot will still ask when the model requires approval, excludes the request from automatic approval, or cannot make a recommendation.\n\nTo make this the starting permission level for new sessions, change the [{1}](command:workbench.action.openSettings?%5B%22{1}%22%5D) setting.", levelLabel, defaultSettingKey),
+				detail: localize('permissions.assisted.warning.detail', "{0} uses model recommendations to approve tool calls. The agent will still ask when the model requires approval, excludes the request from automatic approval, or cannot make a recommendation.\n\nTo make this the starting permission level for new sessions, change the [{1}](command:workbench.action.openSettings?%5B%22{1}%22%5D) setting.", levelLabel, defaultSettingKey),
 			};
 		case ChatPermissionLevel.Autopilot:
 			return {

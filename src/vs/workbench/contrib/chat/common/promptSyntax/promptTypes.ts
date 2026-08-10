@@ -167,7 +167,7 @@ export function getSourceDescription(source: PromptFileSource): string | undefin
 		case PromptFileSource.AgentsPersonal:
 			return localize('source.agentsPersonal', "Global");
 		case PromptFileSource.GitHubWorkspace:
-			return localize('source.githubWorkspace', "Workspace (only used by Copilot agents)");
+			return localize('source.githubWorkspace', "Workspace (`.github` folder)");
 		case PromptFileSource.CopilotPersonal:
 			return localize('source.copilotPersonal', "Global (only used by Copilot agents)");
 		case PromptFileSource.ClaudeWorkspace:

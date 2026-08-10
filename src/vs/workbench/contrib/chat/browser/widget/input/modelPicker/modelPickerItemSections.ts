@@ -62,19 +62,19 @@ export function buildUnavailableStateItems(options: IBuildModelPickerItemsOption
 	if (setupRequired) {
 		const enabled = !!options.actions.onRequestSetup;
 		return [
-			{ kind: ActionListItemKind.Header, label: localize('chat.modelPicker.setupRequired', "Sign in to use Copilot") },
+			{ kind: ActionListItemKind.Header, label: localize('chat.modelPicker.setupRequired', "No models are available") },
 			{
 				item: {
 					id: SETUP_REQUIRED_SIGN_IN_ACTION_ID,
 					enabled,
 					checked: false,
 					class: undefined,
-					tooltip: localize('chat.modelPicker.setupRequired.signInTooltip', "Sign in to GitHub Copilot to choose a model."),
-					label: localize('chat.modelPicker.setupRequired.signIn', "Sign in to use Copilot..."),
+					tooltip: localize('chat.modelPicker.setupRequired.signInTooltip', "Set up a model provider to choose a model."),
+					label: localize('chat.modelPicker.setupRequired.signIn', "Set up a model provider..."),
 					run: () => options.actions.onRequestSetup?.(),
 				},
 				kind: ActionListItemKind.Action,
-				label: localize('chat.modelPicker.setupRequired.signIn', "Sign in to use Copilot..."),
+				label: localize('chat.modelPicker.setupRequired.signIn', "Set up a model provider..."),
 				group: { title: '', icon: ThemeIcon.fromId(Codicon.signIn.id) },
 				disabled: !enabled,
 				hideIcon: false,
@@ -93,7 +93,7 @@ export function buildUnavailableStateItems(options: IBuildModelPickerItemsOption
 		? new MarkdownString(localize('chat.modelPicker.upgradeLink', "[Upgrade](command:workbench.action.chat.upgradePlan \" \")"), { isTrusted: true })
 		: undefined;
 	const hover = canUpgrade ? new MarkdownString('', { isTrusted: true, supportThemeIcons: true }) : undefined;
-	hover?.appendMarkdown(localize('chat.modelPicker.upgradeHover', "[Upgrade to GitHub Copilot Pro](command:workbench.action.chat.upgradePlan \" \") to use the best models."));
+	hover?.appendMarkdown(localize('chat.modelPicker.upgradeHover', "Upgrade your plan to use the best models."));
 	return [{
 		item: {
 			id: 'noModels',

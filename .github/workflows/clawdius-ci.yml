@@ -408,26 +408,33 @@ jobs:
           sudo chmod 4755 .build/electron/chrome-sandbox
           ( cd test/smoke && npm run compile )
           ( cd test/smoke && xvfb-run --auto-servernum node test/index.js -g "Clawdius" )
-      - name: Full unit tier (electron)
+      - name: Electron-only unit tier
         # The last uncovered tier. The node runner excludes browser/ and electron-*, and the browser runner
         # excludes node/ and electron-*, so ~59 test files under electron-browser / electron-main /
         # electron-utility ran nowhere in CI - including the agent-host transport and SSH suites, which are
         # this fork's own code. This job already has what they need: preLaunch built out/ and fetched
         # Electron, and the SUID fix above is what stops Electron aborting headless.
         #
+        # SCOPED to those three directories on purpose. The Electron runner otherwise executes the whole
+        # suite (~27k tests), which re-runs everything the node and browser tiers already gate - no extra
+        # coverage, 4 minutes instead of 35 seconds, and double the exposure to any racy test in the shared
+        # set. The first unscoped run duly failed on a timing-dependent SIGTERM test that lives in
+        # mcp/test/node/ and had already passed in the node tier that same run.
+        #
         # VSCODE_SKIP_PRELAUNCH stops scripts/test.sh re-running the build it just did. `| tee` masks the
         # runner's exit code, so the greps are the gate, as in the other tiers.
         run: |
           set -e
-          VSCODE_SKIP_PRELAUNCH=1 xvfb-run --auto-servernum ./scripts/test.sh 2>&1 | tee full-electron.log
+          VSCODE_SKIP_PRELAUNCH=1 xvfb-run --auto-servernum ./scripts/test.sh \
+            --runGlob '**/{electron-browser,electron-main,electron-utility}/**/*.test.js' 2>&1 | tee full-electron.log
           # This reporter colourizes its summary, so the line starts with an escape sequence and an anchored
           # "^ *N passing" never matches - which failed a run that had actually passed. Strip ANSI first. The
           # anchor has to stay: unanchored "failing" also matches test NAMES (e.g. "failing CI still blocks
           # sessions"), which would fail every green run instead.
           sed -e $'s/\x1b\\[[0-9;]*m//g' full-electron.log > full-electron.clean.log
-          if grep -qE "^[[:space:]]*[1-9][0-9]* failing" full-electron.clean.log; then echo "::error::full electron unit tier has failures"; exit 1; fi
-          if ! grep -qE "^[[:space:]]*[1-9][0-9]* passing" full-electron.clean.log; then echo "::error::full electron unit tier ran no tests"; exit 1; fi
-          echo "full electron unit tier passed"
+          if grep -qE "^[[:space:]]*[1-9][0-9]* failing" full-electron.clean.log; then echo "::error::electron-only unit tier has failures"; exit 1; fi
+          if ! grep -qE "^[[:space:]]*[1-9][0-9]* passing" full-electron.clean.log; then echo "::error::electron-only unit tier ran no tests"; exit 1; fi
+          echo "electron-only unit tier passed"
 
   release-build:
     runs-on: ubuntu-latest

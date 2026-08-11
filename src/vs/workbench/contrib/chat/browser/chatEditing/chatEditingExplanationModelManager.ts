@@ -13,7 +13,7 @@ import { ITextModel } from '../../../../../editor/common/model.js';
 import { DetailedLineRangeMapping, LineRangeMapping } from '../../../../../editor/common/diff/rangeMapping.js';
 import { createDecorator } from '../../../../../platform/instantiation/common/instantiation.js';
 import { InstantiationType, registerSingleton } from '../../../../../platform/instantiation/common/extensions.js';
-import { COPILOT_VENDOR_ID, ChatMessageRole, ILanguageModelsService } from '../../common/languageModels.js';
+import { COPILOT_VENDOR_ID, ChatMessageRole, ILanguageModelsService, UTILITY_MODEL_ID } from '../../common/languageModels.js';
 import * as nls from '../../../../../nls.js';
 
 /**
@@ -237,7 +237,7 @@ export class ChatEditingExplanationModelManager extends Disposable implements IC
 
 		try {
 			// Select a model for understanding all changes together
-			const models = await this._languageModelsService.selectLanguageModels({ vendor: COPILOT_VENDOR_ID, id: 'copilot-utility-small' });
+			const models = await this._languageModelsService.selectLanguageModels({ vendor: COPILOT_VENDOR_ID, id: UTILITY_MODEL_ID });
 			if (!models.length) {
 				for (const fileData of fileChanges) {
 					this._updateUriStatePartial(fileData.uri, {

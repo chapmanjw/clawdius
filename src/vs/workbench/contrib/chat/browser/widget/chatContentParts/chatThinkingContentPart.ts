@@ -1343,6 +1343,11 @@ export class ChatThinkingContentPart extends ChatCollapsibleContentPart implemen
 		const timeout = setTimeout(() => cts.cancel(), 5000);
 
 		try {
+			// CLAWDIUS: deliberately left pointing at a family nothing registers, so this never runs. Unlike the
+			// other utility flows, it is not reached by a user action: it fires when a response finishes
+			// rendering AND again on every re-render of an already-complete response, with no cap. Each call
+			// spawns a `claude -p` process, so wiring it to a real model would be background egress against the
+			// user's own login - which this product does not do. Do not "fix" this to UTILITY_MODEL_ID.
 			const models = await this.languageModelsService.selectLanguageModels({ vendor: COPILOT_VENDOR_ID, id: 'copilot-utility-small' });
 			if (!models.length) {
 				this.setFallbackTitle();

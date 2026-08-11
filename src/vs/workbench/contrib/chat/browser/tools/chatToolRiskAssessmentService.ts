@@ -10,7 +10,7 @@ import { localize } from '../../../../../nls.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { createDecorator } from '../../../../../platform/instantiation/common/instantiation.js';
 import { ChatConfiguration } from '../../common/constants.js';
-import { COPILOT_VENDOR_ID, ChatMessageRole, ILanguageModelsService } from '../../common/languageModels.js';
+import { COPILOT_VENDOR_ID, ChatMessageRole, ILanguageModelsService, UTILITY_MODEL_ID } from '../../common/languageModels.js';
 import { TerminalToolId } from '../../common/tools/terminalToolIds.js';
 import { IToolData } from '../../common/tools/languageModelToolsService.js';
 
@@ -116,7 +116,7 @@ export class ChatToolRiskAssessmentService implements IChatToolRiskAssessmentSer
 	}
 
 	private async _invokeModel(tool: IToolData, parameters: unknown, kind: ToolRiskPromptKind, token: CancellationToken): Promise<IToolRiskAssessment | undefined> {
-		const modelId = this._configurationService.getValue<string>(ChatConfiguration.ToolRiskAssessmentModel) || 'copilot-utility-small';
+		const modelId = this._configurationService.getValue<string>(ChatConfiguration.ToolRiskAssessmentModel) || UTILITY_MODEL_ID;
 
 		const models = await this._languageModelsService.selectLanguageModels({ vendor: COPILOT_VENDOR_ID, id: modelId });
 		if (!models.length || token.isCancellationRequested) {

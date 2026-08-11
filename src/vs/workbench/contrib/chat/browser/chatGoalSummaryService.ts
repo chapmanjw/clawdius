@@ -6,7 +6,7 @@
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { LRUCache } from '../../../../base/common/map.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
-import { COPILOT_VENDOR_ID, ChatMessageRole, ILanguageModelsService } from '../common/languageModels.js';
+import { COPILOT_VENDOR_ID, ChatMessageRole, ILanguageModelsService, UTILITY_MODEL_ID } from '../common/languageModels.js';
 
 export const IChatGoalSummaryService = createDecorator<IChatGoalSummaryService>('chatGoalSummaryService');
 
@@ -81,7 +81,7 @@ export class ChatGoalSummaryService implements IChatGoalSummaryService {
 	}
 
 	private async _invokeModel(prompt: string, token: CancellationToken): Promise<string | undefined> {
-		const models = await this._languageModelsService.selectLanguageModels({ vendor: COPILOT_VENDOR_ID, id: 'copilot-utility-small' });
+		const models = await this._languageModelsService.selectLanguageModels({ vendor: COPILOT_VENDOR_ID, id: UTILITY_MODEL_ID });
 		if (!models.length || token.isCancellationRequested) {
 			return undefined;
 		}

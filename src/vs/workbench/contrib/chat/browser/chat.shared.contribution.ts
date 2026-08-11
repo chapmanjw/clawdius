@@ -64,7 +64,7 @@ import { IChatVariablesService } from '../common/attachments/chatVariables.js';
 import { ChatWidgetHistoryService, IChatWidgetHistoryService } from '../common/widget/chatWidgetHistoryService.js';
 import { BYOKUtilityModelDefault, ChatAIDisabledSettingId, ChatAgentLocation, ChatConfiguration, ChatDefaultPermissionLevel, ChatNotificationMode, ChatPermissionLevel } from '../common/constants.js';
 import { ILanguageModelIgnoredFilesService, LanguageModelIgnoredFilesService } from '../common/ignoredFiles.js';
-import { ILanguageModelsService, LanguageModelsService } from '../common/languageModels.js';
+import { ILanguageModelsService, LanguageModelsService, UTILITY_MODEL_ID } from '../common/languageModels.js';
 import { ILanguageModelStatsService, LanguageModelStatsService } from '../common/languageModelStats.js';
 import { ILanguageModelToolsConfirmationService } from '../common/tools/languageModelToolsConfirmationService.js';
 import { ILanguageModelToolsService } from '../common/tools/languageModelToolsService.js';
@@ -1589,8 +1589,14 @@ configurationRegistry.registerConfiguration({
 		},
 		[ChatConfiguration.ToolRiskAssessmentEnabled]: {
 			type: 'boolean',
-			description: nls.localize('chat.tools.riskAssessment.enabled', "When enabled, tool confirmations show an LLM-generated risk level (Safe / Caution / Review carefully) and a short explanation."),
-			default: true,
+			// CLAWDIUS-BEGIN risk assessment is opt-in
+			// Upstream defaults this on. Here it rated every tool confirmation by spawning a `claude -p`
+			// process against the user's own login, so it is opt-in rather than something a default install
+			// pays for. It also defaulted on while the model it asked for did not exist, which promised a
+			// badge that could never appear; the model default below is a real one now.
+			description: nls.localize('chat.tools.riskAssessment.enabled', "When enabled, tool confirmations show a model-generated risk level (Safe / Caution / Review carefully) and a short explanation. Each assessment runs the configured model, so it is off by default."),
+			default: false,
+			// CLAWDIUS-END
 			experiment: {
 				mode: 'auto'
 			},
@@ -1598,7 +1604,7 @@ configurationRegistry.registerConfiguration({
 		[ChatConfiguration.ToolRiskAssessmentModel]: {
 			type: 'string',
 			description: nls.localize('chat.tools.riskAssessment.model', "The language model id used to generate tool risk assessments. Should be a small, fast model."),
-			default: 'copilot-utility-small',
+			default: UTILITY_MODEL_ID,
 			tags: ['experimental', 'advanced'],
 			experiment: {
 				mode: 'auto'

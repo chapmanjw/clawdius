@@ -53,6 +53,17 @@ import { ILanguageModelsProviderGroup, ILanguageModelsConfigurationService } fro
 // vendor - the built-in Claude provider registers vendor "clawdius" - so that Claude is the default model.
 // The name is kept to minimize the merge surface against upstream; only the value changes.
 export const COPILOT_VENDOR_ID = 'clawdius';
+
+/**
+ * Model used by the small background "utility" flows (short summaries, one-line explanations, risk
+ * ratings) rather than by a chat turn. Upstream points those at an internal small-model family that no
+ * provider registers here, so every such flow silently did nothing; the built-in provider offers
+ * `opus`, `sonnet` and `haiku`, and this is the cheap one.
+ *
+ * Each call spawns a `claude -p` process against the user's own login, so a flow using this must be
+ * reached by a deliberate user action - not by a render, a timer, or a background poll.
+ */
+export const UTILITY_MODEL_ID = 'haiku';
 // CLAWDIUS-END
 
 /** Whether a missing model is conclusively absent from a vendor's live model list. Empty Copilot results remain transient while token-backed discovery completes. */

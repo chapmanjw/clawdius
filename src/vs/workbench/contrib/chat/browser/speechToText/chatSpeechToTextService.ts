@@ -31,7 +31,7 @@ import { AccessibilitySignal, IAccessibilitySignalService } from '../../../../..
 import { IAccessibilityService } from '../../../../../platform/accessibility/common/accessibility.js';
 import { AgentsVoiceStorageKeys } from '../../../agentsVoice/common/agentsVoice.js';
 import { ChatContextKeys } from '../../common/actions/chatContextKeys.js';
-import { COPILOT_VENDOR_ID, ChatMessageRole, ILanguageModelsService } from '../../common/languageModels.js';
+import { COPILOT_VENDOR_ID, ChatMessageRole, ILanguageModelsService, UTILITY_MODEL_ID } from '../../common/languageModels.js';
 import { IPromptsService } from '../../common/promptSyntax/service/promptsService.js';
 import { createPcmCaptureNode } from '../pcmCaptureWorklet.js';
 import { resolveDictationLanguage } from './dictationLanguage.js';
@@ -122,7 +122,7 @@ const LLM_CLEANUP_MAX_CHARS = 4000;
 const LLM_CLEANUP_TIMEOUT_MS = 10000;
 
 /** Utility model used for transcript cleanup — a small, fast model in the spirit of gpt-4o-mini. */
-const LLM_CLEANUP_MODEL_SELECTOR = { vendor: COPILOT_VENDOR_ID, id: 'copilot-utility-small' };
+const LLM_CLEANUP_MODEL_SELECTOR = { vendor: COPILOT_VENDOR_ID, id: UTILITY_MODEL_ID };
 
 /**
  * Which backend transcribes dictation audio:

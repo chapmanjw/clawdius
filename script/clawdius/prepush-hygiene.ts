@@ -50,4 +50,22 @@ if (failed) {
   console.error('\npre-push blocked: the Clawdius forbidden-content / internal-reference scan found problems (above). Fix them, then push.')
   process.exit(1)
 }
+
+// The other three fork-hygiene gates ran only in CI, so an unrecorded ratchet bump was not visible until
+// after the push - which is exactly how it happened. They are cheap and deterministic, so run them here too:
+// a failure now costs seconds, the same failure in CI costs a round trip. CI still runs them, and remains
+// the authority; this is an early copy, not a replacement.
+const gates: { readonly cmd: readonly string[]; readonly what: string; readonly hint: string }[] = [
+  { cmd: ['bash', 'script/clawdius/diff-stat', '--check'], what: 'fork-diff ratchet', hint: 'record a disposition in script/clawdius/fork-diff-baseline.txt and update the numbers' },
+  { cmd: ['node', '--experimental-strip-types', 'script/clawdius/brand-ratchet.ts'], what: 'brand ratchet', hint: 'if you REDUCED brand usage, regenerate with: node script/clawdius/brand-ratchet.ts --update' },
+  { cmd: ['node', '--experimental-strip-types', 'script/clawdius/branding-guard.ts'], what: 'branding guard', hint: 'a Clawdius branding invariant regressed - see the failure above' },
+]
+for (const gate of gates) {
+  try {
+    execFileSync(gate.cmd[0], gate.cmd.slice(1), { stdio: 'inherit' })
+  } catch {
+    console.error(`\npre-push blocked: the ${gate.what} failed. ${gate.hint}.`)
+    process.exit(1)
+  }
+}
 process.exit(0)

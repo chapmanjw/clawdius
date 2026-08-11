@@ -420,8 +420,13 @@ jobs:
         run: |
           set -e
           VSCODE_SKIP_PRELAUNCH=1 xvfb-run --auto-servernum ./scripts/test.sh 2>&1 | tee full-electron.log
-          if grep -qE "^\s*[1-9][0-9]* failing" full-electron.log; then echo "::error::full electron unit tier has failures"; exit 1; fi
-          if ! grep -qE "^\s*[1-9][0-9]* passing" full-electron.log; then echo "::error::full electron unit tier ran no tests"; exit 1; fi
+          # This reporter colourizes its summary, so the line starts with an escape sequence and an anchored
+          # "^ *N passing" never matches - which failed a run that had actually passed. Strip ANSI first. The
+          # anchor has to stay: unanchored "failing" also matches test NAMES (e.g. "failing CI still blocks
+          # sessions"), which would fail every green run instead.
+          sed -e $'s/\x1b\\[[0-9;]*m//g' full-electron.log > full-electron.clean.log
+          if grep -qE "^[[:space:]]*[1-9][0-9]* failing" full-electron.clean.log; then echo "::error::full electron unit tier has failures"; exit 1; fi
+          if ! grep -qE "^[[:space:]]*[1-9][0-9]* passing" full-electron.clean.log; then echo "::error::full electron unit tier ran no tests"; exit 1; fi
           echo "full electron unit tier passed"
 
   release-build:

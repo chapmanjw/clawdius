@@ -368,7 +368,8 @@ jobs:
         # **/{browser,electron-browser,...}/**, which is where most of this fork's own code lives, so
         # without this step the majority of the workbench is untested here.
         # Not covered by either runner: electron-browser / electron-main / electron-utility, which need a
-        # real Electron host. Those run in the e2e smoke job below.
+        # real Electron host. Those run in the "Full unit tier (electron)" step of the e2e smoke job below,
+        # which already has Electron, xvfb and the SUID sandbox fix.
         run: |
           node test/unit/browser/index.js --browser chromium 2>&1 | tee full-browser.log
           if grep -q "BAD " full-browser.log; then echo "::error::browser harness failed to load a test module"; exit 1; fi
@@ -407,6 +408,21 @@ jobs:
           sudo chmod 4755 .build/electron/chrome-sandbox
           ( cd test/smoke && npm run compile )
           ( cd test/smoke && xvfb-run --auto-servernum node test/index.js -g "Clawdius" )
+      - name: Full unit tier (electron)
+        # The last uncovered tier. The node runner excludes browser/ and electron-*, and the browser runner
+        # excludes node/ and electron-*, so ~59 test files under electron-browser / electron-main /
+        # electron-utility ran nowhere in CI - including the agent-host transport and SSH suites, which are
+        # this fork's own code. This job already has what they need: preLaunch built out/ and fetched
+        # Electron, and the SUID fix above is what stops Electron aborting headless.
+        #
+        # VSCODE_SKIP_PRELAUNCH stops scripts/test.sh re-running the build it just did. `| tee` masks the
+        # runner's exit code, so the greps are the gate, as in the other tiers.
+        run: |
+          set -e
+          VSCODE_SKIP_PRELAUNCH=1 xvfb-run --auto-servernum ./scripts/test.sh 2>&1 | tee full-electron.log
+          if grep -qE "^\s*[1-9][0-9]* failing" full-electron.log; then echo "::error::full electron unit tier has failures"; exit 1; fi
+          if ! grep -qE "^\s*[1-9][0-9]* passing" full-electron.log; then echo "::error::full electron unit tier ran no tests"; exit 1; fi
+          echo "full electron unit tier passed"
 
   release-build:
     runs-on: ubuntu-latest

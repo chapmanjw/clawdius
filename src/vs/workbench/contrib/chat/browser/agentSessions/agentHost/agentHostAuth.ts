@@ -14,6 +14,7 @@ import { ServicesAccessor } from '../../../../../../platform/instantiation/commo
 import { ILabelService } from '../../../../../../platform/label/common/label.js';
 import { ILogService } from '../../../../../../platform/log/common/log.js';
 import { localize } from '../../../../../../nls.js';
+import { IProductService } from '../../../../../../platform/product/common/productService.js';
 import { IAuthenticationMcpAccessService } from '../../../../../services/authentication/browser/authenticationMcpAccessService.js';
 import { IAuthenticationMcpService } from '../../../../../services/authentication/browser/authenticationMcpService.js';
 import { IAuthenticationMcpUsageService } from '../../../../../services/authentication/browser/authenticationMcpUsageService.js';
@@ -301,6 +302,7 @@ export async function resolveAuthenticationInteractively(
 	const authenticationService = accessor.get(IAuthenticationService);
 	const commandService = accessor.get(ICommandService);
 	const logService = accessor.get(ILogService);
+	const productService = accessor.get(IProductService);
 	for (const resource of protectedResources) {
 		const resourceUri = URI.parse(resource.resource);
 		const scopes = resource.scopes_supported ?? [];
@@ -317,6 +319,19 @@ export async function resolveAuthenticationInteractively(
 			logService.info(`${options.logPrefix} Interactive authentication succeeded for ${resource.resource}`);
 			return true;
 		}
+
+		// CLAWDIUS-BEGIN no built-in sign-in to fall back to
+		// The fallback below runs CHAT_SETUP_ACTION_ID, which is registered by ChatSetupContribution's
+		// registerActions() - and that is only reached after the contribution has built an entitlement
+		// context, which never happens while defaultChatAgent.entitlementUrl is empty. Executing an
+		// unregistered command does not fail fast: CommandService races extension activation for up to 30
+		// seconds and then rejects with "command '...' not found", so the user waits and is then handed an
+		// internal error instead of a reason. There is no sign-in UI here to fall back to, so say so now.
+		if (!productService.defaultChatAgent?.entitlementUrl) {
+			logService.info(`${options.logPrefix} No interactive sign-in is available for ${resource.resource}`);
+			throw new Error(localize('agentHost.signInUnavailable', "Cannot authorize the MCP server: this build has no built-in sign-in. Authorize the server outside the editor, or configure it with a token."));
+		}
+		// CLAWDIUS-END
 
 		const setupResult = await commandService.executeCommand<IChatSetupResult>(CHAT_SETUP_ACTION_ID, undefined, {
 			forceSignInDialog: true,

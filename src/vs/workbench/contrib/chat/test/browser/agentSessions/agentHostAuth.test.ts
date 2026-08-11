@@ -15,6 +15,7 @@ import { mock } from '../../../../../../base/test/common/mock.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../../base/test/common/utils.js';
 import { TestInstantiationService } from '../../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import { ILogService, NullLogService } from '../../../../../../platform/log/common/log.js';
+import { IProductService } from '../../../../../../platform/product/common/productService.js';
 import { IAuthenticationMcpAccessService } from '../../../../../services/authentication/browser/authenticationMcpAccessService.js';
 import { IAuthenticationMcpService } from '../../../../../services/authentication/browser/authenticationMcpService.js';
 import { IAuthenticationMcpUsageService } from '../../../../../services/authentication/browser/authenticationMcpUsageService.js';
@@ -35,11 +36,14 @@ class TestCommandService extends mock<ICommandService>() {
 	}
 }
 
-function createAuthInstantiationService(disposables: Pick<DisposableStore, 'add'>, authenticationService: IAuthenticationService, commandService = new TestCommandService()): TestInstantiationService {
+function createAuthInstantiationService(disposables: Pick<DisposableStore, 'add'>, authenticationService: IAuthenticationService, commandService = new TestCommandService(), entitlementUrl = 'https://example.invalid/entitlement'): TestInstantiationService {
 	const instantiationService = disposables.add(new TestInstantiationService());
 	instantiationService.stub(IAuthenticationService, authenticationService);
 	instantiationService.stub(ICommandService, commandService);
 	instantiationService.stub(ILogService, new NullLogService());
+	// The interactive fallback only runs the setup command when an entitlement URL is configured, so the
+	// default here is a populated one. Pass '' to exercise the build that has no built-in sign-in.
+	instantiationService.stub(IProductService, { _serviceBrand: undefined, defaultChatAgent: { entitlementUrl } } as unknown as IProductService);
 	return instantiationService;
 }
 
@@ -1109,5 +1113,22 @@ suite('resolveAuthenticationInteractively', () => {
 			logPrefix: '[AgentHost]',
 			authenticate: async () => { },
 		}), /Bad credentials/);
+	});
+
+	test('fails immediately when the build has no built-in sign-in', async () => {
+		const commandService = new TestCommandService();
+		const authService = createMockAuthService({
+			getOrActivateProviderIdForServer: () => Promise.resolve('provider-1'),
+			getSessions: () => Promise.resolve([]),
+		});
+		// Empty entitlementUrl: the setup command is never registered in that build, so executing it would
+		// race extension activation and then reject with an internal "command not found".
+		const instantiationService = createAuthInstantiationService(disposables, authService, commandService, '');
+
+		await assert.rejects(instantiationService.invokeFunction(resolveAuthenticationInteractively, [protectedResource], {
+			logPrefix: '[AgentHost]',
+			authenticate: async () => { },
+		}), /no built-in sign-in/);
+		assert.strictEqual(commandService.calls.length, 0);
 	});
 });

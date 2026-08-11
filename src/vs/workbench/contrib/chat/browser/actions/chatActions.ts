@@ -144,7 +144,7 @@ export interface IChatViewOpenOptions {
 	 * ```
 	 * {
 	 *   id: 'claude-sonnet-4',
-	 *   vendor: 'copilot'
+	 *   vendor: 'clawdius'
 	 * }
 	 * ```
 	 *

@@ -10633,6 +10633,10 @@ suite('AgentHostChatContribution', () => {
 				getSessions: (async () => []) as IAuthenticationService['getSessions'],
 			};
 			const { instantiationService, agentHostService, chatAgentService, commandService } = createTestServices(disposables, undefined, authService);
+			// This case covers the sign-in fallback, which only runs where an entitlement URL is configured.
+			// The shared stub has none, and the fallback now refuses immediately in that build rather than
+			// executing a setup command that is never registered there.
+			instantiationService.stub(IProductService, { quality: 'insider', defaultChatAgent: { entitlementUrl: 'https://example.invalid/entitlement' } } as unknown as IProductService);
 			commandService.result = { success: false, dialogSkipped: false, error: new Error('Bad credentials') };
 			disposables.add(instantiationService.createInstance(AgentHostContribution));
 			agentHostService.setRootState({ agents: protectedAgents(), activeSessions: 0 });

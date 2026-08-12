@@ -38,6 +38,16 @@ ok(/function getOnnxRuntimeExcludeFilter\s*\(/.test(gulpfile),
 ok(/\.pipe\(\s*filter\(\s*getOnnxRuntimeExcludeFilter\(/.test(gulpfile),
 	'build/gulpfile.vscode.ts defines getOnnxRuntimeExcludeFilter but never pipes it into the packaging stream (the filter is inert)')
 
+// The addon dlopen's sibling shared libraries (libonnxruntime.so.1 / .dylib / onnxruntime.dll) which the OS
+// loader resolves by on-disk path, so the WHOLE bin/ tree must be unpacked from the asar - not just the
+// `.node` file that the generic '**/*.node' rule covers. With only the addon unpacked, dlopen fails at
+// runtime and dpkg-shlibdeps cannot resolve libonnxruntime.so.1 when building the .deb.
+//
+// This is a SEPARATE customization from the filter above and the 1.132.0 merge dropped BOTH. Restoring only
+// the filter still failed the Linux legs, on the target arch's own binary, so both are asserted here.
+ok(/'\*\*\/onnxruntime-node\/bin\/\*\*'/.test(gulpfile),
+	"build/gulpfile.vscode.ts no longer unpacks '**/onnxruntime-node/bin/**' from the asar (the addon's shared libraries stay archived, breaking dlopen at runtime and the .deb build)")
+
 // The exclude list is built by subtracting the target from this table, so a missing entry means that
 // platform's binary is never excluded from the OTHER targets' packages.
 for (const [platform, arch] of [['darwin', 'arm64'], ['linux', 'x64'], ['linux', 'arm64'], ['win32', 'x64'], ['win32', 'arm64']]) {
@@ -53,4 +63,4 @@ if (fail.length) {
 	process.exit(1)
 }
 
-console.log('packaging guard passed: onnxruntime binaries are filtered to the target platform/arch')
+console.log('packaging guard passed: onnxruntime binaries are filtered to the target platform/arch and its bin tree is unpacked')

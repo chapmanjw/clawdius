@@ -425,6 +425,16 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 				'**/node-pty/package.json',
 				'**/*.wasm',
 				'**/@vscode/vsce-sign/bin/*',
+				// CLAWDIUS-BEGIN unpack the whole onnxruntime bin tree
+				// onnxruntime-node (on-device chat dictation, direct and transitive via @huggingface/transformers)
+				// ships a prebuilt N-API addon that dlopen's sibling shared libraries (libonnxruntime.so.1 /
+				// .dylib / onnxruntime.dll + DirectML). The OS loader resolves those by on-disk path relative to
+				// the addon, so the WHOLE bin/ tree has to live outside the archive - the '**/*.node' rule above
+				// only unpacks the addon and leaves its libraries inside, which breaks dlopen at runtime and
+				// makes dpkg-shlibdeps fail to resolve libonnxruntime.so.1 when building the .deb. Lost in the
+				// 1.132.0 merge alongside the platform/arch filter.
+				'**/onnxruntime-node/bin/**',
+				// CLAWDIUS-END
 			], [
 				'**/*.mk',
 			], [

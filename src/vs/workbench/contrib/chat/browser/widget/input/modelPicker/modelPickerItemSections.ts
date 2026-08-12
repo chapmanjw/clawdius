@@ -90,7 +90,7 @@ export function buildUnavailableStateItems(options: IBuildModelPickerItemsOption
 	const entitlement = options.chatEntitlementService.entitlement;
 	const canUpgrade = entitlement === ChatEntitlement.Free || entitlement === ChatEntitlement.EDU;
 	const description = canUpgrade
-		? new MarkdownString(localize('chat.modelPicker.upgradeLink', "[Upgrade](command:workbench.action.chat.upgradePlan \" \")"), { isTrusted: true })
+		? new MarkdownString(localize('chat.modelPicker.upgradeRequired', "Upgrade required"))
 		: undefined;
 	const hover = canUpgrade ? new MarkdownString('', { isTrusted: true, supportThemeIcons: true }) : undefined;
 	hover?.appendMarkdown(localize('chat.modelPicker.upgradeHover', "Upgrade your plan to use the best models."));

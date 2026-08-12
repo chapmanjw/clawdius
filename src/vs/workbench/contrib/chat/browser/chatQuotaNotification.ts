@@ -438,16 +438,16 @@ export class ChatQuotaNotificationContribution extends Disposable implements IWo
 			actions = [{ kind: ChatInputNotificationActionKind.Command, label: localize('signIn', "Sign In"), commandId: 'workbench.action.chat.triggerSetup' }];
 		} else if (entitlement === ChatEntitlement.Free) {
 			description = localize('quota.exhausted.free', "Upgrade to keep going.");
-			actions = [{ kind: ChatInputNotificationActionKind.Command, label: localize('upgrade', "Upgrade"), commandId: 'workbench.action.chat.upgradePlan' }];
+			actions = [];
 		} else if (this._isManagedPlan(entitlement)) {
 			description = localize('quota.exhausted.managed', "Contact your admin to increase your limits.");
 			actions = [];
 		} else if (hadOverage) {
 			description = localize('quota.exhausted.hadOverage', "Increase your budget to keep building.");
-			actions = [{ kind: ChatInputNotificationActionKind.Command, label: localize('manageBudget', "Manage Budget"), commandId: 'workbench.action.chat.manageAdditionalSpend' }];
+			actions = [];
 		} else {
 			description = localize('quota.exhausted.default', "Manage your budget to keep building.");
-			actions = [{ kind: ChatInputNotificationActionKind.Command, label: localize('manageBudget2', "Manage Budget"), commandId: 'workbench.action.chat.manageAdditionalSpend' }];
+			actions = [];
 		}
 
 		this._setNotification({
@@ -493,7 +493,7 @@ export class ChatQuotaNotificationContribution extends Disposable implements IWo
 
 		if (entitlement === ChatEntitlement.Unknown || entitlement === ChatEntitlement.Free) {
 			description = localize('quota.approaching.free', "Upgrade to continue past the limit.");
-			actions = [{ kind: ChatInputNotificationActionKind.Command, label: localize('upgrade2', "Upgrade"), commandId: 'workbench.action.chat.upgradePlan' }];
+			actions = [];
 		} else if (this._isManagedPlan(entitlement)) {
 			description = localize('quota.approaching.managed', "Contact your admin to increase your limits.");
 			actions = [];
@@ -511,7 +511,7 @@ export class ChatQuotaNotificationContribution extends Disposable implements IWo
 				actions = [{ kind: ChatInputNotificationActionKind.SwitchToModel, label: localize('switchToAuto', "Switch to Auto"), modelIdentifier: autoModelIdentifier }];
 			} else {
 				description = localize('quota.approaching.default', "Set additional budget to cover extra usage.");
-				actions = [{ kind: ChatInputNotificationActionKind.Command, label: localize('manageBudget3', "Manage Budget"), commandId: 'workbench.action.chat.manageAdditionalSpend' }];
+				actions = [];
 			}
 		}
 

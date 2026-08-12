@@ -100,8 +100,8 @@ function hasModelsTargetingSessionType(languageModelsService: ILanguageModelsSer
 
 /**
  * The inline description shown for an unavailable session type, or `undefined`
- * when it is available. Free / Student users get an actionable "[Upgrade]"
- * link; paid users with no models get a plain "No models available" note.
+ * when it is available. Free / Student users are told an upgrade is required;
+ * paid users with no models get a plain "No models available" note.
  */
 export function getSessionTypeUnavailableDescription(availability: SessionTypeAvailability): IMarkdownString | undefined {
 	switch (availability) {
@@ -111,10 +111,7 @@ export function getSessionTypeUnavailableDescription(availability: SessionTypeAv
 				{ isTrusted: { enabledCommands: ['workbench.action.chat.triggerSetup'] } }
 			);
 		case SessionTypeAvailability.UpgradeRequired:
-			return new MarkdownString(
-				localize('chat.sessionType.upgradeLink', "[Upgrade](command:workbench.action.chat.upgradePlan)"),
-				{ isTrusted: { enabledCommands: ['workbench.action.chat.upgradePlan'] } }
-			);
+			return new MarkdownString(localize('chat.sessionType.upgradeRequired', "Upgrade required"));
 		case SessionTypeAvailability.NoModels:
 			return new MarkdownString(localize('chat.sessionType.noModels', "No models available"));
 		default:
@@ -125,20 +122,17 @@ export function getSessionTypeUnavailableDescription(availability: SessionTypeAv
 /**
  * The hover shown for an unavailable session type, or `undefined` when it is
  * available. Free / Student users are prompted to upgrade; paid users with no
- * models get an explanation with no upgrade link.
+ * models get an explanation instead.
  */
 export function getSessionTypeUnavailableHover(availability: SessionTypeAvailability): IMarkdownString | undefined {
 	switch (availability) {
 		case SessionTypeAvailability.SignInRequired: {
 			const hover = new MarkdownString('', { isTrusted: { enabledCommands: ['workbench.action.chat.triggerSetup'] }, supportThemeIcons: true });
-			hover.appendMarkdown(localize('chat.sessionType.signInHover', "[Sign in to GitHub Copilot](command:workbench.action.chat.triggerSetup) to use this agent."));
+			hover.appendMarkdown(localize('chat.sessionType.signInHover', "[Sign in](command:workbench.action.chat.triggerSetup) to use this agent."));
 			return hover;
 		}
-		case SessionTypeAvailability.UpgradeRequired: {
-			const hover = new MarkdownString('', { isTrusted: { enabledCommands: ['workbench.action.chat.upgradePlan'] }, supportThemeIcons: true });
-			hover.appendMarkdown(localize('chat.sessionType.upgradeHover', "[Upgrade to GitHub Copilot Pro](command:workbench.action.chat.upgradePlan) to use this agent."));
-			return hover;
-		}
+		case SessionTypeAvailability.UpgradeRequired:
+			return new MarkdownString(localize('chat.sessionType.upgradeHover', "Upgrade your plan to use this agent."));
 		case SessionTypeAvailability.NoModels:
 			return new MarkdownString(localize('chat.sessionType.noModelsHover', "No models are available for this agent."));
 		default:
@@ -155,7 +149,7 @@ export function getSessionTypeUnavailableLabel(availability: SessionTypeAvailabi
 		case SessionTypeAvailability.SignInRequired:
 			return localize('chat.sessionType.signInMobile', "Requires sign in");
 		case SessionTypeAvailability.UpgradeRequired:
-			return localize('chat.sessionType.upgradeMobile', "Requires GitHub Copilot Pro");
+			return localize('chat.sessionType.upgradeMobile', "Requires an upgraded plan");
 		case SessionTypeAvailability.NoModels:
 			return localize('chat.sessionType.noModels', "No models available");
 		default:

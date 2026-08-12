@@ -181,7 +181,7 @@ export function createUnavailableModelItem(
 ): IActionListItem<IActionWidgetDropdownAction> {
 	let description: string | MarkdownString | undefined;
 	if (reason === 'upgrade') {
-		description = new MarkdownString(localize('chat.modelPicker.upgradeLink', "[Upgrade](command:workbench.action.chat.upgradePlan \" \")"), { isTrusted: true });
+		description = localize('chat.modelPicker.upgradeRequired', "Upgrade required");
 	} else if (reason === 'update') {
 		// CLAWDIUS-BEGIN brand sweep (model picker update description)
 		description = localize('chat.modelPicker.updateDescription', "Update Clawdius");

@@ -9,7 +9,7 @@ import { IAction, WorkbenchActionExecutedClassification, WorkbenchActionExecuted
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { Event } from '../../../../../base/common/event.js';
 import { Lazy } from '../../../../../base/common/lazy.js';
-import { Disposable, DisposableStore, markAsSingleton, MutableDisposable } from '../../../../../base/common/lifecycle.js';
+import { Disposable } from '../../../../../base/common/lifecycle.js';
 import Severity from '../../../../../base/common/severity.js';
 import { equalsIgnoreCase } from '../../../../../base/common/strings.js';
 import { ThemeIcon } from '../../../../../base/common/themables.js';
@@ -22,20 +22,19 @@ import { IActionViewItemService } from '../../../../../platform/actions/browser/
 import { Action2, MenuId, MenuRegistry, registerAction2 } from '../../../../../platform/actions/common/actions.js';
 import { CommandsRegistry, ICommandService } from '../../../../../platform/commands/common/commands.js';
 import { ConfigurationTarget, IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
-import { ContextKeyExpr, IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
+import { ContextKeyExpr } from '../../../../../platform/contextkey/common/contextkey.js';
 import { IsWebContext } from '../../../../../platform/contextkey/common/contextkeys.js';
 import { IDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
 import { IEnvironmentService } from '../../../../../platform/environment/common/environment.js';
 import { ExtensionIdentifier } from '../../../../../platform/extensions/common/extensions.js';
 import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
-import { ILogService } from '../../../../../platform/log/common/log.js';
 import { IMarkerService } from '../../../../../platform/markers/common/markers.js';
 import product from '../../../../../platform/product/common/product.js';
 import { IProductService } from '../../../../../platform/product/common/productService.js';
 import { ITelemetryService } from '../../../../../platform/telemetry/common/telemetry.js';
 import { IWorkbenchContribution } from '../../../../common/contributions.js';
 import { IViewDescriptorService, ViewContainerLocation } from '../../../../common/views.js';
-import { ChatEntitlement, ChatEntitlementContext, ChatEntitlementContextKeys, ChatEntitlementRequests, ChatEntitlementService, IChatEntitlementService } from '../../../../services/chat/common/chatEntitlementService.js';
+import { ChatEntitlementContext, ChatEntitlementContextKeys, ChatEntitlementRequests, ChatEntitlementService, IChatEntitlementService } from '../../../../services/chat/common/chatEntitlementService.js';
 import { EnablementState, IWorkbenchExtensionEnablementService } from '../../../../services/extensionManagement/common/extensionManagement.js';
 import { ExtensionUrlHandlerOverrideRegistry, IExtensionUrlHandlerOverride } from '../../../../services/extensions/browser/extensionUrlHandler.js';
 import { IExtensionService } from '../../../../services/extensions/common/extensions.js';
@@ -46,14 +45,13 @@ import { ILifecycleService } from '../../../../services/lifecycle/common/lifecyc
 import { IPreferencesService } from '../../../../services/preferences/common/preferences.js';
 import { IExtension, IExtensionsWorkbenchService } from '../../../extensions/common/extensions.js';
 import { ChatContextKeys } from '../../common/actions/chatContextKeys.js';
-import { ChatAIDisabledSettingId, ChatAgentLocation, ChatConfiguration, ChatModeKind } from '../../common/constants.js';
+import { ChatAIDisabledSettingId, ChatConfiguration, ChatModeKind } from '../../common/constants.js';
 import { CHAT_CATEGORY, CHAT_SETUP_ACTION_ID, CHAT_SETUP_SUPPORT_ANONYMOUS_ACTION_ID } from '../actions/chatActions.js';
 import { ChatViewContainerId, IChatWidget, IChatWidgetService } from '../chat.js';
 import { ChatInputNotificationSeverity, IChatInputNotificationService } from '../widget/input/chatInputNotificationService.js';
-import { chatViewsWelcomeRegistry } from '../viewsWelcome/chatViewsWelcome.js';
 import { ChatSetupAnonymous, ChatSetupStrategy, IChatSetupCommandOptions, IChatSetupResult, refreshTokens } from './chatSetup.js';
 import { ChatSetupController } from './chatSetupController.js';
-import { AICodeActionsHelper, AINewSymbolNamesProvider, ChatCodeActionsProvider, SetupAgent } from './chatSetupProviders.js';
+import { AICodeActionsHelper } from './chatSetupProviders.js';
 import { ChatSetup } from './chatSetupRunner.js';
 
 const defaultChat = {
@@ -70,8 +68,6 @@ export class ChatSetupContribution extends Disposable implements IWorkbenchContr
 		@IActionViewItemService actionViewItemService: IActionViewItemService,
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 		@IChatEntitlementService chatEntitlementService: ChatEntitlementService,
-		@ILogService private readonly logService: ILogService,
-		@IContextKeyService private readonly contextKeyService: IContextKeyService,
 		@IWorkbenchExtensionEnablementService private readonly extensionEnablementService: IWorkbenchExtensionEnablementService,
 		@IExtensionsWorkbenchService private readonly extensionsWorkbenchService: IExtensionsWorkbenchService,
 		@IExtensionService private readonly extensionService: IExtensionService,
@@ -87,94 +83,10 @@ export class ChatSetupContribution extends Disposable implements IWorkbenchContr
 
 		const controller = new Lazy(() => this._register(this.instantiationService.createInstance(ChatSetupController, context, requests)));
 
-		this.registerSetupAgents(context, controller);
 		this.registerActions(context, requests, controller);
 		this.registerSignInTitleBarEntry(actionViewItemService);
 		this.registerUrlLinkHandler();
 		this.checkExtensionInstallation(context);
-	}
-
-	private registerSetupAgents(context: ChatEntitlementContext, controller: Lazy<ChatSetupController>): void {
-		const defaultAgentDisposables = markAsSingleton(new MutableDisposable()); // prevents flicker on window reload
-		const vscodeAgentDisposables = markAsSingleton(new MutableDisposable());
-
-		const renameProviderDisposables = markAsSingleton(new MutableDisposable());
-		const codeActionsProviderDisposables = markAsSingleton(new MutableDisposable());
-
-		const updateRegistration = () => {
-
-			// Agent + Tools
-			{
-				if (!context.state.hidden && !context.state.disabledInWorkspace) {
-
-					// Default Agents (always, even if installed to allow for speedy requests right on startup)
-					if (!defaultAgentDisposables.value) {
-						const disposables = defaultAgentDisposables.value = new DisposableStore();
-
-						// Panel Agents
-						const panelAgentDisposables = disposables.add(new DisposableStore());
-						for (const mode of [ChatModeKind.Ask, ChatModeKind.Edit, ChatModeKind.Agent]) {
-							const { agent, disposable } = SetupAgent.registerDefaultAgents(this.instantiationService, ChatAgentLocation.Chat, mode, context, controller);
-							panelAgentDisposables.add(disposable);
-							panelAgentDisposables.add(agent.onUnresolvableError(() => {
-								const panelAgentHasGuidance = chatViewsWelcomeRegistry.get().some(descriptor => this.contextKeyService.contextMatchesRules(descriptor.when));
-								if (panelAgentHasGuidance) {
-									// An unresolvable error from our agent registrations means that
-									// Chat is unhealthy for some reason. We clear our panel
-									// registration to give Chat a chance to show a custom message
-									// to the user from the views and stop pretending as if there was
-									// a functional agent.
-									this.logService.error('[chat setup] Unresolvable error from Chat agent registration, clearing registration.');
-									panelAgentDisposables.dispose();
-								}
-							}));
-						}
-
-						// Inline Agents
-						disposables.add(SetupAgent.registerDefaultAgents(this.instantiationService, ChatAgentLocation.Terminal, ChatModeKind.Ask, context, controller).disposable);
-						disposables.add(SetupAgent.registerDefaultAgents(this.instantiationService, ChatAgentLocation.Notebook, ChatModeKind.Ask, context, controller).disposable);
-						disposables.add(SetupAgent.registerDefaultAgents(this.instantiationService, ChatAgentLocation.EditorInline, ChatModeKind.Ask, context, controller).disposable);
-					}
-
-					// Built-In Agent + Tool (unless completed, signed-in and enabled)
-					if ((!context.state.completed || context.state.entitlement === ChatEntitlement.Unknown || context.state.entitlement === ChatEntitlement.Unresolved) && !vscodeAgentDisposables.value) {
-						const disposables = vscodeAgentDisposables.value = new DisposableStore();
-						disposables.add(SetupAgent.registerBuiltInAgents(this.instantiationService, context, controller));
-					}
-				} else {
-					defaultAgentDisposables.clear();
-					vscodeAgentDisposables.clear();
-				}
-
-				if (context.state.completed) {
-					vscodeAgentDisposables.clear(); // we need to do this to prevent showing duplicate agent/tool entries in the list
-				}
-			}
-
-			// Rename Provider
-			{
-				if (!context.state.completed && !context.state.hidden && !context.state.disabledInWorkspace) {
-					if (!renameProviderDisposables.value) {
-						renameProviderDisposables.value = AINewSymbolNamesProvider.registerProvider(this.instantiationService, context, controller);
-					}
-				} else {
-					renameProviderDisposables.clear();
-				}
-			}
-
-			// Code Actions Provider
-			{
-				if (!context.state.completed && !context.state.hidden && !context.state.disabledInWorkspace) {
-					if (!codeActionsProviderDisposables.value) {
-						codeActionsProviderDisposables.value = ChatCodeActionsProvider.registerProvider(this.instantiationService);
-					}
-				} else {
-					codeActionsProviderDisposables.clear();
-				}
-			}
-		};
-
-		this._register(Event.runAndSubscribe(context.onDidChange, () => updateRegistration()));
 	}
 
 	private registerActions(context: ChatEntitlementContext, requests: ChatEntitlementRequests, controller: Lazy<ChatSetupController>): void {

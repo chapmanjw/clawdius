@@ -375,7 +375,10 @@ suite('ChatQuotaNotificationContribution integration', () => {
 	});
 
 	test('emits existing action telemetry and dismisses from real DOM interaction', async () => {
-		const { instantiationService, telemetryAppender, commandService } = createHarness();
+		// Signed-out users are the remaining exhausted-quota variant that still
+		// carries a command action; the upgrade / manage-budget variants are
+		// informational now that those commands no longer exist.
+		const { instantiationService, telemetryAppender, commandService } = createHarness({ entitlement: ChatEntitlement.Unknown });
 		const widget = store.add(instantiationService.createInstance(ChatInputNotificationWidget, undefined));
 
 		const actionButton = widget.domNode.querySelector<HTMLElement>('.chat-input-notification-action-button');
@@ -384,7 +387,7 @@ suite('ChatQuotaNotificationContribution integration', () => {
 		await timeout(0);
 
 		assert.strictEqual(widget.domNode.querySelector('.chat-input-notification'), null);
-		assert.deepStrictEqual(commandService.executedCommands, ['workbench.action.chat.manageAdditionalSpend']);
+		assert.deepStrictEqual(commandService.executedCommands, ['workbench.action.chat.triggerSetup']);
 		assert.deepStrictEqual(telemetryAppender.events.filter(e => e.eventName === 'workbenchActionExecuted' || e.eventName === 'chatInputNotificationShown'), [
 			{
 				eventName: 'chatInputNotificationShown',
@@ -396,7 +399,7 @@ suite('ChatQuotaNotificationContribution integration', () => {
 			{
 				eventName: 'workbenchActionExecuted',
 				data: {
-					id: 'workbench.action.chat.manageAdditionalSpend',
+					id: 'workbench.action.chat.triggerSetup',
 					from: 'chatInputNotification',
 				},
 			},

@@ -171,10 +171,6 @@
 	font-weight: 400;
 }
 
-.chat-status-bar-entry-tooltip div.header .monaco-action-bar {
-	flex-shrink: 0;
-}
-
 .chat-status-bar-entry-tooltip div.header .header-cta-button {
 	width: auto;
 	padding: 4px 12px;

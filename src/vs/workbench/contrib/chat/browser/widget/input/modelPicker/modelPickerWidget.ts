@@ -519,9 +519,9 @@ export class ModelPickerWidget extends Disposable {
 				}
 			},
 			linkHandler: (uri: URI) => {
-				if (uri.scheme === 'command' && uri.path === 'workbench.action.chat.upgradePlan') {
-					logModelPickerInteraction('premiumModelUpgradePlanClicked');
-				} else if (manageSettingsUrl && this._uriIdentityService.extUri.isEqual(uri, URI.parse(manageSettingsUrl))) {
+				// CLAWDIUS: the upgrade-plan branch is gone with the command it logged - no picker string emits
+				// that command URI any more, so the branch could never run.
+				if (manageSettingsUrl && this._uriIdentityService.extUri.isEqual(uri, URI.parse(manageSettingsUrl))) {
 					logModelPickerInteraction('disabledModelContactAdminClicked');
 				}
 				void this._openerService.open(uri, { allowCommands: true });

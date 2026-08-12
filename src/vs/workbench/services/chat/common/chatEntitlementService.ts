@@ -288,7 +288,7 @@ export function getChatPlanName(chatEntitlement: ChatEntitlement): string {
 		case ChatEntitlement.Enterprise:
 			return localize('plan.enterpriseName', 'Copilot Enterprise');
 		default:
-			return localize('plan.freeName', "Usage");
+			return localize('plan.defaultName', "Usage");
 	}
 }
 

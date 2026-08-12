@@ -147,10 +147,6 @@
 	color: var(--vscode-descriptionForeground);
 }
 
-.sessions-account-titlebar-panel-content .chat-status-bar-entry-tooltip div.header .monaco-action-bar {
-	color: var(--vscode-foreground);
-}
-
 .sessions-account-titlebar-panel-content .chat-status-bar-entry-tooltip .contribution .body {
 	padding: 0 10px 0 8px;
 	line-height: 16px;

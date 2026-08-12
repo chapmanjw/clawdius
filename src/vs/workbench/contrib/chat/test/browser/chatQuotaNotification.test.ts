@@ -468,7 +468,7 @@ suite('ChatQuotaNotificationContribution', () => {
 			assert.strictEqual(getCommandAction(notificationMock.getNotification()!).commandId, 'workbench.action.chat.triggerSetup');
 		});
 
-		test('free user gets upgrade action', () => {
+		test('free user gets upgrade message without an action', () => {
 			const { notificationMock } = createContribution({
 				entitlement: ChatEntitlement.Free,
 				quotas: { usageBasedBilling: true, chat: makeQuotaSnapshot(0) },
@@ -476,7 +476,7 @@ suite('ChatQuotaNotificationContribution', () => {
 
 			assert.ok(notificationMock.getNotification());
 			assert.strictEqual(notificationMock.getNotification()!.description, 'Upgrade to keep going.');
-			assert.strictEqual(getCommandAction(notificationMock.getNotification()!).commandId, 'workbench.action.chat.upgradePlan');
+			assert.strictEqual(notificationMock.getNotification()!.actions.length, 0);
 		});
 
 		test('managed plan user gets admin message', () => {
@@ -514,7 +514,7 @@ suite('ChatQuotaNotificationContribution', () => {
 			assert.strictEqual(notificationMock.getNotification()!.actions.length, 0);
 		});
 
-		test('paid user with overage gets increase budget action', () => {
+		test('paid user with overage gets increase budget message without an action', () => {
 			const { notificationMock } = createContribution({
 				entitlement: ChatEntitlement.Pro,
 				quotas: { usageBasedBilling: true, premiumChat: makeQuotaSnapshot(0), additionalUsageCount: 5 },
@@ -522,10 +522,10 @@ suite('ChatQuotaNotificationContribution', () => {
 
 			assert.ok(notificationMock.getNotification());
 			assert.strictEqual(notificationMock.getNotification()!.description, 'Increase your budget to keep building.');
-			assert.strictEqual(getCommandAction(notificationMock.getNotification()!).commandId, 'workbench.action.chat.manageAdditionalSpend');
+			assert.strictEqual(notificationMock.getNotification()!.actions.length, 0);
 		});
 
-		test('paid user without overage gets manage budget action even in switch-to-Auto treatment', () => {
+		test('paid user without overage gets manage budget message even in switch-to-Auto treatment', () => {
 			const { assignmentMock, notificationMock } = createContribution(
 				{
 					entitlement: ChatEntitlement.Pro,
@@ -536,7 +536,7 @@ suite('ChatQuotaNotificationContribution', () => {
 
 			assert.ok(notificationMock.getNotification());
 			assert.strictEqual(notificationMock.getNotification()!.description, 'Manage your budget to keep building.');
-			assert.strictEqual(getCommandAction(notificationMock.getNotification()!).commandId, 'workbench.action.chat.manageAdditionalSpend');
+			assert.strictEqual(notificationMock.getNotification()!.actions.length, 0);
 			assert.deepStrictEqual(assignmentMock.getTreatmentCalls, []);
 		});
 	});
@@ -601,7 +601,7 @@ suite('ChatQuotaNotificationContribution', () => {
 			await flushPromises();
 
 			assert.strictEqual(notificationMock.getNotification()?.description, 'Set additional budget to cover extra usage.');
-			assert.strictEqual(getCommandAction(notificationMock.getNotification()!).commandId, 'workbench.action.chat.manageAdditionalSpend');
+			assert.strictEqual(notificationMock.getNotification()!.actions.length, 0);
 			assert.deepStrictEqual(assignmentMock.getTreatmentCalls, []);
 		});
 
@@ -615,7 +615,7 @@ suite('ChatQuotaNotificationContribution', () => {
 			await flushPromises();
 
 			assert.strictEqual(notificationMock.getNotification()?.description, 'Set additional budget to cover extra usage.');
-			assert.strictEqual(getCommandAction(notificationMock.getNotification()!).commandId, 'workbench.action.chat.manageAdditionalSpend');
+			assert.strictEqual(notificationMock.getNotification()!.actions.length, 0);
 			assert.deepStrictEqual(assignmentMock.getTreatmentCalls, []);
 		});
 
@@ -629,7 +629,7 @@ suite('ChatQuotaNotificationContribution', () => {
 			await flushPromises();
 
 			assert.strictEqual(notificationMock.getNotification()?.description, 'Set additional budget to cover extra usage.');
-			assert.strictEqual(getCommandAction(notificationMock.getNotification()!).commandId, 'workbench.action.chat.manageAdditionalSpend');
+			assert.strictEqual(notificationMock.getNotification()!.actions.length, 0);
 		});
 
 		test('does not re-show the same threshold', async () => {
@@ -1177,7 +1177,7 @@ suite('ChatQuotaNotificationContribution', () => {
 			assert.strictEqual(notificationMock.getNotification()!.description, 'Additional budget is enabled to cover extra usage.');
 		});
 
-		test('paid user without overages gets set budget action', async () => {
+		test('paid user without overages gets set budget message without an action', async () => {
 			const { entitlementMock, notificationMock } = createContribution({
 				quotas: { usageBasedBilling: true, premiumChat: makeQuotaSnapshot(60) },
 			});
@@ -1187,7 +1187,7 @@ suite('ChatQuotaNotificationContribution', () => {
 
 			assert.ok(notificationMock.getNotification());
 			assert.strictEqual(notificationMock.getNotification()!.description, 'Set additional budget to cover extra usage.');
-			assert.strictEqual(getCommandAction(notificationMock.getNotification()!).commandId, 'workbench.action.chat.manageAdditionalSpend');
+			assert.strictEqual(notificationMock.getNotification()!.actions.length, 0);
 		});
 	});
 

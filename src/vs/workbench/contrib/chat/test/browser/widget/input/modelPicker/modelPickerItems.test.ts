@@ -1090,10 +1090,11 @@ suite('buildModelPickerItems', () => {
 		const actions = getActionItems(items);
 		const disabledItems = actions.filter(a => a.disabled);
 		assert.strictEqual(disabledItems.length, 2);
-		assert.ok(disabledItems[0].description instanceof MarkdownString);
-		assert.ok(disabledItems[0].description.value.includes('Upgrade'));
-		assert.ok(disabledItems[1].description instanceof MarkdownString);
-		assert.ok(disabledItems[1].description.value.includes('Upgrade'));
+		// The upgrade description is plain text now: it used to be a MarkdownString carrying a
+		// command link to workbench.action.chat.upgradePlan, and that command no longer exists.
+		assert.deepStrictEqual(
+			disabledItems.map(i => typeof i.description === 'string' ? i.description : i.description?.value),
+			['Upgrade required', 'Upgrade required']);
 	});
 
 	test('free user sees upgrade description on each unavailable model', () => {
@@ -1109,10 +1110,11 @@ suite('buildModelPickerItems', () => {
 		const actions = getActionItems(items);
 		const disabledItems = actions.filter(a => a.disabled);
 		assert.strictEqual(disabledItems.length, 2);
-		assert.ok(disabledItems[0].description instanceof MarkdownString);
-		assert.ok(disabledItems[0].description.value.includes('Upgrade'));
-		assert.ok(disabledItems[1].description instanceof MarkdownString);
-		assert.ok(disabledItems[1].description.value.includes('Upgrade'));
+		// The upgrade description is plain text now: it used to be a MarkdownString carrying a
+		// command link to workbench.action.chat.upgradePlan, and that command no longer exists.
+		assert.deepStrictEqual(
+			disabledItems.map(i => typeof i.description === 'string' ? i.description : i.description?.value),
+			['Upgrade required', 'Upgrade required']);
 	});
 
 	test('anonymous user model selection triggers onSelect normally', () => {

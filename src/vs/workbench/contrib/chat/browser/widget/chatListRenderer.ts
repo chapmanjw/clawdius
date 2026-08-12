@@ -131,10 +131,10 @@ const $ = dom.$;
 // participant that actually ships - `vscode.clawdius-chat.default` in extensions/clawdius-chat/package.json.
 // If they differ, every assistant turn renders a redundant username + avatar in the transcript.
 //
-// This previously tracked SetupAgent's `${provider.default.name} Copilot` instead. That agent registers from
-// ChatSetupContribution's constructor, which returns before registerSetupAgents() whenever the entitlement
-// context is absent - always, on an empty entitlementUrl - so it never registers here and the name never
-// matched anything. The lockstep is asserted by a test rather than left to this comment.
+// This previously tracked the chat-setup agent's `${provider.default.name} Copilot` instead. That agent only
+// ever registered from ChatSetupContribution's constructor, which returns early whenever the entitlement
+// context is absent - always, on an empty entitlementUrl - so it never registered and the name never matched
+// anything. That registration path has since been removed. The lockstep is asserted by a test.
 const DEFAULT_AGENT_USERNAME = 'Clawdius';
 // CLAWDIUS-END
 const WORKING_CAUGHT_UP_DEBOUNCE_MS = 750;

@@ -92,13 +92,6 @@ export class PromptCodeActionProvider implements CodeActionProvider {
 				result.push(this.createCodeAction(
 					model,
 					range,
-					localize('enableGithubMcpServerSetting', "Enable Built-in GitHub MCP Server"),
-					undefined,
-					{ id: 'workbench.action.openSettings', title: '', arguments: ['@id:github.copilot.chat.githubMcpServer.enabled'] }
-				));
-				result.push(this.createCodeAction(
-					model,
-					range,
 					localize('installGithubMcpServer', "Install GitHub MCP Server from Marketplace"),
 					undefined,
 					{ id: 'workbench.extensions.search', title: '', arguments: ['@mcp github'] }

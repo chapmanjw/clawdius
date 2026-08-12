@@ -226,7 +226,7 @@ suite('PromptCodeActionProvider', () => {
 			assert.strictEqual(actions.length, 0);
 		});
 
-		test('offers quick fix to enable built-in github mcp server', async () => {
+		test('offers quick fix to install github mcp server from marketplace', async () => {
 			markerData = [{
 				code: { value: PromptValidatorMarkerCode.MissingGithubMcpServer, target: URI.parse('https://marketplace.visualstudio.com/items?itemName=io.github.github/github-mcp-server') },
 				owner: 'prompts-diagnostics-provider',
@@ -247,7 +247,6 @@ suite('PromptCodeActionProvider', () => {
 			].join('\n');
 			const actions = await getCodeActions(content, 4, 11, PromptsType.agent);
 			assert.deepStrictEqual(actions.map(action => action.title), [
-				'Enable Built-in GitHub MCP Server',
 				'Install GitHub MCP Server from Marketplace'
 			]);
 		});

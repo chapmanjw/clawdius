@@ -10,7 +10,7 @@ import { renderLabelWithIcons } from '../../../../../base/browser/ui/iconLabel/i
 import { Button } from '../../../../../base/browser/ui/button/button.js';
 import { SelectBox } from '../../../../../base/browser/ui/selectBox/selectBox.js';
 import { Checkbox, TriStateCheckbox } from '../../../../../base/browser/ui/toggle/toggle.js';
-import { IAction, toAction, WorkbenchActionExecutedEvent, WorkbenchActionExecutedClassification } from '../../../../../base/common/actions.js';
+import { toAction, WorkbenchActionExecutedEvent, WorkbenchActionExecutedClassification } from '../../../../../base/common/actions.js';
 import { Sequencer } from '../../../../../base/common/async.js';
 import { CancellationToken, cancelOnDispose } from '../../../../../base/common/cancellation.js';
 import { Codicon } from '../../../../../base/common/codicons.js';
@@ -164,25 +164,15 @@ export class ChatStatusDashboard extends DomWidget {
 			!this.options?.disableProviderOptions ||
 			!this.options?.disableCompletionsSnooze;
 
-		// Title header with plan name, CTA buttons, and manage action
+		// Title header with plan name and CTA buttons
 		let headerAdditionalSpendButton: Button | undefined;
-		let headerUpgradeButton: Button | undefined;
 		if (hasUsageSection && !this.options?.compactQuotaLayout) {
 			const planName = getChatPlanName(this.chatEntitlementService.entitlement);
 			const headerHost = this.options?.titleHeaderContainer ?? this.element;
-			const header = this.renderHeader(headerHost, this._store, planName, toAction({
-				id: 'workbench.action.manageCopilot',
-				label: localize('quotaLabel', "Manage Copilot Settings"),
-				tooltip: localize('quotaTooltip', "Manage Copilot Settings"),
-				class: ThemeIcon.asClassName(Codicon.settings),
-				run: () => this.runCommandAndClose(() => this.openerService.open(URI.parse(this.defaultAccountService.resolveGitHubUrl(GitHubPaths.copilotSettings)))),
-			}));
+			const header = this.renderHeader(headerHost, planName);
 
-			// Add Additional Spend / Upgrade buttons to the header
+			// Add the Additional Spend button to the header
 			const canConfigureAdditionalSpend = this.chatEntitlementService.entitlement === ChatEntitlement.EDU || this.chatEntitlementService.entitlement === ChatEntitlement.Pro || this.chatEntitlementService.entitlement === ChatEntitlement.ProPlus || this.chatEntitlementService.entitlement === ChatEntitlement.Max;
-			const showUpgrade = this.chatEntitlementService.quotas.canUpgradePlan ?? false;
-
-			const actionBarElement = header.lastElementChild;
 
 			if (canConfigureAdditionalSpend) {
 				headerAdditionalSpendButton = this._store.add(new Button(header, { ...defaultButtonStyles, hoverDelegate: nativeHoverDelegate, secondary: true }));
@@ -192,19 +182,6 @@ export class ChatStatusDashboard extends DomWidget {
 					this.telemetryService.publicLog2<WorkbenchActionExecutedEvent, WorkbenchActionExecutedClassification>('workbenchActionExecuted', { id: 'workbench.action.chat.manageAdditionalSpend', from: 'chat-status' });
 					this.runCommandAndClose(() => this.openerService.open(URI.parse(this.defaultAccountService.resolveGitHubUrl(GitHubPaths.billingBudgets))));
 				}));
-				if (actionBarElement) {
-					header.insertBefore(headerAdditionalSpendButton.element, actionBarElement);
-				}
-			}
-
-			if (showUpgrade) {
-				headerUpgradeButton = this._store.add(new Button(header, { ...defaultButtonStyles, hoverDelegate: nativeHoverDelegate }));
-				headerUpgradeButton.element.classList.add('header-cta-button');
-				headerUpgradeButton.label = localize('upgrade', "Upgrade");
-				this._store.add(headerUpgradeButton.onDidClick(() => this.runCommandAndClose('workbench.action.chat.upgradePlan')));
-				if (actionBarElement) {
-					header.insertBefore(headerUpgradeButton.element, actionBarElement);
-				}
 			}
 		}
 
@@ -212,7 +189,6 @@ export class ChatStatusDashboard extends DomWidget {
 		if (hasUsageSection && this.options?.compactQuotaLayout && this.options.ctaButtonsContainer) {
 			const ctaContainer = this.options.ctaButtonsContainer;
 			const canConfigureAdditionalSpend = this.chatEntitlementService.entitlement === ChatEntitlement.EDU || this.chatEntitlementService.entitlement === ChatEntitlement.Pro || this.chatEntitlementService.entitlement === ChatEntitlement.ProPlus || this.chatEntitlementService.entitlement === ChatEntitlement.Max;
-			const showUpgrade = this.chatEntitlementService.quotas.canUpgradePlan ?? false;
 
 			if (canConfigureAdditionalSpend) {
 				headerAdditionalSpendButton = this._store.add(new Button(ctaContainer, { ...defaultButtonStyles, hoverDelegate: nativeHoverDelegate, secondary: true }));
@@ -221,12 +197,6 @@ export class ChatStatusDashboard extends DomWidget {
 					this.telemetryService.publicLog2<WorkbenchActionExecutedEvent, WorkbenchActionExecutedClassification>('workbenchActionExecuted', { id: 'workbench.action.chat.manageAdditionalSpend', from: 'chat-status' });
 					this.runCommandAndClose(() => this.openerService.open(URI.parse(this.defaultAccountService.resolveGitHubUrl(GitHubPaths.billingBudgets))));
 				}));
-			}
-
-			if (showUpgrade) {
-				headerUpgradeButton = this._store.add(new Button(ctaContainer, { ...defaultButtonStyles, hoverDelegate: nativeHoverDelegate }));
-				headerUpgradeButton.label = localize('upgrade', "Upgrade");
-				this._store.add(headerUpgradeButton.onDidClick(() => this.runCommandAndClose('workbench.action.chat.upgradePlan')));
 			}
 		}
 
@@ -240,7 +210,7 @@ export class ChatStatusDashboard extends DomWidget {
 
 		// Usage section — always shown inline
 		if (hasVisibleUsageContent) {
-			this.renderUsageContent(this.element, token, headerAdditionalSpendButton, headerUpgradeButton, updatePromise);
+			this.renderUsageContent(this.element, token, headerAdditionalSpendButton, updatePromise);
 		}
 
 		// Premium chat included indicator (shown when premium chat is unlimited)
@@ -293,7 +263,7 @@ export class ChatStatusDashboard extends DomWidget {
 		this.renderSetupSection();
 	}
 
-	private renderUsageContent(container: HTMLElement, token: CancellationToken, headerAdditionalSpendButton: Button | undefined, headerUpgradeButton: Button | undefined, updatePromise: Promise<void>): void {
+	private renderUsageContent(container: HTMLElement, token: CancellationToken, headerAdditionalSpendButton: Button | undefined, updatePromise: Promise<void>): void {
 		const { chat: chatQuota, completions: completionsQuota, premiumChat: premiumChatQuota } = this.chatEntitlementService.quotas;
 		const compact = !!this.options?.compactQuotaLayout;
 		const planName = compact ? getChatPlanName(this.chatEntitlementService.entitlement) : undefined;
@@ -308,11 +278,6 @@ export class ChatStatusDashboard extends DomWidget {
 			// Update header additional spend button visibility based on callout
 			if (headerAdditionalSpendButton) {
 				headerAdditionalSpendButton.element.style.display = initialCalloutVisible ? '' : 'none';
-			}
-
-			// Update header upgrade button visibility: hide when manage budget button is visible
-			if (headerUpgradeButton) {
-				headerUpgradeButton.element.style.display = (headerAdditionalSpendButton && initialCalloutVisible) ? 'none' : '';
 			}
 
 			let chatQuotaIndicator: ((quota: IQuotaSnapshot | string) => void) | undefined;
@@ -393,9 +358,6 @@ export class ChatStatusDashboard extends DomWidget {
 				if (headerAdditionalSpendButton) {
 					headerAdditionalSpendButton.element.style.display = calloutVisible ? '' : 'none';
 					headerAdditionalSpendButton.label = localize('manageBudget', "Manage Budget");
-				}
-				if (headerUpgradeButton) {
-					headerUpgradeButton.element.style.display = (headerAdditionalSpendButton && calloutVisible) ? 'none' : '';
 				}
 			};
 
@@ -725,14 +687,9 @@ export class ChatStatusDashboard extends DomWidget {
 		return true;
 	}
 
-	private renderHeader(container: HTMLElement, disposables: DisposableStore, label: string, action?: IAction): HTMLElement {
+	private renderHeader(container: HTMLElement, label: string): HTMLElement {
 		const header = container.appendChild($('div.header'));
 		header.appendChild($('span.header-label', undefined, label));
-
-		if (action) {
-			const toolbar = disposables.add(new ActionBar(header, { hoverDelegate: nativeHoverDelegate }));
-			toolbar.push([action], { icon: true, label: false });
-		}
 
 		return header;
 	}

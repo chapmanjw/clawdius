@@ -59,6 +59,7 @@ const gates: { readonly cmd: readonly string[]; readonly what: string; readonly 
   { cmd: ['bash', 'script/clawdius/diff-stat', '--check'], what: 'fork-diff ratchet', hint: 'record a disposition in script/clawdius/fork-diff-baseline.txt and update the numbers' },
   { cmd: ['node', '--experimental-strip-types', 'script/clawdius/brand-ratchet.ts'], what: 'brand ratchet', hint: 'if you REDUCED brand usage, regenerate with: node script/clawdius/brand-ratchet.ts --update' },
   { cmd: ['node', '--experimental-strip-types', 'script/clawdius/branding-guard.ts'], what: 'branding guard', hint: 'a Clawdius branding invariant regressed - see the failure above' },
+  { cmd: ['node', '--experimental-strip-types', 'script/clawdius/packaging-guard.ts'], what: 'packaging guard', hint: 'a packaging customization the release legs depend on was dropped - restore the wiring' },
 ]
 for (const gate of gates) {
   try {

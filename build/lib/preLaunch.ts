@@ -63,9 +63,40 @@ async function ensureCompiled() {
 	}
 }
 
+// CLAWDIUS-BEGIN restore node-pty's conpty binaries if a rebuild dropped them
+// node-pty ships conpty.dll + OpenConsole.exe under third_party/ and its own postinstall copies them into
+// build/Release/conpty/. Rebuilding the native modules directly (node-gyp rebuild / npm rebuild) regenerates
+// the .node files WITHOUT re-running that postinstall, so the directory silently disappears. Nothing notices
+// until you open a terminal and get "Cannot find conpty.dll ... error code: 3", which reads like a broken
+// install rather than a missing post-install step. Checked here because you always launch after rebuilding.
+async function ensureConptyBinaries() {
+	if (process.platform !== 'win32') {
+		return;
+	}
+	const ptyDir = path.join(rootDir, 'node_modules', 'node-pty');
+	const postInstall = path.join(ptyDir, 'scripts', 'post-install.js');
+	if (!(await exists(path.join('node_modules', 'node-pty', 'build', 'Release'))) || !(await exists(path.join('node_modules', 'node-pty', 'scripts', 'post-install.js')))) {
+		return; // node-pty absent or laid out differently - leave it to the normal install path
+	}
+	if (await exists(path.join('node_modules', 'node-pty', 'build', 'Release', 'conpty', 'conpty.dll'))) {
+		return;
+	}
+	console.log('node-pty is missing its conpty binaries (a rebuild dropped them); re-running its post-install');
+	// Spawned WITHOUT a shell on purpose: runProcess() sets shell:true on Windows, and process.execPath is
+	// normally "C:\Program Files\nodejs\node.exe", which the shell splits at the space ("'C:\Program' is not
+	// recognized"). The guard would then report the problem and fail to fix it.
+	await new Promise<void>((resolve, reject) => {
+		const child = spawn(process.execPath, [postInstall], { cwd: ptyDir, stdio: 'inherit', env: process.env, shell: false });
+		child.on('exit', code => code ? reject(new Error(`node-pty post-install exited with ${code}`)) : resolve());
+		child.on('error', reject);
+	});
+}
+// CLAWDIUS-END
+
 async function main() {
 	await ensureNodeModules();
 	await getElectron();
+	await ensureConptyBinaries();
 	await ensureCompiled();
 
 	// Can't require this until after dependencies are installed

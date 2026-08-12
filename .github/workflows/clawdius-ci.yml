@@ -204,8 +204,15 @@ jobs:
             echo "::error::packaging guard did not flag a removed onnxruntime asar unpack rule"; git checkout -- build/gulpfile.vscode.ts; exit 1
           fi
           git checkout -- build/gulpfile.vscode.ts
+          # Third: the bundled-dependency declaration. Without it dpkg-shlibdeps looks for a system
+          # package providing libonnxruntime.so.1 and fails, even when the binary is staged correctly.
+          grep -v "libonnxruntime.so.1" build/linux/dependencies-generator.ts > /tmp/dg.ts && mv /tmp/dg.ts build/linux/dependencies-generator.ts
+          if node script/clawdius/packaging-guard.ts >/dev/null 2>&1; then
+            echo "::error::packaging guard did not flag a removed libonnxruntime bundled-dep entry"; git checkout -- build/linux/dependencies-generator.ts; exit 1
+          fi
+          git checkout -- build/linux/dependencies-generator.ts
           node script/clawdius/packaging-guard.ts
-          echo "packaging guard is falsifiable (filter + unpack) and clean on this tree"
+          echo "packaging guard is falsifiable (filter + unpack + bundled dep) and clean on this tree"
       - name: Recommended-extension namespace guard is falsifiable (GlassWorm)
         shell: bash
         run: |

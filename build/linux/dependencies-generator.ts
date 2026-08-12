@@ -35,6 +35,13 @@ const bundledDeps = [
 	'libvulkan.so.1',
 	'libvk_swiftshader.so',
 	'libffmpeg.so',
+	// CLAWDIUS-BEGIN onnxruntime is bundled, not a system dependency
+	// onnxruntime-node ships libonnxruntime.so.1 beside its addon and the addon dlopens it by relative path.
+	// Without this entry dpkg-shlibdeps treats it as an unresolved system library and fails the .deb build
+	// with "cannot find library libonnxruntime.so.1". Lost in the 1.132.0 merge; restoring it is what makes
+	// the Linux legs package again.
+	'libonnxruntime.so.1',
+	// CLAWDIUS-END
 ];
 
 export async function getDependencies(packageType: 'deb' | 'rpm', buildDir: string, applicationName: string, arch: string): Promise<string[]> {

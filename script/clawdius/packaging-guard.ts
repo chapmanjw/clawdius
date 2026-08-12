@@ -1,11 +1,10 @@
 // Clawdius packaging guard. Asserts that customizations the DESKTOP PACKAGING depends on are still wired in.
 //
 // Why this exists: an upstream merge can silently drop a packaging customization, and nothing notices until a
-// release is cut, because CI builds the tree but never packages it. That has now happened twice. The 1.132.0
-// merge dropped the filter that keeps only the target arch's onnxruntime binary; four of the ten release legs
-// then failed - Linux because dpkg-shlibdeps walks every ELF in the staged tree and cannot resolve a
-// foreign-arch binding's libraries, Windows because rcedit cannot load a Mach-O file. Both failures surfaced
-// only after a public tag was pushed.
+// release is cut, because CI builds the tree but never packages it. The 1.132.0 merge dropped THREE separate
+// onnxruntime customizations - the arch filter, the asar unpack rule, and the bundled-dependency
+// declaration - and four of the ten release legs failed after a public tag was already pushed. They were
+// found one at a time, each fix revealing the next, which is the argument for asserting all three here.
 //
 // Each assertion below is a claim about a file that a merge could quietly revert. Keep them cheap and
 // specific: a guard that reads the whole build graph would rot faster than the thing it protects.
@@ -55,6 +54,14 @@ for (const [platform, arch] of [['darwin', 'arm64'], ['linux', 'x64'], ['linux',
 		`build/gulpfile.vscode.ts onnxRuntimeShippedTargets is missing ['${platform}', '${arch}'] (that binary would ship inside every other package)`)
 }
 
+// dpkg-shlibdeps resolves every shared library an ELF needs against system packages unless the library is
+// declared as one we bundle. libonnxruntime.so.1 ships beside the addon, so without this entry the .deb build
+// fails with "cannot find library libonnxruntime.so.1" even when the binary and its library are both staged
+// correctly. This was the third onnxruntime customization the 1.132.0 merge dropped.
+const linuxDeps = read('build/linux/dependencies-generator.ts')
+ok(/'libonnxruntime\.so\.1'/.test(linuxDeps),
+	"build/linux/dependencies-generator.ts no longer lists 'libonnxruntime.so.1' as a bundled dependency (dpkg-shlibdeps will fail the .deb build looking for a system package that provides it)")
+
 if (fail.length) {
 	console.error('PACKAGING GUARD FAILED:')
 	for (const f of fail) { console.error(`  - ${f}`) }
@@ -63,4 +70,4 @@ if (fail.length) {
 	process.exit(1)
 }
 
-console.log('packaging guard passed: onnxruntime binaries are filtered to the target platform/arch and its bin tree is unpacked')
+console.log('packaging guard passed: onnxruntime is arch-filtered, unpacked from the asar, and declared as a bundled Linux dependency')

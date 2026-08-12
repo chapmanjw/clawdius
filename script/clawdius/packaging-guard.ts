@@ -54,10 +54,13 @@ for (const [platform, arch] of [['darwin', 'arm64'], ['linux', 'x64'], ['linux',
 		`build/gulpfile.vscode.ts onnxRuntimeShippedTargets is missing ['${platform}', '${arch}'] (that binary would ship inside every other package)`)
 }
 
-// dpkg-shlibdeps resolves every shared library an ELF needs against system packages unless the library is
-// declared as one we bundle. libonnxruntime.so.1 ships beside the addon, so without this entry the .deb build
-// fails with "cannot find library libonnxruntime.so.1" even when the binary and its library are both staged
-// correctly. This was the third onnxruntime customization the 1.132.0 merge dropped.
+// The .deb's declared dependencies must not include a library we ship ourselves. dpkg-shlibdeps resolves
+// libonnxruntime.so.1 from the addon's own directory (each binary is passed with -l<its dirname>, and the
+// unpack rule above puts the library there); this list is what then keeps it out of the package's declared
+// system dependencies. Third of the three onnxruntime customizations the 1.132.0 merge dropped.
+//
+// Note the division of labour, since it is easy to misread: the unpack rule is what stops dpkg-shlibdeps
+// ERRORING, and this entry is what stops the .deb DECLARING a dependency the host cannot satisfy.
 const linuxDeps = read('build/linux/dependencies-generator.ts')
 ok(/'libonnxruntime\.so\.1'/.test(linuxDeps),
 	"build/linux/dependencies-generator.ts no longer lists 'libonnxruntime.so.1' as a bundled dependency (dpkg-shlibdeps will fail the .deb build looking for a system package that provides it)")

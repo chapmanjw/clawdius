@@ -36,10 +36,11 @@ const bundledDeps = [
 	'libvk_swiftshader.so',
 	'libffmpeg.so',
 	// CLAWDIUS-BEGIN onnxruntime is bundled, not a system dependency
-	// onnxruntime-node ships libonnxruntime.so.1 beside its addon and the addon dlopens it by relative path.
-	// Without this entry dpkg-shlibdeps treats it as an unresolved system library and fails the .deb build
-	// with "cannot find library libonnxruntime.so.1". Lost in the 1.132.0 merge; restoring it is what makes
-	// the Linux legs package again.
+	// onnxruntime-node ships libonnxruntime.so.1 beside its addon. dpkg-shlibdeps RESOLVES it (each binary is
+	// passed with -l<its own directory>, and the asar unpack rule in gulpfile.vscode.ts puts the library
+	// there), so what this entry does is keep the resolved library out of the package's declared
+	// dependencies - the .deb must not ask the system for a library we ship ourselves. Lost in the 1.132.0
+	// merge along with that unpack rule.
 	'libonnxruntime.so.1',
 	// CLAWDIUS-END
 ];

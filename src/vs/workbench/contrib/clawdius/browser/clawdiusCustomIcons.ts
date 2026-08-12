@@ -35,3 +35,30 @@ export const clawdiusTerminalIcon = registerIcon(CLAWDIUS_TERMINAL_ICON_ID, Codi
 // `layers` fallback also reads as the fan-out of a workflow if the mask CSS ever fails to load.
 export const clawdiusWorkflowsIcon = registerIcon(CLAWDIUS_WORKFLOWS_ICON_ID, Codicon.layers, localize('clawdius.icon.workflows', "Claude Code Ultracode Workflows icon."));
 // CLAWDIUS-END
+
+// CLAWDIUS-BEGIN permission-mode + effort status icons (Phosphor)
+// The official `anthropic.claude-code` plugin draws its permission-mode selector and effort control with Phosphor
+// Icons at regular weight (verified: the plugin's barbell is byte-identical to phosphor regular/barbell.svg), so
+// the six glyphs it uses are vendored next to this file and registered here. That keeps the Clawdius status-bar
+// pills and their quick picks reading exactly like the plugin's own UI. The mechanism is the same as the icons
+// above - a ThemeIcon whose font glyph is replaced by a CSS mask - and it applies to BOTH surfaces because the
+// status bar and the quick pick each render a `.codicon.codicon-<id>` element. Attribution for the vendored
+// assets lives in ThirdPartyNotices.txt + cgmanifest.json.
+
+export const CLAWDIUS_MODE_MANUAL_ICON_ID = 'clawdius-mode-manual';
+export const CLAWDIUS_MODE_EDIT_ICON_ID = 'clawdius-mode-edit';
+export const CLAWDIUS_MODE_PLAN_ICON_ID = 'clawdius-mode-plan';
+export const CLAWDIUS_MODE_AUTO_ICON_ID = 'clawdius-mode-auto';
+export const CLAWDIUS_MODE_BYPASS_ICON_ID = 'clawdius-mode-bypass';
+export const CLAWDIUS_EFFORT_ICON_ID = 'clawdius-effort';
+
+// Fallbacks (shown only if the mask CSS ever fails to load) keep each mode's MEANING legible: a shield for the
+// mode that guards every edit, angle brackets for the editing mode, a book for the read-and-plan mode, a bolt for
+// the auto mode, a step-over arrow for the mode that skips the checks, and a gauge for the effort meter.
+export const clawdiusModeManualIcon = registerIcon(CLAWDIUS_MODE_MANUAL_ICON_ID, Codicon.shield, localize('clawdius.icon.modeManual', "Claude Manual permission-mode icon."));
+export const clawdiusModeEditIcon = registerIcon(CLAWDIUS_MODE_EDIT_ICON_ID, Codicon.code, localize('clawdius.icon.modeEdit', "Claude Edit-automatically permission-mode icon."));
+export const clawdiusModePlanIcon = registerIcon(CLAWDIUS_MODE_PLAN_ICON_ID, Codicon.book, localize('clawdius.icon.modePlan', "Claude Plan permission-mode icon."));
+export const clawdiusModeAutoIcon = registerIcon(CLAWDIUS_MODE_AUTO_ICON_ID, Codicon.zap, localize('clawdius.icon.modeAuto', "Claude Auto permission-mode icon."));
+export const clawdiusModeBypassIcon = registerIcon(CLAWDIUS_MODE_BYPASS_ICON_ID, Codicon.debugStepOver, localize('clawdius.icon.modeBypass', "Claude Bypass-permissions mode icon."));
+export const clawdiusEffortIcon = registerIcon(CLAWDIUS_EFFORT_ICON_ID, Codicon.dashboard, localize('clawdius.icon.effort', "Claude effort-level icon."));
+// CLAWDIUS-END

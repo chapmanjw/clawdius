@@ -33,6 +33,7 @@ import {
 	parseSettingsState,
 	planEffortEdit,
 } from '../../browser/clawdiusEffortStatusEntry.js';
+import { CLAWDIUS_EFFORT_ICON_ID } from '../../browser/clawdiusCustomIcons.js';
 
 /** U+2588 FULL BLOCK, referenced by code point to keep this source ASCII-only. */
 const FULL = String.fromCharCode(0x2588);
@@ -297,6 +298,8 @@ suite('Clawdius effort pill', () => {
 			for (let i = 0; i < 50 && lastText === undefined; i++) { await timeout(0); }
 			assert.ok(lastText !== undefined, 'pill initialized');
 			assert.ok(lastText.includes('Auto'), `unset effort shows Auto (got: ${lastText})`);
+			// The leading glyph is the plugin's Phosphor barbell, not the old $(chip).
+			assert.ok(lastText.startsWith(`$(${CLAWDIUS_EFFORT_ICON_ID}) `), `effort pill leads with the barbell icon (got: ${lastText})`);
 
 			// The pick wrote settings.json (simulated) then signals the pill directly via signalEffortWritten().
 			fileContent = '{ "effortLevel": "high" }';

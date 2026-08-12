@@ -44,6 +44,7 @@ import { IPathService } from '../../../services/path/common/pathService.js';
 import { IStatusbarEntry, IStatusbarEntryAccessor, IStatusbarService, StatusbarAlignment } from '../../../services/statusbar/browser/statusbar.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { CLAWDIUS_STATUS_BAR_ENABLED_SETTING, isClawdiusStatusBarEnabled } from '../common/clawdiusStatusBar.js';
+import { clawdiusEffortIcon } from './clawdiusCustomIcons.js';
 import { IExtensionService } from '../../../services/extensions/common/extensions.js';
 import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 import { blockBar } from './usage/claudeUsageCharts.js';
@@ -484,9 +485,10 @@ export class ClawdiusEffortStatusEntry extends Disposable implements IWorkbenchC
 	private getProps(display: IEffortDisplay): IStatusbarEntry {
 		// Native text rendering: stable layout + native click/hover/focus. The meter glyphs are wrapped in a NUL
 		// sentinel so the label renderer emits per-cell spans the CSS animates. Ultracode keeps its purple pill.
+		// The leading glyph is the plugin's own Phosphor barbell (registered in clawdiusCustomIcons.ts).
 		return {
 			name: localize('clawdius.effort.name', "Claude Effort Level"),
-			text: `$(chip) ${meterMarkup(display)} ${display.label}`,
+			text: `$(${clawdiusEffortIcon.id}) ${meterMarkup(display)} ${display.label}`,
 			ariaLabel: display.ariaLabel,
 			tooltip: new MarkdownString(display.tooltip),
 			command: SET_EFFORT_COMMAND_ID,

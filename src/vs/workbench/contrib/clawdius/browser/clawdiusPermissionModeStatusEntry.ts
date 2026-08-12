@@ -5,18 +5,23 @@
 
 // CLAWDIUS-BEGIN permission-mode status-bar indicator
 // A bottom-right status-bar pill showing the DEFAULT Claude permission mode for new conversations. Titles,
-// descriptions, and ordering mirror the official `anthropic.claude-code` chat selector (Plan mode / Ask before
-// edits / Edit automatically / Bypass permissions) so the two surfaces read the same. Clicking it (or running
+// descriptions, icons, and ordering mirror the official `anthropic.claude-code` chat selector (Plan / Manual /
+// Auto / Edit automatically / Bypass permissions) so the two surfaces read the same. Clicking it (or running
 // "Clawdius: Set Default Permission Mode") opens a quick pick to change it.
 //
-// Honesty note on scope: the official plugin (2.1.187) does NOT expose the LIVE per-conversation permission mode
+// Honesty note on scope: the official plugin (2.1.220) does NOT expose the LIVE per-conversation permission mode
 // to the host - it changes the mode over a private webview channel (`set_permission_mode`) and only persists a
 // subset into its own `globalState`, never into observable configuration. So this widget reads/writes the
 // documented `claudeCode.initialPermissionMode` setting (the "Initial permission mode for new conversations"),
 // which `getInitialPermissionMode()` reads first - making our write authoritative for the NEXT conversation. It
 // is a default control, not a live-session mirror. A live mirror needs an Anthropic API; tracked as a feature
-// request. The plugin's chat selector also offers "Auto mode", which is NOT in the public config enum (it lives
-// only in the plugin's private state), so it is intentionally omitted here.
+// request.
+//
+// Honesty note on Auto: the plugin's chat selector offers Auto, and its `getInitialPermissionMode()` passes any
+// configured string straight through (it only aliases 'manual' to 'default' and clamps a gated-off Bypass), so
+// selecting Auto here does reach the chat. The plugin's PUBLISHED setting enum (2.1.220) still lists only
+// default/manual/acceptEdits/plan/bypassPermissions, so the Settings editor may flag the value as unrecognized
+// even though it takes effect. The agent host's own `ClaudePermissionMode` (platform/agentHost) does include it.
 //
 // Bypass: selecting "Bypass permissions" also enables the plugin's gate
 // (`claudeCode.allowDangerouslySkipPermissions=true`) so the choice actually takes effect; choosing any other
@@ -28,13 +33,13 @@
 // bypass-enable behavior are unit-testable without booting a workbench (see test/browser/...).
 
 import { Disposable, MutableDisposable } from '../../../../base/common/lifecycle.js';
-import { Codicon } from '../../../../base/common/codicons.js';
 import { MarkdownString } from '../../../../base/common/htmlContent.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { localize, localize2 } from '../../../../nls.js';
 import product from '../../../../platform/product/common/product.js';
 import { ConfigurationTarget, IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { CLAWDIUS_STATUS_BAR_ENABLED_SETTING, isClawdiusStatusBarEnabled } from '../common/clawdiusStatusBar.js';
+import { clawdiusModeAutoIcon, clawdiusModeBypassIcon, clawdiusModeEditIcon, clawdiusModeManualIcon, clawdiusModePlanIcon } from './clawdiusCustomIcons.js';
 import { Action2 } from '../../../../platform/actions/common/actions.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
@@ -46,8 +51,8 @@ import { IStatusbarEntry, IStatusbarEntryAccessor, IStatusbarService, StatusbarA
 import { IExtensionService } from '../../../services/extensions/common/extensions.js';
 import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
 
-/** The four documented permission modes (the `claudeCode.initialPermissionMode` enum). Auto mode is omitted - it is not in the public config enum. */
-export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
+/** The five permission modes the plugin's chat selector offers, written to `claudeCode.initialPermissionMode`. */
+export type PermissionMode = 'default' | 'auto' | 'acceptEdits' | 'plan' | 'bypassPermissions';
 
 /** The plugin setting that backs the default mode for new conversations. */
 export const INITIAL_PERMISSION_MODE_KEY = 'claudeCode.initialPermissionMode';
@@ -97,16 +102,18 @@ export interface IPermissionModeInfo {
 
 /**
  * Ordered safest -> most permissive, mirroring the plugin's chat selector. Labels/descriptions are taken
- * verbatim from `anthropic.claude-code` 2.1.187 so the status pill and the chat read identically. Icons are the
- * closest stock codicons (the plugin's own glyphs are bespoke SVGs in its webview, not codicons; exact parity
- * would require adding them to an icon font).
+ * verbatim from `anthropic.claude-code` 2.1.220 so the status pill and the chat read identically. The icons are
+ * the plugin's own Phosphor glyphs, vendored and registered in clawdiusCustomIcons.ts - including the swap the
+ * plugin itself made: lightning now means Auto, so Bypass takes the winding-path glyph. Auto keeps the plain
+ * tone: it pauses for anything risky, so the warn/danger fills stay reserved for the modes that act unchecked.
  */
 export function permissionModes(): IPermissionModeInfo[] {
 	return [
-		{ value: 'plan', label: localize('clawdius.perm.plan', "Plan mode"), detail: localize('clawdius.perm.plan.detail', "Claude will explore the code and present a plan before editing"), icon: Codicon.eye, tone: 'safe' },
-		{ value: 'default', label: localize('clawdius.perm.default', "Ask before edits"), detail: localize('clawdius.perm.default.detail', "Claude will ask for approval before making each edit"), icon: Codicon.shield, tone: 'none' },
-		{ value: 'acceptEdits', label: localize('clawdius.perm.acceptEdits', "Edit automatically"), detail: localize('clawdius.perm.acceptEdits.detail', "Claude will edit your selected text or the whole file"), icon: Codicon.edit, tone: 'warn' },
-		{ value: 'bypassPermissions', label: localize('clawdius.perm.bypass', "Bypass permissions"), detail: localize('clawdius.perm.bypass.detail', "Claude will not ask for approval before running potentially dangerous commands"), icon: Codicon.zap, tone: 'danger' },
+		{ value: 'plan', label: localize('clawdius.perm.plan', "Plan"), detail: localize('clawdius.perm.plan.detail', "Claude will explore the code and present a plan before editing"), icon: clawdiusModePlanIcon, tone: 'safe' },
+		{ value: 'default', label: localize('clawdius.perm.default', "Manual"), detail: localize('clawdius.perm.default.detail', "Claude will ask for approval before making each edit"), icon: clawdiusModeManualIcon, tone: 'none' },
+		{ value: 'auto', label: localize('clawdius.perm.auto', "Auto"), detail: localize('clawdius.perm.auto.detail', "Claude will approve actions that pass a safety check and pause for anything risky"), icon: clawdiusModeAutoIcon, tone: 'none' },
+		{ value: 'acceptEdits', label: localize('clawdius.perm.acceptEdits', "Edit automatically"), detail: localize('clawdius.perm.acceptEdits.detail', "Claude will edit your selected text or the whole file"), icon: clawdiusModeEditIcon, tone: 'warn' },
+		{ value: 'bypassPermissions', label: localize('clawdius.perm.bypass', "Bypass permissions"), detail: localize('clawdius.perm.bypass.detail', "Claude will not ask for approval before running potentially dangerous commands"), icon: clawdiusModeBypassIcon, tone: 'danger' },
 	];
 }
 
@@ -114,9 +121,12 @@ function modeInfo(value: PermissionMode): IPermissionModeInfo {
 	return permissionModes().find(m => m.value === value) ?? permissionModes()[1];
 }
 
-/** Coerce a raw setting value (possibly unset / unknown) to a valid mode, defaulting to `default`. */
+/**
+ * Coerce a raw setting value (possibly unset / unknown) to a valid mode, defaulting to `default`. The plugin's
+ * own `manual` alias for `default` lands on `default` through the unknown-value fallback, as it should.
+ */
 export function parsePermissionMode(value: string | undefined): PermissionMode {
-	return (value === 'plan' || value === 'acceptEdits' || value === 'bypassPermissions') ? value : 'default';
+	return (value === 'plan' || value === 'auto' || value === 'acceptEdits' || value === 'bypassPermissions') ? value : 'default';
 }
 
 function readMode(configurationService: IConfigurationService): PermissionMode {
@@ -132,7 +142,7 @@ export interface IPermissionModeDisplay {
 	/** The EFFECTIVE mode shown (bypass clamps to default when its gate is off). */
 	readonly mode: PermissionMode;
 	readonly label: string;
-	/** Status-bar entry text, e.g. `$(eye) Plan mode`. */
+	/** Status-bar entry text, e.g. `$(clawdius-mode-plan) Plan`. */
 	readonly text: string;
 	readonly ariaLabel: string;
 	readonly tone: ModeTone;
@@ -145,7 +155,7 @@ export interface IPermissionModeDisplay {
 /**
  * Resolve what the pill should show. If Bypass permissions is configured but its gate
  * (`claudeCode.allowDangerouslySkipPermissions`) is off, the plugin clamps new conversations back to the Default
- * ("Ask before edits") mode, so the pill must show that - not claim a bypass that will not happen.
+ * ("Manual") mode, so the pill must show that - not claim a bypass that will not happen.
  */
 export function permissionModeDisplay(configured: PermissionMode, allowBypass: boolean): IPermissionModeDisplay {
 	const bypassGatedOff = configured === 'bypassPermissions' && !allowBypass;
@@ -153,7 +163,7 @@ export function permissionModeDisplay(configured: PermissionMode, allowBypass: b
 	const tooltip = bypassGatedOff
 		? localize(
 			'clawdius.perm.tooltip.gated',
-			"**Bypass permissions** is configured but disabled by the `claudeCode.allowDangerouslySkipPermissions` setting, so new Claude conversations fall back to **Ask before edits**.\n\nClick to change. This sets the default for new conversations; it does not change a chat already in progress.",
+			"**Bypass permissions** is configured but disabled by the `claudeCode.allowDangerouslySkipPermissions` setting, so new Claude conversations fall back to **Manual**.\n\nClick to change. This sets the default for new conversations; it does not change a chat already in progress.",
 		)
 		: localize(
 			'clawdius.perm.tooltip',
@@ -176,7 +186,7 @@ export interface IModePick extends IQuickPickItem {
 }
 
 /**
- * The quick-pick items for choosing a mode - all four, always (selecting Bypass enables its gate, so it is never
+ * The quick-pick items for choosing a mode - all five, always (selecting Bypass enables its gate, so it is never
  * hidden). The current mode is marked.
  */
 export function permissionModePicks(current: PermissionMode): IModePick[] {

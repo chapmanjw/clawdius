@@ -768,6 +768,17 @@
 				"DEALINGS IN THE SOFTWARE."
 			],
 			"license": "MIT"
+		},
+		{
+			"component": {
+				"type": "npm",
+				"npm": {
+					"name": "@phosphor-icons/core",
+					"version": "2.1.1"
+				}
+			},
+			"license": "MIT",
+			"version": "2.1.1"
 		}
 	],
 	"version": 1

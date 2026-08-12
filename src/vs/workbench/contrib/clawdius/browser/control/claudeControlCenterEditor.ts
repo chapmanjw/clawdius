@@ -279,7 +279,7 @@ export class ScrollAnchor {
 }
 
 /** The six documented `permissions.defaultMode` values, with a label/icon/tone for the scope-aware default-mode
- *  control. Deliberately distinct from the FOUR-value global session-start pill (clawdiusPermissionModeStatusEntry):
+ *  control. Deliberately distinct from the FIVE-value global session-start pill (clawdiusPermissionModeStatusEntry):
  *  same words, different key - which is the conflation this control exists to defuse. */
 const DEFAULT_MODE_INFOS: readonly { value: PermissionDefaultMode; label: string; detail: string; icon: ThemeIcon; tone: 'none' | 'safe' | 'warn' | 'danger' }[] = [
 	{ value: 'default', label: localize('clawdius.control.dm.default', "Default"), detail: localize('clawdius.control.dm.default.d', "Ask for approval before each edit or command."), icon: Codicon.shield, tone: 'none' },

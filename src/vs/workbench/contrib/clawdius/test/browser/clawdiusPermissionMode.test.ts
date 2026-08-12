@@ -5,8 +5,9 @@
 
 // CLAWDIUS-BEGIN permission-mode status pill unit tests
 // Covers the user-visible behaviors of the default-permission-mode pill without booting a workbench:
-// the chat-matching titles/descriptions, the tone->color mapping, the effective-mode honesty clamp (a
-// configured-but-gated-off Bypass must display as the Default mode), and the one-way bypass-enable on select.
+// the chat-matching titles/descriptions/icons (all five modes, Auto included), the tone->color mapping, the
+// effective-mode honesty clamp (a configured-but-gated-off Bypass must display as the Default mode), and the
+// one-way bypass-enable on select.
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
@@ -29,19 +30,25 @@ suite('Clawdius permission-mode pill', () => {
 		assert.strictEqual(ALLOW_BYPASS_KEY, 'claudeCode.allowDangerouslySkipPermissions');
 	});
 
-	test('parsePermissionMode clamps unset / unknown values to default', () => {
+	test('parsePermissionMode clamps unset / unknown values to default and round-trips every mode', () => {
 		assert.strictEqual(parsePermissionMode(undefined), 'default');
 		assert.strictEqual(parsePermissionMode(''), 'default');
 		assert.strictEqual(parsePermissionMode('nonsense'), 'default');
-		assert.strictEqual(parsePermissionMode('auto'), 'default'); // Auto is not in the public enum
+		assert.strictEqual(parsePermissionMode('manual'), 'default'); // the plugin's alias for default
 		assert.strictEqual(parsePermissionMode('plan'), 'plan');
+		assert.strictEqual(parsePermissionMode('auto'), 'auto');
 		assert.strictEqual(parsePermissionMode('acceptEdits'), 'acceptEdits');
 		assert.strictEqual(parsePermissionMode('bypassPermissions'), 'bypassPermissions');
+		// Every offered mode survives a write -> read round trip through the setting.
+		for (const pick of permissionModePicks('default')) {
+			assert.strictEqual(parsePermissionMode(pick.mode), pick.mode);
+		}
 	});
 
 	test('titles mirror the plugin chat selector', () => {
-		assert.strictEqual(permissionModeDisplay('plan', false).label, 'Plan mode');
-		assert.strictEqual(permissionModeDisplay('default', false).label, 'Ask before edits');
+		assert.strictEqual(permissionModeDisplay('plan', false).label, 'Plan');
+		assert.strictEqual(permissionModeDisplay('default', false).label, 'Manual');
+		assert.strictEqual(permissionModeDisplay('auto', false).label, 'Auto');
 		assert.strictEqual(permissionModeDisplay('acceptEdits', false).label, 'Edit automatically');
 		assert.strictEqual(permissionModeDisplay('bypassPermissions', true).label, 'Bypass permissions');
 	});
@@ -50,20 +57,23 @@ suite('Clawdius permission-mode pill', () => {
 		const byMode = new Map(permissionModePicks('default').map(p => [p.mode, p.detail]));
 		assert.strictEqual(byMode.get('plan'), 'Claude will explore the code and present a plan before editing');
 		assert.strictEqual(byMode.get('default'), 'Claude will ask for approval before making each edit');
+		assert.strictEqual(byMode.get('auto'), 'Claude will approve actions that pass a safety check and pause for anything risky');
 		assert.strictEqual(byMode.get('acceptEdits'), 'Claude will edit your selected text or the whole file');
 		assert.strictEqual(byMode.get('bypassPermissions'), 'Claude will not ask for approval before running potentially dangerous commands');
 	});
 
-	test('status text carries the per-mode codicon + label', () => {
-		assert.strictEqual(permissionModeDisplay('plan', false).text, '$(eye) Plan mode');
-		assert.strictEqual(permissionModeDisplay('default', false).text, '$(shield) Ask before edits');
-		assert.strictEqual(permissionModeDisplay('acceptEdits', false).text, '$(edit) Edit automatically');
-		assert.strictEqual(permissionModeDisplay('bypassPermissions', true).text, '$(zap) Bypass permissions');
+	test('status text carries the per-mode Phosphor icon + label (lightning is Auto, Bypass takes the path)', () => {
+		assert.strictEqual(permissionModeDisplay('plan', false).text, '$(clawdius-mode-plan) Plan');
+		assert.strictEqual(permissionModeDisplay('default', false).text, '$(clawdius-mode-manual) Manual');
+		assert.strictEqual(permissionModeDisplay('auto', false).text, '$(clawdius-mode-auto) Auto');
+		assert.strictEqual(permissionModeDisplay('acceptEdits', false).text, '$(clawdius-mode-edit) Edit automatically');
+		assert.strictEqual(permissionModeDisplay('bypassPermissions', true).text, '$(clawdius-mode-bypass) Bypass permissions');
 	});
 
-	test('tone: Plan=safe (green), Default=none (plain), Accept=warn, Bypass=danger', () => {
+	test('tone: Plan=safe (green), Manual/Auto=none (plain), Accept=warn, Bypass=danger', () => {
 		assert.strictEqual(permissionModeDisplay('plan', false).tone, 'safe');
 		assert.strictEqual(permissionModeDisplay('default', false).tone, 'none');
+		assert.strictEqual(permissionModeDisplay('auto', false).tone, 'none');
 		assert.strictEqual(permissionModeDisplay('acceptEdits', false).tone, 'warn');
 		assert.strictEqual(permissionModeDisplay('bypassPermissions', true).tone, 'danger');
 	});
@@ -71,7 +81,7 @@ suite('Clawdius permission-mode pill', () => {
 	test('Bypass configured + gate OFF clamps to the Default mode (honesty fix) and explains in the tooltip', () => {
 		const d = permissionModeDisplay('bypassPermissions', false);
 		assert.strictEqual(d.mode, 'default');
-		assert.strictEqual(d.label, 'Ask before edits');
+		assert.strictEqual(d.label, 'Manual');
 		assert.strictEqual(d.tone, 'none');
 		assert.strictEqual(d.bypassGatedOff, true);
 		assert.ok(/fall back to/i.test(d.tooltip), 'gated tooltip should explain the fallback');
@@ -81,13 +91,14 @@ suite('Clawdius permission-mode pill', () => {
 		for (const allow of [true, false]) {
 			assert.strictEqual(permissionModeDisplay('plan', allow).bypassGatedOff, false);
 			assert.strictEqual(permissionModeDisplay('default', allow).bypassGatedOff, false);
+			assert.strictEqual(permissionModeDisplay('auto', allow).bypassGatedOff, false);
 			assert.strictEqual(permissionModeDisplay('acceptEdits', allow).bypassGatedOff, false);
 		}
 	});
 
-	test('picker always offers all four modes (Bypass is never hidden - selecting it enables the gate)', () => {
+	test('picker offers all five modes safest -> most permissive (Bypass is never hidden - selecting it enables the gate)', () => {
 		const modes = permissionModePicks('default').map(p => p.mode);
-		assert.deepStrictEqual(modes, ['plan', 'default', 'acceptEdits', 'bypassPermissions']);
+		assert.deepStrictEqual(modes, ['plan', 'default', 'auto', 'acceptEdits', 'bypassPermissions']);
 	});
 
 	test('exactly one pick is marked Current and it matches the current mode', () => {
@@ -97,14 +108,18 @@ suite('Clawdius permission-mode pill', () => {
 		assert.strictEqual(current[0].mode, 'acceptEdits');
 	});
 
-	test('every pick carries an icon class', () => {
-		for (const pick of permissionModePicks('default')) {
-			assert.ok(pick.iconClass && /codicon-/.test(pick.iconClass), `pick ${pick.mode} should have a codicon class`);
-		}
+	test('every pick carries its registered Phosphor icon class (same glyphs as the status pill)', () => {
+		assert.deepStrictEqual(permissionModePicks('default').map(p => [p.mode, p.iconClass]), [
+			['plan', 'codicon codicon-clawdius-mode-plan'],
+			['default', 'codicon codicon-clawdius-mode-manual'],
+			['auto', 'codicon codicon-clawdius-mode-auto'],
+			['acceptEdits', 'codicon codicon-clawdius-mode-edit'],
+			['bypassPermissions', 'codicon codicon-clawdius-mode-bypass'],
+		]);
 	});
 
 	test('selecting a non-bypass mode writes only initialPermissionMode (never touches the bypass gate)', () => {
-		for (const mode of ['plan', 'default', 'acceptEdits'] as const) {
+		for (const mode of ['plan', 'default', 'auto', 'acceptEdits'] as const) {
 			const writes = permissionModeWrites(mode);
 			assert.deepStrictEqual(writes, [{ key: INITIAL_PERMISSION_MODE_KEY, value: mode }]);
 			assert.ok(!writes.some(w => w.key === ALLOW_BYPASS_KEY), 'must not write the bypass gate');

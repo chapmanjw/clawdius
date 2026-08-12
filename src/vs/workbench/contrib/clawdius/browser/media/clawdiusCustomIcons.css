@@ -50,3 +50,61 @@
 	mask-image: url('./claude-code-workflows.svg');
 }
 /* CLAWDIUS-END */
+
+/* CLAWDIUS-BEGIN permission-mode + effort status icons (Phosphor)
+ * The vendored Phosphor (regular weight) glyphs the official `anthropic.claude-code` plugin uses for its
+ * permission-mode selector and effort control, painted the same way as the toolbar icons above: the fallback
+ * codicon glyph is killed with content:'' and the SVG is masked in with currentColor, so each icon follows the
+ * status-bar foreground - including the white-on-color foregrounds of the Plan / Edit / Bypass / Ultracode pills.
+ * The same rules cover the quick pick, which renders the identical `.codicon.codicon-<id>` element.
+ */
+
+.codicon.codicon-clawdius-mode-manual::before,
+.codicon.codicon-clawdius-mode-edit::before,
+.codicon.codicon-clawdius-mode-plan::before,
+.codicon.codicon-clawdius-mode-auto::before,
+.codicon.codicon-clawdius-mode-bypass::before,
+.codicon.codicon-clawdius-effort::before {
+	content: '';
+	display: inline-block;
+	width: 1em;
+	height: 1em;
+	background-color: currentColor;
+	-webkit-mask-repeat: no-repeat;
+	mask-repeat: no-repeat;
+	-webkit-mask-position: center;
+	mask-position: center;
+	-webkit-mask-size: contain;
+	mask-size: contain;
+}
+
+.codicon.codicon-clawdius-mode-manual::before {
+	-webkit-mask-image: url('./phosphor-hand-palm.svg');
+	mask-image: url('./phosphor-hand-palm.svg');
+}
+
+.codicon.codicon-clawdius-mode-edit::before {
+	-webkit-mask-image: url('./phosphor-code.svg');
+	mask-image: url('./phosphor-code.svg');
+}
+
+.codicon.codicon-clawdius-mode-plan::before {
+	-webkit-mask-image: url('./phosphor-scroll.svg');
+	mask-image: url('./phosphor-scroll.svg');
+}
+
+.codicon.codicon-clawdius-mode-auto::before {
+	-webkit-mask-image: url('./phosphor-lightning.svg');
+	mask-image: url('./phosphor-lightning.svg');
+}
+
+.codicon.codicon-clawdius-mode-bypass::before {
+	-webkit-mask-image: url('./phosphor-path.svg');
+	mask-image: url('./phosphor-path.svg');
+}
+
+.codicon.codicon-clawdius-effort::before {
+	-webkit-mask-image: url('./phosphor-barbell.svg');
+	mask-image: url('./phosphor-barbell.svg');
+}
+/* CLAWDIUS-END */

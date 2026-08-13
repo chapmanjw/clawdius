@@ -248,28 +248,6 @@ function computeChecksum(filename: string): string {
 // downloaded on demand at runtime, only on supported platforms, into a per-user
 // cache (see `src/vs/platform/localTranscription/node/foundryLocalRuntime.ts`).
 // Exclude every prebuilt addon and core library from the package here.
-// CLAWDIUS-BEGIN keep only the target arch's onnxruntime binary
-// onnxruntime-node (on-device chat dictation, direct and transitive via @huggingface/transformers) ships
-// prebuilt binaries for EVERY platform/arch in its tarball. Keeping them all bloats each package with
-// ~170MB of unused native code, and worse, dpkg-shlibdeps walks every ELF file it finds when building the
-// .deb: a foreign-arch binding makes it fail to resolve libonnxruntime.so.1 and the Linux legs die. This
-// filter existed before the 1.132.0 merge and was lost in it.
-const onnxRuntimeShippedTargets: readonly [string, string][] = [
-	['darwin', 'arm64'],
-	['linux', 'x64'],
-	['linux', 'arm64'],
-	['win32', 'x64'],
-	['win32', 'arm64'],
-];
-function getOnnxRuntimeExcludeFilter(platform: string, arch: string): string[] {
-	return [
-		'**',
-		...onnxRuntimeShippedTargets
-			.filter(([p, a]) => !(p === platform && a === arch))
-			.map(([p, a]) => `!**/onnxruntime-node/bin/napi-v6/${p}/${a}/**`),
-	];
-}
-// CLAWDIUS-END
 
 function getFoundryLocalExcludeFilter(): string[] {
 	return [
@@ -397,7 +375,6 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 		const deps = es.merge(cleanedDeps, osProxyResolverPlatformPackage)
 			.pipe(filter(getRipgrepExcludeFilter(platform, arch)))
 			.pipe(filter(getMxcExcludeFilter(arch)))
-			.pipe(filter(getOnnxRuntimeExcludeFilter(platform, arch)))
 			.pipe(filter(getFoundryLocalExcludeFilter()))
 			.pipe(filter(getOSProxyResolverExcludeFilter(platform, arch)))
 			.pipe(jsFilter)
@@ -425,17 +402,7 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 				'**/node-pty/package.json',
 				'**/*.wasm',
 				'**/@vscode/vsce-sign/bin/*',
-				// CLAWDIUS-BEGIN unpack the whole onnxruntime bin tree
-				// onnxruntime-node (on-device chat dictation, direct and transitive via @huggingface/transformers)
-				// ships a prebuilt N-API addon that dlopen's sibling shared libraries (libonnxruntime.so.1 /
-				// .dylib / onnxruntime.dll + DirectML). The OS loader resolves those by on-disk path relative to
-				// the addon, so the WHOLE bin/ tree has to live outside the archive - the '**/*.node' rule above
-				// only unpacks the addon and leaves its libraries inside, which breaks dlopen at runtime and
-				// makes dpkg-shlibdeps fail to resolve libonnxruntime.so.1 when building the .deb. Lost in the
-				// 1.132.0 merge alongside the platform/arch filter.
-				'**/onnxruntime-node/bin/**',
-				// CLAWDIUS-END
-			], [
+							], [
 				'**/*.mk',
 			], [
 				'node_modules/vsda/**', // retain copy of `vsda` in node_modules for internal use

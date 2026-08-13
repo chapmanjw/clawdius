@@ -35,14 +35,6 @@ const bundledDeps = [
 	'libvulkan.so.1',
 	'libvk_swiftshader.so',
 	'libffmpeg.so',
-	// CLAWDIUS-BEGIN onnxruntime is bundled, not a system dependency
-	// onnxruntime-node ships libonnxruntime.so.1 beside its addon. dpkg-shlibdeps RESOLVES it (each binary is
-	// passed with -l<its own directory>, and the asar unpack rule in gulpfile.vscode.ts puts the library
-	// there), so what this entry does is keep the resolved library out of the package's declared
-	// dependencies - the .deb must not ask the system for a library we ship ourselves. Lost in the 1.132.0
-	// merge along with that unpack rule.
-	'libonnxruntime.so.1',
-	// CLAWDIUS-END
 ];
 
 export async function getDependencies(packageType: 'deb' | 'rpm', buildDir: string, applicationName: string, arch: string): Promise<string[]> {

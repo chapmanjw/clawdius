@@ -184,35 +184,32 @@ jobs:
           echo "fork-diff ratchet is falsifiable (over-baseline growth trips) and clean on the current tree"
       - name: Branding guard (Clawdius branding, Open VSX, no telemetry, Clawdius theme)
         run: node script/clawdius/branding-guard.ts
-      - name: Packaging guard is falsifiable (a dropped packaging customization must trip) + clean on this tree
+      - name: Packaging guard is falsifiable (a reintroduced dependency must drag its packaging back) + clean
         shell: bash
         run: |
           set -e
-          # CI builds the tree but never packages it, so a packaging customization can be dropped by a merge
-          # and stay invisible until a release is cut. That has happened: the 1.132.0 merge removed the filter
-          # that keeps only the target arch's onnxruntime binary, and four of the ten release legs failed after
-          # the tag was already public. Removing the filter's pipeline stage must trip this guard.
-          node -e "const fs=require('fs');const p='build/gulpfile.vscode.ts';let t=fs.readFileSync(p,'utf8');t=t.replace(/^\s*\.pipe\(filter\(getOnnxRuntimeExcludeFilter\(platform, arch\)\)\)\n/m,'');fs.writeFileSync(p,t)"
-          if node script/clawdius/packaging-guard.ts >/dev/null 2>&1; then
-            echo "::error::packaging guard did not flag a removed onnxruntime filter stage"; git checkout -- build/gulpfile.vscode.ts; exit 1
-          fi
-          git checkout -- build/gulpfile.vscode.ts
-          # The merge dropped TWO onnxruntime customizations and restoring only the filter still failed the
-          # Linux legs, so the asar unpack rule is probed separately.
-          grep -v "onnxruntime-node/bin" build/gulpfile.vscode.ts > /tmp/gf.ts && mv /tmp/gf.ts build/gulpfile.vscode.ts
-          if node script/clawdius/packaging-guard.ts >/dev/null 2>&1; then
-            echo "::error::packaging guard did not flag a removed onnxruntime asar unpack rule"; git checkout -- build/gulpfile.vscode.ts; exit 1
-          fi
-          git checkout -- build/gulpfile.vscode.ts
-          # Third: the bundled-dependency declaration. Without it dpkg-shlibdeps looks for a system
-          # package providing libonnxruntime.so.1 and fails, even when the binary is staged correctly.
-          grep -v "libonnxruntime.so.1" build/linux/dependencies-generator.ts > /tmp/dg.ts && mv /tmp/dg.ts build/linux/dependencies-generator.ts
-          if node script/clawdius/packaging-guard.ts >/dev/null 2>&1; then
-            echo "::error::packaging guard did not flag a removed libonnxruntime bundled-dep entry"; git checkout -- build/linux/dependencies-generator.ts; exit 1
-          fi
-          git checkout -- build/linux/dependencies-generator.ts
+          # CI builds the tree but never packages it, so a packaging customization can be dropped by a merge and
+          # stay invisible until a release is cut. That has happened: the 1.132.0 merge removed three onnxruntime
+          # customizations and four of the ten release legs failed after the tag was already public.
+          #
+          # onnxruntime-node has since been dropped entirely - nothing imported it, because dictation moved to
+          # Foundry Local, which fetches its own ONNX Runtime at runtime. The guard is therefore conditional now,
+          # and what must stay falsifiable is that reintroducing the dependency WITHOUT its packaging trips it.
           node script/clawdius/packaging-guard.ts
-          echo "packaging guard is falsifiable (filter + unpack + bundled dep) and clean on this tree"
+          # Reintroducing the dependency while the customizations are absent must fail.
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.dependencies['onnxruntime-node']='1.24.3';fs.writeFileSync('package.json',JSON.stringify(p,null,'	'))"
+          if node script/clawdius/packaging-guard.ts >/dev/null 2>&1; then
+            echo "::error::packaging guard did not flag onnxruntime-node returning without its packaging customizations"; git checkout -- package.json; exit 1
+          fi
+          git checkout -- package.json
+          # And the same for its only consumer arriving on its own.
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.dependencies['@huggingface/transformers']='4.2.0';fs.writeFileSync('package.json',JSON.stringify(p,null,'	'))"
+          if node script/clawdius/packaging-guard.ts >/dev/null 2>&1; then
+            echo "::error::packaging guard did not flag @huggingface/transformers returning without onnxruntime packaging"; git checkout -- package.json; exit 1
+          fi
+          git checkout -- package.json
+          node script/clawdius/packaging-guard.ts
+          echo "packaging guard is falsifiable (a returning dependency must bring its packaging) and clean on this tree"
       - name: Recommended-extension namespace guard is falsifiable (GlassWorm)
         shell: bash
         run: |

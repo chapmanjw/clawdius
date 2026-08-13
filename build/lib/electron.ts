@@ -125,6 +125,42 @@ function feedPackageName(fileName: string): string | undefined {
 	return fileName.replace(/\.zip$/, '');
 }
 
+// CLAWDIUS-BEGIN retry Electron downloads that fail with a transient server error
+// Without a feed the download falls through to @vscode/gulp-electron's default path, which fetches the archives from
+// electron's GitHub releases. That path IS wrapped in a retry, but the retry only recognises socket-level failures
+// (ETIMEDOUT/ECONNRESET/...), so an HTTP 503 - a server explicitly asking to be retried - is treated as permanent and
+// thrown on the first attempt. Cutting 1.132.0 lost three release-job runs to exactly that, on an asset that
+// downloads fine seconds later.
+//
+// Passing `repo` as a FUNCTION is the library's own extension point: it then routes every asset through this resolver
+// (@vscode/gulp-electron's ResponseDownloader) instead of downloading directly, so retrying here covers every leg.
+// The body is returned unread so the archive still streams to disk rather than being buffered in memory.
+const RETRYABLE_HTTP_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+const ELECTRON_DOWNLOAD_RETRIES = 5;
+
+async function fetchElectronAsset(url: string): Promise<Response> {
+	let lastFailure = '';
+	for (let attempt = 1; ; attempt++) {
+		let response: Response | undefined;
+		try {
+			response = await fetch(url);
+			if (!RETRYABLE_HTTP_STATUS.has(response.status)) {
+				return response; // success, or a failure that retrying cannot fix (404, 401, ...)
+			}
+			lastFailure = `HTTP ${response.status} ${response.statusText}`;
+			await response.body?.cancel(); // release the socket before sleeping
+		} catch (err) {
+			lastFailure = (err as Error)?.message ?? String(err);
+		}
+		if (attempt > ELECTRON_DOWNLOAD_RETRIES) {
+			return response ?? new Response(null, { status: 599, statusText: `${lastFailure} (after ${attempt - 1} retries)` });
+		}
+		const delay = Math.min(2000 * Math.pow(2, attempt - 1), 30000);
+		console.warn(`[clawdius] electron asset ${url} failed with ${lastFailure} (attempt ${attempt}/${ELECTRON_DOWNLOAD_RETRIES}); retrying in ${delay}ms...`);
+		await new Promise(resolve => setTimeout(resolve, delay));
+	}
+}
+
 const electronAssetResolver = electronFeed
 	? async ({ fileName }: { url: string; fileName: string }): Promise<Response> => {
 		const name = feedPackageName(fileName);
@@ -137,7 +173,8 @@ const electronAssetResolver = electronFeed
 		const body = Readable.toWeb(fs.createReadStream(filePath)) as ReadableStream<Uint8Array>;
 		return new Response(body, { status: 200, headers: { 'Content-Length': String(size) } });
 	}
-	: undefined;
+	: async ({ url }: { url: string; fileName: string }): Promise<Response> => fetchElectronAsset(url);
+// CLAWDIUS-END
 
 export const config = {
 	version: electronVersion,

@@ -689,7 +689,28 @@
 # neither manifest changes. The vulnerable middleware is never invoked - serveStatic appears nowhere in
 # src, test/mcp or build - but the patch is free and within range, so it closes the alert outright
 # rather than leaving a standing dismissal to re-justify on every scan. Growth is the six lock lines.
+# Disposition 2026-08-16 (@anthropic-ai/claude-agent-sdk 0.3.220 -> 0.3.226): taken for the 0.3.224 fix
+# where a project path over 200 characters resolved into another project's session directory, so session
+# list/get/rename/fork/delete and /resume could cross projects; 0.3.225 also fixes background subagents
+# never resuming in headless sessions. The SDK's OnElicitation options gained a required requestId, the
+# control_request envelope id an out-of-band control_response must echo. This fork answers in-band from
+# the callback, so the SDK correlates its own response and claudeElicitationBridge keeps generating its
+# own workbench UUID; only the eight direct test invocations needed the new field. Growth is the lock
+# churn plus those test arguments.
+# Disposition 2026-08-16 (js/regex/missing-regexp-anchor, CodeQL 149): parseHasGitHubRemote matched the
+# raw `git remote -v` blob with an unanchored github.com test, so a host that merely contains the string
+# - https://evil-github.com/owner/repo.git - was reported as a GitHub remote. Now defers to
+# parseGitHubRepoFromRemote, the anchored parser the PR paths already use, leaving one definition of a
+# GitHub remote. Growth is the replacement plus three regression tests.
+# Disposition 2026-08-16 (fast-uri 3.1.4 -> 3.1.5, js-yaml 4.3.0 -> 4.3.1): GHSA-7p8r-x3mc-p8w7 and the
+# backported removal of quadratic complexity from js-yaml's !!omap duplicate-key detection. Both are
+# transitive in the build tooling, so this is lockfile-only in /build and /build/rspack. Regenerated per
+# directory rather than taking the grouped Dependabot branch, whose regeneration pruned the webpack
+# subtree out of build/rspack and left npm ci failing EUSAGE; entry counts here are unchanged (547 and
+# 112) and npm ci --dry-run passes in both. The image-size half of that group is deliberately not taken:
+# v2 drops the sync and callback APIs imageSizeHelper.ts uses, and would add the JXL and HEIF readers
+# that pinned 1.0.0 lacks - the exact parsers advisory GHSA-5p2g-fcmc-qvqq covers.
 upstream_version: 1.132.0
 upstream_commit: df53daabb18cd157bdb08c7f01c34df936cf12f4
 recorded: 2026-08-16
-baseline: 5948 files changed, 59161 insertions(+), 1513355 deletions(-)
+baseline: 5950 files changed, 59253 insertions(+), 1513411 deletions(-)

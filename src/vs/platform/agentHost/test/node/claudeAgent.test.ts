@@ -4776,7 +4776,7 @@ suite('ClaudeAgent (MCP elicitation translation)', () => {
 
 		const promise = onElicitation(
 			{ serverName: 'test-mcp', message: 'Pick a side', mode: 'form', requestedSchema: { type: 'object', properties: { side: { type: 'string' } } } },
-			{ signal: new AbortController().signal },
+			{ signal: new AbortController().signal, requestId: 'el_form_accept' },
 		);
 		await tick();
 
@@ -4801,7 +4801,7 @@ suite('ClaudeAgent (MCP elicitation translation)', () => {
 
 		const promise = onElicitation(
 			{ serverName: 'm', message: 'q', mode: 'form', requestedSchema: { type: 'object', properties: { side: { type: 'string' } } } },
-			{ signal: new AbortController().signal },
+			{ signal: new AbortController().signal, requestId: 'el_form_decline' },
 		);
 		await tick();
 		ctx.agent.respondToUserInputRequest(inputRequests.at(-1)!.id, ChatInputResponseKind.Decline);
@@ -4815,7 +4815,7 @@ suite('ClaudeAgent (MCP elicitation translation)', () => {
 		const controller = new AbortController();
 		const promise = onElicitation(
 			{ serverName: 'm', message: 'q', mode: 'form', requestedSchema: { type: 'object', properties: { side: { type: 'string' } } } },
-			{ signal: controller.signal },
+			{ signal: controller.signal, requestId: 'el_abort_parked' },
 		);
 		await tick();
 		assert.ok(inputRequests.at(-1), 'the elicitation parked as a ChatInputRequested action');
@@ -4829,7 +4829,7 @@ suite('ClaudeAgent (MCP elicitation translation)', () => {
 
 		const promise = onElicitation(
 			{ serverName: 'm', message: 'Authorize', mode: 'url', url: 'https://example.com/auth' },
-			{ signal: new AbortController().signal },
+			{ signal: new AbortController().signal, requestId: 'el_url_accept' },
 		);
 		await tick();
 
@@ -4856,7 +4856,7 @@ suite('ClaudeAgent (MCP elicitation translation)', () => {
 		controller.abort();
 		const result = await onElicitation(
 			{ serverName: 'm', message: 'q', mode: 'form', requestedSchema: { type: 'object', properties: { side: { type: 'string' } } } },
-			{ signal: controller.signal },
+			{ signal: controller.signal, requestId: 'el_pre_aborted' },
 		);
 
 		assert.deepStrictEqual({ result, parked: inputRequests.length }, { result: { action: 'cancel' }, parked: 0 });
@@ -4867,7 +4867,7 @@ suite('ClaudeAgent (MCP elicitation translation)', () => {
 
 		const result = await onElicitation(
 			{ serverName: 'm', message: 'Authorize', mode: 'url' },
-			{ signal: new AbortController().signal },
+			{ signal: new AbortController().signal, requestId: 'el_url_no_url' },
 		);
 
 		assert.deepStrictEqual({ result, parked: inputRequests.length }, { result: { action: 'cancel' }, parked: 0 });
@@ -4878,7 +4878,7 @@ suite('ClaudeAgent (MCP elicitation translation)', () => {
 
 		const result = await onElicitation(
 			{ serverName: 'm', message: 'q', mode: 'form', requestedSchema: { type: 'object', properties: {} } },
-			{ signal: new AbortController().signal },
+			{ signal: new AbortController().signal, requestId: 'el_form_no_fields' },
 		);
 
 		assert.deepStrictEqual({ result, parked: inputRequests.length }, { result: { action: 'cancel' }, parked: 0 });

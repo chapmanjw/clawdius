@@ -145,6 +145,19 @@ suite('AgentHostGitService', () => {
 		test('returns undefined when probe failed (output absent)', () => {
 			assert.strictEqual(parseHasGitHubRemote(undefined), undefined);
 		});
+		test('returns false for a host that merely contains github.com', () => {
+			assert.strictEqual(parseHasGitHubRemote('origin\thttps://evil-github.com/owner/repo.git (fetch)\n'), false);
+		});
+		test('returns false when github.com is only a parent-domain prefix', () => {
+			assert.strictEqual(parseHasGitHubRemote('origin\thttps://github.com.attacker.example/owner/repo.git (fetch)\n'), false);
+		});
+		test('detects a github remote alongside a non-github origin', () => {
+			assert.strictEqual(parseHasGitHubRemote([
+				'origin\thttps://gitlab.com/owner/repo.git (fetch)',
+				'origin\thttps://gitlab.com/owner/repo.git (push)',
+				'backup\tgit@github.com:owner/repo.git (fetch)',
+			].join('\n')), true);
+		});
 	});
 
 	suite('parseDefaultBranchRef', () => {

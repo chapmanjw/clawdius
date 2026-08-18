@@ -1282,10 +1282,12 @@ export function parseHasGitHubRemote(remotesOutput: string | undefined): boolean
 	if (remotesOutput === undefined) {
 		return undefined;
 	}
-	if (!remotesOutput.trim()) {
-		return false;
-	}
-	return /github\.com[:\/]/i.test(remotesOutput);
+	// Parse the remotes rather than substring-matching the raw blob. An unanchored
+	// github\.com test also accepts a host that merely contains the string, so
+	// `https://evil-github.com/owner/repo.git` was reported as a GitHub remote. Reuse
+	// the anchored parser the PR paths already resolve `owner`/`repo` with, so there is
+	// one definition of what counts as a GitHub remote.
+	return parseGitHubRepoFromRemote(remotesOutput) !== undefined;
 }
 
 /** Returns fetch remote URLs with the preferred remote, then `origin`, first. */

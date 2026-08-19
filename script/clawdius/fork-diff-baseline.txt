@@ -710,7 +710,17 @@
 # 112) and npm ci --dry-run passes in both. The image-size half of that group is deliberately not taken:
 # v2 drops the sync and callback APIs imageSizeHelper.ts uses, and would add the JXL and HEIF readers
 # that pinned 1.0.0 lacks - the exact parsers advisory GHSA-5p2g-fcmc-qvqq covers.
-upstream_version: 1.132.0
-upstream_commit: df53daabb18cd157bdb08c7f01c34df936cf12f4
-recorded: 2026-08-16
-baseline: 5950 files changed, 59253 insertions(+), 1513411 deletions(-)
+# Disposition 2026-08-18 (upstream 1.132.1): security patch release. Four MSRC fixes - 127004 SSRF in
+# domainMatcher via an IPv4-mapped IPv6 literal, 122104 zero-click OS protocol launch through
+# webPageLoader, the remoteTerminalChannel workspace-trust bypass, and privileged URL payload options
+# in extensionHostConnection - plus always handing extensions copies of buffers. Every affected core
+# file was byte-identical to upstream here, so they took cleanly and add no fork surface. MSRC 115876
+# (acceptEdits workspace-boundary bypass) does not apply: it lives in extensions/copilot, which this
+# fork removes. The fork's own Claude permission path in platform/agentHost/node/claude is a separate
+# implementation and is NOT covered by that fix - auditing it against the same bug class is open work.
+# Files-changed +1 and deletions +93 are the copilot files upstream touched that we delete; insertions
+# fall by 5 because package.json/package-lock now carry upstream's own version string.
+upstream_version: 1.132.1
+upstream_commit: c2d1b13fdc4a77628e5f3bb70173351c8f2fbad1
+recorded: 2026-08-18
+baseline: 5951 files changed, 59258 insertions(+), 1513504 deletions(-)
